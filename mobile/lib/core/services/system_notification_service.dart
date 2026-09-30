@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:js' as js;
+import 'notification_bridge.dart';
 
 class SystemNotificationService {
   static final Set<String> _notifiedIds = {};
@@ -14,9 +13,7 @@ class SystemNotificationService {
     _hasRequestedPermission = true;
 
     try {
-      if (js.context.hasProperty('requestNotificationPermission')) {
-        js.context.callMethod('requestNotificationPermission');
-      }
+      webRequestNotificationPermission();
     } catch (e) {
       debugPrint('[SystemNotificationService] Permission request error: $e');
     }
@@ -34,9 +31,7 @@ class SystemNotificationService {
     _notifiedIds.add(id);
 
     try {
-      if (js.context.hasProperty('showSystemNotification')) {
-        js.context.callMethod('showSystemNotification', [title, body, url ?? '/']);
-      }
+      webShowSystemNotification(title, body, url ?? '/');
     } catch (e) {
       debugPrint('[SystemNotificationService] Show notification error: $e');
     }
