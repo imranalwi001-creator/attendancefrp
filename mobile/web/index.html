@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A new Flutter project.">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="hrm_attendance_mobile">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>hrm_attendance_mobile</title>
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <script>
+    // System Notification Bridge for Lock Screen & Background Notifications
+    window.requestNotificationPermission = async function() {
+      if (!('Notification' in window)) return 'unsupported';
+      try {
+        if (Notification.permission === 'default') {
+          return await Notification.requestPermission();
+        }
+        return Notification.permission;
+      } catch (e) {
+        console.warn('Error requesting notification permission:', e);
+        return 'denied';
+      }
+    };
+
+    window.showSystemNotification = function(title, body, url) {
+      if (!('Notification' in window)) return false;
+      if (Notification.permission !== 'granted') {
+        Notification.requestPermission();
+        return false;
+      }
+      try {
+        if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({
+            type: 'SHOW_NOTIFICATION',
+            title: title || 'Pemberitahuan HRM',
+            body: body || '',
+            url: url || '/'
+          });
+        } else {
+          const notif = new Notification(title || 'Pemberitahuan HRM', {
+            body: body || '',
+            icon: 'icons/Icon-192.png',
+            badge: 'icons/Icon-192.png',
+            vibrate: [200, 100, 200],
+            renotify: true,
+            tag: 'hrm-notification-' + Date.now()
+          });
+          notif.onclick = function() {
+            window.focus();
+            this.close();
+          };
+        }
+        return true;
+      } catch (e) {
+        console.warn('Notification display error:', e);
+        return false;
+      }
+    };
+  </script>
+  <!-- Sleek loading indicator while Flutter Web compiles & initializes -->
+  <div id="flutter-loader" style="position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0F172A; z-index: 9999; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; pointer-events: none;">
+    <div style="width: 44px; height: 44px; border: 3.5px solid rgba(255,255,255,0.12); border-top-color: #10B981; border-radius: 50%; animation: spinLoader 0.9s cubic-bezier(0.55, 0.15, 0.45, 0.85) infinite;"></div>
+    <div style="margin-top: 18px; font-weight: 700; font-size: 15px; color: #F8FAFC; letter-spacing: 0.3px;">HRM Attendance Mobile</div>
+    <div style="margin-top: 6px; font-size: 12px; color: #94A3B8;">Memuat aplikasi, mohon tunggu...</div>
+  </div>
+  <style>
+    @keyframes spinLoader { to { transform: rotate(360deg); } }
+    body { margin: 0; background-color: #0F172A; }
+  </style>
+
+  <script>
+    function dismissFlutterLoader() {
+      var el = document.getElementById('flutter-loader');
+      if (el) {
+        el.style.transition = 'opacity 0.3s ease, visibility 0.3s ease';
+        el.style.opacity = '0';
+        setTimeout(function() {
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+        }, 300);
+      }
+    }
+    window.addEventListener('flutter-first-frame', dismissFlutterLoader);
+    var loaderObserver = new MutationObserver(function() {
+      if (document.querySelector('flutter-view') || document.querySelector('flt-glass-pane') || document.querySelector('flt-scene-host')) {
+        setTimeout(dismissFlutterLoader, 150);
+        loaderObserver.disconnect();
+      }
+    });
+    loaderObserver.observe(document.body, { childList: true, subtree: true });
+    setTimeout(dismissFlutterLoader, 4500);
+  </script>
+
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

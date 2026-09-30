@@ -1,0 +1,1 @@
+DELETE FROM pengumpulan_tugas WHERE id = 'f368c3c8-bc1e-415a-8bb8-bf7d74e7b344';

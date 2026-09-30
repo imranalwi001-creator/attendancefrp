@@ -1,0 +1,43 @@
+project_id = "lms_digiss_local"
+
+[functions.create-user]
+verify_jwt = false
+
+[functions.seed-admin]
+verify_jwt = false
+
+[functions.update-user-password]
+verify_jwt = false
+
+[functions.generate-mapel]
+verify_jwt = false
+
+[functions.send-push-notification]
+verify_jwt = false
+
+[functions.get-vapid-public-key]
+verify_jwt = false
+
+[functions.extract-family-data]
+verify_jwt = false
+
+[functions.trigger-push-notification]
+verify_jwt = false
+
+[functions.grade-essay]
+verify_jwt = false
+
+[functions.generate-soal]
+verify_jwt = false
+
+[functions.extract-psikologi-data]
+verify_jwt = false
+
+[functions.generate-psikologi-summary]
+verify_jwt = false
+
+[functions.chat-assistant]
+verify_jwt = false
+
+[functions.materi-ai]
+verify_jwt = false

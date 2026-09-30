@@ -1,0 +1,341 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    --background: 216 18% 96%;
+    --foreground: 210 15% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 210 15% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 15% 15%;
+
+    --primary: 174 85% 34%;
+    --primary-foreground: 0 0% 100%;
+    --primary-light: 174 70% 85%;
+    
+    --secondary: 174 70% 96%;
+    --secondary-foreground: 174 85% 34%;
+
+    --muted: 210 15% 95%;
+    --muted-foreground: 210 10% 50%;
+
+    --accent: 174 85% 34%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 210 15% 88%;
+    --input: 210 15% 90%;
+    --ring: 174 85% 34%;
+
+    --radius: 1rem;
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 210 15% 20%;
+    --sidebar-primary: 174 85% 34%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 174 70% 96%;
+    --sidebar-accent-foreground: 174 85% 34%;
+    --sidebar-border: 210 15% 92%;
+    --sidebar-ring: 174 85% 34%;
+
+    --chart-1: 174 85% 34%;
+    --chart-2: 199 80% 48%;
+    --chart-3: 142 65% 42%;
+    --chart-4: 38 90% 55%;
+    --chart-5: 330 70% 55%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(174 85% 34%), hsl(174 70% 45%));
+    --gradient-subtle: linear-gradient(180deg, hsl(174 70% 98%), hsl(210 20% 98%));
+    
+    --shadow-sm: 0 2px 4px -1px hsl(210 15% 15% / 0.04);
+    --shadow-md: 0 4px 12px -2px hsl(210 15% 15% / 0.08);
+    --shadow-lg: 0 12px 24px -4px hsl(210 15% 15% / 0.12);
+  }
+
+  .dark {
+    --background: 210 20% 8%;
+    --foreground: 210 10% 95%;
+
+    --card: 210 18% 12%;
+    --card-foreground: 210 10% 95%;
+
+    --popover: 210 18% 12%;
+    --popover-foreground: 210 10% 95%;
+
+    --primary: 174 75% 40%;
+    --primary-foreground: 0 0% 100%;
+    --primary-light: 174 50% 25%;
+
+    --secondary: 174 50% 25%;
+    --secondary-foreground: 174 70% 85%;
+
+    --muted: 210 15% 15%;
+    --muted-foreground: 210 10% 60%;
+
+    --accent: 174 75% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 65% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 210 15% 20%;
+    --input: 210 15% 18%;
+    --ring: 174 75% 40%;
+
+    --sidebar-background: 210 18% 10%;
+    --sidebar-foreground: 210 10% 90%;
+    --sidebar-primary: 174 75% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 15% 16%;
+    --sidebar-accent-foreground: 174 75% 40%;
+    --sidebar-border: 210 15% 18%;
+    --sidebar-ring: 174 75% 40%;
+
+    --chart-1: 174 75% 40%;
+    --chart-2: 199 70% 55%;
+    --chart-3: 142 55% 50%;
+    --chart-4: 38 85% 60%;
+    --chart-5: 330 65% 60%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(174 75% 40%), hsl(174 60% 50%));
+    --gradient-subtle: linear-gradient(180deg, hsl(210 18% 12%), hsl(210 20% 8%));
+    
+    --shadow-sm: 0 2px 4px -1px hsl(0 0% 0% / 0.2);
+    --shadow-md: 0 4px 12px -2px hsl(0 0% 0% / 0.3);
+    --shadow-lg: 0 12px 24px -4px hsl(0 0% 0% / 0.4);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+
+  /* Clean Calendar & Datepicker Global Styling */
+  input[type="date"],
+  input[type="month"],
+  input[type="time"] {
+    accent-color: hsl(var(--primary));
+    color-scheme: light;
+  }
+
+  /* Dark mode: native date/time pickers follow system dark theme */
+  .dark input[type="date"],
+  .dark input[type="month"],
+  .dark input[type="time"] {
+    color-scheme: dark;
+    accent-color: hsl(var(--primary));
+  }
+
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="month"]::-webkit-calendar-picker-indicator,
+  input[type="time"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 2px;
+    opacity: 0.65;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+
+  input[type="date"]::-webkit-calendar-picker-indicator:hover,
+  input[type="month"]::-webkit-calendar-picker-indicator:hover,
+  input[type="time"]::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@layer components {
+  .container-base {
+    @apply rounded-xl sm:rounded-2xl bg-card border border-border/50 p-3 sm:p-5 shadow-sm;
+  }
+
+  .title-card {
+    @apply flex items-center gap-2 sm:gap-3;
+  }
+
+  .title-card h3 {
+    @apply text-sm sm:text-base font-semibold text-foreground;
+  }
+
+  .title-card-icon {
+    @apply p-1.5 sm:p-2 rounded-lg flex items-center justify-center;
+  }
+
+  .title-card-icon > svg {
+    @apply h-3.5 w-3.5 sm:h-4 sm:w-4;
+  }
+
+  /* Global Brand Button Helpers */
+  .btn-primary {
+    @apply bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded-xl shadow-xs transition-all active:scale-[0.98];
+  }
+
+  .btn-outline {
+    @apply border border-primary/30 bg-card text-primary hover:bg-primary/10 hover:border-primary/50 font-medium rounded-xl transition-all active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply bg-primary/10 text-primary hover:bg-primary/20 border border-primary/15 font-medium rounded-xl transition-all active:scale-[0.98];
+  }
+}
+
+@layer utilities {
+  .animate-fade-in {
+    animation: fade-in 0.3s ease-out forwards;
+    opacity: 0;
+  }
+
+  .animate-scale-in {
+    animation: scale-in 0.2s ease-out forwards;
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Custom scrollbar styling */
+  .overflow-x-auto {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .overflow-x-auto::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .overflow-x-auto::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 3px;
+  }
+
+  .overflow-x-auto::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+
+  .overflow-x-auto::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+  }
+
+  /* Enterprise-grade clean tables */
+  .table-clean {
+    width: 100%;
+    text-align: left;
+    font-size: 0.75rem;
+    color: hsl(var(--foreground));
+  }
+  .table-clean thead {
+    background-color: hsl(var(--muted) / 0.4);
+    border-bottom: 1px solid hsl(var(--border) / 0.8);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: hsl(var(--muted-foreground));
+  }
+  .table-clean th {
+    padding: 0.75rem 1rem;
+    font-weight: 600;
+  }
+  .table-clean td {
+    padding: 0.75rem 1rem;
+    vertical-align: middle;
+    border-bottom: 1px solid hsl(var(--border) / 0.5);
+    transition: background-color 0.15s ease;
+  }
+  .table-clean tbody tr:hover {
+    background-color: hsl(var(--muted) / 0.3);
+  }
+
+  /* Soft scrollbar — used in sidebar/menus */
+  .scrollbar-soft {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border) / 0.5) transparent;
+  }
+  .scrollbar-soft::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  .scrollbar-soft::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-soft::-webkit-scrollbar-thumb {
+    background: hsl(var(--border) / 0.5);
+    border-radius: 9999px;
+  }
+  .scrollbar-soft::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.3);
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* Professional Document Print Layout */
+  @media print {
+    body * {
+      visibility: hidden;
+    }
+    #printable-report-sheet,
+    #printable-report-sheet * {
+      visibility: visible;
+    }
+    #printable-report-sheet {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100% !important;
+      margin: 0 !important;
+      padding: 15mm 20mm !important;
+      background: #ffffff !important;
+      color: #0f172a !important;
+      box-shadow: none !important;
+      border: none !important;
+    }
+    aside, header, nav, button, .no-print {
+      display: none !important;
+    }
+  }
+}

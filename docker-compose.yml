@@ -1,0 +1,115 @@
+# ==============================================================================
+# HRM ATTENDANCE SYSTEM - DOCKER COMPOSE STACK
+# Group Container Khusus & Terisolasi Penuh
+# ==============================================================================
+
+services:
+  # ─── 1. FRONTEND CONTAINER (REACT PWA + NGINX) ─────────────────────────────
+  hrm-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hrm-frontend
+    restart: unless-stopped
+    expose:
+      - "80" # Akses internal via Caddy Reverse Proxy (Port 80 & 443)
+    networks:
+      - hrm-network
+    environment:
+      - NODE_ENV=production
+
+  # ─── 2. DATABASE CONTAINER (POSTGRESQL 16 ALPINE) ──────────────────────────
+  hrm-database:
+    image: postgres:16-alpine
+    container_name: hrm-database
+    restart: unless-stopped
+    ports:
+      - "5432:5432" # Akses database PostgreSQL
+    environment:
+      POSTGRES_USER: ${DB_USER:-hrm_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-hrm_secure_password_2026}
+      POSTGRES_DB: ${DB_NAME:-hrm_db}
+    volumes:
+      - hrm_db_data:/var/lib/postgresql/data
+      - ./hrm_schema.sql:/docker-entrypoint-initdb.d/01_init_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-hrm_user} -d ${DB_NAME:-hrm_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - hrm-network
+
+  # ─── 3. BACKEND API CONTAINER (NODE.JS + POSTGRESQL) ───────────────────────
+  hrm-backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: hrm-backend
+    restart: unless-stopped
+    expose:
+      - "5000"
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - DB_HOST=hrm-database
+      - DB_PORT=5432
+      - DB_USER=${DB_USER:-hrm_user}
+      - DB_PASSWORD=${DB_PASSWORD:-hrm_secure_password_2026}
+      - DB_NAME=${DB_NAME:-hrm_db}
+      - FACE_AI_URL=${FACE_AI_URL:-http://hrm-face-ai:5001}
+    volumes:
+      - ./server/src:/app/src
+    depends_on:
+      hrm-database:
+        condition: service_healthy
+    networks:
+      - hrm-network
+
+  # ─── 4. BIOMETRIC FACE AI CONTAINER (INSIGHTFACE + FASTAPI) ────────────────
+  hrm-face-ai:
+    build:
+      context: ./biometric-ai
+      dockerfile: Dockerfile
+    container_name: hrm-face-ai
+    restart: unless-stopped
+    expose:
+      - "5001"
+    ports:
+      - "5001:5001"
+    networks:
+      - hrm-network
+
+  # ─── 5. REVERSE PROXY CONTAINER (CADDY AUTO HTTPS) ─────────────────────────
+  hrm-proxy:
+    image: caddy:2-alpine
+    container_name: hrm-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"   # HTTP
+      - "443:443" # HTTPS (Sangat penting untuk PWA & Kamera HP)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - hrm_caddy_data:/data
+      - hrm_caddy_config:/config
+    depends_on:
+      - hrm-frontend
+      - hrm-backend
+    networks:
+      - hrm-network
+
+volumes:
+  hrm_db_data:
+    name: hrm_db_data
+  hrm_caddy_data:
+    name: hrm_caddy_data
+  hrm_caddy_config:
+    name: hrm_caddy_config
+
+networks:
+  hrm-network:
+    name: hrm-network
+    driver: bridge

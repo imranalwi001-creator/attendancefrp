@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>HRM Attendance System</title>
+    <meta name="description" content="Sistem Informasi Presensi & Manajemen SDM Mandiri">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+    <meta property="og:title" content="HRM Attendance System">
+    <meta name="twitter:title" content="HRM Attendance System">
+    <meta property="og:description" content="Sistem Informasi Presensi & Manajemen SDM Mandiri">
+    <meta name="twitter:description" content="Sistem Informasi Presensi & Manajemen SDM Mandiri">
+    <meta name="twitter:card" content="summary">
+    <meta property="og:type" content="website">
+    <meta name="theme-color" content="#0d9488">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="HRM Presensi">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/pwa-192x192.png">
+    <script>
+      // Capture PWA install prompt BEFORE any JS bundle loads
+      window.__pwaInstallPrompt = null;
+      window.__pwaInstallPromptListeners = new Set();
+      window.addEventListener('beforeinstallprompt', function(e) {
+        e.preventDefault();
+        window.__pwaInstallPrompt = e;
+        console.log('[PWA] beforeinstallprompt captured in HTML!');
+        window.__pwaInstallPromptListeners.forEach(function(fn) { fn(); });
+      });
+      window.addEventListener('appinstalled', function() {
+        window.__pwaInstallPrompt = null;
+        console.log('[PWA] App installed!');
+        window.__pwaInstallPromptListeners.forEach(function(fn) { fn(); });
+      });
+      // Global uncaught error display to prevent silent white screen
+      window.addEventListener('error', function(e) {
+        console.error('[HRM Global Error]', e.message, e.filename, e.lineno);
+        var errBox = document.getElementById('hrm-critical-error');
+        if (errBox) {
+          errBox.style.display = 'block';
+          errBox.textContent = 'Galat Inisialisasi: ' + (e.message || 'Unknown error') + ' (' + (e.filename || 'script') + ':' + (e.lineno || 0) + ')';
+        }
+      });
+    </script>
+  </head>
+  <body class="bg-background text-foreground antialiased min-h-screen">
+    <div id="root">
+      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; color: #334155; padding: 20px;">
+        <div style="width: 44px; height: 44px; border: 3px solid #e2e8f0; border-top-color: #0d9488; border-radius: 50%; animation: hrm-spin 0.8s linear infinite; margin-bottom: 16px;"></div>
+        <p style="font-weight: 600; font-size: 15px; margin: 0 0 6px 0; color: #0f172a;">Memuat HRM Attendance System...</p>
+        <p style="font-size: 12px; margin: 0; color: #64748b;">Menghubungkan sesi & menyiapkan antarmuka...</p>
+        <div id="hrm-critical-error" style="display: none; margin-top: 16px; max-width: 480px; padding: 12px 16px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; color: #b91c1c; font-size: 12px; font-family: monospace; white-space: pre-wrap; word-break: break-word;"></div>
+        <style>
+          @keyframes hrm-spin {
+            to { transform: rotate(360deg); }
+          }
+        </style>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

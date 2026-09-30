@@ -1,0 +1,1 @@
+ALTER TABLE public.ramadhan_mood ADD COLUMN tilawah_quran text;

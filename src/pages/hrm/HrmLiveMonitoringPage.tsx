@@ -1,0 +1,1252 @@
+import React, { useState, useEffect } from 'react';
+import { hrmService, getTodayDateStr } from '@/services/hrmService';
+import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation } from '@/types/hrm';
+import {
+  UserCheck,
+  Clock,
+  Search,
+  RotateCw,
+  QrCode,
+  ShieldCheck,
+  AlertTriangle,
+  Smartphone,
+  Eye,
+  CheckCircle2,
+  X,
+  MapPin,
+  ShieldAlert,
+  Flame,
+  Activity,
+  UserX,
+  LayoutGrid,
+  TableProperties,
+  Lock,
+  Unlock,
+} from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import QRCode from 'qrcode';
+import {
+  anomalyDetectionService,
+  AnomalyRadarSummary,
+  AnomalyRiskItem,
+} from '@/services/anomalyDetectionService';
+
+export const HrmLiveMonitoringPage: React.FC = () => {
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [divisions, setDivisions] = useState<Division[]>([]);
+  const [attendances, setAttendances] = useState<AttendanceRecord[]>([]);
+  const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
+  const [perimeterViolations, setPerimeterViolations] = useState<PerimeterViolation[]>([]);
+
+  const [activeTab, setActiveTab] = useState<'all' | 'present' | 'late' | 'absent' | 'anomalies' | 'breaches'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterDivision, setFilterDivision] = useState('all');
+  const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
+
+  // Perimeter breach unlock authorization modal
+  const [unlockModalOpen, setUnlockModalOpen] = useState(false);
+  const [selectedBreach, setSelectedBreach] = useState<PerimeterViolation | null>(null);
+  const [unlockReason, setUnlockReason] = useState('');
+  const [isUnlocking, setIsUnlocking] = useState(false);
+
+  // Anti-fraud QR Kiosk modal
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [qrData, setQrData] = useState(hrmService.getDynamicOfficeQrCode());
+  const [qrImageUrl, setQrImageUrl] = useState<string>('');
+  const [previewForensic, setPreviewForensic] = useState<{
+    url: string;
+    name: string;
+    nip?: string;
+    division?: string;
+    time?: string;
+    biometricScore?: number;
+    biometricMatch?: boolean;
+    geofenceDistance?: number;
+    geofenceValid?: boolean;
+    isMockLocation?: boolean;
+    lat?: number;
+    lng?: number;
+    securityFlags?: string[];
+  } | null>(null);
+
+  const loadData = () => {
+    const today = getTodayDateStr();
+    setUsers(hrmService.getUsers().filter((u) => u.isActive));
+    setDivisions(hrmService.getDivisions());
+    setAttendances(hrmService.getAttendances(today));
+    setOvertimes(hrmService.getOvertimeRecords());
+    setPerimeterViolations(hrmService.getPerimeterViolations());
+  };
+
+  useEffect(() => {
+    loadData();
+    hrmService.syncWithBackend().then(() => loadData());
+
+    const handleUpdated = () => loadData();
+    window.addEventListener('hrm_data_updated', handleUpdated);
+
+    const interval = setInterval(() => {
+      hrmService.syncWithBackend().then(() => loadData());
+    }, 8000);
+
+    return () => {
+      window.removeEventListener('hrm_data_updated', handleUpdated);
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Update Dynamic QR every second
+  useEffect(() => {
+    if (!qrModalOpen) return;
+    const timer = setInterval(() => {
+      setQrData(hrmService.getDynamicOfficeQrCode());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [qrModalOpen]);
+
+  // Generate square 2D QR Code image
+  useEffect(() => {
+    if (!qrModalOpen || !qrData?.code) return;
+    QRCode.toDataURL(qrData.code, {
+      width: 320,
+      margin: 1.5,
+      color: {
+        dark: '#020617',
+        light: '#ffffff',
+      },
+    })
+      .then((url) => setQrImageUrl(url))
+      .catch((err) => console.error('Failed generating QR code:', err));
+  }, [qrData?.code, qrModalOpen]);
+
+  const monitoredList = users.map((u) => {
+    const att = attendances.find((a) => a.userId === u.id);
+    return {
+      user: u,
+      attendance: att,
+      status: !att ? 'absent' : att.status === 'terlambat' ? 'late' : 'present',
+    };
+  });
+
+  const filtered = monitoredList.filter((item) => {
+    const matchTab = activeTab === 'all' || item.status === activeTab;
+    const matchDiv = filterDivision === 'all' || item.user.divisionId === filterDivision;
+    const matchSearch =
+      item.user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      item.user.nip.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchTab && matchDiv && matchSearch;
+  });
+
+  const presentCount = monitoredList.filter((i) => i.status === 'present').length;
+  const lateCount = monitoredList.filter((i) => i.status === 'late').length;
+  const absentCount = monitoredList.filter((i) => i.status === 'absent').length;
+  const activeBreaches = perimeterViolations.filter((v) => v.status === 'active');
+
+  const radarSummary: AnomalyRadarSummary = React.useMemo(() => {
+    return anomalyDetectionService.analyzeWorkforceAnomalies(users, attendances, overtimes);
+  }, [users, attendances, overtimes]);
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs font-semibold text-emerald-600 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
+              Sistem Pengawasan Kehadiran
+            </span>
+            {radarSummary.items.length > 0 && (
+              <span className="text-xs font-semibold text-rose-700 bg-rose-50 dark:bg-rose-950/40 px-2.5 py-0.5 rounded-full border border-rose-200 dark:border-rose-900 flex items-center gap-1">
+                <ShieldAlert size={12} /> {radarSummary.items.length} Anomali Terdeteksi
+              </span>
+            )}
+          </div>
+          <h1 className="text-2xl font-bold text-foreground tracking-tight flex items-center gap-2">
+            <UserCheck className="w-6 h-6 text-primary" />
+            Live Monitoring Presensi &amp; Anti-Fraud
+          </h1>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            Pantau status kedatangan staf secara *real-time* disertai validasi perangkat, lokasi GPS, audit anomali, dan sertifikat biometrik.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2.5">
+          <Button
+            onClick={() => setQrModalOpen(true)}
+            className="gap-2 rounded-xl text-xs h-9 font-semibold shadow-xs"
+          >
+            <QrCode size={15} /> Terminal QR Dinamis
+          </Button>
+          <Button variant="outline" size="sm" onClick={loadData} className="text-xs gap-1.5 border-border rounded-xl h-9">
+            <RotateCw className="w-3.5 h-3.5 text-primary" /> Refresh
+          </Button>
+        </div>
+      </div>
+
+      {/* Status Counters */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+        <div
+          onClick={() => setActiveTab('all')}
+          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+            activeTab === 'all'
+              ? 'border-primary bg-primary/10 ring-1 ring-primary/20 shadow-xs'
+              : 'border-border bg-card hover:bg-muted/40'
+          }`}
+        >
+          <p className="text-xs font-medium text-muted-foreground">Semua Karyawan</p>
+          <p className="text-2xl font-bold text-foreground mt-1 font-mono">{users.length} Orang</p>
+        </div>
+
+        <div
+          onClick={() => setActiveTab('present')}
+          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+            activeTab === 'present'
+              ? 'border-emerald-500 bg-emerald-50/50 ring-1 ring-emerald-500/30 shadow-xs'
+              : 'border-border bg-card hover:bg-muted/40'
+          }`}
+        >
+          <p className="text-xs font-medium text-muted-foreground">Hadir Tepat Waktu</p>
+          <p className="text-2xl font-bold text-emerald-700 mt-1 font-mono">{presentCount} Orang</p>
+        </div>
+
+        <div
+          onClick={() => setActiveTab('late')}
+          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+            activeTab === 'late'
+              ? 'border-amber-500 bg-amber-50/50 ring-1 ring-amber-500/30 shadow-xs'
+              : 'border-border bg-card hover:bg-muted/40'
+          }`}
+        >
+          <p className="text-xs font-medium text-muted-foreground">Terlambat</p>
+          <p className="text-2xl font-bold text-amber-700 mt-1 font-mono">{lateCount} Orang</p>
+        </div>
+
+        <div
+          onClick={() => setActiveTab('absent')}
+          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+            activeTab === 'absent'
+              ? 'border-destructive bg-destructive/10 ring-1 ring-destructive/20 shadow-xs'
+              : 'border-border bg-card hover:bg-muted/40'
+          }`}
+        >
+          <p className="text-xs font-medium text-muted-foreground">Belum Presensi</p>
+          <p className="text-2xl font-bold text-destructive mt-1 font-mono">{absentCount} Orang</p>
+        </div>
+
+        <div
+          onClick={() => setActiveTab('anomalies')}
+          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+            activeTab === 'anomalies'
+              ? 'border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 ring-1 ring-rose-500/30 shadow-xs'
+              : 'border-border bg-card hover:bg-muted/40'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-muted-foreground">Audit Anomali</p>
+            {radarSummary.items.length > 0 && (
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
+            )}
+          </div>
+          <p className="text-2xl font-bold text-rose-600 mt-1 font-mono">{radarSummary.items.length} Isu</p>
+        </div>
+
+        <div
+          onClick={() => setActiveTab('breaches')}
+          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+            activeTab === 'breaches'
+              ? 'border-rose-500 bg-rose-500/10 ring-1 ring-rose-500/30 shadow-xs'
+              : 'border-border bg-card hover:bg-muted/40'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-muted-foreground">Pelanggaran Perimeter</p>
+            {activeBreaches.length > 0 && (
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+            )}
+          </div>
+          <p className="text-2xl font-bold text-rose-600 mt-1 font-mono">{activeBreaches.length} Terkunci</p>
+        </div>
+      </div>
+
+      {/* Filter Bar */}
+      <Card className="border-border/80 bg-card rounded-2xl shadow-xs">
+        <CardContent className="p-3.5">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="relative">
+                <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <Input
+                  placeholder="Cari Nama Karyawan / NIP..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 text-xs rounded-xl h-9"
+                />
+              </div>
+
+              <Select value={filterDivision} onValueChange={setFilterDivision}>
+                <SelectTrigger className="text-xs rounded-xl h-9">
+                  <SelectValue placeholder="Semua Divisi" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Divisi</SelectItem>
+                  {divisions.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name} ({d.code})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* View Mode Toggle */}
+            <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border shrink-0 self-end sm:self-auto">
+              <Button
+                type="button"
+                variant={viewMode === 'table' ? 'default' : 'ghost'}
+                size="sm"
+                className={`h-7 px-2.5 text-xs rounded-lg gap-1.5 transition-all ${
+                  viewMode === 'table' ? 'shadow-xs font-medium' : 'text-muted-foreground hover:text-foreground'
+                }`}
+                onClick={() => setViewMode('table')}
+              >
+                <TableProperties size={13} />
+                <span>Tabel</span>
+              </Button>
+              <Button
+                type="button"
+                variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                size="sm"
+                className={`h-7 px-2.5 text-xs rounded-lg gap-1.5 transition-all ${
+                  viewMode === 'grid' ? 'shadow-xs font-medium' : 'text-muted-foreground hover:text-foreground'
+                }`}
+                onClick={() => setViewMode('grid')}
+              >
+                <LayoutGrid size={13} />
+                <span>Kartu</span>
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── CONDITIONAL VIEW: ANOMALY RADAR OR PERIMETER BREACHES OR DATAGRID/CARDS ── */}
+      {activeTab === 'anomalies' ? (
+        <div className="space-y-4">
+          <div className="p-4 bg-card border border-border rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-muted text-foreground border border-border">
+                <ShieldAlert size={20} className="text-rose-600" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-foreground">
+                  Pusat Audit Integritas Presensi
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Deteksi kepatuhan perangkat ganda (titip absen), anomali koordinat batas perimeter, dan beban jam kerja berlebih.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge className="bg-rose-600 text-white font-mono text-xs">
+                {radarSummary.criticalCount + radarSummary.highCount} Prioritas Tinggi
+              </Badge>
+              <Badge variant="outline" className="font-mono text-xs border-border">
+                {radarSummary.totalScanned} Total Dipindai
+              </Badge>
+            </div>
+          </div>
+
+          {radarSummary.items.length === 0 ? (
+            <Card className="rounded-2xl border-dashed border-emerald-500/40 bg-emerald-500/5 text-center p-8">
+              <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center mb-3">
+                <ShieldCheck size={26} />
+              </div>
+              <h3 className="font-bold text-sm text-foreground">Integritas Kehadiran Optimal</h3>
+              <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+                Tidak ada anomali atau indikasi kecurangan perangkat yang terdeteksi pada seluruh presensi karyawan hari ini.
+              </p>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {radarSummary.items.map((item) => {
+                const isCritical = item.severity === 'critical';
+                const isHigh = item.severity === 'high';
+                return (
+                  <Card
+                    key={item.userId}
+                    className={`rounded-2xl border p-4 shadow-xs space-y-3 transition-all ${
+                      isCritical
+                        ? 'border-rose-500/40 bg-rose-500/5'
+                        : isHigh
+                        ? 'border-amber-500/40 bg-amber-500/5'
+                        : 'border-border bg-card'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <div
+                          className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold ${
+                            isCritical
+                              ? 'bg-rose-600 text-white'
+                              : isHigh
+                              ? 'bg-amber-600 text-white'
+                              : 'bg-muted text-foreground'
+                          }`}
+                        >
+                          {item.userName.charAt(0)}
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-foreground">{item.userName}</p>
+                          <p className="text-[11px] text-muted-foreground font-mono">
+                            {item.nip} • {item.divisionName}
+                          </p>
+                        </div>
+                      </div>
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] uppercase tracking-wider font-bold ${
+                          isCritical
+                            ? 'bg-rose-600 text-white border-transparent'
+                            : isHigh
+                            ? 'bg-amber-500 text-white border-transparent'
+                            : 'bg-muted text-muted-foreground border-border'
+                        }`}
+                      >
+                        Skor Risiko: {item.overallRiskScore}
+                      </Badge>
+                    </div>
+
+                    {/* Breakdown Sub-Risiko */}
+                    <div className="grid grid-cols-3 gap-2 pt-2 border-t border-border/70 text-center">
+                      <div className="p-2 rounded-xl bg-background/60 border border-border/60">
+                        <p className="text-[10px] text-muted-foreground">Kecurangan Perangkat</p>
+                        <p className={`text-xs font-bold font-mono mt-0.5 ${item.deviceCollisionScore > 40 ? 'text-rose-600' : 'text-foreground'}`}>
+                          {item.deviceCollisionScore}%
+                        </p>
+                      </div>
+                      <div className="p-2 rounded-xl bg-background/60 border border-border/60">
+                        <p className="text-[10px] text-muted-foreground">Radius Perimeter</p>
+                        <p className={`text-xs font-bold font-mono mt-0.5 ${item.geofenceAnomalyScore > 40 ? 'text-amber-600' : 'text-foreground'}`}>
+                          {item.geofenceAnomalyScore}%
+                        </p>
+                      </div>
+                      <div className="p-2 rounded-xl bg-background/60 border border-border/60">
+                        <p className="text-[10px] text-muted-foreground">Beban Lembur</p>
+                        <p className={`text-xs font-bold font-mono mt-0.5 ${item.burnoutRiskScore > 40 ? 'text-orange-600' : 'text-foreground'}`}>
+                          {item.burnoutRiskScore}%
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Detailed Reason Explanations */}
+                    <div className="p-2.5 rounded-xl bg-muted/40 border border-border/70 space-y-1 text-xs">
+                      {item.reasons.map((r, i) => (
+                        <p key={i} className="text-muted-foreground flex items-start gap-1.5 leading-relaxed">
+                          <span className="text-rose-500 font-bold">•</span>
+                          <span>{r}</span>
+                        </p>
+                      ))}
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : activeTab === 'breaches' ? (
+        /* ── DEDICATED PERIMETER BREACH DISCIPLINE AUDIT DATAGRID ── */
+        <div className="space-y-4">
+          <div className="p-4 bg-card border border-border rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-rose-500/10 text-rose-600 border border-rose-500/20">
+                <ShieldAlert size={20} />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-foreground">
+                  Audit Pelanggaran Perimeter Kerja & Kunci Presensi Pulang
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Daftar staf yang terdeteksi keluar dari batas radius kantor saat jam kerja aktif tanpa izin. Presensi kepulangan otomatis dinonaktifkan demi integritas data kinerja.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge className="bg-rose-600 text-white font-mono text-xs">
+                {activeBreaches.length} Checkout Terkunci
+              </Badge>
+              <Badge variant="outline" className="font-mono text-xs border-border">
+                {perimeterViolations.length} Total Riwayat
+              </Badge>
+            </div>
+          </div>
+
+          {perimeterViolations.length === 0 ? (
+            <Card className="rounded-2xl border-dashed border-emerald-500/40 bg-emerald-500/5 text-center p-8">
+              <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center mb-3">
+                <ShieldCheck size={26} />
+              </div>
+              <h3 className="font-bold text-sm text-foreground">Disiplin Perimeter 100% Terjaga</h3>
+              <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+                Tidak ada karyawan yang terdeteksi meninggalkan area kerja kantor divisi saat jam kerja berlangsung.
+              </p>
+            </Card>
+          ) : (
+            <div className="rounded-2xl border border-border bg-card shadow-xs overflow-hidden">
+              <Table>
+                <TableHeader className="bg-muted/40">
+                  <TableRow className="text-xs">
+                    <TableHead className="w-12 text-center">#</TableHead>
+                    <TableHead>Karyawan</TableHead>
+                    <TableHead>Divisi</TableHead>
+                    <TableHead>Waktu Terdeteksi Keluar</TableHead>
+                    <TableHead>Jarak Di Luar Radius</TableHead>
+                    <TableHead>Status Kunci</TableHead>
+                    <TableHead>Catatan Pelanggaran</TableHead>
+                    <TableHead className="text-right">Tindakan Otorisasi</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {perimeterViolations.map((v, idx) => {
+                    const u = users.find((usr) => usr.id === v.userId);
+                    const div = divisions.find((d) => d.id === v.divisionId);
+                    const isLocked = v.status === 'active';
+                    return (
+                      <TableRow key={v.id} className="text-xs hover:bg-muted/30">
+                        <TableCell className="text-center font-mono text-muted-foreground">{idx + 1}</TableCell>
+                        <TableCell>
+                          <div>
+                            <p className="font-bold text-foreground">{u?.fullName || v.userName || 'Karyawan'}</p>
+                            <p className="text-[11px] text-muted-foreground font-mono">{u?.nip || v.nip || '-'}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-medium text-foreground">{div?.name || v.divisionName || '-'}</span>
+                        </TableCell>
+                        <TableCell className="font-mono">
+                          {new Date(v.detectedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WIB
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-[10px] gap-1 border-rose-500/30 text-rose-600 bg-rose-500/10 font-mono">
+                            <MapPin size={10} /> {Math.round(v.distanceMeters)} meter
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {isLocked ? (
+                            <Badge className="bg-rose-600 text-white text-[10px] gap-1">
+                              <Lock size={10} /> TERKUNCI
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 text-[10px] gap-1">
+                              <CheckCircle2 size={10} /> DIBUKA KUNCI
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="max-w-[220px]">
+                          <p className="truncate text-muted-foreground" title={v.notes}>
+                            {v.notes}
+                          </p>
+                          {v.resolutionNotes && (
+                            <p className="text-[10px] text-emerald-600 truncate mt-0.5" title={v.resolutionNotes}>
+                              Otorisasi: {v.resolutionNotes} ({v.resolvedByName || v.resolvedBy})
+                            </p>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {isLocked ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setSelectedBreach(v);
+                                setUnlockReason('');
+                                setUnlockModalOpen(true);
+                              }}
+                              className="h-7 px-2.5 text-xs rounded-xl gap-1 border-rose-500/40 text-rose-600 hover:bg-rose-500/10 font-semibold"
+                            >
+                              <Unlock size={12} /> Buka Kunci Presensi
+                            </Button>
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">Telah Disetujui</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+      ) : viewMode === 'table' ? (
+        /* ── CLEAN & PROFESSIONAL ENTERPRISE DATAGRID / TABLE ── */
+        <div className="rounded-2xl border border-border/80 bg-card shadow-xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader className="bg-muted/40">
+                <TableRow className="hover:bg-transparent border-b border-border/70 text-xs">
+                  <TableHead className="w-12 text-center font-semibold text-muted-foreground">#</TableHead>
+                  <TableHead className="min-w-[220px] font-semibold text-muted-foreground">Karyawan</TableHead>
+                  <TableHead className="min-w-[150px] font-semibold text-muted-foreground">Divisi & Jabatan</TableHead>
+                  <TableHead className="min-w-[130px] text-center font-semibold text-muted-foreground">Status Kehadiran</TableHead>
+                  <TableHead className="min-w-[110px] text-center font-semibold text-muted-foreground">Jam Masuk</TableHead>
+                  <TableHead className="min-w-[110px] text-center font-semibold text-muted-foreground">Jam Pulang</TableHead>
+                  <TableHead className="min-w-[170px] font-semibold text-muted-foreground">Verifikasi Keamanan</TableHead>
+                  <TableHead className="w-28 text-right font-semibold text-muted-foreground">Forensik</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody className="divide-y divide-border/60">
+                {filtered.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="py-12 text-center text-muted-foreground text-xs">
+                      Tidak ada data karyawan yang sesuai dengan kriteria filter.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filtered.map(({ user: u, attendance: att, status }, idx) => {
+                    const userAnomaly = radarSummary.items.find((i) => i.userId === u.id);
+                    return (
+                      <TableRow key={u.id} className="hover:bg-muted/30 transition-colors">
+                        <TableCell className="text-center font-mono text-xs text-muted-foreground/80">
+                          {idx + 1}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
+                              {u.fullName.charAt(0)}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <p className="font-semibold text-foreground text-xs truncate max-w-[180px]" title={u.fullName}>
+                                  {u.fullName}
+                                </p>
+                                {userAnomaly && (
+                                  <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" title="Terdeteksi anomali presensi" />
+                                )}
+                              </div>
+                              <p className="text-[11px] text-muted-foreground font-mono truncate">
+                                {u.nip}
+                              </p>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <p className="text-xs font-medium text-foreground truncate max-w-[160px]">{u.divisionName || '-'}</p>
+                          <p className="text-[11px] text-muted-foreground capitalize">
+                            {u.role === 'admin' ? 'Administrator' : u.role === 'hr' ? 'HR Staff' : 'Karyawan'}
+                          </p>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {status === 'present' ? (
+                            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                              Tepat Waktu
+                            </Badge>
+                          ) : status === 'late' ? (
+                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                              Telat {att?.lateMinutes}m
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-muted text-muted-foreground border-border text-[11px] rounded-full px-2.5 py-0.5">
+                              Belum Hadir
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <span className={`font-mono text-xs ${att?.clockIn ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
+                            {att?.clockIn ? `${att.clockIn} WIB` : '-'}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <span className={`font-mono text-xs ${att?.clockOut ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
+                            {att?.clockOut ? `${att.clockOut} WIB` : '-'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          {att ? (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {/* Shield 1: Face-API Biometric 1:1 Verification */}
+                              {att.biometricScore != null ? (
+                                <Badge
+                                  variant="outline"
+                                  className={`text-[10px] gap-1 rounded-full ${
+                                    att.biometricMatch !== false
+                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300'
+                                      : 'bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-300'
+                                  }`}
+                                  title={`Skor Kemiripan Biometrik 1:1: ${att.biometricScore}%`}
+                                >
+                                  <ShieldCheck size={10} />
+                                  Face {att.biometricScore}%
+                                </Badge>
+                              ) : att.securityFlags?.includes('BIOMETRIC_SELFIE_WATERMARKED') ? (
+                                <Badge className="bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[10px] gap-1 rounded-full">
+                                  <ShieldCheck size={10} /> Face Valid
+                                </Badge>
+                              ) : null}
+
+                              {/* Shield 2: Geofence Spatial Perimeter & Distance */}
+                              {att.isMockLocation || att.isMockSuspected ? (
+                                <Badge className="bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 text-[10px] gap-1 rounded-full">
+                                  <AlertTriangle size={10} /> Mock GPS
+                                </Badge>
+                              ) : att.geofenceDistance != null ? (
+                                <Badge
+                                  variant="outline"
+                                  className={`text-[10px] gap-1 rounded-full ${
+                                    att.geofenceValid !== false
+                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800'
+                                      : 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800'
+                                  }`}
+                                  title={`Jarak ke perimeter divisi: ${Math.round(att.geofenceDistance)} meter`}
+                                >
+                                  <MapPin size={10} />
+                                  {Math.round(att.geofenceDistance)}m {att.geofenceValid !== false ? 'Valid' : 'Luar'}
+                                </Badge>
+                              ) : att.securityFlags?.includes('DYNAMIC_QR_OFFICE_VERIFIED') || att.securityFlags?.includes('TERMINAL_BARCODE_VERIFIED') ? (
+                                <Badge className="bg-cyan-50 text-cyan-800 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-400 dark:border-cyan-800 text-[10px] gap-1 rounded-full">
+                                  <ShieldCheck size={10} /> Terminal OK
+                                </Badge>
+                              ) : (
+                                <Badge className="bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[10px] gap-1 rounded-full">
+                                  <ShieldCheck size={10} /> Terverifikasi
+                                </Badge>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground/40 text-xs">-</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {(att?.isPerimeterBreached || att?.isLocked) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[10px] rounded-lg gap-1 border-rose-500/40 text-rose-600 hover:bg-rose-500/10 font-semibold"
+                                onClick={() => {
+                                  const existingViolation = perimeterViolations.find((v) => v.userId === u.id && v.status === 'active');
+                                  const vToUse = existingViolation || ({
+                                    id: `violation-${u.id}`,
+                                    userId: u.id,
+                                    attendanceId: att?.id,
+                                    divisionId: u.divisionId,
+                                    violationDate: getTodayDateStr(),
+                                    detectedAt: new Date().toISOString(),
+                                    distanceMeters: att?.geofenceDistance || 120,
+                                    status: 'active',
+                                    notes: 'Terdeteksi meninggalkan perimeter area kantor pada jam operasional.',
+                                    createdAt: new Date().toISOString(),
+                                    updatedAt: new Date().toISOString(),
+                                  } as PerimeterViolation);
+                                  setSelectedBreach(vToUse);
+                                  setUnlockReason('');
+                                  setUnlockModalOpen(true);
+                                }}
+                                title="Buka Kunci Presensi Pulang"
+                              >
+                                <Unlock size={11} /> Buka Kunci
+                              </Button>
+                            )}
+                            {att?.photoIn ? (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 px-2 text-[11px] rounded-lg gap-1 text-primary hover:bg-primary/10"
+                                onClick={() => setPreviewForensic({
+                                  url: att.photoIn!,
+                                  name: u.fullName,
+                                  nip: u.nip,
+                                  division: u.divisionName,
+                                  time: att.clockIn,
+                                  biometricScore: att.biometricScore,
+                                  biometricMatch: att.biometricMatch,
+                                  geofenceDistance: att.geofenceDistance,
+                                  geofenceValid: att.geofenceValid,
+                                  isMockLocation: att.isMockLocation,
+                                  lat: att.clockInLat,
+                                  lng: att.clockInLong,
+                                  securityFlags: att.securityFlags,
+                                })}
+                              >
+                                <Eye size={12} /> Forensik
+                              </Button>
+                            ) : (
+                              <span className="text-muted-foreground/30 text-xs mr-2">-</span>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Datagrid Summary Bar */}
+          <div className="px-4 py-3 border-t border-border/70 bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>
+              Menampilkan <strong className="text-foreground font-semibold">{filtered.length}</strong> dari <strong className="text-foreground font-semibold">{users.length}</strong> karyawan
+            </span>
+            <div className="flex items-center gap-3 text-[11px]">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" /> Tepat Waktu
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-500" /> Terlambat
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-muted-foreground/50" /> Belum Hadir
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* Real-time Cards Grid Fallback */
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filtered.length === 0 ? (
+            <div className="col-span-full py-12 text-center text-muted-foreground text-sm">
+              Tidak ada data staf yang sesuai dengan filter.
+            </div>
+          ) : (
+            filtered.map(({ user: u, attendance: att, status }) => {
+              const userAnomaly = radarSummary.items.find((i) => i.userId === u.id);
+              return (
+              <Card key={u.id} className="border-border/80 bg-card rounded-2xl shadow-xs hover:shadow-md transition-all flex flex-col justify-between">
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
+                        {u.fullName.charAt(0)}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-semibold text-foreground text-xs">{u.fullName}</p>
+                          {userAnomaly && (
+                            <span className="w-2 h-2 rounded-full bg-rose-500" title="Terdeteksi anomali presensi" />
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground font-mono">
+                          {u.nip} • {u.divisionName || '-'}
+                        </p>
+                      </div>
+                    </div>
+
+                  {status === 'present' ? (
+                    <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] rounded-full">
+                      Tepat Waktu
+                    </Badge>
+                  ) : status === 'late' ? (
+                    <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] rounded-full">
+                      Telat {att?.lateMinutes}m
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="bg-muted text-muted-foreground border-border text-[10px] rounded-full">
+                      Belum Hadir
+                    </Badge>
+                  )}
+                </div>
+
+                <div className="p-2.5 bg-muted/30 rounded-xl border border-border/70 text-xs space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Jam Masuk:</span>
+                    <span className="font-mono font-medium text-foreground">
+                      {att?.clockIn ? `${att.clockIn} WIB` : '-'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Jam Pulang:</span>
+                    <span className="font-mono font-medium text-foreground">
+                      {att?.clockOut ? `${att.clockOut} WIB` : '-'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Anti-Fraud Dual-Shield Inspection Stamp */}
+                {att && (
+                  <div className="flex items-center justify-between pt-1 border-t border-border/60">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {/* Shield 1: Face-API Biometric */}
+                      {att.biometricScore != null ? (
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] gap-1 rounded-full ${
+                            att.biometricMatch !== false
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300'
+                              : 'bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-300'
+                          }`}
+                        >
+                          <ShieldCheck size={10} />
+                          {att.biometricScore}% Match
+                        </Badge>
+                      ) : att.securityFlags?.includes('BIOMETRIC_SELFIE_WATERMARKED') ? (
+                        <Badge className="bg-emerald-50 text-emerald-800 border-emerald-200 text-[10px] gap-1 rounded-full">
+                          <ShieldCheck size={10} /> Face Valid
+                        </Badge>
+                      ) : null}
+
+                      {/* Shield 2: Geofence Spatial Perimeter */}
+                      {att.isMockLocation || att.isMockSuspected ? (
+                        <Badge className="bg-rose-50 text-rose-700 border-rose-200 text-[10px] gap-1 rounded-full">
+                          <AlertTriangle size={10} /> Mock GPS
+                        </Badge>
+                      ) : att.geofenceDistance != null ? (
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] gap-1 rounded-full ${
+                            att.geofenceValid !== false
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400'
+                              : 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/40 dark:text-rose-400'
+                          }`}
+                        >
+                          <MapPin size={10} />
+                          {Math.round(att.geofenceDistance)}m
+                        </Badge>
+                      ) : (
+                        <Badge className="bg-emerald-50 text-emerald-800 border-emerald-200 text-[10px] gap-1 rounded-full">
+                          <ShieldCheck size={10} /> Valid
+                        </Badge>
+                      )}
+                    </div>
+
+                    {att.photoIn && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-[10px] rounded-lg gap-1 text-primary hover:bg-primary/10 shrink-0"
+                        onClick={() => setPreviewForensic({
+                          url: att.photoIn!,
+                          name: u.fullName,
+                          nip: u.nip,
+                          division: u.divisionName,
+                          time: att.clockIn,
+                          biometricScore: att.biometricScore,
+                          biometricMatch: att.biometricMatch,
+                          geofenceDistance: att.geofenceDistance,
+                          geofenceValid: att.geofenceValid,
+                          isMockLocation: att.isMockLocation,
+                          lat: att.clockInLat,
+                          lng: att.clockInLong,
+                          securityFlags: att.securityFlags,
+                        })}
+                      >
+                        <Eye size={11} /> Forensik
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+          })
+        )}
+      </div>
+      )}
+
+      {/* Terminal QR Dinamis Kantor Dialog */}
+      <Dialog open={qrModalOpen} onOpenChange={setQrModalOpen}>
+        <DialogContent className="max-w-md rounded-2xl border border-border shadow-2xl text-center">
+          <DialogHeader>
+            <div className="mx-auto w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-1">
+              <QrCode size={24} />
+            </div>
+            <DialogTitle className="text-lg font-bold text-foreground">
+              Terminal QR Dinamis Kantor
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Tampilkan layar ini di monitor lobi kantor. Kode berputar secara otomatis demi mencegah presensi dari luar area.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Square 2D QR Matrix Box */}
+            <div className="p-5 bg-slate-950 rounded-2xl border border-slate-800 flex flex-col items-center justify-center shadow-xl">
+              <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest block mb-3">
+                ARAHKAN KAMERA HP KE KODE QR
+              </span>
+
+              {/* Real 2D Square QR Code Graphic */}
+              <div className="p-3 bg-white rounded-2xl shadow-lg border-4 border-emerald-500/40 inline-flex items-center justify-center transition-transform hover:scale-[1.02]">
+                {qrImageUrl ? (
+                  <img
+                    src={qrImageUrl}
+                    alt="QR Code Presensi Kantor"
+                    className="w-56 h-56 sm:w-64 sm:h-64 object-contain rounded-xl"
+                  />
+                ) : (
+                  <div className="w-56 h-56 flex items-center justify-center bg-slate-100 rounded-xl text-slate-400 text-xs font-medium">
+                    Membuat Kode QR...
+                  </div>
+                )}
+              </div>
+
+              {/* Text Token Fallback */}
+              <div className="text-center mt-3.5 space-y-1">
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
+                  Token Alternatif (Input Manual):
+                </span>
+                <p className="font-mono text-lg sm:text-xl font-black tracking-widest text-emerald-400 bg-slate-900 px-4 py-1.5 rounded-xl border border-slate-700 select-all inline-block">
+                  {qrData.code}
+                </p>
+              </div>
+
+              {/* Progress Countdown Bar */}
+              <div className="w-full max-w-xs mt-3 space-y-1">
+                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="bg-emerald-500 h-full transition-all duration-1000 ease-linear rounded-full"
+                    style={{ width: `${(qrData.remainingSeconds / 10) * 100}%` }}
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400 text-center">
+                  Berputar otomatis dalam <strong className="text-emerald-400 font-mono">{qrData.remainingSeconds} detik</strong>
+                </p>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Forensic Photo & Dual-Shield Database Telemetry Modal */}
+      {previewForensic && (
+        <Dialog open={!!previewForensic} onOpenChange={() => setPreviewForensic(null)}>
+          <DialogContent className="max-w-2xl rounded-2xl p-0 overflow-hidden border border-border shadow-2xl">
+            <div className="flex items-center justify-between p-4 border-b border-border bg-card">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-sm text-foreground">Sertifikat Forensik Presensi Dual-Shield</h3>
+                  <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
+                    Database PostgreSQL Synchronized
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {previewForensic.name} ({previewForensic.nip || '-'}) • {previewForensic.division || 'Umum'} • Jam {previewForensic.time || '-'} WIB
+                </p>
+              </div>
+              <Button size="icon" variant="ghost" onClick={() => setPreviewForensic(null)} className="h-8 w-8 rounded-xl">
+                <X size={15} />
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border bg-card">
+              {/* Left Column: Forensic Selfie Photo */}
+              <div className="p-4 bg-slate-950 flex flex-col items-center justify-center">
+                <img
+                  src={previewForensic.url}
+                  alt="Forensic Watermark"
+                  className="max-h-[50vh] w-full rounded-xl object-contain shadow-lg"
+                />
+                <p className="text-[10px] text-slate-400 mt-2 text-center">
+                  Foto snapshot otentik dengan stempel cryptographic watermark ISO/IEC 19794-5
+                </p>
+              </div>
+
+              {/* Right Column: Synchronized Database Verification Audit */}
+              <div className="p-4 space-y-3.5 text-xs">
+                <div>
+                  <h4 className="font-bold text-foreground text-xs uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-primary" /> Verifikasi Gate Database
+                  </h4>
+
+                  {/* Shield 1 Telemetry */}
+                  <div className="p-3 rounded-xl bg-muted/40 border border-border/80 space-y-1.5 mb-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-foreground flex items-center gap-1">
+                        🛡️ Shield 1: Face-API Biometrik 1:1
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] font-bold ${
+                          previewForensic.biometricMatch !== false
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300'
+                            : 'bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-300'
+                        }`}
+                      >
+                        {previewForensic.biometricScore != null ? `${previewForensic.biometricScore}% Match` : 'Terverifikasi'}
+                      </Badge>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Model ResNet-34 128-D Euclidean Centroid vs Master Profile Enrollment.
+                    </p>
+                  </div>
+
+                  {/* Shield 2 Telemetry */}
+                  <div className="p-3 rounded-xl bg-muted/40 border border-border/80 space-y-1.5 mb-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-foreground flex items-center gap-1">
+                        📍 Shield 2: Geofence Perimeter
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] font-bold ${
+                          previewForensic.geofenceValid !== false
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300'
+                            : 'bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-300'
+                        }`}
+                      >
+                        {previewForensic.geofenceDistance != null ? `${Math.round(previewForensic.geofenceDistance)}m` : 'Area Valid'}
+                        {previewForensic.geofenceValid !== false ? ' (Dalam Area)' : ' (Luar Area)'}
+                      </Badge>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Metrik Haversine &amp; Polygon Ray-Casting ke titik perimeter divisi.
+                    </p>
+                  </div>
+
+                  {/* Anti-Spoof Telemetry */}
+                  <div className="p-3 rounded-xl bg-muted/40 border border-border/80 space-y-1.5 mb-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-foreground flex items-center gap-1">
+                        📡 Integritas GPS &amp; Perangkat
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] font-bold ${
+                          previewForensic.isMockLocation
+                            ? 'bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-300'
+                            : 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300'
+                        }`}
+                      >
+                        {previewForensic.isMockLocation ? '⚠️ Mock GPS Terdeteksi' : 'Hardware GPS Asli'}
+                      </Badge>
+                    </div>
+                    {previewForensic.lat != null && previewForensic.lng != null && (
+                      <p className="text-[11px] font-mono text-muted-foreground">
+                        Koordinat: {previewForensic.lat.toFixed(5)}, {previewForensic.lng.toFixed(5)}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Audit Security Flags */}
+                  {previewForensic.securityFlags && previewForensic.securityFlags.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        Security Audit Flags:
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        {previewForensic.securityFlags.map((flag, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded-md bg-muted text-muted-foreground text-[10px] font-mono border border-border"
+                          >
+                            {flag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* ─── MODAL OTORISASI PEMBUKAAN KUNCI PRESENSI (HRD / PIMPINAN) ─── */}
+      <Dialog open={unlockModalOpen} onOpenChange={setUnlockModalOpen}>
+        <DialogContent className="sm:max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-foreground">
+              <Unlock className="w-5 h-5 text-emerald-600" />
+              Otorisasi Pembukaan Kunci Presensi Pulang
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Tindakan ini akan memulihkan akses Checkout presensi bagi karyawan yang mengalami insiden pelanggaran perimeter.
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedBreach && (
+            <div className="space-y-4 py-2 text-xs">
+              <div className="p-3 bg-muted/40 rounded-xl border border-border space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Karyawan:</span>
+                  <span className="font-bold text-foreground">
+                    {users.find((u) => u.id === selectedBreach.userId)?.fullName || selectedBreach.userName || selectedBreach.userId}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Jarak Terdeteksi:</span>
+                  <span className="font-semibold text-rose-600 font-mono">
+                    {Math.round(selectedBreach.distanceMeters)} Meter di Luar Perimeter
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Waktu Insiden:</span>
+                  <span className="font-mono text-foreground">
+                    {new Date(selectedBreach.detectedAt).toLocaleTimeString('id-ID')} WIB
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="font-medium text-foreground text-xs">
+                  Catatan Pertimbangan / Otorisasi Pembukaan:
+                </label>
+                <Textarea
+                  placeholder="Contoh: Karyawan telah diverifikasi mendapat tugas dinas mendadak / Kendala teknis sinyal GPS..."
+                  value={unlockReason}
+                  onChange={(e) => setUnlockReason(e.target.value)}
+                  rows={3}
+                  className="text-xs rounded-xl"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Catatan ini akan tersimpan permanen di database PostgreSQL dan menjadi lampiran audit kinerja karyawan.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setUnlockModalOpen(false)}
+              className="rounded-xl text-xs"
+            >
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              disabled={isUnlocking}
+              onClick={async () => {
+                if (!selectedBreach) return;
+                setIsUnlocking(true);
+                try {
+                  await hrmService.resolvePerimeterBreach({
+                    violationId: selectedBreach.id,
+                    resolvedBy: 'Admin HRD',
+                    resolutionNotes: unlockReason.trim() || 'Disetujui pembukaan kunci presensi oleh HRD',
+                    unlockAttendance: true,
+                  });
+                  setUnlockModalOpen(false);
+                  loadData();
+                } catch (err: any) {
+                  alert(err.message || 'Gagal membuka kunci presensi.');
+                } finally {
+                  setIsUnlocking(false);
+                }
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold gap-1.5"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              {isUnlocking ? 'Memproses...' : 'Setujui & Buka Kunci'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};

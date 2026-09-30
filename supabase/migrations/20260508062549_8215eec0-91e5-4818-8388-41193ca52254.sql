@@ -1,0 +1,1 @@
+ALTER TABLE public.pengumpulan_tugas ADD COLUMN IF NOT EXISTS feedback_santri text;

@@ -1,0 +1,1 @@
+UPDATE ramadhan_activities SET title = 'One day one juz' WHERE id = '6e2ad5a0-ea67-4d56-bdad-375ed05a49f9';

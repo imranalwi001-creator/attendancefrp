@@ -1,0 +1,1 @@
+INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES (gen_random_uuid(), 'test_trigger_2@test.com', '{"name": "Test 2", "workspaceType": "mandiri", "educationLevel": "sd", "institutionName": ""}'::jsonb);
