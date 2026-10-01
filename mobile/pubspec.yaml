@@ -1,7 +1,7 @@
 name: hrm_attendance_mobile
 description: "Production-grade Employee Face & Location Attendance Mobile App"
 publish_to: "none"
-version: 1.0.3+4
+version: 1.0.4+5
 
 environment:
   sdk: ">=3.2.0 <4.0.0"
@@ -19,6 +19,7 @@ dependencies:
   fl_chart: ^0.68.0
   ota_update: ^7.1.0
   package_info_plus: ^10.2.1
+  camera: ^0.12.1
 
 dev_dependencies:
   flutter_test:

@@ -388,6 +388,7 @@ class AttendanceController extends ChangeNotifier {
     BuildContext context, {
     required LivenessChallenge activeChallenge,
     required Function(String status, double progress) onStepUpdate,
+    String? photo,
   }) async {
     isProcessing = true;
     notifyListeners();
@@ -435,6 +436,7 @@ class AttendanceController extends ChangeNotifier {
           time: timeStr,
           latitude: LocationService.officeLatitude,
           longitude: LocationService.officeLongitude,
+          photo: photo,
           status: 'hadir',
           lateMinutes: 0,
           biometricScore: faceResult.confidenceScore,
@@ -457,6 +459,7 @@ class AttendanceController extends ChangeNotifier {
           time: timeStr,
           latitude: LocationService.officeLatitude,
           longitude: LocationService.officeLongitude,
+          photo: photo,
           earlyLeavingMinutes: 0,
           workDurationMinutes: 480,
           biometricScore: faceResult.confidenceScore,

@@ -8,8 +8,8 @@ import '../constants/app_typography.dart';
 import '../services/api_service.dart';
 
 /// Fallback hardcoded version if package_info_plus is not yet available
-const String kCurrentAppVersion = "1.0.3";
-const int kCurrentVersionCode = 4;
+const String kCurrentAppVersion = "1.0.4";
+const int kCurrentVersionCode = 5;
 
 class AppUpdateChecker {
   /// Check with server and prompt in-app update dialog if newer version is released
