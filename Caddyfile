@@ -1,11 +1,10 @@
 # ==============================================================================
-# CADDY REVERSE PROXY CONFIGURATION
-# Otomatisasi HTTPS Resmi via nip.io & Akses HTTP Langsung
+# CADDY REVERSE PROXY CONFIGURATION - PT FAWWAZ RESKI PERWIRA
+# Otomatisasi HTTPS Resmi Let's Encrypt / ZeroSSL
 # ==============================================================================
 
-# 1. Domain Otomatis Resmi HTTPS (Sertifikat SSL Let's Encrypt Gratis Otomatis)
-# Memungkinkan Akses Kamera HP, GPS, & PWA tanpa peringatan keamanan
-103.197.188.211.nip.io {
+# Domain Utama & Subdomain WWW Resmi
+fawwazreskiperwira.com, www.fawwazreskiperwira.com {
     handle /api/* {
         reverse_proxy hrm-backend:5000
     }
@@ -17,6 +16,7 @@
     encode zstd gzip
 
     header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         X-Content-Type-Options "nosniff"
         X-Frame-Options "SAMEORIGIN"
         Referrer-Policy "strict-origin-when-cross-origin"
@@ -24,8 +24,8 @@
     }
 }
 
-# 2. Port 80 HTTP Biasa (Akses Langsung via IP)
-:80 {
+# Fallback Wildcard & Port 80 HTTP Biasa
+103.197.188.211.nip.io, :80 {
     handle /api/* {
         reverse_proxy hrm-backend:5000
     }
