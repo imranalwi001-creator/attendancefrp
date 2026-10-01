@@ -918,17 +918,6 @@ export const HrmEmployeesPage: React.FC = () => {
                       </td>
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          {/* Face Enrollment Button */}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleOpenFaceEnrollment(u)}
-                            className="h-8 w-8 p-0 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10 rounded-lg transition-colors"
-                            title="Pendaftaran / Rekam Wajah Master"
-                          >
-                            <ScanFace className="w-4 h-4 text-emerald-600" />
-                          </Button>
-
                           {/* Mutasi / Pindah Lokasi Button */}
                           <Button
                             variant="ghost"

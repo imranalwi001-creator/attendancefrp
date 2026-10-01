@@ -450,6 +450,37 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+app.get('/api/users/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(`
+      SELECT p.*, r.name as role_code, r.label as role_label,
+             COALESCE(d.name, p.division_name, 'Umum') as resolved_division_name,
+             d.location_name as division_location_name,
+             d.radius_meters as division_radius_meters,
+             d.latitude as division_latitude,
+             d.longitude as division_longitude,
+             s.name as shift_name,
+             s.start_time as shift_start_time,
+             s.end_time as shift_end_time,
+             sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme
+      FROM hrm_profiles p
+      LEFT JOIN hrm_roles r ON p.role_id = r.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id::text = $1 OR p.nip = $1 OR LOWER(p.email) = LOWER($1)
+      LIMIT 1
+    `, [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    res.json({ success: true, data: formatUserRow(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/users', async (req, res) => {
   const u = req.body;
   if (!u.nip || !u.fullName || !u.email) {
@@ -1706,7 +1737,7 @@ app.post('/api/biometrics/enroll', async (req, res) => {
         face_enrolled_at = NOW(),
         avatar_url = COALESCE($2, avatar_url),
         updated_at = NOW()
-      WHERE id = $3
+      WHERE id::text = $3 OR nip = $3 OR LOWER(email) = LOWER($3)
       RETURNING *;
     `;
     const result = await pool.query(query, [descriptorStr, enrolledPhoto || null, userId]);
@@ -1714,7 +1745,7 @@ app.post('/api/biometrics/enroll', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
     }
     console.log(`[Biometrics] Master face enrolled successfully for user ${userId}`);
-    res.json({ success: true, data: formatUserRow(result.rows[0]) });
+    res.json({ success: true, data: formatUserRow(result.rows[0]), message: 'Wajah master biometrik berhasil didaftarkan' });
   } catch (err) {
     console.error('Enroll biometrics error:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -1731,7 +1762,7 @@ app.post('/api/biometrics/reset/:userId', async (req, res) => {
         face_enrolled_photo = NULL,
         face_enrolled_at = NULL,
         updated_at = NOW()
-      WHERE id = $1
+      WHERE id::text = $1 OR nip = $1 OR LOWER(email) = LOWER($1)
       RETURNING *;
     `;
     const result = await pool.query(query, [userId]);
@@ -1739,7 +1770,7 @@ app.post('/api/biometrics/reset/:userId', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
     }
     console.log(`[Biometrics] Master face reset successfully for user ${userId}`);
-    res.json({ success: true, data: formatUserRow(result.rows[0]) });
+    res.json({ success: true, data: formatUserRow(result.rows[0]), message: 'Data wajah master berhasil direset' });
   } catch (err) {
     console.error('Reset biometrics error:', err);
     res.status(500).json({ success: false, error: err.message });

@@ -28,6 +28,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import QRCode from 'qrcode';
+import { api } from '@/services/apiClient';
 
 interface HrmFaceEnrollmentModalProps {
   open: boolean;
@@ -96,9 +97,24 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
   useEffect(() => {
     if (!open || !user || enrollMode !== 'qr_mobile' || isMobileEnrolledSuccess) return;
 
-    const pollInterval = setInterval(() => {
+    const pollInterval = setInterval(async () => {
+      // 1. Poll PostgreSQL database on server
+      try {
+        const res = await api.get<{ success: boolean; data: UserProfile }>(`/users/${user.id}`);
+        if (res && res.success && res.data && res.data.isFaceEnrolled && res.data.faceEnrolledPhoto) {
+          setIsMobileEnrolledSuccess(true);
+          setEnrolledPhotoPreview(res.data.faceEnrolledPhoto);
+          await hrmService.syncWithBackend().catch(() => null);
+          if (onSuccess) onSuccess(res.data);
+          return;
+        }
+      } catch (err) {
+        // Silent fallback to local storage check
+      }
+
+      // 2. Fallback check local storage
       const freshUsers = hrmService.getUsers();
-      const targetUser = freshUsers.find((u) => u.id === user.id);
+      const targetUser = freshUsers.find((u) => u.id === user.id || u.nip === user.nip);
 
       if (targetUser && targetUser.isFaceEnrolled && targetUser.faceEnrolledPhoto) {
         setIsMobileEnrolledSuccess(true);

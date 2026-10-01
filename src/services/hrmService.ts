@@ -1752,46 +1752,78 @@ export const hrmService = {
     descriptor: number[],
     photoUrl: string
   ): Promise<UserProfile> => {
-    const users = hrmService.getUsers();
-    const idx = users.findIndex((u) => u.id === userId);
-    if (idx === -1) throw new Error('Karyawan tidak ditemukan');
+    let backendUser: UserProfile | null = null;
+    let backendError: string | null = null;
 
-    const nowIso = new Date().toISOString();
-    users[idx].isFaceEnrolled = true;
-    users[idx].faceDescriptor = descriptor;
-    users[idx].faceEnrolledPhoto = photoUrl;
-    users[idx].faceEnrolledAt = nowIso;
-    users[idx].avatarUrl = photoUrl;
-
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-
-    // Update current user in session if matches
-    const currentUser = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
-    if (currentUser && currentUser.id === userId) {
-      localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(users[idx]));
-    }
-
-    window.dispatchEvent(new Event('hrm_users_updated'));
-
-    // Persist to PostgreSQL backend database
+    // 1. Persist directly to PostgreSQL backend database
     try {
-      const res = await api.post<{ success: boolean; data: UserProfile }>('/biometrics/enroll', {
+      const res = await api.post<{ success: boolean; data: UserProfile; message?: string }>('/biometrics/enroll', {
         userId,
         faceDescriptor: descriptor,
         enrolledPhoto: photoUrl,
       });
       if (res && res.success && res.data) {
-        users[idx] = { ...users[idx], ...res.data };
-        localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-        if (currentUser && currentUser.id === userId) {
-          localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(users[idx]));
-        }
+        backendUser = res.data;
       }
-    } catch (err) {
-      console.warn('[Biometrics] Syncing master face to backend warning:', err);
+    } catch (err: any) {
+      console.warn('[Biometrics] Backend enroll error:', err);
+      backendError = err?.response?.data?.error || err.message;
     }
 
-    return users[idx];
+    // 2. Also update local storage if user exists locally (e.g. desktop admin session)
+    const users = hrmService.getUsers();
+    const idx = users.findIndex((u) => u.id === userId || u.nip === userId);
+    const nowIso = new Date().toISOString();
+
+    if (idx !== -1) {
+      users[idx].isFaceEnrolled = true;
+      users[idx].faceDescriptor = descriptor;
+      users[idx].faceEnrolledPhoto = photoUrl;
+      users[idx].faceEnrolledAt = nowIso;
+      users[idx].avatarUrl = photoUrl;
+
+      if (backendUser) {
+        users[idx] = { ...users[idx], ...backendUser };
+      }
+
+      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+
+      const currentUser = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
+      if (currentUser && (currentUser.id === userId || currentUser.nip === userId)) {
+        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(users[idx]));
+      }
+
+      window.dispatchEvent(new Event('hrm_users_updated'));
+      return users[idx];
+    }
+
+    if (backendUser) {
+      return backendUser;
+    }
+
+    if (backendError) {
+      throw new Error(`Gagal menyimpan ke server: ${backendError}`);
+    }
+
+    // Fallback constructed user profile
+    const fallbackUser: UserProfile = {
+      id: userId,
+      nip: userId,
+      fullName: 'Karyawan',
+      email: '',
+      roleId: 'karyawan',
+      roleName: 'Karyawan',
+      divisionId: 'div-umum',
+      divisionName: 'Umum',
+      isActive: true,
+      joinDate: new Date().toISOString().split('T')[0],
+      isFaceEnrolled: true,
+      faceDescriptor: descriptor,
+      faceEnrolledPhoto: photoUrl,
+      faceEnrolledAt: nowIso,
+      avatarUrl: photoUrl,
+    };
+    return fallbackUser;
   },
 
   resetMasterFace: async (userId: string): Promise<UserProfile> => {
