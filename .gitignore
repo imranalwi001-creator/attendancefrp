@@ -26,6 +26,7 @@ supabase/snippets
 
 # Sensitive credential text notes
 database*.txt
+dump_*.sql
 
 # Flutter mobile artifacts
 mobile/build/
