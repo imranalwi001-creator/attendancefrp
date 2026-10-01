@@ -265,8 +265,11 @@ export async function initDb() {
       ALTER TABLE hrm_payroll_salary_profiles
       ADD COLUMN IF NOT EXISTS severance_scheme VARCHAR(50) DEFAULT 'tabungan';
 
+      ALTER TABLE hrm_profiles
+      ADD COLUMN IF NOT EXISTS employee_sequence_no INT DEFAULT 0;
+
       ALTER TABLE hrm_payroll_salary_profiles
-      ADD COLUMN IF NOT EXISTS base_salary BIGINT DEFAULT 4045050;
+      ADD COLUMN IF NOT EXISTS employee_sequence_no INT DEFAULT 0;
 
       -- Ensure default active profile for imranalwi8@gmail.com exists
       INSERT INTO hrm_profiles (
