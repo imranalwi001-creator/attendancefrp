@@ -32,13 +32,13 @@ app.get('/api/health', (req, res) => {
 app.get('/api/app-version', (req, res) => {
   res.json({
     success: true,
-    latestVersion: '1.0.3',
-    versionCode: 4,
+    latestVersion: '1.0.4',
+    versionCode: 5,
     minVersion: '1.0.0',
     downloadUrl: 'https://fawwazreskiperwira.com/downloads/hrm-attendance.apk',
     forceUpdate: false,
-    title: 'Pembaruan Sistem HRM Tersedia',
-    releaseNotes: 'Fitur baru In-App Auto-Updater (OTA) langsung di dalam aplikasi, perbaikan biometrik, dan menu Korlap.',
+    title: 'Pembaruan Kamera & Presensi Wajah Tersedia',
+    releaseNotes: 'Fitur Live Camera Viewfinder aktif pada Presensi Wajah, verifikasi foto real-time, dan OTA In-App Auto-Updater.',
     releasedAt: '2026-10-01'
   });
 });
