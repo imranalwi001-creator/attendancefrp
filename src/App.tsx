@@ -107,7 +107,7 @@ export const App: React.FC = () => {
                 <Route
                   path="/admin/approval"
                   element={
-                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas']}>
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu']}>
                       <HrmApprovalPage />
                     </HrmProtectedRoute>
                   }
@@ -116,7 +116,7 @@ export const App: React.FC = () => {
                 <Route
                   path="/admin/monitoring"
                   element={
-                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas']}>
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu']}>
                       <HrmLiveMonitoringPage />
                     </HrmProtectedRoute>
                   }
@@ -125,7 +125,7 @@ export const App: React.FC = () => {
                 <Route
                   path="/admin/laporan"
                   element={
-                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'keuangan', 'pengawas']}>
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'keuangan', 'pengawas', 'korlap', 'kepala_regu']}>
                       <HrmReportsPage />
                     </HrmProtectedRoute>
                   }
@@ -135,7 +135,7 @@ export const App: React.FC = () => {
                 <Route
                   path="/admin/karyawan"
                   element={
-                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin']}>
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'korlap']}>
                       <HrmEmployeesPage />
                     </HrmProtectedRoute>
                   }

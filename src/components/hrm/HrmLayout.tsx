@@ -146,37 +146,37 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       label: 'Presensi Saya',
       path: '/presensi',
       icon: Clock,
-      roles: ['karyawan', 'superadmin', 'admin', 'hrd', 'keuangan', 'pengawas'],
+      // Semua pengguna / karyawan memiliki akses presensi mandiri
     },
     {
       label: 'Pengajuan Cuti / Izin',
       path: '/pengajuan',
       icon: CalendarCheck2,
-      roles: ['karyawan', 'superadmin', 'admin', 'hrd', 'keuangan', 'pengawas'],
+      // Semua pengguna / karyawan berhak mengajukan izin/cuti
     },
     {
       label: 'Riwayat Presensi',
       path: '/riwayat',
       icon: CalendarDays,
-      roles: ['karyawan', 'superadmin', 'admin', 'hrd', 'keuangan', 'pengawas'],
+      // Semua pengguna / karyawan dapat melihat riwayat kehadiran pribadi
     },
     {
       label: 'Persetujuan Izin',
       path: '/admin/approval',
       icon: FileCheck2,
-      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas'],
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu'],
     },
     {
       label: 'Monitoring Presensi',
       path: '/admin/monitoring',
       icon: UserCheck,
-      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas'],
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu'],
     },
     {
       label: 'Rekap & Laporan',
       path: '/admin/laporan',
       icon: FileSpreadsheet,
-      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'keuangan', 'pengawas'],
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'keuangan', 'pengawas', 'korlap', 'kepala_regu'],
     },
     {
       label: 'Penggajian (Payroll)',
@@ -188,7 +188,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       label: 'Data Karyawan',
       path: '/admin/karyawan',
       icon: Users,
-      roles: ['superadmin', 'admin'],
+      roles: ['superadmin', 'admin', 'hrd', 'korlap'],
     },
     {
       label: 'Kelola Divisi',
@@ -218,7 +218,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
 
   // Mobile Bottom Navigation Bar Items (Primary 4 items + "Lainnya" button)
   const getPrimaryMobileItems = () => {
-    if (['superadmin', 'admin', 'hrd', 'pimpinan'].includes(currentRole)) {
+    if (['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu', 'kepalaregu'].some((r) => currentRole.includes(r))) {
       return [
         { label: 'Beranda', path: '/dashboard', icon: LayoutDashboard },
         { label: 'Monitor', path: '/admin/monitoring', icon: UserCheck },
@@ -253,6 +253,10 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       pimpinan: 'Pimpinan',
       keuangan: 'Keuangan',
       karyawan: 'Karyawan',
+      pengawas: 'Pengawas',
+      korlap: 'Korlap',
+      kepala_regu: 'Danru',
+      kepalaregu: 'Danru',
     };
     const isSuper = r === 'superadmin';
     return (

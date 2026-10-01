@@ -19,12 +19,26 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import defaultLogo from '@/assets/logo.png';
+import { api } from '@/services/apiClient';
 
 export const HrmMobileEnrollPage: React.FC = () => {
   const [searchParams] = useSearchParams();
-  const userId = searchParams.get('userId') || '';
-  const employeeName = searchParams.get('name') || 'Karyawan';
+  const userId = searchParams.get('userId') || searchParams.get('id') || '';
+  const initialName = searchParams.get('name') || 'Karyawan';
+  const [employeeDisplayName, setEmployeeDisplayName] = useState(initialName);
   const token = searchParams.get('token') || '';
+
+  useEffect(() => {
+    if (userId) {
+      api.get<{ success: boolean; data: any }>(`/users/${userId}`)
+        .then((res) => {
+          if (res && res.success && res.data && res.data.fullName) {
+            setEmployeeDisplayName(res.data.fullName);
+          }
+        })
+        .catch(() => null);
+    }
+  }, [userId]);
 
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
@@ -42,7 +56,16 @@ export const HrmMobileEnrollPage: React.FC = () => {
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const isCapturingRef = useRef(false);
 
-  // Initialize and load face-api deep learning models
+  // 1. Start camera immediately on mount (zero waiting for AI models)
+  useEffect(() => {
+    startCamera(facingMode);
+
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
+  // 2. Load face-api AI models asynchronously in the background
   useEffect(() => {
     let isMounted = true;
     biometricService
@@ -50,64 +73,86 @@ export const HrmMobileEnrollPage: React.FC = () => {
         if (isMounted) setModelStatus(status);
       })
       .then(() => {
-        if (isMounted) {
-          setIsModelLoading(false);
-          startCamera();
-        }
+        if (isMounted) setIsModelLoading(false);
       })
       .catch((err) => {
-        if (isMounted) {
-          setIsModelLoading(false);
-          startCamera(); // Proceed to start camera even if model warning
-        }
+        console.warn('AI models background loading warning:', err);
+        if (isMounted) setIsModelLoading(false);
       });
 
     return () => {
       isMounted = false;
-      stopCamera();
     };
-  }, [facingMode]);
+  }, []);
 
-  const startCamera = async () => {
-    stopCamera();
-    try {
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      setCameraStream(stream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        videoRef.current.setAttribute('muted', 'true');
-        try {
-          await videoRef.current.play();
-        } catch (e) {
-          console.warn('Video auto-play warning:', e);
-        }
+  // 3. Reactively attach cameraStream to videoRef whenever stream or element updates
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && cameraStream) {
+      if (video.srcObject !== cameraStream) {
+        video.srcObject = cameraStream;
       }
-    } catch (err: any) {
-      console.warn('High-res camera stream failed, trying basic stream:', err);
+      video.setAttribute('playsinline', 'true');
+      video.setAttribute('webkit-playsinline', 'true');
+      video.muted = true;
+      video.onloadedmetadata = () => {
+        video.play().catch((e) => console.warn('[Video] onloadedmetadata play error:', e));
+      };
+      video.play().catch((e) => console.warn('[Video] Immediate play error:', e));
+    }
+  }, [cameraStream]);
+
+  const startCamera = async (targetFacing: 'user' | 'environment' = facingMode) => {
+    stopCamera();
+    setErrorMsg(null);
+
+    try {
+      let stream: MediaStream | null = null;
+
+      // Tier 1: Ideal facingMode (front/user by default) with standard 1280x720 or 720x1280
       try {
-        const fallbackStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: facingMode } },
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: targetFacing },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
           audio: false,
         });
-        setCameraStream(fallbackStream);
-        if (videoRef.current) {
-          videoRef.current.srcObject = fallbackStream;
-          videoRef.current.setAttribute('playsinline', 'true');
-          videoRef.current.setAttribute('muted', 'true');
-          await videoRef.current.play();
+      } catch (e1) {
+        console.warn('[Camera] Tier 1 failed, trying basic facingMode:', e1);
+        try {
+          // Tier 2: Basic facingMode constraint without resolution requirements
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: targetFacing },
+            audio: false,
+          });
+        } catch (e2) {
+          console.warn('[Camera] Tier 2 failed, falling back to any available video device:', e2);
+          // Tier 3: Any video device available on device
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
         }
-      } catch (err2: any) {
-        setErrorMsg('Akses kamera tidak diizinkan di browser Anda. Harap berikan izin akses kamera.');
       }
+
+      if (stream) {
+        setCameraStream(stream);
+        const video = videoRef.current;
+        if (video) {
+          video.srcObject = stream;
+          video.setAttribute('playsinline', 'true');
+          video.setAttribute('webkit-playsinline', 'true');
+          video.muted = true;
+          video.play().catch(() => null);
+        }
+      } else {
+        throw new Error('Tidak ada stream video yang diterima dari kamera perangkat.');
+      }
+    } catch (err: any) {
+      console.error('[Camera] All initialization tiers failed:', err);
+      setErrorMsg('Akses kamera tidak terdeteksi atau diblokir. Harap izinkan akses kamera di peramban Anda.');
     }
   };
 
@@ -116,6 +161,15 @@ export const HrmMobileEnrollPage: React.FC = () => {
       cameraStream.getTracks().forEach((t) => t.stop());
       setCameraStream(null);
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  const handleSwitchCamera = () => {
+    const nextMode = facingMode === 'user' ? 'environment' : 'user';
+    setFacingMode(nextMode);
+    startCamera(nextMode);
   };
 
   // Immediate manual snapshot capture
@@ -308,7 +362,7 @@ export const HrmMobileEnrollPage: React.FC = () => {
         </div>
         <h1 className="text-xl font-bold text-white tracking-tight">Pendaftaran Wajah HD</h1>
         <p className="text-xs text-slate-400">
-          Karyawan: <strong className="text-white">{employeeName}</strong>
+          Karyawan: <strong className="text-white">{employeeDisplayName}</strong>
         </p>
       </div>
 
@@ -324,59 +378,58 @@ export const HrmMobileEnrollPage: React.FC = () => {
         <div className="space-y-4 my-auto">
           {/* Viewfinder */}
           <div className="relative w-full aspect-square bg-black rounded-3xl overflow-hidden border-2 border-slate-800 shadow-2xl flex items-center justify-center">
-            {isModelLoading ? (
-              <div className="flex flex-col items-center gap-2 text-center p-6 text-slate-400">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className={`w-full h-full object-cover ${facingMode === 'user' ? '-scale-x-100' : ''}`}
+            />
+            <canvas
+              ref={overlayCanvasRef}
+              className={`absolute inset-0 w-full h-full pointer-events-none ${
+                facingMode === 'user' ? '-scale-x-100' : ''
+              }`}
+            />
+
+            {/* Center Biometric Oval Guide */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10">
+              <div
+                className={`w-52 h-64 rounded-[50%] border-2 transition-all duration-300 ${
+                  isQualityGood
+                    ? 'border-emerald-400 shadow-[0_0_30px_rgba(52,211,153,0.5)]'
+                    : 'border-cyan-400/70 border-dashed animate-pulse'
+                }`}
+              />
+              <div className="absolute inset-x-0 bottom-4 px-4 text-center">
+                <span
+                  className={`inline-block text-xs font-semibold px-3.5 py-1.5 rounded-full backdrop-blur-md border ${
+                    isQualityGood
+                      ? 'bg-emerald-500/90 text-white border-emerald-400'
+                      : 'bg-black/80 text-slate-200 border-white/20'
+                  }`}
+                >
+                  {qualityMsg}
+                </span>
+              </div>
+            </div>
+
+            {/* Switch Camera Button */}
+            <button
+              type="button"
+              onClick={handleSwitchCamera}
+              className="absolute top-4 right-4 p-2.5 bg-black/60 hover:bg-black/80 text-white rounded-full backdrop-blur-md border border-white/20 active:scale-95 transition-all z-20"
+              title="Ganti Kamera"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+
+            {/* Model Loading Non-Blocking Overlay */}
+            {isModelLoading && (
+              <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xs flex flex-col items-center justify-center gap-2 text-center p-6 text-slate-300 z-30">
                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
                 <p className="text-xs font-medium">{modelStatus}</p>
               </div>
-            ) : (
-              <>
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className={`w-full h-full object-cover ${facingMode === 'user' ? '-scale-x-100' : ''}`}
-                />
-                <canvas
-                  ref={overlayCanvasRef}
-                  className={`absolute inset-0 w-full h-full pointer-events-none ${
-                    facingMode === 'user' ? '-scale-x-100' : ''
-                  }`}
-                />
-
-                {/* Center Biometric Oval Guide */}
-                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                  <div
-                    className={`w-52 h-64 rounded-[50%] border-2 transition-all duration-300 ${
-                      isQualityGood
-                        ? 'border-emerald-400 shadow-[0_0_30px_rgba(52,211,153,0.5)]'
-                        : 'border-cyan-400/70 border-dashed animate-pulse'
-                    }`}
-                  />
-                  <div className="absolute inset-x-0 bottom-4 px-4 text-center">
-                    <span
-                      className={`inline-block text-xs font-semibold px-3.5 py-1.5 rounded-full backdrop-blur-md border ${
-                        isQualityGood
-                          ? 'bg-emerald-500/90 text-white border-emerald-400'
-                          : 'bg-black/80 text-slate-200 border-white/20'
-                      }`}
-                    >
-                      {qualityMsg}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Switch Camera Button */}
-                <button
-                  type="button"
-                  onClick={() => setFacingMode(facingMode === 'user' ? 'environment' : 'user')}
-                  className="absolute top-4 right-4 p-2.5 bg-black/60 hover:bg-black/80 text-white rounded-full backdrop-blur-md border border-white/20 active:scale-95 transition-all"
-                  title="Ganti Kamera"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </button>
-              </>
             )}
           </div>
 
@@ -482,7 +535,7 @@ export const HrmMobileEnrollPage: React.FC = () => {
           <div className="space-y-1.5">
             <h2 className="text-xl font-bold text-white">Wajah Master Berhasil Terdaftar!</h2>
             <p className="text-xs text-slate-300 max-w-xs mx-auto leading-relaxed">
-              Vektor biometrik HD untuk <strong>{employeeName}</strong> telah berhasil disimpan ke database PostgreSQL.
+              Vektor biometrik HD untuk <strong>{employeeDisplayName}</strong> telah berhasil disimpan ke database PostgreSQL.
             </p>
           </div>
           <div className="p-3 bg-emerald-950/50 border border-emerald-800/40 rounded-xl text-[11px] text-emerald-300">
