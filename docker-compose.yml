@@ -63,6 +63,7 @@ services:
       - FACE_AI_URL=${FACE_AI_URL:-http://hrm-face-ai:5001}
     volumes:
       - ./server/src:/app/src
+      - ./server/public:/app/public
     depends_on:
       hrm-database:
         condition: service_healthy

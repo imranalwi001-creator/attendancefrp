@@ -9,6 +9,10 @@ fawwazreskiperwira.com, www.fawwazreskiperwira.com {
         reverse_proxy hrm-backend:5000
     }
 
+    handle /downloads/* {
+        reverse_proxy hrm-backend:5000
+    }
+
     handle {
         reverse_proxy hrm-frontend:80
     }
@@ -27,6 +31,10 @@ fawwazreskiperwira.com, www.fawwazreskiperwira.com {
 # Fallback Wildcard & Port 80 HTTP Biasa
 103.197.188.211.nip.io, :80 {
     handle /api/* {
+        reverse_proxy hrm-backend:5000
+    }
+
+    handle /downloads/* {
         reverse_proxy hrm-backend:5000
     }
 
