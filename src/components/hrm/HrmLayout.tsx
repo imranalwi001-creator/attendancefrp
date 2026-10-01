@@ -407,7 +407,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   );
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row transition-colors duration-200">
+    <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row transition-colors duration-200 w-full max-w-full overflow-x-hidden">
       {/* DESKTOP SIDEBAR - LMS DIGISS ORIGINAL THEME WITH COMPACT & HOVER EXPANSION */}
       <aside
         onMouseEnter={() => isSidebarCollapsed && setIsSidebarHovered(true)}
@@ -510,27 +510,25 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       </aside>
 
       {/* MOBILE NAVBAR */}
-      <header className="md:hidden flex items-center justify-between h-16 px-4 bg-card text-foreground border-b border-border sticky top-0 z-40">
-        <div className="flex items-center gap-2.5">
+      <header className="md:hidden flex items-center justify-between h-14 px-3.5 bg-card/95 backdrop-blur-md text-foreground border-b border-border sticky top-0 z-40 w-full max-w-full">
+        <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
           <img
             src={appSettings.logoUrl || defaultLogo}
             alt="Logo Perusahaan"
-            className="w-8 h-8 object-contain filter drop-shadow-xs dark:drop-shadow-[0_2px_8px_rgba(255,255,255,0.25)] shrink-0"
+            className="w-7 h-7 object-contain filter drop-shadow-xs dark:drop-shadow-[0_2px_8px_rgba(255,255,255,0.25)] shrink-0"
           />
-          <span className="font-bold text-sm text-foreground truncate max-w-[150px]">
+          <span className="font-bold text-xs sm:text-sm text-foreground truncate">
             {appSettings.appName || 'PT. FAWWAZ RESKI PERWIRA'}
           </span>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1 shrink-0">
           <ThemeToggle variant="dropdown" />
-          <ApkDownloadButton variant="header" />
           {renderNotificationBell()}
-          {getRoleBadge(currentRole)}
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="text-foreground hover:bg-muted rounded-xl"
+            className="text-foreground hover:bg-muted rounded-xl h-9 w-9"
             title="Menu Navigasi"
           >
             {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -541,7 +539,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       {/* MOBILE DRAWER */}
       {mobileMenuOpen && (
         <div 
-          className="md:hidden fixed inset-0 top-16 bottom-16 bg-background/95 backdrop-blur-md z-30 flex flex-col p-4 space-y-2 overflow-y-auto"
+          className="md:hidden fixed inset-0 top-14 bottom-16 bg-background/95 backdrop-blur-md z-30 flex flex-col p-4 space-y-2 overflow-y-auto"
         >
           <div className="p-3 bg-muted rounded-xl mb-2 flex items-center gap-3">
             {user?.avatarUrl ? (
@@ -556,7 +554,10 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
               </div>
             )}
             <div className="min-w-0 flex-1">
-              <p className="font-semibold text-foreground text-sm truncate">{user?.fullName}</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="font-semibold text-foreground text-sm truncate">{user?.fullName}</p>
+                {getRoleBadge(currentRole)}
+              </div>
               <p className="text-xs text-muted-foreground truncate">{user?.email} • {user?.divisionName}</p>
             </div>
           </div>
@@ -578,7 +579,8 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
               </Link>
             );
           })}
-          <div className="pt-4 mt-auto">
+          <div className="pt-4 mt-auto space-y-2">
+            <ApkDownloadButton variant="sidebar" />
             <Button
               variant="destructive"
               className="w-full gap-2 rounded-xl"
@@ -597,7 +599,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       {/* MAIN CONTENT AREA */}
       <main
         className={cn(
-          'flex-1 flex flex-col min-w-0 bg-background text-foreground transition-all duration-300 ease-in-out',
+          'flex-1 flex flex-col min-w-0 bg-background text-foreground w-full max-w-full overflow-x-hidden transition-all duration-300 ease-in-out',
           isSidebarCollapsed ? 'md:pl-[72px]' : 'md:pl-[260px]'
         )}
       >
@@ -661,7 +663,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
         </div>
 
         {/* Page Content Body */}
-        <div className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 md:pb-8 w-full min-w-0">
+        <div className="flex-1 p-3 sm:p-6 lg:p-8 pb-24 md:pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
           {children}
         </div>
       </main>
