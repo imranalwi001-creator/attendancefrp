@@ -60,6 +60,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import QRCode from 'qrcode';
+import { toast } from 'sonner';
 
 export const HrmDivisionsPage: React.FC = () => {
   const [divisions, setDivisions] = useState<Division[]>([]);
@@ -88,6 +89,8 @@ export const HrmDivisionsPage: React.FC = () => {
   const [longitude, setLongitude] = useState<number>(106.809);
   const [radiusMeters, setRadiusMeters] = useState<number>(150);
   const [gettingLocation, setGettingLocation] = useState(false);
+  const [detectedAccuracy, setDetectedAccuracy] = useState<number | null>(null);
+  const [detectedTime, setDetectedTime] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Employee List Modal for specific division
@@ -643,21 +646,62 @@ export const HrmDivisionsPage: React.FC = () => {
 
   const handleGetCoordinates = () => {
     if (!navigator.geolocation) {
-      alert('Geolokasi tidak didukung oleh browser Anda.');
+      toast.error('Perangkat atau browser Anda tidak mendukung fitur geolokasi GPS.');
       return;
     }
     setGettingLocation(true);
+
+    const applyLocationSuccess = (pos: GeolocationPosition, isFallback = false) => {
+      const lat = Number(pos.coords.latitude.toFixed(6));
+      const lng = Number(pos.coords.longitude.toFixed(6));
+      const acc = Math.round(pos.coords.accuracy || 0);
+      const timeStr = new Date().toLocaleTimeString('id-ID');
+
+      setLatitude(lat);
+      setLongitude(lng);
+      setDetectedAccuracy(acc);
+      setDetectedTime(timeStr);
+      setGettingLocation(false);
+
+      toast.success(
+        `Titik GPS Berhasil Dideteksi! Lat: ${lat}, Lng: ${lng} (Akurasi: ±${acc}m${isFallback ? ' via Jaringan' : ''})`,
+        { duration: 5000 }
+      );
+    };
+
+    // 1. Coba High Accuracy dengan batas waktu 8 detik & fresh reading (maximumAge: 0)
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLatitude(Number(pos.coords.latitude.toFixed(6)));
-        setLongitude(Number(pos.coords.longitude.toFixed(6)));
-        setGettingLocation(false);
+      (pos) => applyLocationSuccess(pos, false),
+      (highAccErr) => {
+        console.warn('[GPS Detection] Mode GPS akurasi tinggi lambat/gagal, beralih ke mode jaringan...', highAccErr);
+
+        // 2. Fallback mode jaringan (sangat efektif di laptop / PC kantor tanpa chip satelit GPS)
+        navigator.geolocation.getCurrentPosition(
+          (fallbackPos) => applyLocationSuccess(fallbackPos, true),
+          (finalErr) => {
+            setGettingLocation(false);
+            console.error('[GPS Detection] Gagal deteksi lokasi:', finalErr);
+            if (finalErr.code === 1) {
+              toast.error(
+                'Izin lokasi ditolak di browser. Klik ikon gembok / lokasi di address bar browser dan pilih "Izinkan" untuk fawwazreskiperwira.com',
+                { duration: 8000 }
+              );
+            } else if (finalErr.code === 3) {
+              toast.error(
+                'Deteksi lokasi timeout. Anda dapat menyalin koordinat titik lokasi langsung dari Google Maps.',
+                { duration: 6000 }
+              );
+            } else {
+              toast.error(
+                `Gagal mengambil koordinat (${finalErr.message}). Silakan ketik titik koordinat secara manual atau buka Google Maps.`,
+                { duration: 6000 }
+              );
+            }
+          },
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 }
+        );
       },
-      (err) => {
-        alert('Gagal mengambil titik GPS: ' + err.message);
-        setGettingLocation(false);
-      },
-      { enableHighAccuracy: true }
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
     );
   };
 
@@ -1024,23 +1068,47 @@ export const HrmDivisionsPage: React.FC = () => {
 
             {/* GEOFENCING & COORDINATES SECTION */}
             <div className="p-4 bg-muted/40 border border-border rounded-xl space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
                   <MapPin className="w-4 h-4 text-primary" />
-                  Titik Koordinat Lokasi Divisi (Geofencing)
+                  <span>Titik Koordinat Lokasi Divisi (Geofencing)</span>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleGetCoordinates}
-                  disabled={gettingLocation}
-                  className="h-7 text-xs gap-1.5 border-border rounded-lg"
-                >
-                  <Crosshair className="w-3 h-3 text-primary" />
-                  {gettingLocation ? 'Mencari...' : 'Deteksi GPS Saya'}
-                </Button>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleGetCoordinates}
+                    disabled={gettingLocation}
+                    className="h-7 text-xs gap-1.5 border-primary/30 text-primary hover:bg-primary/10 rounded-lg font-medium shadow-2xs"
+                  >
+                    <Crosshair className={`w-3.5 h-3.5 text-primary ${gettingLocation ? 'animate-spin' : ''}`} />
+                    {gettingLocation ? 'Mencari Titik GPS...' : 'Deteksi GPS Saya'}
+                  </Button>
+                  <a
+                    href={`https://www.google.com/maps?q=${latitude},${longitude}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted transition-colors font-medium"
+                    title="Buka titik koordinat saat ini di Google Maps"
+                  >
+                    <ExternalLink className="w-3 h-3 text-primary" />
+                    <span>Buka Maps</span>
+                  </a>
+                </div>
               </div>
+
+              {detectedTime && (
+                <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/25 rounded-xl flex items-center justify-between text-[11px] text-emerald-800 dark:text-emerald-300 animate-in fade-in duration-200">
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>GPS Terdeteksi: <strong>{latitude}, {longitude}</strong> (±{detectedAccuracy}m pada {detectedTime})</span>
+                  </span>
+                  <span className="font-mono text-[9px] bg-emerald-500/20 text-emerald-800 dark:text-emerald-200 px-1.5 py-0.5 rounded font-bold uppercase">
+                    Aktif
+                  </span>
+                </div>
+              )}
 
               <div className="space-y-1">
                 <Label className="text-[11px] text-muted-foreground">Nama Lokasi / Gedung Divisi</Label>
@@ -1066,10 +1134,22 @@ export const HrmDivisionsPage: React.FC = () => {
                 <div className="space-y-1">
                   <Label className="text-[11px] text-muted-foreground">Latitude (Lintang)</Label>
                   <Input
-                    type="number"
-                    step="any"
+                    type="text"
                     value={latitude}
-                    onChange={(e) => setLatitude(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val.includes(',')) {
+                        const parts = val.split(',');
+                        const lat = parseFloat(parts[0]);
+                        const lng = parseFloat(parts[1]);
+                        if (!isNaN(lat)) setLatitude(lat);
+                        if (!isNaN(lng)) setLongitude(lng);
+                      } else {
+                        const num = parseFloat(val);
+                        setLatitude(isNaN(num) ? 0 : num);
+                      }
+                    }}
+                    placeholder="-4.815063"
                     className="text-xs font-mono rounded-xl"
                     required
                   />
@@ -1078,10 +1158,13 @@ export const HrmDivisionsPage: React.FC = () => {
                 <div className="space-y-1">
                   <Label className="text-[11px] text-muted-foreground">Longitude (Bujur)</Label>
                   <Input
-                    type="number"
-                    step="any"
+                    type="text"
                     value={longitude}
-                    onChange={(e) => setLongitude(Number(e.target.value))}
+                    onChange={(e) => {
+                      const num = parseFloat(e.target.value);
+                      setLongitude(isNaN(num) ? 0 : num);
+                    }}
+                    placeholder="119.544556"
                     className="text-xs font-mono rounded-xl"
                     required
                   />

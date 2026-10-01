@@ -43,6 +43,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -284,19 +285,56 @@ export const HrmSettingsPage: React.FC = () => {
   };
 
   const handleGetCurrentLocation = () => {
-    if (!navigator.geolocation) { alert('Geolokasi tidak didukung oleh browser Anda.'); return; }
+    if (!navigator.geolocation) {
+      toast.error('Perangkat/browser Anda tidak mendukung fitur geolokasi GPS.');
+      return;
+    }
     setGettingLocation(true);
+
+    const applyOfficeLocation = (pos: GeolocationPosition, isFallback = false) => {
+      const lat = Number(pos.coords.latitude.toFixed(6));
+      const lng = Number(pos.coords.longitude.toFixed(6));
+      const acc = Math.round(pos.coords.accuracy || 0);
+
+      setOffice((prev) => ({
+        ...prev,
+        latitude: lat,
+        longitude: lng,
+      }));
+      setGettingLocation(false);
+
+      toast.success(
+        `Titik GPS Kantor Berhasil Dideteksi! Lat: ${lat}, Lng: ${lng} (Akurasi: ±${acc}m${isFallback ? ' via Jaringan' : ''})`,
+        { duration: 5000 }
+      );
+    };
+
+    // 1. Coba High Accuracy (8s timeout, fresh reading)
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setOffice((prev) => ({
-          ...prev,
-          latitude: Number(pos.coords.latitude.toFixed(6)),
-          longitude: Number(pos.coords.longitude.toFixed(6)),
-        }));
-        setGettingLocation(false);
+      (pos) => applyOfficeLocation(pos, false),
+      (highAccErr) => {
+        console.warn('[GPS Detection Office] Beralih ke fallback jaringan...', highAccErr);
+        // 2. Fallback mode jaringan
+        navigator.geolocation.getCurrentPosition(
+          (fallbackPos) => applyOfficeLocation(fallbackPos, true),
+          (finalErr) => {
+            setGettingLocation(false);
+            if (finalErr.code === 1) {
+              toast.error(
+                'Izin lokasi ditolak di browser. Klik ikon gembok / lokasi di address bar browser dan pilih "Izinkan" untuk fawwazreskiperwira.com',
+                { duration: 8000 }
+              );
+            } else {
+              toast.error(
+                `Gagal mengambil koordinat (${finalErr.message}). Silakan ketik titik koordinat secara manual dari Google Maps.`,
+                { duration: 6000 }
+              );
+            }
+          },
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 }
+        );
       },
-      (err) => { alert('Gagal mengambil koordinat lokasi: ' + err.message); setGettingLocation(false); },
-      { enableHighAccuracy: true }
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
     );
   };
 
