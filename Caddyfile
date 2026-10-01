@@ -1,10 +1,14 @@
 # ==============================================================================
 # CADDY REVERSE PROXY CONFIGURATION
-# Otomatisasi HTTPS / SSL untuk Akses HP, PWA Install & Webcam Kamera
+# Otomatisasi HTTP & HTTPS untuk Akses Web, HP, PWA & Kamera
 # ==============================================================================
 
-# Port 80: HTTP Handler & Reverse Proxy
-:80 {
+{
+    auto_https disable_redirects
+}
+
+# HTTP Handler (Port 80)
+http://103.197.188.211, :80 {
     handle /api/* {
         reverse_proxy hrm-backend:5000
     }
@@ -16,7 +20,6 @@
     encode zstd gzip
 
     header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         X-Content-Type-Options "nosniff"
         X-Frame-Options "SAMEORIGIN"
         Referrer-Policy "strict-origin-when-cross-origin"
@@ -24,8 +27,8 @@
     }
 }
 
-# Port 443: HTTPS Handler dengan Self-Signed Internal TLS (Mendukung Kamera HP & PWA)
-:443 {
+# HTTPS Handler (Port 443) dengan Internal TLS untuk IP Address
+https://103.197.188.211, :443 {
     tls internal
 
     handle /api/* {
@@ -39,7 +42,6 @@
     encode zstd gzip
 
     header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         X-Content-Type-Options "nosniff"
         X-Frame-Options "SAMEORIGIN"
         Referrer-Policy "strict-origin-when-cross-origin"
