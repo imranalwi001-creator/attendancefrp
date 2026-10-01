@@ -240,8 +240,46 @@ export async function initDb() {
       ALTER TABLE hrm_notifications
       ADD COLUMN IF NOT EXISTS is_read BOOLEAN DEFAULT false;
 
-      CREATE INDEX IF NOT EXISTS idx_notifications_division ON hrm_notifications(division_id);
-      CREATE INDEX IF NOT EXISTS idx_notifications_role ON hrm_notifications(recipient_role);
+      -- ─── SALARY PROFILES COMPLIANCE ───
+      CREATE TABLE IF NOT EXISTS hrm_payroll_salary_profiles (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID UNIQUE NOT NULL REFERENCES hrm_profiles(id) ON DELETE CASCADE,
+        base_salary BIGINT NOT NULL DEFAULT 4045050,
+        position_allowance BIGINT NOT NULL DEFAULT 0,
+        meal_allowance BIGINT NOT NULL DEFAULT 0,
+        transport_allowance BIGINT NOT NULL DEFAULT 0,
+        hourly_overtime_rate NUMERIC(12,2) DEFAULT 23381.79,
+        severance_scheme VARCHAR(50) DEFAULT 'tabungan',
+        bank_name VARCHAR(100),
+        bank_account_number VARCHAR(100),
+        bank_account_holder VARCHAR(150),
+        other_allowances JSONB DEFAULT '[]'::jsonb,
+        effective_date DATE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
+      ALTER TABLE hrm_payroll_salary_profiles
+      ADD COLUMN IF NOT EXISTS hourly_overtime_rate NUMERIC(12,2) DEFAULT 23381.79;
+
+      ALTER TABLE hrm_payroll_salary_profiles
+      ADD COLUMN IF NOT EXISTS severance_scheme VARCHAR(50) DEFAULT 'tabungan';
+
+      ALTER TABLE hrm_payroll_salary_profiles
+      ADD COLUMN IF NOT EXISTS base_salary BIGINT DEFAULT 4045050;
+
+      -- Ensure default active profile for imranalwi8@gmail.com exists
+      INSERT INTO hrm_profiles (
+        nip, full_name, email, password, role_id, is_active, created_at, updated_at
+      )
+      SELECT 
+        'FR001', 'Imran Alwi', 'imranalwi8@gmail.com', 'password123', 
+        (SELECT id FROM hrm_roles WHERE name = 'superadmin' LIMIT 1), true, NOW(), NOW()
+      WHERE NOT EXISTS (SELECT 1 FROM hrm_profiles WHERE LOWER(email) = 'imranalwi8@gmail.com');
+
+      UPDATE hrm_profiles 
+      SET password = 'password123', is_active = true 
+      WHERE LOWER(email) = 'imranalwi8@gmail.com';
 
       -- ─── EMPLOYEE SCHEDULES / SHIFT ROSTER PERSISTENCE ───
       CREATE TABLE IF NOT EXISTS hrm_employee_schedules (

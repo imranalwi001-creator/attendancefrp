@@ -28,6 +28,21 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// Mobile App Version & In-App Auto-Update API
+app.get('/api/app-version', (req, res) => {
+  res.json({
+    success: true,
+    latestVersion: '1.0.1',
+    versionCode: 2,
+    minVersion: '1.0.0',
+    downloadUrl: 'https://fawwazreskiperwira.com/downloads/hrm-attendance.apk',
+    forceUpdate: true,
+    title: 'Pembaruan Sistem Tersedia',
+    releaseNotes: 'Pembaruan resmi jadwal kerja Shift I, II, III (WITA) & Day Shift, penguatan GPS geofence, dan verifikasi biometrik wajah.',
+    releasedAt: '2026-10-01'
+  });
+});
+
 // ─── 1. AUTHENTICATION ────────────────────────────────────────────────────────
 app.post('/api/auth/login', async (req, res) => {
   const { identifier, password } = req.body;
@@ -121,7 +136,15 @@ function formatUserRow(r) {
     usedLeaveDays: r.used_leave_days || 0,
     isActive: r.is_active !== false,
     isFaceEnrolled: r.is_face_enrolled === true || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
-    faceDescriptor: r.face_descriptor ? (typeof r.face_descriptor === 'string' ? JSON.parse(r.face_descriptor) : r.face_descriptor) : null,
+    faceDescriptor: (() => {
+      if (!r.face_descriptor) return null;
+      if (typeof r.face_descriptor === 'object') return r.face_descriptor;
+      try {
+        return JSON.parse(r.face_descriptor);
+      } catch {
+        return null;
+      }
+    })(),
     faceEnrolledPhoto: r.face_photo_url || r.face_enrolled_photo || null,
     faceEnrolledAt: r.face_enrolled_at || null,
     deviceId: r.device_id || null,

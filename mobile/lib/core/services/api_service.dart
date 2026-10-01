@@ -53,6 +53,23 @@ class ApiService {
     return null;
   }
 
+  /// Check latest mobile APK version and release notes from server
+  static Future<Map<String, dynamic>?> checkAppVersion() async {
+    try {
+      final response = await http.get(
+        Uri.parse("$baseUrl/app-version"),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 8));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      }
+    } catch (e) {
+      print("[ApiService] checkAppVersion error: $e");
+    }
+    return null;
+  }
+
   /// Submit Clock-In to PostgreSQL database
   static Future<Map<String, dynamic>?> submitClockIn({
     required String userId,

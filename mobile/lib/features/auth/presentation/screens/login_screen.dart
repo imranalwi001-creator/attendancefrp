@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_typography.dart';
 import '../../../../core/services/api_service.dart';
+import '../../../../core/widgets/app_update_dialog.dart';
 import '../../../attendance/presentation/screens/dashboard_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -19,6 +20,15 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isPasswordVisible = false;
   bool _isLoading = false;
   String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    // Check with server if a newer APK is available and prompt update
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppUpdateChecker.checkForUpdate(context);
+    });
+  }
 
   @override
   void dispose() {
@@ -63,14 +73,6 @@ class _LoginScreenState extends State<LoginScreen> {
         setState(() => _isLoading = false);
       }
     }
-  }
-
-  void _fillDemo(String id, String pwd) {
-    setState(() {
-      _identifierController.text = id;
-      _passwordController.text = pwd;
-      _errorMessage = null;
-    });
   }
 
   @override
@@ -320,59 +322,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
 
-                  const SizedBox(height: 20),
-
-                  // 3. QUICK 1-CLICK DEMO CHIPS
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppColors.border),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.touch_app_outlined, size: 16, color: AppColors.primary),
-                            const SizedBox(width: 6),
-                            Text(
-                              "Pilih Akun Demo dari Database (1-Klik):",
-                              style: AppTypography.labelSmall.copyWith(
-                                color: AppColors.textPrimary,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            _buildDemoChip(
-                              name: "imranalwi (Aktif)",
-                              email: "imranalwi8@gmail.com",
-                            ),
-                            _buildDemoChip(
-                              name: "Ahmad Fauzi (IT)",
-                              email: "fauzi@hrm.local",
-                            ),
-                            _buildDemoChip(
-                              name: "Dewi Sartika (MKT)",
-                              email: "dewi@hrm.local",
-                            ),
-                            _buildDemoChip(
-                              name: "Budi Prakoso (HR)",
-                              email: "admin@hrm.local",
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-
                   const SizedBox(height: 24),
                   Center(
                     child: Text(
@@ -389,25 +338,6 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildDemoChip({required String name, required String email}) {
-    return ActionChip(
-      avatar: const Icon(Icons.person_pin_circle_rounded, size: 16, color: AppColors.primary),
-      label: Text(
-        name,
-        style: AppTypography.labelSmall.copyWith(
-          color: AppColors.textPrimary,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      backgroundColor: AppColors.subSurface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: AppColors.borderSubtle),
-      ),
-      onPressed: () => _fillDemo(email, "password123"),
     );
   }
 }
