@@ -240,8 +240,8 @@ const DEFAULT_SHIFTS: Shift[] = [
   {
     id: 'shift-morning',
     code: 'PAGI',
-    name: 'Shift 1 - Pagi (07:00 - 15:30)',
-    startTime: '07:00',
+    name: 'Shift 1 (07:30 - 15:30)',
+    startTime: '07:30',
     endTime: '15:30',
     breakStartTime: '11:30',
     breakEndTime: '12:30',
@@ -250,39 +250,39 @@ const DEFAULT_SHIFTS: Shift[] = [
     isCrossDay: false,
     workingDays: [1, 2, 3, 4, 5, 6],
     colorTag: '#3b82f6',
-    description: 'Shift operasional pagi hari',
+    description: 'Shift 1 operasional pagi hari',
     isDefault: false,
   },
   {
     id: 'shift-afternoon',
     code: 'SIANG',
-    name: 'Shift 2 - Siang (13:30 - 21:30)',
-    startTime: '13:30',
-    endTime: '21:30',
-    breakStartTime: '17:30',
-    breakEndTime: '18:30',
+    name: 'Shift 2 (15:30 - 22:30)',
+    startTime: '15:30',
+    endTime: '22:30',
+    breakStartTime: '18:00',
+    breakEndTime: '19:00',
     lateToleranceMinutes: 15,
     earliestClockInMinutes: 60,
     isCrossDay: false,
     workingDays: [1, 2, 3, 4, 5, 6],
     colorTag: '#f59e0b',
-    description: 'Shift operasional siang s/d malam',
+    description: 'Shift 2 operasional siang s/d malam',
     isDefault: false,
   },
   {
     id: 'shift-night',
     code: 'MALAM',
-    name: 'Shift 3 - Malam Lintas Hari (21:30 - 06:00)',
-    startTime: '21:30',
-    endTime: '06:00',
-    breakStartTime: '01:00',
-    breakEndTime: '02:00',
+    name: 'Shift 3 (22:30 - 07:30)',
+    startTime: '22:30',
+    endTime: '07:30',
+    breakStartTime: '02:00',
+    breakEndTime: '03:00',
     lateToleranceMinutes: 15,
     earliestClockInMinutes: 60,
     isCrossDay: true,
     workingDays: [1, 2, 3, 4, 5, 6],
     colorTag: '#8b5cf6',
-    description: 'Shift malam penjagaan & operasional logistik lintas hari',
+    description: 'Shift 3 malam penjagaan & operasional logistik lintas hari',
     isDefault: false,
   },
 ];
@@ -754,7 +754,13 @@ export const hrmService = {
       }
     }
 
-    if (!localStorage.getItem(STORAGE_KEYS.SHIFTS)) {
+    const existingShifts = safeGetJson<Shift[]>(STORAGE_KEYS.SHIFTS, []);
+    const needsShiftSync = !existingShifts.length || existingShifts.some((s) => 
+      (s.id === 'shift-morning' && s.startTime !== '07:30') ||
+      (s.id === 'shift-afternoon' && s.startTime !== '15:30') ||
+      (s.id === 'shift-night' && s.startTime !== '22:30')
+    );
+    if (needsShiftSync) {
       localStorage.setItem(STORAGE_KEYS.SHIFTS, JSON.stringify(DEFAULT_SHIFTS));
     }
     if (!localStorage.getItem(STORAGE_KEYS.OFFICE)) {
@@ -1179,22 +1185,22 @@ export const hrmService = {
         let isOff = true;
 
         if (code === 'P') {
-          sName = 'Shift Pagi (07:00 - 15:00 WIB)';
-          sStart = '07:00';
-          sEnd = '15:00';
+          sName = 'Shift 1 (07:30 - 15:30 WIB)';
+          sStart = '07:30';
+          sEnd = '15:30';
           duration = 8;
           isOff = false;
         } else if (code === 'S') {
-          sName = 'Shift Siang (15:00 - 23:00 WIB)';
-          sStart = '15:00';
-          sEnd = '23:00';
-          duration = 8;
+          sName = 'Shift 2 (15:30 - 22:30 WIB)';
+          sStart = '15:30';
+          sEnd = '22:30';
+          duration = 7;
           isOff = false;
         } else if (code === 'M') {
-          sName = 'Shift Malam (23:00 - 07:00 WIB)';
-          sStart = '23:00';
-          sEnd = '07:00';
-          duration = 8;
+          sName = 'Shift 3 (22:30 - 07:30 WIB)';
+          sStart = '22:30';
+          sEnd = '07:30';
+          duration = 9;
           isNight = true;
           isOff = false;
         }

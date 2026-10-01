@@ -227,10 +227,16 @@ export const HrmDivisionsPage: React.FC = () => {
       let totalOffDays = 0;
 
       Object.values(newAssignments).forEach((asg) => {
-        if (asg.shiftCode === 'P' || asg.shiftCode === 'S' || asg.shiftCode === 'M') {
+        if (asg.shiftCode === 'P') {
           totalWorkHours += 8;
           totalWorkDays += 1;
-          if (asg.shiftCode === 'M') totalNightShifts += 1;
+        } else if (asg.shiftCode === 'S') {
+          totalWorkHours += 7;
+          totalWorkDays += 1;
+        } else if (asg.shiftCode === 'M') {
+          totalWorkHours += 9;
+          totalWorkDays += 1;
+          totalNightShifts += 1;
         } else {
           totalOffDays += 1;
         }
@@ -1589,13 +1595,13 @@ export const HrmDivisionsPage: React.FC = () => {
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-muted-foreground text-[11px] font-semibold">Keterangan Shift:</span>
               <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-blue-500" /> P (Pagi 07:00-15:00)
+                <span className="w-2.5 h-2.5 rounded bg-blue-500" /> P (Shift 1: 07:30-15:30)
               </span>
               <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-amber-500" /> S (Siang 15:00-23:00)
+                <span className="w-2.5 h-2.5 rounded bg-amber-500" /> S (Shift 2: 15:30-22:30)
               </span>
               <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-purple-600" /> M (Malam 23:00-07:00)
+                <span className="w-2.5 h-2.5 rounded bg-purple-600" /> M (Shift 3: 22:30-07:30)
               </span>
               <span className="flex items-center gap-1">
                 <span className="w-2.5 h-2.5 rounded bg-muted-foreground/40" /> OFF (Libur)

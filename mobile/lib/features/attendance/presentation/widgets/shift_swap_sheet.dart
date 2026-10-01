@@ -39,7 +39,7 @@ class _ShiftSwapSheetState extends State<ShiftSwapSheet> {
   final _reasonController = TextEditingController();
 
   DateTime _swapDate = DateTime.now().add(const Duration(days: 1));
-  String _originalShift = "Shift Pagi (07:00 - 15:00)";
+  String _originalShift = "Shift 1 (07:30 - 15:30)";
   String _targetCategory = "Izin Mendesak / Penggantian Pos";
   bool _isSubmitting = false;
 
@@ -47,9 +47,9 @@ class _ShiftSwapSheetState extends State<ShiftSwapSheet> {
   List<dynamic> _smartCandidates = [];
 
   final List<String> _shiftOptions = [
-    "Shift Pagi (07:00 - 15:00)",
-    "Shift Siang (14:00 - 22:00)",
-    "Shift Malam (22:00 - 07:00)",
+    "Shift 1 (07:30 - 15:30)",
+    "Shift 2 (15:30 - 22:30)",
+    "Shift 3 (22:30 - 07:30)",
     "Reguler (08:00 - 17:00)",
   ];
 

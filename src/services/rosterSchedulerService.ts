@@ -62,9 +62,9 @@ export interface GenerationResult {
 }
 
 export const DEFAULT_SHIFTS: ShiftDefinition[] = [
-  { id: 'shift-pagi', name: 'Shift Pagi', code: 'P', startTime: '07:00', endTime: '15:00', durationHours: 8, isNightShift: false, color: '#3b82f6' },
-  { id: 'shift-siang', name: 'Shift Siang', code: 'S', startTime: '15:00', endTime: '23:00', durationHours: 8, isNightShift: false, color: '#f59e0b' },
-  { id: 'shift-malam', name: 'Shift Malam', code: 'M', startTime: '23:00', endTime: '07:00', durationHours: 8, isNightShift: true, color: '#8b5cf6' },
+  { id: 'shift-pagi', name: 'Shift 1 (07:30 - 15:30)', code: 'P', startTime: '07:30', endTime: '15:30', durationHours: 8, isNightShift: false, color: '#3b82f6' },
+  { id: 'shift-siang', name: 'Shift 2 (15:30 - 22:30)', code: 'S', startTime: '15:30', endTime: '22:30', durationHours: 7, isNightShift: false, color: '#f59e0b' },
+  { id: 'shift-malam', name: 'Shift 3 (22:30 - 07:30)', code: 'M', startTime: '22:30', endTime: '07:30', durationHours: 9, isNightShift: true, color: '#8b5cf6' },
   { id: 'shift-off', name: 'Libur / Off', code: 'OFF', startTime: '00:00', endTime: '00:00', durationHours: 0, isNightShift: false, color: '#6b7280' }
 ];
 

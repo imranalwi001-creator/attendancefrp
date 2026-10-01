@@ -6,7 +6,7 @@ class ApiService {
   // Base URL pointing to the running backend (supports --dart-define=API_URL=https://...)
   static String baseUrl = const String.fromEnvironment(
     'API_URL',
-    defaultValue: "http://localhost:5000/api",
+    defaultValue: "https://fawwazreskiperwira.com/api",
   );
 
   /// Authenticate employee with Email or NIP against PostgreSQL database

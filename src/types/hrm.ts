@@ -148,9 +148,9 @@ export interface EmployeeSchedule {
   scheduleDate: string; // YYYY-MM-DD
   shiftId?: string;
   shiftCode: string; // 'P' | 'S' | 'M' | 'OFF' | string
-  shiftName: string; // 'Shift Pagi (07:00 - 15:00)', etc.
-  startTime: string; // '07:00'
-  endTime: string;   // '15:00'
+  shiftName: string; // 'Shift 1 (07:30 - 15:30)', etc.
+  startTime: string; // '07:30'
+  endTime: string;   // '15:30'
   durationHours: number;
   isNightShift: boolean;
   isOff: boolean;
