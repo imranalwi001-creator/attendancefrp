@@ -446,11 +446,29 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
 
                   <div className="space-y-1 max-w-xs">
                     <p className="text-xs font-semibold text-foreground">
-                      Pindai dengan Kamera HP Karyawan / HRD
+                      Pindai dengan Kamera HP atau Buka Langsung
                     </p>
                     <p className="text-[11px] text-muted-foreground leading-relaxed">
-                      Kamera smartphone akan otomatis terbuka dengan panduan AI setinggi pandangan mata untuk hasil akurasi biometrik maksimal.
+                      Sistem akan memandu Anda melalui 6 pose presisi (dekat, jauh, berkedip, senyum, menoleh) untuk akurasi biometrik standar ISO.
                     </p>
+                  </div>
+
+                  {/* Direct Launch Button for Mobile Users */}
+                  <div className="w-full pt-1">
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        if (typeof window !== 'undefined' && user) {
+                          const targetPath = `/enroll-face?userId=${encodeURIComponent(user.id)}&name=${encodeURIComponent(user.fullName)}&token=${user.id.substring(0, 8)}`;
+                          window.location.href = targetPath;
+                        }
+                      }}
+                      className="w-full bg-primary hover:bg-primary/90 text-primary-foreground text-xs rounded-xl h-10 font-bold gap-2 shadow-md"
+                    >
+                      <ScanFace className="w-4 h-4" />
+                      <span>Buka Pendaftaran Wajah di HP Ini</span>
+                      <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+                    </Button>
                   </div>
                 </div>
 
@@ -458,7 +476,7 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
                 <div className="p-3 bg-muted/40 border border-border rounded-xl flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs truncate">
                     <Smartphone className="w-4 h-4 text-primary shrink-0" />
-                    <span className="text-muted-foreground truncate max-w-[220px] font-mono text-[11px]">
+                    <span className="text-muted-foreground truncate max-w-[200px] font-mono text-[11px]">
                       {mobileEnrollUrl}
                     </span>
                   </div>
@@ -477,7 +495,7 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
                     ) : (
                       <>
                         <Copy className="w-3.5 h-3.5" />
-                        <span>Salin Link</span>
+                        <span>Salin</span>
                       </>
                     )}
                   </Button>

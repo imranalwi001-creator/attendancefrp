@@ -1,7 +1,7 @@
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
 import { isCapacitorApp } from './apiClient';
 
-export const CURRENT_APP_VERSION = '1.0.6';
+export const CURRENT_APP_VERSION = '1.0.9';
 
 export async function initAppUpdater(): Promise<void> {
   if (!isCapacitorApp()) return;
@@ -27,20 +27,21 @@ export async function initAppUpdater(): Promise<void> {
     console.log(`[OTA] Active version: ${activeVersion}, Server version: ${data.version}`);
 
     if (data.version !== activeVersion) {
-      console.log(`[OTA] New live update detected: ${data.version}. Downloading silent bundle...`);
+      console.log(`[OTA] New live update detected: ${data.version}. Downloading bundle immediately...`);
       const bundle = await CapacitorUpdater.download({
         url: data.bundleUrl,
         version: data.version,
       });
 
-      console.log(`[OTA] Bundle downloaded: ${bundle.id}. Applying update...`);
-      if (data.force) {
-        await CapacitorUpdater.set({ id: bundle.id });
-      } else {
-        await CapacitorUpdater.next({ id: bundle.id });
-      }
+      console.log(`[OTA] Bundle downloaded: ${bundle.id}. Applying update and reloading webview...`);
+      await CapacitorUpdater.set({ id: bundle.id });
+      // Instantly reload webview so the app updates without waiting for next cold boot
+      await CapacitorUpdater.reload().catch(() => {
+        window.location.reload();
+      });
     }
   } catch (err: any) {
     console.warn('[OTA] Updater check error:', err?.message || err);
   }
 }
+

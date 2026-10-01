@@ -83,10 +83,10 @@ app.post('/api/auth/login', async (req, res) => {
 // Over-The-Air (OTA) Live Update endpoint for CapacitorUpdater
 app.get('/api/app-update/check', (req, res) => {
   res.json({
-    version: '1.0.8',
+    version: '1.0.9',
     bundleUrl: 'https://fawwazreskiperwira.com/downloads/bundle.zip',
-    force: false,
-    notes: 'Pembaruan UI otomatis v1.0.8: Ingat Saya, Anti-Kekosongan Pos Cuti, Live Monitoring Bulanan, Reset Password, Safe Area Header',
+    force: true,
+    notes: 'Pembaruan UI & Biometrik v1.0.9: Registrasi Wajah Presisi 6-Pose (Dekatkan, Jauhkan, Berkedip, Senyum, Tengok Kanan-Kiri), Clean UI Absensi, Sinkronisasi OTA Otomatis Instant',
   });
 });
 
