@@ -155,7 +155,7 @@ class AppUpdateDialog extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       releaseNotes,
-                      style: AppTypography.bodySmall.copyWith(
+                      style: AppTypography.bodyMedium.copyWith(
                         color: AppColors.textSecondary,
                         height: 1.4,
                       ),
