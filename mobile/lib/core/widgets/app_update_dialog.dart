@@ -5,8 +5,8 @@ import '../constants/app_typography.dart';
 import '../services/api_service.dart';
 
 /// Current installed version of this APK client
-const String kCurrentAppVersion = "1.0.0";
-const int kCurrentVersionCode = 1;
+const String kCurrentAppVersion = "1.0.1";
+const int kCurrentVersionCode = 2;
 
 class AppUpdateChecker {
   /// Check with server and prompt modal dialog if newer version is released
@@ -62,11 +62,24 @@ class AppUpdateDialog extends StatelessWidget {
   Future<void> _handleDownload(BuildContext context) async {
     final uri = Uri.parse(downloadUrl);
     try {
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched) {
+        await launchUrl(uri, mode: LaunchMode.platformDefault);
       }
     } catch (e) {
       debugPrint("[AppUpdateDialog] launch error: $e");
+      try {
+        await launchUrl(uri, mode: LaunchMode.platformDefault);
+      } catch (err) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Silakan unduh manual melalui browser: $downloadUrl"),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+      }
     }
   }
 
