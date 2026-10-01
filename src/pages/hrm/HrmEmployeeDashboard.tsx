@@ -980,9 +980,9 @@ export const HrmEmployeeDashboard: React.FC = () => {
       <PwaInstallPrompt />
 
       {/* ─── TOP STATUS & QUICK ACCESS BAR (ICON-DRIVEN & MINIMALIST) ─── */}
-      <div className="flex items-center justify-between gap-2 p-2.5 sm:p-3 bg-card border border-border rounded-xl shadow-2xs">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 bg-card border border-border rounded-xl shadow-2xs">
         {/* Geolocation Status Chip */}
-        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
           <div
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all truncate max-w-full ${
               locationStatus === 'inside'
@@ -1013,15 +1013,15 @@ export const HrmEmployeeDashboard: React.FC = () => {
           </Button>
 
           {user?.originalDivisionId && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[11px] border border-blue-500/20 font-medium">
-              <Info className="w-3 h-3" />
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs border border-blue-500/20 font-medium">
+              <Info className="w-3.5 h-3.5" />
               <span>Mutasi: {user.divisionName}</span>
             </span>
           )}
         </div>
 
-        {/* Quick Actions (Kios & Notif) - Cleanly displayed on tablet/desktop */}
-        <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+        {/* Quick Actions (Kios & Notif: only shown on desktop/tablet since mobile navbar has them) */}
+        <div className="hidden sm:flex items-center gap-1.5 self-end sm:self-center shrink-0">
           <Link to="/kios">
             <Button
               variant="outline"
@@ -1134,21 +1134,21 @@ export const HrmEmployeeDashboard: React.FC = () => {
 
       {/* ─── 5. TOP HEADER & DIGITAL CLOCK ─── */}
       <div className="bg-card border border-border rounded-xl p-3.5 sm:p-5 shadow-2xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-          <div className="space-y-1 min-w-0 flex-1">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
+          <div className="space-y-1.5 min-w-0 flex-1">
             <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-foreground truncate break-words">
               {user?.fullName}
             </h1>
-            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1 shrink-0">
-                <UserCheck className="w-3.5 h-3.5 text-primary shrink-0" />
+                <UserCheck className="w-3.5 h-3.5 text-primary" />
                 <span>NIP: <strong className="text-foreground">{user?.nip}</strong></span>
               </span>
               <span>•</span>
               {todaySchedule ? (
                 <span className="inline-flex items-center gap-1.5 flex-wrap">
                   <Clock className="w-3.5 h-3.5 text-primary shrink-0" />
-                  <span>Jadwal:</span>
+                  <span>Jadwal Roster:</span>
                   <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold ${
                     todaySchedule.isOff
                       ? 'bg-slate-500/20 text-slate-700 dark:text-slate-300'
@@ -1164,20 +1164,14 @@ export const HrmEmployeeDashboard: React.FC = () => {
               ) : (
                 <span className="inline-flex items-center gap-1 flex-wrap">
                   <Clock className="w-3.5 h-3.5 text-primary shrink-0" />
-                  <span>
-                    Shift: <strong className="text-foreground">{userShift?.name}</strong>
-                    {/* Avoid printing duplicate hours if already inside shift name */}
-                    {!userShift?.name?.includes('(') && userShift?.startTime && userShift?.endTime && (
-                      ` (${userShift.startTime} - ${userShift.endTime})`
-                    )}
-                  </span>
+                  <span>Shift: <strong className="text-foreground">{userShift?.name}</strong> <span className="text-[11px]">({userShift?.startTime} - {userShift?.endTime})</span></span>
                 </span>
               )}
             </div>
           </div>
 
           {/* Real-time Digital Clock Display */}
-          <div className="bg-muted/30 border border-border/80 px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-xl text-left sm:text-right shrink-0">
+          <div className="bg-muted/30 border border-border/80 px-3.5 py-2 rounded-xl text-center md:text-right w-full md:w-auto min-w-0 shrink-0">
             <p className="text-[11px] font-medium text-muted-foreground">
               {formatDateIndonesian(currentTime)}
             </p>
@@ -1203,7 +1197,7 @@ export const HrmEmployeeDashboard: React.FC = () => {
               </div>
             </div>
           )}
-          <CardHeader className="border-b border-border/60 pb-3">
+          <CardHeader className="border-b border-border/60 pb-3 px-3.5 sm:px-6">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <CardTitle className="text-sm sm:text-base font-bold text-foreground flex items-center gap-2">
                 <Clock className="w-4 h-4 text-primary shrink-0" />
@@ -1233,7 +1227,7 @@ export const HrmEmployeeDashboard: React.FC = () => {
             </div>
           </CardHeader>
 
-          <CardContent className="space-y-6 pt-6">
+          <CardContent className="space-y-5 sm:space-y-6 pt-4 sm:pt-6 px-3.5 sm:px-6">
             {/* HERO CENTER BUTTON */}
             <div className="flex flex-col items-center justify-center p-6 bg-gradient-to-b from-muted/30 to-muted/10 border border-border rounded-2xl text-center shadow-xs">
               <div className="relative mb-3">

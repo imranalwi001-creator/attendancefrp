@@ -1,16 +1,17 @@
 // Centralized API Client for HRM Attendance System
-export function getApiBaseUrl(): string {
-  if (typeof window === 'undefined') return '/api';
-
-  // Check if running in Capacitor native Android/iOS wrapper
+export function isCapacitorApp(): boolean {
+  if (typeof window === 'undefined') return false;
   const isCapacitorNative = Boolean((window as any).Capacitor?.isNativePlatform?.());
   const isCapacitorScheme = window.location.protocol === 'capacitor:' || window.location.protocol === 'ionic:';
   const isCapacitorLocalhost = window.location.hostname === 'localhost' && window.location.port !== '5173' && window.location.port !== '3000';
+  return isCapacitorNative || isCapacitorScheme || isCapacitorLocalhost;
+}
 
-  if (isCapacitorNative || isCapacitorScheme || isCapacitorLocalhost) {
+export function getApiBaseUrl(): string {
+  if (typeof window === 'undefined') return '/api';
+  if (isCapacitorApp()) {
     return 'https://fawwazreskiperwira.com/api';
   }
-
   return '/api';
 }
 

@@ -10,7 +10,10 @@ declare global {
   }
 }
 
+import { isCapacitorApp } from '@/services/apiClient';
+
 export const PwaInstallPrompt: React.FC<{ compact?: boolean }> = ({ compact = false }) => {
+  if (isCapacitorApp()) return null;
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isStandalone, setIsStandalone] = useState(false);
   const [isIos, setIsIos] = useState(false);
@@ -142,7 +145,7 @@ export const PwaInstallPrompt: React.FC<{ compact?: boolean }> = ({ compact = fa
 
   return (
     <>
-      <div className="md:hidden p-3 rounded-xl border border-border bg-card shadow-2xs flex items-center justify-between gap-2.5 my-2 transition-colors w-full max-w-full">
+      <div className="md:hidden p-3 rounded-xl border border-border bg-card shadow-2xs flex items-center justify-between gap-3 my-2 transition-colors">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
             <Smartphone className="w-4 h-4" />

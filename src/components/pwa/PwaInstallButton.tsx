@@ -3,6 +3,8 @@ import { DownloadCloud, Smartphone, CheckCircle2, Share, PlusSquare, X } from 'l
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 
+import { isCapacitorApp } from '@/services/apiClient';
+
 interface PwaInstallButtonProps {
   variant?: 'sidebar' | 'header' | 'mobile-banner';
   isCompact?: boolean;
@@ -12,6 +14,7 @@ export const PwaInstallButton: React.FC<PwaInstallButtonProps> = ({
   variant = 'sidebar',
   isCompact = false,
 }) => {
+  if (isCapacitorApp()) return null;
   const [isStandalone, setIsStandalone] = useState(false);
   const [hasPrompt, setHasPrompt] = useState(false);
   const [isIos, setIsIos] = useState(false);

@@ -21,9 +21,12 @@ import {
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 
+import { isCapacitorApp } from '@/services/apiClient';
+
 export const ApkDownloadButton: React.FC<{ variant?: 'header' | 'sidebar' | 'button' }> = ({
   variant = 'header',
 }) => {
+  if (isCapacitorApp()) return null;
   const [open, setOpen] = useState(false);
   const [qrUrl, setQrUrl] = useState<string>('');
 

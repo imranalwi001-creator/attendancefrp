@@ -407,7 +407,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   );
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row transition-colors duration-200 w-full max-w-full overflow-x-hidden">
+    <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row transition-colors duration-200 w-full max-w-[100vw] overflow-x-hidden">
       {/* DESKTOP SIDEBAR - LMS DIGISS ORIGINAL THEME WITH COMPACT & HOVER EXPANSION */}
       <aside
         onMouseEnter={() => isSidebarCollapsed && setIsSidebarHovered(true)}
@@ -510,8 +510,8 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       </aside>
 
       {/* MOBILE NAVBAR */}
-      <header className="md:hidden flex items-center justify-between h-14 px-3.5 bg-card/95 backdrop-blur-md text-foreground border-b border-border sticky top-0 z-40 w-full max-w-full">
-        <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
+      <header className="md:hidden flex items-center justify-between h-14 px-3 sm:px-4 bg-card text-foreground border-b border-border sticky top-0 z-40 w-full max-w-[100vw] overflow-hidden">
+        <div className="flex items-center gap-2 min-w-0 flex-1 mr-1.5">
           <img
             src={appSettings.logoUrl || defaultLogo}
             alt="Logo Perusahaan"
@@ -521,14 +521,16 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
             {appSettings.appName || 'PT. FAWWAZ RESKI PERWIRA'}
           </span>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
           <ThemeToggle variant="dropdown" />
+          <ApkDownloadButton variant="header" />
           {renderNotificationBell()}
+          <div className="hidden sm:inline-flex">{getRoleBadge(currentRole)}</div>
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="text-foreground hover:bg-muted rounded-xl h-9 w-9"
+            className="h-8 w-8 text-foreground hover:bg-muted rounded-xl"
             title="Menu Navigasi"
           >
             {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -579,8 +581,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
               </Link>
             );
           })}
-          <div className="pt-4 mt-auto space-y-2">
-            <ApkDownloadButton variant="sidebar" />
+          <div className="pt-4 mt-auto">
             <Button
               variant="destructive"
               className="w-full gap-2 rounded-xl"
@@ -599,7 +600,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       {/* MAIN CONTENT AREA */}
       <main
         className={cn(
-          'flex-1 flex flex-col min-w-0 bg-background text-foreground w-full max-w-full overflow-x-hidden transition-all duration-300 ease-in-out',
+          'flex-1 flex flex-col min-w-0 w-full max-w-[100vw] overflow-x-hidden bg-background text-foreground transition-all duration-300 ease-in-out',
           isSidebarCollapsed ? 'md:pl-[72px]' : 'md:pl-[260px]'
         )}
       >
@@ -663,7 +664,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
         </div>
 
         {/* Page Content Body */}
-        <div className="flex-1 p-3 sm:p-6 lg:p-8 pb-24 md:pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
+        <div className="flex-1 p-3 sm:p-5 lg:p-8 pb-24 md:pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
           {children}
         </div>
       </main>
