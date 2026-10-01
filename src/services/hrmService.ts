@@ -223,8 +223,8 @@ const DEFAULT_DIVISIONS: Division[] = [
 const DEFAULT_SHIFTS: Shift[] = [
   {
     id: 'shift-regular',
-    code: 'REG',
-    name: 'Reguler / Day Shift (07:30 - 16:30)',
+    code: 'DAY',
+    name: 'Day Shift (07:30 - 16:30 WITA)',
     startTime: '07:30',
     endTime: '16:30',
     breakStartTime: '12:00',
@@ -234,29 +234,29 @@ const DEFAULT_SHIFTS: Shift[] = [
     isCrossDay: false,
     workingDays: [1, 2, 3, 4, 5],
     colorTag: '#0d9488',
-    description: 'Jam kerja standar kantor pusat / Day Shift (07:30 - 16:30)',
+    description: 'Hari Senin s/d Jumat : Pukul 07.30 - 16.30 WITA',
     isDefault: true,
   },
   {
     id: 'shift-morning',
     code: 'PAGI',
-    name: 'Shift 1 - Day Shift (07:30 - 16:30)',
+    name: 'Shift I (07:30 - 15:30 WITA)',
     startTime: '07:30',
-    endTime: '16:30',
-    breakStartTime: '12:00',
-    breakEndTime: '13:00',
+    endTime: '15:30',
+    breakStartTime: '11:30',
+    breakEndTime: '12:30',
     lateToleranceMinutes: 15,
     earliestClockInMinutes: 60,
     isCrossDay: false,
     workingDays: [1, 2, 3, 4, 5, 6],
     colorTag: '#3b82f6',
-    description: 'Shift 1 operasional Day Shift (07:30 - 16:30)',
+    description: 'Shift I Operasional Pagi (07.30 - 15.30 WITA)',
     isDefault: false,
   },
   {
     id: 'shift-afternoon',
     code: 'SIANG',
-    name: 'Shift 2 (15:30 - 22:30)',
+    name: 'Shift II (15:30 - 22:30 WITA)',
     startTime: '15:30',
     endTime: '22:30',
     breakStartTime: '18:00',
@@ -266,13 +266,13 @@ const DEFAULT_SHIFTS: Shift[] = [
     isCrossDay: false,
     workingDays: [1, 2, 3, 4, 5, 6],
     colorTag: '#f59e0b',
-    description: 'Shift 2 operasional siang s/d malam',
+    description: 'Shift II Operasional Sore (15.30 - 22.30 WITA)',
     isDefault: false,
   },
   {
     id: 'shift-night',
     code: 'MALAM',
-    name: 'Shift 3 (22:30 - 07:30)',
+    name: 'Shift III (22:30 - 07:30 WITA)',
     startTime: '22:30',
     endTime: '07:30',
     breakStartTime: '02:00',
@@ -282,7 +282,7 @@ const DEFAULT_SHIFTS: Shift[] = [
     isCrossDay: true,
     workingDays: [1, 2, 3, 4, 5, 6],
     colorTag: '#8b5cf6',
-    description: 'Shift 3 malam penjagaan & operasional logistik lintas hari',
+    description: 'Shift III Malam Lintas Hari (22.30 - 07.30 WITA)',
     isDefault: false,
   },
 ];
@@ -756,10 +756,11 @@ export const hrmService = {
 
     const existingShifts = safeGetJson<Shift[]>(STORAGE_KEYS.SHIFTS, []);
     const needsShiftSync = !existingShifts.length || existingShifts.some((s) => 
-      (s.id === 'shift-morning' && (s.startTime !== '07:30' || s.endTime !== '16:30')) ||
+      (s.id === 'shift-morning' && (s.startTime !== '07:30' || s.endTime !== '15:30')) ||
       (s.id === 'shift-regular' && (s.startTime !== '07:30' || s.endTime !== '16:30')) ||
-      (s.id === 'shift-afternoon' && s.startTime !== '15:30') ||
-      (s.id === 'shift-night' && s.startTime !== '22:30')
+      (s.id === 'shift-afternoon' && (s.startTime !== '15:30' || s.endTime !== '22:30')) ||
+      (s.id === 'shift-night' && (s.startTime !== '22:30' || s.endTime !== '07:30')) ||
+      !s.name.includes('WITA')
     );
     if (needsShiftSync) {
       localStorage.setItem(STORAGE_KEYS.SHIFTS, JSON.stringify(DEFAULT_SHIFTS));
@@ -1186,19 +1187,19 @@ export const hrmService = {
         let isOff = true;
 
         if (code === 'P') {
-          sName = 'Shift 1 - Day Shift (07:30 - 16:30 WIB)';
+          sName = 'Shift I (07:30 - 15:30 WITA)';
           sStart = '07:30';
-          sEnd = '16:30';
+          sEnd = '15:30';
           duration = 8;
           isOff = false;
         } else if (code === 'S') {
-          sName = 'Shift 2 (15:30 - 22:30 WIB)';
+          sName = 'Shift II (15:30 - 22:30 WITA)';
           sStart = '15:30';
           sEnd = '22:30';
           duration = 7;
           isOff = false;
         } else if (code === 'M') {
-          sName = 'Shift 3 (22:30 - 07:30 WIB)';
+          sName = 'Shift III (22:30 - 07:30 WITA)';
           sStart = '22:30';
           sEnd = '07:30';
           duration = 9;

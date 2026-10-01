@@ -1595,13 +1595,13 @@ export const HrmDivisionsPage: React.FC = () => {
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-muted-foreground text-[11px] font-semibold">Keterangan Shift:</span>
               <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-blue-500" /> P (Shift 1 / Day Shift: 07:30-16:30)
+                <span className="w-2.5 h-2.5 rounded bg-blue-500" /> P (Shift I: 07:30-15:30 WITA)
               </span>
               <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-amber-500" /> S (Shift 2: 15:30-22:30)
+                <span className="w-2.5 h-2.5 rounded bg-amber-500" /> S (Shift II: 15:30-22:30 WITA)
               </span>
               <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-purple-600" /> M (Shift 3: 22:30-07:30)
+                <span className="w-2.5 h-2.5 rounded bg-purple-600" /> M (Shift III: 22:30-07:30 WITA)
               </span>
               <span className="flex items-center gap-1">
                 <span className="w-2.5 h-2.5 rounded bg-muted-foreground/40" /> OFF (Libur)
