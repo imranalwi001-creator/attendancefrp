@@ -252,7 +252,7 @@ export async function initDb() {
         shift_code VARCHAR(20) NOT NULL, -- 'P', 'S', 'M', 'OFF'
         shift_name VARCHAR(100),
         start_time VARCHAR(10) DEFAULT '07:30',
-        end_time VARCHAR(10) DEFAULT '15:30',
+        end_time VARCHAR(10) DEFAULT '16:30',
         duration_hours NUMERIC(4,1) DEFAULT 8.0,
         is_night_shift BOOLEAN DEFAULT false,
         is_off BOOLEAN DEFAULT false,
@@ -266,10 +266,14 @@ export async function initDb() {
       CREATE INDEX IF NOT EXISTS idx_emp_schedules_date ON hrm_employee_schedules(schedule_date);
 
       -- ─── MASTER SHIFTS SYNCHRONIZATION ───
-      -- Ensure Shift 1 (07:30 - 15:30), Shift 2 (15:30 - 22:30), Shift 3 (22:30 - 07:30)
+      -- Ensure Shift 1 - Day Shift (07:30 - 16:30), Shift 2 (15:30 - 22:30), Shift 3 (22:30 - 07:30)
       UPDATE hrm_shifts 
-      SET name = 'Shift 1 (07:30 - 15:30)', start_time = '07:30:00', end_time = '15:30:00' 
-      WHERE name ILIKE '%Shift 1%' OR name ILIKE '%Shift I %' OR name ILIKE '%Shift Pagi%';
+      SET name = 'Shift 1 - Day Shift (07:30 - 16:30)', start_time = '07:30:00', end_time = '16:30:00' 
+      WHERE name ILIKE '%Shift 1%' OR name ILIKE '%Shift I %' OR name ILIKE '%Shift Pagi%' OR name ILIKE '%Day Shift%';
+
+      UPDATE hrm_shifts 
+      SET name = 'Reguler - Day Shift (07:30 - 16:30)', start_time = '07:30:00', end_time = '16:30:00' 
+      WHERE name ILIKE '%Reguler%';
 
       UPDATE hrm_shifts 
       SET name = 'Shift 2 (15:30 - 22:30)', start_time = '15:30:00', end_time = '22:30:00' 
@@ -280,8 +284,8 @@ export async function initDb() {
       WHERE name ILIKE '%Shift 3%' OR name ILIKE '%Shift III%' OR name ILIKE '%Shift Malam%';
 
       INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
-      SELECT 'Shift 1 (07:30 - 15:30)', '07:30:00', '15:30:00', 15, false
-      WHERE NOT EXISTS (SELECT 1 FROM hrm_shifts WHERE name ILIKE '%Shift 1%');
+      SELECT 'Shift 1 - Day Shift (07:30 - 16:30)', '07:30:00', '16:30:00', 15, false
+      WHERE NOT EXISTS (SELECT 1 FROM hrm_shifts WHERE name ILIKE '%Shift 1%' OR name ILIKE '%Day Shift%');
 
       INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
       SELECT 'Shift 2 (15:30 - 22:30)', '15:30:00', '22:30:00', 15, false

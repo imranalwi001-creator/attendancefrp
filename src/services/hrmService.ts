@@ -224,9 +224,9 @@ const DEFAULT_SHIFTS: Shift[] = [
   {
     id: 'shift-regular',
     code: 'REG',
-    name: 'Reguler Kantor (08:00 - 17:00)',
-    startTime: '08:00',
-    endTime: '17:00',
+    name: 'Reguler / Day Shift (07:30 - 16:30)',
+    startTime: '07:30',
+    endTime: '16:30',
     breakStartTime: '12:00',
     breakEndTime: '13:00',
     lateToleranceMinutes: 15,
@@ -234,23 +234,23 @@ const DEFAULT_SHIFTS: Shift[] = [
     isCrossDay: false,
     workingDays: [1, 2, 3, 4, 5],
     colorTag: '#0d9488',
-    description: 'Jam kerja standar kantor pusat & divisi administrasi (5 hari kerja)',
+    description: 'Jam kerja standar kantor pusat / Day Shift (07:30 - 16:30)',
     isDefault: true,
   },
   {
     id: 'shift-morning',
     code: 'PAGI',
-    name: 'Shift 1 (07:30 - 15:30)',
+    name: 'Shift 1 - Day Shift (07:30 - 16:30)',
     startTime: '07:30',
-    endTime: '15:30',
-    breakStartTime: '11:30',
-    breakEndTime: '12:30',
+    endTime: '16:30',
+    breakStartTime: '12:00',
+    breakEndTime: '13:00',
     lateToleranceMinutes: 15,
     earliestClockInMinutes: 60,
     isCrossDay: false,
     workingDays: [1, 2, 3, 4, 5, 6],
     colorTag: '#3b82f6',
-    description: 'Shift 1 operasional pagi hari',
+    description: 'Shift 1 operasional Day Shift (07:30 - 16:30)',
     isDefault: false,
   },
   {
@@ -756,7 +756,8 @@ export const hrmService = {
 
     const existingShifts = safeGetJson<Shift[]>(STORAGE_KEYS.SHIFTS, []);
     const needsShiftSync = !existingShifts.length || existingShifts.some((s) => 
-      (s.id === 'shift-morning' && s.startTime !== '07:30') ||
+      (s.id === 'shift-morning' && (s.startTime !== '07:30' || s.endTime !== '16:30')) ||
+      (s.id === 'shift-regular' && (s.startTime !== '07:30' || s.endTime !== '16:30')) ||
       (s.id === 'shift-afternoon' && s.startTime !== '15:30') ||
       (s.id === 'shift-night' && s.startTime !== '22:30')
     );
@@ -1185,9 +1186,9 @@ export const hrmService = {
         let isOff = true;
 
         if (code === 'P') {
-          sName = 'Shift 1 (07:30 - 15:30 WIB)';
+          sName = 'Shift 1 - Day Shift (07:30 - 16:30 WIB)';
           sStart = '07:30';
-          sEnd = '15:30';
+          sEnd = '16:30';
           duration = 8;
           isOff = false;
         } else if (code === 'S') {
