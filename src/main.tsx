@@ -63,7 +63,9 @@ if ("serviceWorker" in navigator && !isLovablePreview) {
   } else {
     window.addEventListener("load", () => void initServiceWorker());
   }
-}
+import { initAppUpdater } from "./services/updaterService.ts";
+
+void initAppUpdater();
 
 console.log("[HRM] Initializing App mount...");
 const rootElement = document.getElementById("root");

@@ -80,6 +80,16 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Over-The-Air (OTA) Live Update endpoint for CapacitorUpdater
+app.get('/api/app-update/check', (req, res) => {
+  res.json({
+    version: '1.0.6',
+    bundleUrl: 'https://fawwazreskiperwira.com/downloads/bundle.zip',
+    force: false,
+    notes: 'Pembaruan UI otomatis: Responsivitas layar HP dan perbaikan layout presensi',
+  });
+});
+
 // Helper: Format PostgreSQL row to match TypeScript UserProfile
 function formatUserRow(r) {
   return {
