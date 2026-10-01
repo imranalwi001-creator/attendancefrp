@@ -139,6 +139,26 @@ export interface Shift {
   isDefault?: boolean;
 }
 
+export interface EmployeeSchedule {
+  id: string;
+  userId: string;
+  userName: string;
+  userNip?: string;
+  divisionId?: string;
+  scheduleDate: string; // YYYY-MM-DD
+  shiftId?: string;
+  shiftCode: string; // 'P' | 'S' | 'M' | 'OFF' | string
+  shiftName: string; // 'Shift Pagi (07:00 - 15:00)', etc.
+  startTime: string; // '07:00'
+  endTime: string;   // '15:00'
+  durationHours: number;
+  isNightShift: boolean;
+  isOff: boolean;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface OfficeLocation {
   id: string;
   name: string;
@@ -239,6 +259,10 @@ export interface AttendanceRecord {
   earlyLeavingMinutes: number;
   workDurationMinutes: number;
   notes?: string;
+  // Shift assignment metadata
+  shiftId?: string;
+  shiftCode?: string;          // 'P' | 'S' | 'M' | 'OFF'
+  shiftName?: string;
   // Anti-fraud security metadata
   deviceId?: string;
   isMockSuspected?: boolean;

@@ -4828,6 +4828,172 @@ app.get('/api/analytics/self', async (req, res) => {
 // Update /api/analytics/employees to support kepalaReguId for Kepala Regu scope
 // (These override the previous implementations to add division scope)
 
+// ─── EMPLOYEE SHIFT SCHEDULES API ─────────────────────────────────────────
+
+// GET /api/employee-schedules - Retrieve scheduled shifts with optional filters
+app.get('/api/employee-schedules', async (req, res) => {
+  const { month, year, divisionId, userId, date } = req.query;
+  try {
+    let query = `
+      SELECT 
+        s.id,
+        s.user_id as "userId",
+        p.full_name as "userName",
+        p.nip as "userNip",
+        p.division_id as "divisionId",
+        p.division_name as "divisionName",
+        TO_CHAR(s.schedule_date, 'YYYY-MM-DD') as "scheduleDate",
+        s.shift_id as "shiftId",
+        s.shift_code as "shiftCode",
+        s.shift_name as "shiftName",
+        s.start_time as "startTime",
+        s.end_time as "endTime",
+        s.duration_hours as "durationHours",
+        s.is_night_shift as "isNightShift",
+        s.is_off as "isOff",
+        s.notes,
+        s.created_at as "createdAt",
+        s.updated_at as "updatedAt"
+      FROM hrm_employee_schedules s
+      JOIN hrm_profiles p ON s.user_id = p.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (userId) {
+      params.push(userId);
+      query += ` AND s.user_id = $${params.length}`;
+    }
+    if (divisionId && divisionId !== 'all') {
+      params.push(divisionId);
+      query += ` AND p.division_id = $${params.length}`;
+    }
+    if (date) {
+      params.push(date);
+      query += ` AND s.schedule_date = $${params.length}`;
+    }
+    if (month && year) {
+      params.push(Number(month));
+      query += ` AND EXTRACT(MONTH FROM s.schedule_date) = $${params.length}`;
+      params.push(Number(year));
+      query += ` AND EXTRACT(YEAR FROM s.schedule_date) = $${params.length}`;
+    }
+
+    query += ` ORDER BY s.schedule_date ASC, p.full_name ASC`;
+    const result = await pool.query(query, params);
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    console.error('[Employee Schedules] Error fetching:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/employee-schedules/today/:userId - Retrieve today's schedule for specific user
+app.get('/api/employee-schedules/today/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const today = req.query.date || new Date().toISOString().split('T')[0];
+  try {
+    const query = `
+      SELECT 
+        s.id,
+        s.user_id as "userId",
+        p.full_name as "userName",
+        p.nip as "userNip",
+        TO_CHAR(s.schedule_date, 'YYYY-MM-DD') as "scheduleDate",
+        s.shift_id as "shiftId",
+        s.shift_code as "shiftCode",
+        s.shift_name as "shiftName",
+        s.start_time as "startTime",
+        s.end_time as "endTime",
+        s.duration_hours as "durationHours",
+        s.is_night_shift as "isNightShift",
+        s.is_off as "isOff",
+        s.notes
+      FROM hrm_employee_schedules s
+      JOIN hrm_profiles p ON s.user_id = p.id
+      WHERE s.user_id = $1 AND s.schedule_date = $2
+      LIMIT 1
+    `;
+    const result = await pool.query(query, [userId, today]);
+    res.json({ success: true, data: result.rows[0] || null });
+  } catch (err) {
+    console.error('[Employee Schedules Today] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/employee-schedules/batch - Upsert multiple employee schedules
+app.post('/api/employee-schedules/batch', async (req, res) => {
+  const { schedules } = req.body;
+  if (!Array.isArray(schedules) || schedules.length === 0) {
+    return res.status(400).json({ success: false, error: 'Daftar jadwal wajib disertakan' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let upsertedCount = 0;
+
+    for (const item of schedules) {
+      if (!item.userId || !item.scheduleDate) continue;
+      await client.query(`
+        INSERT INTO hrm_employee_schedules (
+          user_id,
+          schedule_date,
+          shift_id,
+          shift_code,
+          shift_name,
+          start_time,
+          end_time,
+          duration_hours,
+          is_night_shift,
+          is_off,
+          notes,
+          updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+        ON CONFLICT (user_id, schedule_date) 
+        DO UPDATE SET
+          shift_id = EXCLUDED.shift_id,
+          shift_code = EXCLUDED.shift_code,
+          shift_name = EXCLUDED.shift_name,
+          start_time = EXCLUDED.start_time,
+          end_time = EXCLUDED.end_time,
+          duration_hours = EXCLUDED.duration_hours,
+          is_night_shift = EXCLUDED.is_night_shift,
+          is_off = EXCLUDED.is_off,
+          notes = EXCLUDED.notes,
+          updated_at = NOW()
+      `, [
+        item.userId,
+        item.scheduleDate,
+        item.shiftId || null,
+        item.shiftCode || 'OFF',
+        item.shiftName || (item.shiftCode === 'OFF' ? 'Libur / Off' : `Shift ${item.shiftCode}`),
+        item.startTime || (item.shiftCode === 'M' ? '23:00' : item.shiftCode === 'S' ? '15:00' : '07:00'),
+        item.endTime || (item.shiftCode === 'M' ? '07:00' : item.shiftCode === 'S' ? '23:00' : '15:00'),
+        item.durationHours ?? (item.shiftCode === 'OFF' ? 0 : 8),
+        Boolean(item.isNightShift || item.shiftCode === 'M'),
+        Boolean(item.isOff || item.shiftCode === 'OFF'),
+        item.notes || 'Disusun via Smart Roster Scheduler'
+      ]);
+      upsertedCount++;
+    }
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      count: upsertedCount,
+      message: `Berhasil menyimpan ${upsertedCount} jadwal shift ke database PostgreSQL`,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[Employee Schedules Batch] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 // Start Server
 async function start() {
   try {

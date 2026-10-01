@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, calculateDistanceMeters, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, HrmNotification } from '@/types/hrm';
+import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, HrmNotification, EmployeeSchedule } from '@/types/hrm';
 import {
   Clock,
   MapPin,
@@ -78,6 +78,7 @@ export const HrmEmployeeDashboard: React.FC = () => {
   // Today's attendance & shift
   const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord | undefined>(undefined);
   const [userShift, setUserShift] = useState<Shift | null>(null);
+  const [todaySchedule, setTodaySchedule] = useState<EmployeeSchedule | null>(null);
 
   // Overtime state
   const [todayApprovedOvertime, setTodayApprovedOvertime] = useState<OvertimeRecord | null>(null);
@@ -206,8 +207,25 @@ export const HrmEmployeeDashboard: React.FC = () => {
     });
 
     const shifts = hrmService.getShifts();
-    const shift = shifts.find((s) => s.id === user.shiftId) || shifts[0];
-    setUserShift(shift);
+    const todayStr = getTodayDateStr();
+    const dailySched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
+    setTodaySchedule(dailySched);
+
+    if (dailySched && !dailySched.isOff) {
+      setUserShift({
+        id: dailySched.shiftId || `sched-${dailySched.shiftCode}`,
+        code: dailySched.shiftCode,
+        name: dailySched.shiftName,
+        startTime: dailySched.startTime,
+        endTime: dailySched.endTime,
+        lateToleranceMinutes: 15,
+        isCrossDay: dailySched.isNightShift,
+        colorTag: dailySched.shiftCode === 'P' ? '#3b82f6' : dailySched.shiftCode === 'S' ? '#f59e0b' : '#8b5cf6',
+      });
+    } else {
+      const shift = shifts.find((s) => s.id === user.shiftId) || shifts[0];
+      setUserShift(shift);
+    }
 
     const todayAtt = hrmService.getUserTodayAttendance(user.id);
     setTodayAttendance(todayAtt);
@@ -216,7 +234,6 @@ export const HrmEmployeeDashboard: React.FC = () => {
     const approvedOt = hrmService.getUserTodayApprovedOvertime(user.id);
     setTodayApprovedOvertime(approvedOt);
 
-    const todayStr = getTodayDateStr();
     const myOts = hrmService.getOvertimeRecords().filter((r) => r.userId === user.id && r.date === todayStr);
     setUserOvertimeRequests(myOts);
 
@@ -241,11 +258,13 @@ export const HrmEmployeeDashboard: React.FC = () => {
     window.addEventListener('hrm_notifications_updated', handleNotifUpdate);
     window.addEventListener('hrm_overtime_updated', loadAttendanceData);
     window.addEventListener('hrm_attendance_updated', loadAttendanceData);
+    window.addEventListener('hrm_schedules_updated', loadAttendanceData);
 
     return () => {
       window.removeEventListener('hrm_notifications_updated', handleNotifUpdate);
       window.removeEventListener('hrm_overtime_updated', loadAttendanceData);
       window.removeEventListener('hrm_attendance_updated', loadAttendanceData);
+      window.removeEventListener('hrm_schedules_updated', loadAttendanceData);
     };
   }, [user]);
 
@@ -1126,10 +1145,28 @@ export const HrmEmployeeDashboard: React.FC = () => {
                 <span>NIP: <strong className="text-foreground">{user?.nip}</strong></span>
               </span>
               <span>•</span>
-              <span className="inline-flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5 text-primary" />
-                <span>Shift: <strong className="text-foreground">{userShift?.name}</strong> ({userShift?.startTime} - {userShift?.endTime})</span>
-              </span>
+              {todaySchedule ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-primary" />
+                  <span>Jadwal Roster:</span>
+                  <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold ${
+                    todaySchedule.isOff
+                      ? 'bg-slate-500/20 text-slate-700 dark:text-slate-300'
+                      : todaySchedule.shiftCode === 'P'
+                      ? 'bg-blue-500/20 text-blue-700 dark:text-blue-300'
+                      : todaySchedule.shiftCode === 'S'
+                      ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
+                      : 'bg-purple-500/20 text-purple-700 dark:text-purple-300'
+                  }`}>
+                    {todaySchedule.isOff ? '🏖️ LIBUR / OFF' : `${todaySchedule.shiftName} (${todaySchedule.startTime} - ${todaySchedule.endTime})`}
+                  </span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5 text-primary" />
+                  <span>Shift: <strong className="text-foreground">{userShift?.name}</strong> ({userShift?.startTime} - {userShift?.endTime})</span>
+                </span>
+              )}
             </div>
           </div>
 
@@ -1149,6 +1186,17 @@ export const HrmEmployeeDashboard: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Presensi Action Hero Card */}
         <Card className="lg:col-span-2 border-border shadow-2xs rounded-xl overflow-hidden">
+          {todaySchedule?.isOff && (
+            <div className="mx-6 mt-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl flex items-start gap-2.5 text-xs text-blue-900 dark:text-blue-200">
+              <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold">Hari ini Anda dijadwalkan Libur (OFF).</span>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Anda tidak memiliki kewajiban absensi hari ini menurut matriks jadwal shift perusahaan. Jika hadir untuk lembur atau penugasan khusus, Anda tetap dapat melakukan presensi di bawah.
+                </p>
+              </div>
+            </div>
+          )}
           <CardHeader className="border-b border-border/60 pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base font-bold text-foreground flex items-center gap-2">

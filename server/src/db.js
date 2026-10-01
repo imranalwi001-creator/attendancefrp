@@ -242,9 +242,31 @@ export async function initDb() {
 
       CREATE INDEX IF NOT EXISTS idx_notifications_division ON hrm_notifications(division_id);
       CREATE INDEX IF NOT EXISTS idx_notifications_role ON hrm_notifications(recipient_role);
+
+      -- ─── EMPLOYEE SCHEDULES / SHIFT ROSTER PERSISTENCE ───
+      CREATE TABLE IF NOT EXISTS hrm_employee_schedules (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID NOT NULL REFERENCES hrm_profiles(id) ON DELETE CASCADE,
+        schedule_date DATE NOT NULL,
+        shift_id UUID REFERENCES hrm_shifts(id) ON DELETE SET NULL,
+        shift_code VARCHAR(20) NOT NULL, -- 'P', 'S', 'M', 'OFF'
+        shift_name VARCHAR(100),
+        start_time VARCHAR(10) DEFAULT '07:00',
+        end_time VARCHAR(10) DEFAULT '15:00',
+        duration_hours NUMERIC(4,1) DEFAULT 8.0,
+        is_night_shift BOOLEAN DEFAULT false,
+        is_off BOOLEAN DEFAULT false,
+        notes TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        CONSTRAINT uq_user_schedule_date UNIQUE (user_id, schedule_date)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_emp_schedules_user_date ON hrm_employee_schedules(user_id, schedule_date);
+      CREATE INDEX IF NOT EXISTS idx_emp_schedules_date ON hrm_employee_schedules(schedule_date);
     `);
 
-    console.log('[Database] Schema verification, Biometric, Geofence, Shift Swaps & Notifications extensions completed.');
+    console.log('[Database] Schema verification, Biometric, Geofence, Shift Swaps, Schedules & Notifications extensions completed.');
   } catch (err) {
     console.error('[Database] Initialization error:', err.message);
     throw err;
