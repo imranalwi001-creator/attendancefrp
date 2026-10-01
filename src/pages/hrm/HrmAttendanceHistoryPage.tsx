@@ -26,7 +26,15 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
 
   const filteredHistory = history.filter((a) => {
     if (!filterMonth) return true;
-    return a.attendanceDate.startsWith(filterMonth);
+    if (!a || !a.attendanceDate) return false;
+    try {
+      const cleanDate = typeof a.attendanceDate === 'string'
+        ? a.attendanceDate.split('T')[0]
+        : new Date(a.attendanceDate).toISOString().split('T')[0];
+      return cleanDate.startsWith(filterMonth);
+    } catch {
+      return false;
+    }
   });
 
   return (
@@ -43,13 +51,24 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="w-full sm:w-auto">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
           <Input
             type="month"
             value={filterMonth}
             onChange={(e) => setFilterMonth(e.target.value)}
-            className="text-xs bg-card rounded-xl border-border"
+            className="text-xs bg-card rounded-xl border-border w-full sm:w-48"
+            placeholder="Pilih Bulan..."
           />
+          {filterMonth && (
+            <button
+              type="button"
+              onClick={() => setFilterMonth('')}
+              className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-lg border border-border hover:bg-muted shrink-0"
+              title="Reset Filter"
+            >
+              Semua
+            </button>
+          )}
         </div>
       </div>
 

@@ -83,10 +83,15 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     securityFlags?: string[];
   } | null>(null);
 
+  const [allAttendances, setAllAttendances] = useState<AttendanceRecord[]>([]);
+  const [periodScope, setPeriodScope] = useState<'today' | 'month' | 'year'>('today');
+
   const loadData = () => {
     const today = getTodayDateStr();
     setUsers(hrmService.getUsers().filter((u) => u.isActive));
     setDivisions(hrmService.getDivisions());
+    const all = hrmService.getAttendances();
+    setAllAttendances(all);
     setAttendances(hrmService.getAttendances(today));
     setOvertimes(hrmService.getOvertimeRecords());
     setPerimeterViolations(hrmService.getPerimeterViolations());
@@ -133,13 +138,74 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       .catch((err) => console.error('Failed generating QR code:', err));
   }, [qrData?.code, qrModalOpen]);
 
+  const currentMonthStr = getTodayDateStr().slice(0, 7);
+  const currentYearStr = getTodayDateStr().slice(0, 4);
+  const currentMonthName = new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+  const currentYear = new Date().getFullYear();
+
+  const activePeriodAttendances = React.useMemo(() => {
+    if (periodScope === 'today') {
+      const today = getTodayDateStr();
+      return allAttendances.filter((a) => a.attendanceDate === today);
+    } else if (periodScope === 'month') {
+      return allAttendances.filter((a) => a.attendanceDate?.startsWith(currentMonthStr));
+    } else {
+      return allAttendances.filter((a) => a.attendanceDate?.startsWith(currentYearStr));
+    }
+  }, [allAttendances, periodScope, currentMonthStr, currentYearStr]);
+
+  // Aggregate Division Summaries
+  const divisionSummaries = React.useMemo(() => {
+    return divisions.map((div) => {
+      const divUsers = users.filter((u) => u.divisionId === div.id);
+      const divAtts = activePeriodAttendances.filter((a) =>
+        divUsers.some((u) => u.id === a.userId) || a.divisionName === div.name
+      );
+      const presentCount = divAtts.filter((a) => a.status === 'hadir').length;
+      const lateCount = divAtts.filter((a) => a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0)).length;
+      const totalLateMinutes = divAtts.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
+      const totalHours = Math.round(divAtts.reduce((sum, a) => sum + (a.workDurationMinutes || 0), 0) / 60);
+      const lateDeductionEstimate = totalLateMinutes * 1000;
+
+      return {
+        division: div,
+        totalEmployees: divUsers.length,
+        totalRecords: divAtts.length,
+        presentCount,
+        lateCount,
+        totalLateMinutes,
+        totalHours,
+        lateDeductionEstimate,
+      };
+    });
+  }, [divisions, users, activePeriodAttendances]);
+
   const monitoredList = users.map((u) => {
-    const att = attendances.find((a) => a.userId === u.id);
-    return {
-      user: u,
-      attendance: att,
-      status: !att ? 'absent' : att.status === 'terlambat' ? 'late' : 'present',
-    };
+    if (periodScope === 'today') {
+      const att = activePeriodAttendances.find((a) => a.userId === u.id);
+      return {
+        user: u,
+        attendance: att,
+        status: !att ? 'absent' : att.status === 'terlambat' ? 'late' : 'present',
+        totalLateMinutes: att?.lateMinutes || 0,
+        lateCount: att && (att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0)) ? 1 : 0,
+        totalAttCount: att ? 1 : 0,
+      };
+    } else {
+      const userAtts = activePeriodAttendances.filter((a) => a.userId === u.id);
+      const lateAtts = userAtts.filter((a) => a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0));
+      const totLateMin = lateAtts.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
+      const latestAtt = userAtts[userAtts.length - 1];
+
+      return {
+        user: u,
+        attendance: latestAtt,
+        status: userAtts.length === 0 ? 'absent' : lateAtts.length > 0 ? 'late' : 'present',
+        totalLateMinutes: totLateMin,
+        lateCount: lateAtts.length,
+        totalAttCount: userAtts.length,
+      };
+    }
   });
 
   const filtered = monitoredList.filter((item) => {
@@ -157,8 +223,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const activeBreaches = perimeterViolations.filter((v) => v.status === 'active');
 
   const radarSummary: AnomalyRadarSummary = React.useMemo(() => {
-    return anomalyDetectionService.analyzeWorkforceAnomalies(users, attendances, overtimes);
-  }, [users, attendances, overtimes]);
+    return anomalyDetectionService.analyzeWorkforceAnomalies(users, activePeriodAttendances, overtimes);
+  }, [users, activePeriodAttendances, overtimes]);
 
   return (
     <div className="space-y-6">
@@ -184,17 +250,80 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Period Scope Toggle */}
+          <div className="flex items-center gap-1 bg-muted/80 p-1 rounded-xl border border-border">
+            <Button
+              type="button"
+              variant={periodScope === 'today' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setPeriodScope('today')}
+              className="text-xs h-7 px-2.5 rounded-lg font-medium"
+            >
+              Hari Ini (Live)
+            </Button>
+            <Button
+              type="button"
+              variant={periodScope === 'month' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setPeriodScope('month')}
+              className="text-xs h-7 px-2.5 rounded-lg font-medium"
+            >
+              Bulan Berjalan
+            </Button>
+            <Button
+              type="button"
+              variant={periodScope === 'year' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setPeriodScope('year')}
+              className="text-xs h-7 px-2.5 rounded-lg font-medium"
+            >
+              Tahun {currentYear}
+            </Button>
+          </div>
+
           <Button
             onClick={() => setQrModalOpen(true)}
-            className="gap-2 rounded-xl text-xs h-9 font-semibold shadow-xs"
+            className="gap-2 rounded-xl text-xs h-8 font-semibold shadow-xs"
           >
-            <QrCode size={15} /> Terminal QR Dinamis
+            <QrCode size={14} /> Terminal QR Dinamis
           </Button>
-          <Button variant="outline" size="sm" onClick={loadData} className="text-xs gap-1.5 border-border rounded-xl h-9">
+          <Button variant="outline" size="sm" onClick={loadData} className="text-xs gap-1.5 border-border rounded-xl h-8">
             <RotateCw className="w-3.5 h-3.5 text-primary" /> Refresh
           </Button>
         </div>
+      </div>
+
+      {/* Division Summaries & Realtime Lateness Metric Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {divisionSummaries.map((ds) => (
+          <div key={ds.division.id} className="p-3.5 bg-card border border-border rounded-2xl shadow-2xs space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-xs text-foreground truncate">{ds.division.name}</span>
+              <Badge variant="outline" className="text-[10px] bg-muted/40 font-mono">
+                {ds.totalEmployees} Anggota
+              </Badge>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-border">
+              <div>
+                <span className="text-muted-foreground block text-[10px]">Hadir / Terlambat</span>
+                <span className="font-bold text-foreground font-mono">
+                  {ds.presentCount} / <span className="text-amber-600">{ds.lateCount}</span>
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block text-[10px]">Menit Keterlambatan</span>
+                <span className="font-bold text-amber-600 font-mono">{ds.totalLateMinutes} mnt</span>
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-[10px] pt-1 text-muted-foreground border-t border-border/60">
+              <span>Potongan Denda Payroll:</span>
+              <span className="font-bold text-rose-600 font-mono">
+                Rp {ds.lateDeductionEstimate.toLocaleString('id-ID')}
+              </span>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Status Counters */}
@@ -601,9 +730,15 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   <TableHead className="w-12 text-center font-semibold text-muted-foreground">#</TableHead>
                   <TableHead className="min-w-[220px] font-semibold text-muted-foreground">Karyawan</TableHead>
                   <TableHead className="min-w-[150px] font-semibold text-muted-foreground">Divisi & Jabatan</TableHead>
-                  <TableHead className="min-w-[130px] text-center font-semibold text-muted-foreground">Status Kehadiran</TableHead>
-                  <TableHead className="min-w-[110px] text-center font-semibold text-muted-foreground">Jam Masuk</TableHead>
-                  <TableHead className="min-w-[110px] text-center font-semibold text-muted-foreground">Jam Pulang</TableHead>
+                  <TableHead className="min-w-[130px] text-center font-semibold text-muted-foreground">
+                    {periodScope === 'today' ? 'Status Kehadiran' : 'Total Kehadiran'}
+                  </TableHead>
+                  <TableHead className="min-w-[110px] text-center font-semibold text-muted-foreground">
+                    {periodScope === 'today' ? 'Jam Masuk' : 'Frekuensi Terlambat'}
+                  </TableHead>
+                  <TableHead className="min-w-[110px] text-center font-semibold text-muted-foreground">
+                    {periodScope === 'today' ? 'Jam Pulang' : 'Denda Payroll'}
+                  </TableHead>
                   <TableHead className="min-w-[170px] font-semibold text-muted-foreground">Verifikasi Keamanan</TableHead>
                   <TableHead className="w-28 text-right font-semibold text-muted-foreground">Forensik</TableHead>
                 </TableRow>
@@ -616,7 +751,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filtered.map(({ user: u, attendance: att, status }, idx) => {
+                  filtered.map(({ user: u, attendance: att, status, totalLateMinutes, lateCount, totalAttCount }, idx) => {
                     const userAnomaly = radarSummary.items.find((i) => i.userId === u.id);
                     return (
                       <TableRow key={u.id} className="hover:bg-muted/30 transition-colors">
@@ -650,29 +785,51 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           </p>
                         </TableCell>
                         <TableCell className="text-center">
-                          {status === 'present' ? (
-                            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
-                              Tepat Waktu
-                            </Badge>
-                          ) : status === 'late' ? (
-                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
-                              Telat {att?.lateMinutes}m
-                            </Badge>
+                          {periodScope === 'today' ? (
+                            status === 'present' ? (
+                              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                Tepat Waktu
+                              </Badge>
+                            ) : status === 'late' ? (
+                              <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                Telat {att?.lateMinutes || 0}m
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="bg-muted text-muted-foreground border-border text-[11px] rounded-full px-2.5 py-0.5">
+                                Belum Hadir
+                              </Badge>
+                            )
                           ) : (
-                            <Badge variant="outline" className="bg-muted text-muted-foreground border-border text-[11px] rounded-full px-2.5 py-0.5">
-                              Belum Hadir
+                            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[11px] rounded-full px-2.5 py-0.5 font-mono font-medium">
+                              {totalAttCount} Hari Hadir
                             </Badge>
                           )}
                         </TableCell>
                         <TableCell className="text-center">
-                          <span className={`font-mono text-xs ${att?.clockIn ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
-                            {att?.clockIn ? `${att.clockIn} WIB` : '-'}
-                          </span>
+                          {periodScope === 'today' ? (
+                            <span className={`font-mono text-xs ${att?.clockIn ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
+                              {att?.clockIn ? `${att.clockIn} WIB` : '-'}
+                            </span>
+                          ) : (
+                            lateCount > 0 ? (
+                              <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                {lateCount}x ({totalLateMinutes} mnt)
+                              </Badge>
+                            ) : (
+                              <span className="text-[11px] text-emerald-600 font-medium">Nihil (0 mnt)</span>
+                            )
+                          )}
                         </TableCell>
                         <TableCell className="text-center">
-                          <span className={`font-mono text-xs ${att?.clockOut ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
-                            {att?.clockOut ? `${att.clockOut} WIB` : '-'}
-                          </span>
+                          {periodScope === 'today' ? (
+                            <span className={`font-mono text-xs ${att?.clockOut ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
+                              {att?.clockOut ? `${att.clockOut} WIB` : '-'}
+                            </span>
+                          ) : (
+                            <span className="font-mono text-xs font-bold text-rose-600">
+                              Rp {(totalLateMinutes * 1000).toLocaleString('id-ID')}
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell>
                           {att ? (

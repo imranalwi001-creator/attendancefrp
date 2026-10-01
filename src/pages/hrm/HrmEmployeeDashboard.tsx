@@ -132,6 +132,51 @@ export const HrmEmployeeDashboard: React.FC = () => {
   const [loadingSlip, setLoadingSlip] = useState(false);
   const [slipCopied, setSlipCopied] = useState(false);
 
+  // Multi-Device Collision & Employee Password Change States
+  const currentDeviceFingerprint = hrmService.getDeviceFingerprint();
+  const currentDeviceModel = hrmService.getDeviceModel();
+  const isMultiDeviceDetected = Boolean(user?.registeredDeviceId && user.registeredDeviceId !== currentDeviceFingerprint);
+
+  const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [passwordChangeMessage, setPasswordChangeMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleChangePasswordSubmit = async () => {
+    if (!user) return;
+    if (!newPassword || newPassword.length < 6) {
+      setPasswordChangeMessage({ type: 'error', text: 'Kata sandi baru minimal 6 karakter.' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordChangeMessage({ type: 'error', text: 'Konfirmasi kata sandi baru tidak sesuai.' });
+      return;
+    }
+    setIsChangingPassword(true);
+    setPasswordChangeMessage(null);
+    try {
+      const res = await hrmService.changePassword(user.id, oldPassword, newPassword);
+      if (res.success) {
+        setPasswordChangeMessage({ type: 'success', text: 'Kata sandi berhasil diperbarui!' });
+        setOldPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        setTimeout(() => {
+          setChangePasswordModalOpen(false);
+          setPasswordChangeMessage(null);
+        }, 1500);
+      } else {
+        setPasswordChangeMessage({ type: 'error', text: res.error || 'Gagal mengubah kata sandi' });
+      }
+    } catch (err: any) {
+      setPasswordChangeMessage({ type: 'error', text: err.message || 'Terjadi kesalahan sistem' });
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
   const handleOpenSalarySlip = async () => {
     if (!user) return;
     setLoadingSlip(true);
@@ -1064,6 +1109,16 @@ export const HrmEmployeeDashboard: React.FC = () => {
 
         {/* Quick Actions (Kios & Notif: only shown on desktop/tablet since mobile navbar has them) */}
         <div className="hidden sm:flex items-center gap-1.5 self-end sm:self-center shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setChangePasswordModalOpen(true)}
+            className="h-8 px-2.5 text-xs rounded-lg gap-1.5 border-border hover:bg-muted text-muted-foreground hover:text-foreground font-medium"
+            title="Ganti Kata Sandi Akun"
+          >
+            <Lock className="w-3.5 h-3.5" />
+            <span>Ganti Sandi</span>
+          </Button>
           <Link to="/kios">
             <Button
               variant="outline"
@@ -1091,6 +1146,34 @@ export const HrmEmployeeDashboard: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/* ─── MULTI-DEVICE ACCESS NOTICE BANNER ─── */}
+      {isMultiDeviceDetected && (
+        <Alert className="rounded-2xl border-amber-500/40 bg-amber-500/10 text-amber-950 dark:text-amber-100 shadow-xs">
+          <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0" />
+          <AlertTitle className="text-xs font-bold uppercase tracking-wider flex items-center justify-between flex-wrap gap-2">
+            <span>⚠️ Peringatan Keamanan: Terdeteksi Akses Multi-Perangkat</span>
+            <Badge variant="outline" className="bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/40 text-[10px]">
+              Notice Keamanan
+            </Badge>
+          </AlertTitle>
+          <AlertDescription className="text-xs mt-1 space-y-2">
+            <p>
+              Akun Anda terikat pada <strong>{user?.deviceModel || 'Perangkat Utama'}</strong>, namun aplikasi saat ini terdeteksi dibuka pada perangkat berbeda (<strong>{currentDeviceModel}</strong>). Sesuai kebijakan keamanan PT. Fawwaz Reski Perwira, dilarang keras membagikan akun untuk presensi titipan. Jika Anda merasa akun Anda diakses orang lain, segera ganti kata sandi.
+            </p>
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setChangePasswordModalOpen(true)}
+                className="rounded-xl text-xs h-8 px-3 font-semibold border-amber-500/40 bg-background text-amber-800 dark:text-amber-200 hover:bg-amber-500/20"
+              >
+                Ganti Kata Sandi Sekarang
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* ─── 2. MUTATION / TEMPORARY ASSIGNMENT NOTICE (IF REASSIGNED BY ADMIN) ─── */}
       {user?.originalDivisionId && (
@@ -2831,6 +2914,92 @@ export const HrmEmployeeDashboard: React.FC = () => {
               className="rounded-xl text-xs h-8 w-full sm:w-auto"
             >
               Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── EMPLOYEE CHANGE PASSWORD DIALOG MODAL ─── */}
+      <Dialog open={changePasswordModalOpen} onOpenChange={setChangePasswordModalOpen}>
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold">
+              <Lock className="w-5 h-5 text-primary" />
+              Ganti Kata Sandi Akun
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Perbarui kata sandi login Anda untuk menjaga keamanan data akun dan presensi.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 text-xs">
+            {passwordChangeMessage && (
+              <Alert className={`rounded-xl text-xs p-2.5 ${
+                passwordChangeMessage.type === 'success'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-900 dark:text-emerald-100'
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-900 dark:text-rose-100'
+              }`}>
+                {passwordChangeMessage.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 inline mr-1.5 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 inline mr-1.5 shrink-0" />
+                )}
+                <span>{passwordChangeMessage.text}</span>
+              </Alert>
+            )}
+
+            <div className="space-y-1.5">
+              <label className="font-semibold text-foreground">Kata Sandi Lama</label>
+              <Input
+                type="password"
+                placeholder="Masukkan kata sandi saat ini"
+                value={oldPassword}
+                onChange={(e) => setOldPassword(e.target.value)}
+                className="text-xs rounded-xl"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="font-semibold text-foreground">Kata Sandi Baru (Minimal 6 Karakter)</label>
+              <Input
+                type="password"
+                placeholder="Masukkan kata sandi baru"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="text-xs rounded-xl"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="font-semibold text-foreground">Konfirmasi Kata Sandi Baru</label>
+              <Input
+                type="password"
+                placeholder="Ketik ulang kata sandi baru"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="text-xs rounded-xl"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-xl text-xs"
+              onClick={() => setChangePasswordModalOpen(false)}
+              disabled={isChangingPassword}
+            >
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              className="rounded-xl text-xs font-semibold gap-1.5"
+              onClick={handleChangePasswordSubmit}
+              disabled={isChangingPassword || !newPassword || !confirmPassword}
+            >
+              <Lock size={14} />
+              {isChangingPassword ? 'Memperbarui...' : 'Simpan Kata Sandi'}
             </Button>
           </DialogFooter>
         </DialogContent>

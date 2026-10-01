@@ -19,11 +19,23 @@ export const HrmLogin: React.FC = () => {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     setSettings(hrmService.getAppSettings());
+    const saved = localStorage.getItem('hrm_remembered_credentials');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.identifier && parsed.password) {
+          setIdentifier(parsed.identifier);
+          setPassword(parsed.password);
+          setRememberMe(true);
+        }
+      } catch {}
+    }
   }, []);
 
   React.useEffect(() => {
@@ -49,6 +61,11 @@ export const HrmLogin: React.FC = () => {
     try {
       const res = await login(identifier, password);
       if (res?.success) {
+        if (rememberMe) {
+          localStorage.setItem('hrm_remembered_credentials', JSON.stringify({ identifier, password }));
+        } else {
+          localStorage.removeItem('hrm_remembered_credentials');
+        }
         navigate('/dashboard', { replace: true });
       } else {
         setError(res?.error || 'Email/NIP atau kata sandi tidak sesuai');
@@ -138,6 +155,18 @@ export const HrmLogin: React.FC = () => {
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-0.5">
+                <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="w-4 h-4 rounded text-primary border-border focus:ring-primary/20 accent-primary cursor-pointer"
+                  />
+                  <span>Ingat Saya (Simpan Akun di Perangkat Ini)</span>
+                </label>
               </div>
 
               <Button

@@ -232,6 +232,37 @@ export const HrmReportsPage: React.FC = () => {
     };
   });
 
+  // Current Month Lateness Summary (Realtime)
+  const currentMonthStr = getTodayDateStr().slice(0, 7);
+  const currentMonthAttendances = attendances.filter((a) => a.attendanceDate?.startsWith(currentMonthStr));
+  const lateRecordsMonth = currentMonthAttendances.filter((a) => a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0));
+
+  const employeeLatenessMap = new Map<string, {
+    userName: string;
+    userNip: string;
+    divisionName: string;
+    lateCount: number;
+    totalLateMinutes: number;
+  }>();
+
+  lateRecordsMonth.forEach((a) => {
+    const key = a.userId;
+    const existing = employeeLatenessMap.get(key) || {
+      userName: a.userName,
+      userNip: a.userNip,
+      divisionName: a.divisionName || '-',
+      lateCount: 0,
+      totalLateMinutes: 0,
+    };
+    existing.lateCount += 1;
+    existing.totalLateMinutes += (a.lateMinutes || 0);
+    employeeLatenessMap.set(key, existing);
+  });
+
+  const employeeLatenessList = Array.from(employeeLatenessMap.values()).sort((a, b) => b.totalLateMinutes - a.totalLateMinutes);
+  const totalLateMinutesMonth = employeeLatenessList.reduce((sum, e) => sum + e.totalLateMinutes, 0);
+  const totalEstimatedDeduction = totalLateMinutesMonth * 1000;
+
   const exportOtToExcel = () => {
     const dataToExport = filteredOtList.map((o, idx) => ({
       No: idx + 1,
@@ -913,6 +944,92 @@ export const HrmReportsPage: React.FC = () => {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Realtime Current Month Lateness Recap Card */}
+          <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-border flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-600" />
+                  <h2 className="text-sm font-semibold text-foreground">
+                    Rekapitulasi Keterlambatan Bulan Berjalan ({new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})
+                  </h2>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Monitoring akumulasi menit keterlambatan terhadap batas toleransi shift dan estimasi potongan denda payroll.
+                </p>
+              </div>
+              <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-500/30 text-[10px] font-mono">
+                Real-Time
+              </Badge>
+            </div>
+
+            <CardContent className="p-4 space-y-4">
+              {/* Summary Metrics */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-3 bg-muted/40 rounded-xl border border-border">
+                  <span className="text-muted-foreground text-xs block">Karyawan Terlambat</span>
+                  <span className="text-lg font-bold text-foreground font-mono">{employeeLatenessList.length} Orang</span>
+                  <span className="text-[10px] text-muted-foreground block">({lateRecordsMonth.length} kali kejadian bulan ini)</span>
+                </div>
+                <div className="p-3 bg-muted/40 rounded-xl border border-border">
+                  <span className="text-muted-foreground text-xs block">Akumulasi Keterlambatan</span>
+                  <span className="text-lg font-bold text-amber-600 font-mono">{totalLateMinutesMonth} Menit</span>
+                  <span className="text-[10px] text-muted-foreground block">Melebihi batas toleransi shift</span>
+                </div>
+                <div className="p-3 bg-muted/40 rounded-xl border border-border">
+                  <span className="text-muted-foreground text-xs block">Estimasi Potongan Denda Payroll</span>
+                  <span className="text-lg font-bold text-rose-600 font-mono">Rp {totalEstimatedDeduction.toLocaleString('id-ID')}</span>
+                  <span className="text-[10px] text-muted-foreground block">@Rp 1.000 / menit keterlambatan</span>
+                </div>
+              </div>
+
+              {/* Lateness Detail Table */}
+              <div className="rounded-xl border border-border overflow-hidden">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-muted/50 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+                    <tr>
+                      <th className="py-2.5 px-3 font-semibold">Karyawan</th>
+                      <th className="py-2.5 px-3 font-semibold">Divisi</th>
+                      <th className="py-2.5 px-3 font-semibold text-center">Frekuensi Telat</th>
+                      <th className="py-2.5 px-3 font-semibold text-center">Total Menit</th>
+                      <th className="py-2.5 px-3 font-semibold text-right">Estimasi Potongan (Rp)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {employeeLatenessList.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-6 text-center text-muted-foreground">
+                          Luar biasa! Tidak ada catatan keterlambatan di bulan berjalan.
+                        </td>
+                      </tr>
+                    ) : (
+                      employeeLatenessList.map((emp) => (
+                        <tr key={emp.userNip} className="hover:bg-muted/30">
+                          <td className="py-2.5 px-3">
+                            <span className="font-semibold text-foreground block">{emp.userName}</span>
+                            <span className="text-[10px] text-muted-foreground font-mono">{emp.userNip}</span>
+                          </td>
+                          <td className="py-2.5 px-3 text-muted-foreground">{emp.divisionName}</td>
+                          <td className="py-2.5 px-3 text-center">
+                            <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 border-amber-500/20">
+                              {emp.lateCount}x Kejadian
+                            </Badge>
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-mono font-bold text-amber-600">
+                            {emp.totalLateMinutes} mnt
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600">
+                            Rp {(emp.totalLateMinutes * 1000).toLocaleString('id-ID')}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </CardContent>
           </Card>

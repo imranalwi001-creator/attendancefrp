@@ -83,11 +83,73 @@ app.post('/api/auth/login', async (req, res) => {
 // Over-The-Air (OTA) Live Update endpoint for CapacitorUpdater
 app.get('/api/app-update/check', (req, res) => {
   res.json({
-    version: '1.0.6',
+    version: '1.0.8',
     bundleUrl: 'https://fawwazreskiperwira.com/downloads/bundle.zip',
     force: false,
-    notes: 'Pembaruan UI otomatis: Responsivitas layar HP dan perbaikan layout presensi',
+    notes: 'Pembaruan UI otomatis v1.0.8: Ingat Saya, Anti-Kekosongan Pos Cuti, Live Monitoring Bulanan, Reset Password, Safe Area Header',
   });
+});
+
+// Change Password endpoint for Employee
+app.post('/api/auth/change-password', async (req, res) => {
+  const { userId, oldPassword, newPassword } = req.body;
+  if (!userId || !newPassword) {
+    return res.status(400).json({ success: false, error: 'Data tidak lengkap' });
+  }
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+    const uRes = await pool.query('SELECT * FROM hrm_profiles WHERE id = $1 LIMIT 1', [validUserId]);
+    if (uRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+    const row = uRes.rows[0];
+    if (oldPassword && row.password && row.password !== oldPassword) {
+      return res.status(400).json({ success: false, error: 'Kata sandi lama tidak sesuai' });
+    }
+    await pool.query('UPDATE hrm_profiles SET password = $1, updated_at = NOW() WHERE id = $2', [newPassword, validUserId]);
+    await broadcastNotification({
+      targetUserId: validUserId,
+      title: '🔐 Kata Sandi Berhasil Diperbarui',
+      message: 'Kata sandi login Anda telah berhasil diperbarui.',
+      type: 'info',
+    });
+    res.json({ success: true, message: 'Kata sandi berhasil diperbarui' });
+  } catch (err) {
+    console.error('Change password error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Reset Password endpoint for Superadmin
+app.post('/api/users/:id/reset-password', async (req, res) => {
+  const { id } = req.params;
+  const { newPassword = 'password123' } = req.body;
+  try {
+    let validUserId = id;
+    if (!UUID_REGEX.test(id)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [id]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+    const uRes = await pool.query('SELECT * FROM hrm_profiles WHERE id = $1 LIMIT 1', [validUserId]);
+    if (uRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+    await pool.query('UPDATE hrm_profiles SET password = $1, updated_at = NOW() WHERE id = $2', [newPassword, validUserId]);
+    await broadcastNotification({
+      targetUserId: validUserId,
+      title: '🔐 Reset Kata Sandi Akun',
+      message: `Kata sandi akun Anda telah diatur ulang oleh Superadmin menjadi: ${newPassword}. Harap segera ganti setelah masuk.`,
+      type: 'warning',
+    });
+    res.json({ success: true, message: `Kata sandi berhasil direset menjadi ${newPassword}` });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Helper: Format PostgreSQL row to match TypeScript UserProfile
@@ -2327,10 +2389,10 @@ app.post('/api/leaves', async (req, res) => {
   }
 });
 
-// Update Status Cuti (Approval / Rejection oleh Superadmin, HRD, Pimpinan)
+// Update Status Cuti (Approval / Rejection oleh Superadmin, HRD, Pimpinan, Korlap)
 app.put('/api/leaves/:id/status', async (req, res) => {
   const { id } = req.params;
-  const { status, approverId, approverName, notes } = req.body;
+  const { status, approverId, approverName, notes, substituteId, substituteName, substituteNip } = req.body;
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ success: false, error: 'Status tidak valid (hanya approved / rejected)' });
   }
@@ -2348,16 +2410,25 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       if (aRes.rows.length > 0) validApproverId = aRes.rows[0].id;
     }
 
+    let validSubId = substituteId;
+    if (substituteId && !UUID_REGEX.test(substituteId)) {
+      const sRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [substituteId]);
+      if (sRes.rows.length > 0) validSubId = sRes.rows[0].id;
+    }
+
     const updateRes = await pool.query(`
       UPDATE hrm_leave_requests SET
         status = $1,
         approved_by = $2,
         approval_notes = $3,
+        substitute_id = $4,
+        substitute_name = $5,
+        substitute_nip = $6,
         approved_at = NOW(),
         updated_at = NOW()
-      WHERE id = $4
+      WHERE id = $7
       RETURNING *;
-    `, [status, validApproverId || null, notes || null, id]);
+    `, [status, validApproverId || null, notes || null, validSubId || null, substituteName || null, substituteNip || null, id]);
 
     // Jika disetujui dan cuti tahunan, otomatis kurangi sisa cuti di profil karyawan!
     if (status === 'approved' && leave.leave_type === 'cuti_tahunan') {
@@ -2369,15 +2440,27 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       `, [leave.total_days, leave.user_id]);
     }
 
-    // Teruskan notifikasi langsung ke karyawan
+    // Teruskan notifikasi langsung ke karyawan pemohon
     const statusText = status === 'approved' ? 'DISETUJUI' : 'DITOLAK';
+    const subText = substituteName ? ` Karyawan Pengganti Pos Tugas: ${substituteName} (${substituteNip || '-'}).` : '';
     await broadcastNotification({
       targetUserId: leave.user_id,
       title: `Pengajuan Izin/Cuti ${statusText}`,
-      message: `Permohonan cuti Anda untuk tanggal ${leave.start_date} s/d ${leave.end_date} (${leave.total_days} hari) telah ${statusText} oleh ${approverName || 'Atasan/HRD'}.${notes ? ' Catatan: ' + notes : ''}`,
+      message: `Permohonan cuti Anda untuk tanggal ${leave.start_date} s/d ${leave.end_date} (${leave.total_days} hari) telah ${statusText} oleh ${approverName || 'Atasan/HRD'}.${subText}${notes ? ' Catatan: ' + notes : ''}`,
       type: status === 'approved' ? 'success' : 'warning',
-      metadata: { leaveId: id, status, approverName },
+      metadata: { leaveId: id, status, approverName, substituteName, substituteId },
     });
+
+    // Jika ada penugasan pengganti dan disetujui, kirimkan notifikasi penugasan pos dinas ke karyawan pengganti
+    if (status === 'approved' && validSubId) {
+      await broadcastNotification({
+        targetUserId: validSubId,
+        title: '📋 Tugas Pengganti Pos Dinas (Backfill)',
+        message: `Anda ditugaskan oleh ${approverName || 'Korlap'} untuk menggantikan tugas pos rekan kerja pada periode ${leave.start_date} s/d ${leave.end_date}. Pekerjaan pos harus tetap berjalan lancar.`,
+        type: 'info',
+        metadata: { leaveId: id, substituteFor: leave.user_id },
+      });
+    }
 
     res.json({
       success: true,

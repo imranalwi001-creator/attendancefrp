@@ -74,6 +74,12 @@ export const HrmApprovalPage: React.FC = () => {
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<string | null>(null);
 
+  // Substitute & 1-Year History State for Leave Approval
+  const [applicantHistoryLeaves, setApplicantHistoryLeaves] = useState<LeaveRequest[]>([]);
+  const [applicantQuotaInfo, setApplicantQuotaInfo] = useState<{ totalQuota: number; usedDays: number; remaining: number }>({ totalQuota: 14, usedDays: 0, remaining: 14 });
+  const [substituteCandidates, setSubstituteCandidates] = useState<UserProfile[]>([]);
+  const [selectedSubstituteId, setSelectedSubstituteId] = useState<string>('');
+
   // Overtime Approval Modal State (with Admin Approved Hours authority)
   const [otModalOpen, setOtModalOpen] = useState(false);
   const [selectedOvertime, setSelectedOvertime] = useState<OvertimeRecord | null>(null);
@@ -261,15 +267,64 @@ export const HrmApprovalPage: React.FC = () => {
     setSelectedLeave(leave);
     setDecision(type);
     setNotes(type === 'approved' ? 'Pengajuan cuti/izin disetujui sesuai ketentuan.' : 'Mohon maaf, pengajuan cuti/izin belum dapat disetujui.');
+
+    // 1. Calculate 1-Year Leave History of Applicant
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    const applicantAll = leaves.filter(
+      (l) => l.userId === leave.userId && new Date(l.startDate || l.createdAt) >= oneYearAgo
+    );
+    setApplicantHistoryLeaves(applicantAll);
+
+    // Get applicant user profile for accurate quota (12 + 2 = 14)
+    const applicantUser = users.find((u) => u.id === leave.userId);
+    const annualQuota = applicantUser?.annualLeaveQuota || 14;
+    const usedDays = applicantUser?.usedLeaveDays || 0;
+    setApplicantQuotaInfo({
+      totalQuota: annualQuota,
+      usedDays,
+      remaining: Math.max(0, annualQuota - usedDays),
+    });
+
+    // 2. Recommend smart substitute from the same division
+    const sameDiv = users.filter(
+      (u) =>
+        u.id !== leave.userId &&
+        u.isActive &&
+        (u.divisionId === leave.divisionId || (u.divisionName && u.divisionName === leave.divisionName))
+    );
+    const candidates = sameDiv.length > 0 ? sameDiv : users.filter((u) => u.id !== leave.userId && u.isActive);
+    setSubstituteCandidates(candidates);
+    if (candidates.length > 0) {
+      setSelectedSubstituteId(candidates[0].id);
+    } else {
+      setSelectedSubstituteId('');
+    }
+
     setModalOpen(true);
   };
 
   const handleConfirmDecision = () => {
     if (!selectedLeave || !user) return;
     try {
-      hrmService.updateLeaveStatus(selectedLeave.id, decision, user.id, notes.trim());
+      const selectedSub = substituteCandidates.find((c) => c.id === selectedSubstituteId);
+      hrmService.updateLeaveStatus(
+        selectedLeave.id,
+        decision,
+        user.id,
+        notes.trim(),
+        decision === 'approved' ? selectedSubstituteId : undefined,
+        decision === 'approved' ? selectedSub?.fullName : undefined,
+        decision === 'approved' ? selectedSub?.nip : undefined
+      );
       setModalOpen(false);
-      setActionSuccess(`Pengajuan ${selectedLeave.userName} berhasil di-${decision === 'approved' ? 'setujui' : 'tolak'}.`);
+      setActionSuccess(
+        `Pengajuan ${selectedLeave.userName} berhasil di-${decision === 'approved' ? 'setujui' : 'tolak'}. ${
+          decision === 'approved' && selectedSub
+            ? `Karyawan Pengganti Resmi: ${selectedSub.fullName} (${selectedSub.nip}). Notifikasi telah terkirim.`
+            : ''
+        }`
+      );
       setTimeout(() => setActionSuccess(null), 4000);
       loadData();
     } catch (err: any) {
@@ -581,7 +636,14 @@ export const HrmApprovalPage: React.FC = () => {
                       </td>
                       <td className="py-3 px-4">
                         {l.status === 'approved' ? (
-                          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] rounded-md">Disetujui</Badge>
+                          <div className="space-y-0.5">
+                            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] rounded-md">Disetujui</Badge>
+                            {l.substituteName && (
+                              <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                                Pengganti: {l.substituteName}
+                              </div>
+                            )}
+                          </div>
                         ) : l.status === 'rejected' ? (
                           <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20 text-[10px] rounded-md">Ditolak</Badge>
                         ) : (
@@ -984,7 +1046,7 @@ export const HrmApprovalPage: React.FC = () => {
 
       {/* Leave Decision Dialog */}
       <Dialog open={modalOpen} onOpenChange={setModalOpen}>
-        <DialogContent className="max-w-md rounded-2xl">
+        <DialogContent className="max-w-lg rounded-2xl max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {decision === 'approved' ? (
@@ -999,11 +1061,102 @@ export const HrmApprovalPage: React.FC = () => {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3 my-2">
+          <div className="space-y-3.5 my-2">
+            {/* Reason */}
             <div className="p-3 bg-muted/30 rounded-xl border border-border text-xs space-y-1">
               <p className="text-muted-foreground">Alasan Karyawan:</p>
               <p className="font-medium text-foreground italic">"{selectedLeave?.reason}"</p>
             </div>
+
+            {/* 1-Year Leave History Summary & Quota Status */}
+            <div className="p-3 bg-muted/40 rounded-xl border border-border space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-foreground flex items-center gap-1.5">
+                  <CalendarCheck2 className="w-4 h-4 text-primary" />
+                  Rekap Hak & Riwayat Cuti 1 Tahun
+                </span>
+                <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px]">
+                  Kuota: {applicantQuotaInfo.totalQuota} Hari (12+2)
+                </Badge>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-center pt-1">
+                <div className="p-2 rounded-lg bg-background border border-border">
+                  <span className="text-[10px] text-muted-foreground block">Total Hak</span>
+                  <span className="font-bold text-xs text-foreground font-mono">{applicantQuotaInfo.totalQuota} Hari</span>
+                </div>
+                <div className="p-2 rounded-lg bg-background border border-border">
+                  <span className="text-[10px] text-muted-foreground block">Terpakai</span>
+                  <span className="font-bold text-xs text-amber-600 font-mono">{applicantQuotaInfo.usedDays} Hari</span>
+                </div>
+                <div className="p-2 rounded-lg bg-background border border-border">
+                  <span className="text-[10px] text-muted-foreground block">Sisa Hak Cuti</span>
+                  <span className="font-bold text-xs text-emerald-600 font-mono">{applicantQuotaInfo.remaining} Hari</span>
+                </div>
+              </div>
+
+              {applicantHistoryLeaves.length > 0 ? (
+                <div className="pt-2 border-t border-border">
+                  <p className="text-[11px] font-medium text-muted-foreground mb-1">
+                    {applicantHistoryLeaves.length} Catatan pengajuan dalam setahun terakhir:
+                  </p>
+                  <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
+                    {applicantHistoryLeaves.map((hist) => (
+                      <div key={hist.id} className="flex items-center justify-between text-[10px] bg-background/80 p-1.5 rounded-lg border border-border">
+                        <span className="font-mono text-muted-foreground">{hist.startDate} - {hist.endDate} ({hist.totalDays}h)</span>
+                        <span className="capitalize font-medium text-foreground">{hist.leaveType.replace('_', ' ')}</span>
+                        <Badge variant="outline" className={`text-[9px] py-0 px-1.5 ${
+                          hist.status === 'approved' ? 'text-primary border-primary/30' : hist.status === 'rejected' ? 'text-destructive border-destructive/30' : 'text-muted-foreground'
+                        }`}>
+                          {hist.status}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[10px] text-muted-foreground italic pt-1">
+                  Belum ada riwayat pengajuan cuti lain dalam 1 tahun terakhir.
+                </p>
+              )}
+            </div>
+
+            {/* Smart Division-based Substitute Recommendation (Mandatory Anti-Kekosongan Pos) */}
+            {decision === 'approved' && (
+              <div className="space-y-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-bold text-blue-950 dark:text-blue-200 flex items-center gap-1.5">
+                    <UserCheck className="w-4 h-4 text-blue-600" />
+                    <span>Pilih Karyawan Pengganti Pos (Divisi {selectedLeave?.divisionName})</span>
+                  </Label>
+                  <Badge variant="outline" className="bg-blue-500/20 text-blue-700 dark:text-blue-300 text-[10px]">
+                    Wajib Ada Pengganti
+                  </Badge>
+                </div>
+                <p className="text-[11px] text-blue-900/80 dark:text-blue-300">
+                  Untuk menjaga operasional pos tetap berjalan tanpa kekosongan, tentukan rekan kerja dari divisi <strong>{selectedLeave?.divisionName}</strong> untuk menggantikan tugas selama periode cuti:
+                </p>
+
+                <Select value={selectedSubstituteId} onValueChange={setSelectedSubstituteId}>
+                  <SelectTrigger className="text-xs rounded-xl h-9 bg-background">
+                    <SelectValue placeholder="Pilih Rekan Pengganti..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {substituteCandidates.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.fullName} ({c.nip}) — Divisi {c.divisionName || 'Operasional'} (Cuti terpakai: {c.usedLeaveDays || 0} hari)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                {selectedSubstituteId && (
+                  <div className="text-[10px] text-blue-950 dark:text-blue-200 bg-blue-500/15 p-2 rounded-lg">
+                    ✨ Karyawan terpilih akan otomatis menerima <strong>notifikasi surat penugasan dinas pengganti</strong> dan nama karyawan pengganti tercantum pada bukti persetujuan pemohon.
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="space-y-1">
               <Label className="text-xs font-semibold">Catatan dari Approver</Label>
@@ -1025,7 +1178,7 @@ export const HrmApprovalPage: React.FC = () => {
               onClick={handleConfirmDecision}
               className={decision === 'approved' ? 'bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl' : 'bg-destructive hover:bg-destructive/90 text-destructive-foreground rounded-xl'}
             >
-              Konfirmasi {decision === 'approved' ? 'Setujui' : 'Tolak'}
+              Konfirmasi {decision === 'approved' ? 'Setujui Pengajuan' : 'Tolak'}
             </Button>
           </DialogFooter>
         </DialogContent>

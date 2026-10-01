@@ -35,6 +35,7 @@ import {
   HeartHandshake,
   Shield,
   ScanFace,
+  KeyRound,
 } from 'lucide-react';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
 import {
@@ -715,6 +716,39 @@ export const HrmEmployeesPage: React.FC = () => {
     }
   };
 
+  // Reset Password State for Superadmin
+  const [resetPasswordUser, setResetPasswordUser] = useState<UserProfile | null>(null);
+  const [newResetPassword, setNewResetPassword] = useState('password123');
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+
+  const handleOpenResetPassword = (u: UserProfile) => {
+    setResetPasswordUser(u);
+    setNewResetPassword('password123');
+  };
+
+  const handleConfirmResetPassword = async () => {
+    if (!resetPasswordUser) return;
+    if (!newResetPassword || newResetPassword.length < 6) {
+      alert('Kata sandi minimal 6 karakter.');
+      return;
+    }
+    setIsResettingPassword(true);
+    try {
+      const res = await hrmService.resetPassword(resetPasswordUser.id, newResetPassword);
+      if (res.success) {
+        alert(`Kata sandi untuk ${resetPasswordUser.fullName} berhasil di-reset menjadi "${newResetPassword}". Karyawan dapat langsung masuk menggunakan sandi baru.`);
+        setResetPasswordUser(null);
+        loadData();
+      } else {
+        alert(res.error || 'Gagal mereset kata sandi');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Gagal mereset kata sandi');
+    } finally {
+      setIsResettingPassword(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Title & Action */}
@@ -950,6 +984,15 @@ export const HrmEmployeesPage: React.FC = () => {
                             title={u.registeredDeviceId ? `Kunci Perangkat Terikat (${u.deviceModel || 'Perangkat'}). Klik untuk Reset.` : 'Belum Ada Perangkat Terikat'}
                           >
                             <Smartphone className={`w-4 h-4 ${u.registeredDeviceId ? 'text-blue-600' : 'text-muted-foreground/30'}`} />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleOpenResetPassword(u)}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-amber-600 hover:bg-amber-500/10 rounded-lg transition-colors"
+                            title={`Reset Kata Sandi ${u.fullName} (Superadmin)`}
+                          >
+                            <KeyRound className="w-4 h-4 text-amber-600" />
                           </Button>
                           <Button
                             variant="ghost"
@@ -1969,6 +2012,65 @@ export const HrmEmployeesPage: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Reset Password Dialog for Superadmin */}
+      <Dialog open={!!resetPasswordUser} onOpenChange={(open) => !open && setResetPasswordUser(null)}>
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold">
+              <KeyRound className="w-5 h-5 text-amber-600" />
+              Reset Kata Sandi Karyawan
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Atur ulang kata sandi login untuk {resetPasswordUser?.fullName} ({resetPasswordUser?.nip}).
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 text-xs">
+            <div className="p-3 bg-muted/40 rounded-xl border border-border space-y-1">
+              <span className="text-muted-foreground">Karyawan:</span>
+              <p className="font-semibold text-foreground">{resetPasswordUser?.fullName}</p>
+              <p className="text-muted-foreground font-mono">{resetPasswordUser?.email} • NIP: {resetPasswordUser?.nip}</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Kata Sandi Baru</Label>
+              <Input
+                type="text"
+                value={newResetPassword}
+                onChange={(e) => setNewResetPassword(e.target.value)}
+                placeholder="Masukkan kata sandi baru..."
+                className="text-xs rounded-xl font-mono"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Default: <code className="bg-muted px-1 rounded">password123</code>. Karyawan dapat langsung masuk menggunakan sandi baru ini.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-xl text-xs"
+              onClick={() => setResetPasswordUser(null)}
+              disabled={isResettingPassword}
+            >
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              className="rounded-xl text-xs font-semibold gap-1.5 bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={handleConfirmResetPassword}
+              disabled={isResettingPassword || !newResetPassword}
+            >
+              <KeyRound size={14} />
+              {isResettingPassword ? 'Mereset...' : 'Simpan Sandi Baru'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
+

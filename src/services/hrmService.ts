@@ -32,6 +32,7 @@ import {
 import { api } from './apiClient';
 import { payrollTaxEngine } from './payrollTaxEngine';
 import { GenerationResult, DEFAULT_SHIFTS as ROSTER_DEFAULT_SHIFTS } from './rosterSchedulerService';
+import { notifyUserWithAudioAndVibe } from './soundVibrationService';
 
 const STORAGE_KEYS = {
   ROLES: 'hrm_roles',
@@ -1906,6 +1907,53 @@ export const hrmService = {
     return true;
   },
 
+  changePassword: async (userId: string, oldPassword: string, newPassword: string): Promise<{ success: boolean; message?: string; error?: string }> => {
+    try {
+      const res = await api.post<{ success: boolean; message?: string; error?: string }>('/auth/change-password', {
+        userId,
+        oldPassword,
+        newPassword,
+      });
+      if (res && res.success) {
+        const users = hrmService.getUsers();
+        const idx = users.findIndex((u) => u.id === userId);
+        if (idx !== -1) {
+          users[idx].password = newPassword;
+          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+        }
+        const curr = hrmService.getCurrentUser();
+        if (curr && curr.id === userId) {
+          curr.password = newPassword;
+          localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(curr));
+        }
+        window.dispatchEvent(new Event('hrm_users_updated'));
+      }
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Gagal mengubah kata sandi' };
+    }
+  },
+
+  resetPassword: async (userId: string, newPassword = 'password123'): Promise<{ success: boolean; message?: string; error?: string }> => {
+    try {
+      const res = await api.post<{ success: boolean; message?: string; error?: string }>(`/users/${userId}/reset-password`, {
+        newPassword,
+      });
+      if (res && res.success) {
+        const users = hrmService.getUsers();
+        const idx = users.findIndex((u) => u.id === userId);
+        if (idx !== -1) {
+          users[idx].password = newPassword;
+          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+        }
+        window.dispatchEvent(new Event('hrm_users_updated'));
+      }
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Gagal mereset kata sandi' };
+    }
+  },
+
   getDynamicOfficeQrCode: (divisionId?: string): { code: string; expiresAt: number; remainingSeconds: number } => {
     const intervalSec = 10;
     const now = Date.now();
@@ -2397,6 +2445,24 @@ export const hrmService = {
 
     leaves.unshift(newLeave);
     localStorage.setItem(STORAGE_KEYS.LEAVES, JSON.stringify(leaves));
+
+    // Dispatch real-time alert with sound & vibration to Korlap, Pimpinan, Admin, Superadmin, Keuangan
+    const typeLabel = req.leaveType.replace('_', ' ').toUpperCase();
+    ['korlap', 'pimpinan', 'superadmin', 'admin', 'keuangan'].forEach((role) => {
+      hrmService.addNotification({
+        recipientRole: role,
+        title: `📋 Pengajuan ${typeLabel} Baru Masuk`,
+        message: `${user.fullName} (${user.nip} • ${user.divisionName || 'Operasional'}) mengajukan ${totalDays} hari (${req.startDate} s/d ${req.endDate}): "${req.reason}". Segera tinjau & tentukan karyawan pengganti.`,
+        type: 'leave',
+        link: '/admin/approval',
+      });
+    });
+
+    notifyUserWithAudioAndVibe(
+      `Pengajuan ${typeLabel} Baru`,
+      `${user.fullName} (${user.divisionName || 'Operasional'}) mengajukan ${totalDays} hari cuti/izin.`
+    );
+
     return newLeave;
   },
 
@@ -2404,7 +2470,10 @@ export const hrmService = {
     leaveId: string,
     status: 'approved' | 'rejected',
     approverId: string,
-    notes?: string
+    notes?: string,
+    substituteId?: string,
+    substituteName?: string,
+    substituteNip?: string
   ): LeaveRequest => {
     const leaves = hrmService.getLeaves();
     const idx = leaves.findIndex((l) => l.id === leaveId);
@@ -2416,6 +2485,9 @@ export const hrmService = {
     leaves[idx].approvedBy = approverId;
     leaves[idx].approvedByName = approver?.fullName || 'HRD / Pimpinan';
     leaves[idx].approvalNotes = notes;
+    if (substituteId) leaves[idx].substituteId = substituteId;
+    if (substituteName) leaves[idx].substituteName = substituteName;
+    if (substituteNip) leaves[idx].substituteNip = substituteNip;
 
     if (status === 'approved' && leaves[idx].leaveType === 'cuti_tahunan') {
       const users = hrmService.getUsers();
@@ -2429,12 +2501,43 @@ export const hrmService = {
     localStorage.setItem(STORAGE_KEYS.LEAVES, JSON.stringify(leaves));
     window.dispatchEvent(new Event('hrm_leaves_updated'));
 
+    // Notification to applicant
+    const statusText = status === 'approved' ? 'Disetujui' : 'Ditolak';
+    const subText = substituteName ? ` Karyawan Pengganti Pos Tugas: ${substituteName} (${substituteNip || '-'}).` : '';
+    hrmService.addNotification({
+      userId: leaves[idx].userId,
+      title: `Pengajuan ${leaves[idx].leaveType.replace('_', ' ').toUpperCase()} ${statusText}`,
+      message: `Permohonan Anda (${leaves[idx].startDate} s/d ${leaves[idx].endDate}) telah ${statusText.toLowerCase()} oleh ${approver?.fullName || 'Atasan'}.${subText}${notes ? ' Catatan: ' + notes : ''}`,
+      type: status === 'approved' ? 'leave' : 'warning',
+      link: '/riwayat',
+    });
+
+    // If substitute assigned, send notification to designated substitute employee
+    if (status === 'approved' && substituteId) {
+      hrmService.addNotification({
+        userId: substituteId,
+        title: '📋 Tugas Pengganti Pos Dinas (Backfill)',
+        message: `Anda ditugaskan oleh ${approver?.fullName || 'Korlap'} untuk menggantikan tugas pos ${leaves[idx].userName} (${leaves[idx].divisionName}) pada periode ${leaves[idx].startDate} s/d ${leaves[idx].endDate}. Pekerjaan pos harus tetap berjalan lancar.`,
+        type: 'assignment',
+        link: '/riwayat',
+      });
+    }
+
+    // Play chime and vibrate on device
+    notifyUserWithAudioAndVibe(
+      `Pengajuan ${statusText}`,
+      `Pengajuan ${leaves[idx].userName} telah ${statusText.toLowerCase()}`
+    );
+
     // Asynchronously push approval/rejection to backend database
     api.put(`/leaves/${leaveId}/status`, {
       status,
       approverId,
       approverName: approver?.fullName || 'Atasan / HRD',
       notes,
+      substituteId,
+      substituteName,
+      substituteNip,
     }).catch((err) => {
       console.warn('[HRM] Warning syncing leave status to backend:', err);
     });

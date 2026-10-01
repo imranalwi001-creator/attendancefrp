@@ -67,9 +67,22 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const isCapturingRef = useRef(false);
 
-  // Dynamic Enrollment URL for mobile handoff
+  // Dynamic Enrollment URL for mobile handoff (always use official domain on mobile APK/Capacitor/localhost)
+  const getEnrollBaseUrl = () => {
+    if (
+      typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1' ||
+        window.location.protocol === 'capacitor:' ||
+        window.location.origin.includes('localhost'))
+    ) {
+      return 'https://fawwazreskiperwira.com';
+    }
+    return window.location.origin;
+  };
+
   const mobileEnrollUrl = user
-    ? `${window.location.origin}/enroll-face?userId=${encodeURIComponent(user.id)}&name=${encodeURIComponent(
+    ? `${getEnrollBaseUrl()}/enroll-face?userId=${encodeURIComponent(user.id)}&name=${encodeURIComponent(
         user.fullName
       )}&token=${user.id.substring(0, 8)}`
     : '';

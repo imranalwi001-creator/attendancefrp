@@ -510,16 +510,28 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       </aside>
 
       {/* MOBILE NAVBAR */}
-      <header className="md:hidden flex items-center justify-between h-14 px-3 sm:px-4 bg-card text-foreground border-b border-border sticky top-0 z-40 w-full max-w-[100vw] overflow-hidden">
+      <header
+        className="md:hidden flex items-center justify-between px-3 sm:px-4 bg-card text-foreground border-b border-border sticky top-0 z-40 w-full max-w-[100vw] overflow-hidden"
+        style={{
+          paddingTop: 'max(env(safe-area-inset-top, 0px), 24px)',
+          minHeight: 'calc(54px + max(env(safe-area-inset-top, 0px), 24px))',
+          paddingBottom: '8px',
+        }}
+      >
         <div className="flex items-center gap-2 min-w-0 flex-1 mr-1.5">
           <img
             src={appSettings.logoUrl || defaultLogo}
             alt="Logo Perusahaan"
-            className="w-7 h-7 object-contain filter drop-shadow-xs dark:drop-shadow-[0_2px_8px_rgba(255,255,255,0.25)] shrink-0"
+            className="w-8 h-8 object-contain filter drop-shadow-xs dark:drop-shadow-[0_2px_8px_rgba(255,255,255,0.25)] shrink-0"
           />
-          <span className="font-bold text-xs sm:text-sm text-foreground truncate">
-            {appSettings.appName || 'PT. FAWWAZ RESKI PERWIRA'}
-          </span>
+          <div className="flex flex-col min-w-0 truncate">
+            <span className="font-bold text-xs sm:text-sm text-foreground truncate leading-tight">
+              {appSettings.appName || 'PT. FAWWAZ RESKI PERWIRA'}
+            </span>
+            <span className="text-[10px] text-muted-foreground truncate leading-none mt-0.5">
+              HRM & Attendance Gate
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
           <ThemeToggle variant="dropdown" />
@@ -541,7 +553,8 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       {/* MOBILE DRAWER */}
       {mobileMenuOpen && (
         <div 
-          className="md:hidden fixed inset-0 top-14 bottom-16 bg-background/95 backdrop-blur-md z-30 flex flex-col p-4 space-y-2 overflow-y-auto"
+          className="md:hidden fixed inset-0 bottom-16 bg-background/95 backdrop-blur-md z-30 flex flex-col p-4 space-y-2 overflow-y-auto"
+          style={{ top: 'calc(54px + max(env(safe-area-inset-top, 0px), 24px))' }}
         >
           <div className="p-3 bg-muted rounded-xl mb-2 flex items-center gap-3">
             {user?.avatarUrl ? (

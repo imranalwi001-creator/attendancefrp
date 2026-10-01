@@ -323,6 +323,9 @@ export interface LeaveRequest {
   approvedBy?: string;
   approvedByName?: string;
   approvalNotes?: string;
+  substituteId?: string;
+  substituteName?: string;
+  substituteNip?: string;
   createdAt: string;
 }
 
