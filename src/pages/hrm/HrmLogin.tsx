@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import defaultLogo from '@/assets/logo.png';
 import { hrmService } from '@/services/hrmService';
-import { Lock, Eye, EyeOff, User, ShieldCheck, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Lock, Eye, EyeOff, User, ShieldCheck, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -58,20 +58,6 @@ export const HrmLogin: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const demoUsers = [
-    { role: 'Super Admin', email: 'superadmin@hrm.local', name: 'Master Admin' },
-    { role: 'Admin HRD', email: 'admin@hrm.local', name: 'Budi (HRD)' },
-    { role: 'Pimpinan', email: 'pimpinan@hrm.local', name: 'Drs. Hendra' },
-    { role: 'Keuangan', email: 'keuangan@hrm.local', name: 'Anisa (Finance)' },
-    { role: 'Karyawan', email: 'fauzi@hrm.local', name: 'Ahmad Fauzi' },
-  ];
-
-  const handleSelectDemo = (email: string) => {
-    setIdentifier(email);
-    setPassword('password123');
-    setError(null);
   };
 
   return (
@@ -165,32 +151,7 @@ export const HrmLogin: React.FC = () => {
             </form>
           </CardContent>
 
-          <CardFooter className="pt-0 px-4 sm:px-6 pb-5 flex flex-col space-y-3 border-t border-border bg-muted/20">
-            <div className="w-full pt-3">
-              <details className="text-xs group">
-                <summary className="cursor-pointer text-muted-foreground hover:text-foreground list-none flex items-center justify-between p-2.5 rounded-xl bg-background/80 hover:bg-background border border-border/60 shadow-xs transition-colors">
-                  <span className="flex items-center gap-1.5 font-medium text-xs text-foreground">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                    Pilih Akun Demo Cepat (1-Klik)
-                  </span>
-                  <span className="text-[11px] text-muted-foreground group-open:rotate-180 transition-transform">▼</span>
-                </summary>
-                <div className="mt-2 grid grid-cols-2 gap-1.5 pt-1">
-                  {demoUsers.map((u) => (
-                    <button
-                      key={u.email}
-                      type="button"
-                      onClick={() => handleSelectDemo(u.email)}
-                      className="text-left p-2 rounded-lg border border-border/70 hover:border-primary/60 bg-card hover:bg-primary/5 transition-all text-xs"
-                    >
-                      <div className="font-semibold text-foreground text-[11px] truncate">{u.role}</div>
-                      <div className="text-[10px] text-muted-foreground truncate">{u.name}</div>
-                    </button>
-                  ))}
-                </div>
-              </details>
-            </div>
-
+          <CardFooter className="py-4 px-4 sm:px-6 flex flex-col space-y-3 border-t border-border bg-muted/20">
             <div className="w-full text-center">
               <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
                 <ShieldCheck className="w-3.5 h-3.5 text-primary" />
