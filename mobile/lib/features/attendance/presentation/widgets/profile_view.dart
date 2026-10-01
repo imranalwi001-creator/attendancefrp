@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_typography.dart';
+import '../../../../core/widgets/app_update_dialog.dart';
 import '../../../auth/presentation/screens/login_screen.dart';
 
 class ProfileView extends StatelessWidget {
@@ -208,9 +209,60 @@ class ProfileView extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(height: 20),
+
+          // 4. Versi & Pembaruan Sistem (OTA)
+          Text("Pembaruan Sistem (OTA)", style: AppTypography.labelSmall.copyWith(fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFE2E8F0), width: 1.2),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.system_update_rounded, size: 16, color: AppColors.primary),
+                    ),
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("Versi Aplikasi HRM", style: AppTypography.bodyMedium.copyWith(fontSize: 13, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        const Text("v$kCurrentAppVersion • OTA Auto-Update", style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                      ],
+                    ),
+                  ],
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryLight,
+                    foregroundColor: AppColors.primary,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () => AppUpdateChecker.checkForUpdate(context, showToastIfLatest: true),
+                  icon: const Icon(Icons.sync_rounded, size: 14),
+                  label: const Text("Cek Update", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 24),
 
-          // 4. Logout Button
+          // 5. Logout Button
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 14),

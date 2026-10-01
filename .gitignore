@@ -50,3 +50,6 @@ __pycache__/
 *.sln
 *.sw?
 New Text Document.txt
+*.apk
+public/downloads/
+server/public/downloads/

@@ -19,6 +19,7 @@ import '../widgets/approval_panel_view.dart';
 import '../widgets/analytics_dashboard_view.dart';
 import '../widgets/employee_self_progress_view.dart';
 import '../widgets/kepala_regu_management_view.dart';
+import '../../../../core/widgets/app_update_dialog.dart';
 
 import '../../../auth/presentation/screens/login_screen.dart';
 
@@ -113,6 +114,9 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
     SystemNotificationService.requestPermission();
     _notifPollTimer = Timer.periodic(const Duration(seconds: 25), (_) {
       _fetchNotifications(silent: true);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppUpdateChecker.checkForUpdate(context);
     });
   }
 

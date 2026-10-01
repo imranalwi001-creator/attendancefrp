@@ -32,13 +32,13 @@ app.get('/api/health', (req, res) => {
 app.get('/api/app-version', (req, res) => {
   res.json({
     success: true,
-    latestVersion: '1.0.2',
-    versionCode: 3,
+    latestVersion: '1.0.3',
+    versionCode: 4,
     minVersion: '1.0.0',
     downloadUrl: 'https://fawwazreskiperwira.com/downloads/hrm-attendance.apk',
-    forceUpdate: true,
-    title: 'Pembaruan Tampilan & Font Sistem Tersedia',
-    releaseNotes: 'Standarisasi tipografi resmi Plus Jakarta Sans, penguncian font offline anti-AI-slop, dan pembaruan visual kartu performa & cuti.',
+    forceUpdate: false,
+    title: 'Pembaruan Sistem HRM Tersedia',
+    releaseNotes: 'Fitur baru In-App Auto-Updater (OTA) langsung di dalam aplikasi, perbaikan biometrik, dan menu Korlap.',
     releasedAt: '2026-10-01'
   });
 });
