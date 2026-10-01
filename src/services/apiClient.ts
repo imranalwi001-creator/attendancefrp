@@ -1,5 +1,18 @@
 // Centralized API Client for HRM Attendance System
-const API_BASE = '/api';
+export function getApiBaseUrl(): string {
+  if (typeof window === 'undefined') return '/api';
+
+  // Check if running in Capacitor native Android/iOS wrapper
+  const isCapacitorNative = Boolean((window as any).Capacitor?.isNativePlatform?.());
+  const isCapacitorScheme = window.location.protocol === 'capacitor:' || window.location.protocol === 'ionic:';
+  const isCapacitorLocalhost = window.location.hostname === 'localhost' && window.location.port !== '5173' && window.location.port !== '3000';
+
+  if (isCapacitorNative || isCapacitorScheme || isCapacitorLocalhost) {
+    return 'https://fawwazreskiperwira.com/api';
+  }
+
+  return '/api';
+}
 
 export class ApiError extends Error {
   status: number;
@@ -14,7 +27,8 @@ export class ApiError extends Error {
 }
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_BASE}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+  const base = getApiBaseUrl();
+  const url = `${base}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
 
   const headers = {
     'Content-Type': 'application/json',

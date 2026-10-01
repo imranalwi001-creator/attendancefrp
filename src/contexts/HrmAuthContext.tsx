@@ -60,7 +60,7 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
         password: pass,
       });
 
-      if (res.success && res.user) {
+      if (res && res.success && res.user) {
         setUser(res.user);
         sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(res.user));
         localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(res.user));
@@ -69,7 +69,7 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return { success: true };
       }
 
-      return { success: false, error: res.error || 'Email atau kata sandi tidak sesuai' };
+      return { success: false, error: res?.error || 'Email atau kata sandi tidak sesuai' };
     } catch (apiErr: any) {
       console.warn('Backend login error, checking fallback:', apiErr.message);
       // Fallback to in-memory user check

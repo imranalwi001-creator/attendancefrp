@@ -48,10 +48,10 @@ export const HrmLogin: React.FC = () => {
     setLoading(true);
     try {
       const res = await login(identifier, password);
-      if (res.success) {
+      if (res?.success) {
         navigate('/dashboard', { replace: true });
       } else {
-        setError(res.error || 'Email/NIP atau kata sandi tidak sesuai');
+        setError(res?.error || 'Email/NIP atau kata sandi tidak sesuai');
       }
     } catch (err: any) {
       setError(err.message || 'Terjadi kesalahan sistem.');
