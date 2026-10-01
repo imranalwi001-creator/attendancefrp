@@ -1,6 +1,6 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:camera/camera.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_typography.dart';
@@ -21,12 +21,9 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
   late AnimationController _animController;
   late Animation<double> _laserAnimation;
 
-  List<CameraDescription> _availableCameras = [];
-  CameraController? _cameraController;
-  bool _isCameraReady = false;
-  bool _isCameraLoading = true;
-  String? _cameraErrorMessage;
-  int _selectedCameraIndex = 0;
+  Uint8List? _capturedBytes;
+  String? _capturedPhotoBase64;
+  final ImagePicker _picker = ImagePicker();
 
   String _currentStepText = "Posisikan wajah Anda tepat di dalam bingkai";
   double _progressValue = 0.0;
@@ -45,80 +42,19 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
       CurvedAnimation(parent: _animController, curve: Curves.easeInOut),
     );
 
-    _initCamera();
-  }
-
-  Future<void> _initCamera([int? targetIndex]) async {
-    setState(() {
-      _isCameraLoading = true;
-      _cameraErrorMessage = null;
-    });
-
-    try {
-      if (_availableCameras.isEmpty) {
-        _availableCameras = await availableCameras();
-      }
-
-      if (_availableCameras.isEmpty) {
-        if (mounted) {
-          setState(() {
-            _isCameraLoading = false;
-            _cameraErrorMessage = "Kamera tidak terdeteksi pada perangkat.";
-          });
+    // Auto-trigger front camera after modal presentation transition
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 350), () {
+        if (mounted && _capturedBytes == null && !_isLoading) {
+          _openCamera();
         }
-        return;
-      }
-
-      // Prioritize front-facing camera for face attendance
-      if (targetIndex != null) {
-        _selectedCameraIndex = targetIndex % _availableCameras.length;
-      } else {
-        final frontIdx = _availableCameras.indexWhere(
-          (c) => c.lensDirection == CameraLensDirection.front,
-        );
-        _selectedCameraIndex = frontIdx != -1 ? frontIdx : 0;
-      }
-
-      final camera = _availableCameras[_selectedCameraIndex];
-      await _cameraController?.dispose();
-
-      final controller = CameraController(
-        camera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-
-      _cameraController = controller;
-      await controller.initialize();
-
-      if (mounted) {
-        setState(() {
-          _isCameraReady = true;
-          _isCameraLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isCameraReady = false;
-          _isCameraLoading = false;
-          _cameraErrorMessage = "Izin atau sensor kamera terkendala. Coba ketuk 'Muat Ulang'.";
-        });
-      }
-    }
-  }
-
-  Future<void> _switchCamera() async {
-    if (_availableCameras.length < 2) return;
-    final nextIndex = (_selectedCameraIndex + 1) % _availableCameras.length;
-    await _initCamera(nextIndex);
+      });
+    });
   }
 
   @override
   void dispose() {
     _animController.dispose();
-    _cameraController?.dispose();
     super.dispose();
   }
 
@@ -135,25 +71,43 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
     }
   }
 
-  Future<void> _startScan() async {
+  Future<void> _openCamera() async {
+    try {
+      final XFile? file = await _picker.pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.front,
+        maxWidth: 1080,
+        maxHeight: 1440,
+        imageQuality: 85,
+      );
+
+      if (file != null) {
+        final bytes = await file.readAsBytes();
+        final base64Photo = "data:image/jpeg;base64,${base64Encode(bytes)}";
+        if (mounted) {
+          setState(() {
+            _capturedBytes = bytes;
+            _capturedPhotoBase64 = base64Photo;
+            _errorMessage = null;
+          });
+          _startBiometricVerification(base64Photo);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = "Akses kamera dibatalkan atau terkendala: $e";
+        });
+      }
+    }
+  }
+
+  Future<void> _startBiometricVerification(String? photoBase64) async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
-      _progressValue = 0.1;
+      _progressValue = 0.15;
     });
-
-    String? photoBase64;
-
-    // 1. Capture snapshot from real CameraController if available
-    try {
-      if (_cameraController != null && _cameraController!.value.isInitialized) {
-        final xFile = await _cameraController!.takePicture();
-        final bytes = await xFile.readAsBytes();
-        photoBase64 = "data:image/jpeg;base64,${base64Encode(bytes)}";
-      }
-    } catch (e) {
-      print("[BiometricSheet] Camera capture snapshot warning: $e");
-    }
 
     try {
       final success = await widget.controller.executeAttendance(
@@ -191,7 +145,7 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
                         style: AppTypography.bodyLarge.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
                       ),
                       Text(
-                        "Biometrik terverifikasi | GPS dalam perimeter kantor",
+                        "Foto wajah & GPS tersinkronisasi ke server",
                         style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 11),
                       ),
                     ],
@@ -211,142 +165,6 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
         });
       }
     }
-  }
-
-  Future<void> _fallbackPickImage() async {
-    try {
-      final picker = ImagePicker();
-      final picked = await picker.pickImage(source: ImageSource.camera, imageQuality: 85);
-      if (picked != null) {
-        final bytes = await picked.readAsBytes();
-        final photoBase64 = "data:image/jpeg;base64,${base64Encode(bytes)}";
-        setState(() {
-          _isLoading = true;
-          _errorMessage = null;
-        });
-
-        final success = await widget.controller.executeAttendance(
-          context,
-          activeChallenge: _activeChallenge,
-          photo: photoBase64,
-          onStepUpdate: (step, progress) {
-            if (mounted) {
-              setState(() {
-                _currentStepText = step;
-                _progressValue = progress;
-              });
-            }
-          },
-        );
-
-        if (success && mounted) {
-          Navigator.pop(context);
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _errorMessage = "Gagal mengambil foto: $e";
-        });
-      }
-    }
-  }
-
-  Widget _buildCameraPreviewOrFallback() {
-    if (_isCameraLoading) {
-      return Container(
-        color: const Color(0xFF111827),
-        child: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: 32,
-                height: 32,
-                child: CircularProgressIndicator(
-                  color: Color(0xFF34D399),
-                  strokeWidth: 2.5,
-                ),
-              ),
-              SizedBox(height: 12),
-              Text(
-                "Menghubungkan Kamera...",
-                style: TextStyle(color: Colors.white70, fontSize: 11),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (_cameraErrorMessage != null || !_isCameraReady || _cameraController == null || !_cameraController!.value.isInitialized) {
-      return Container(
-        color: const Color(0xFF111827),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.videocam_off_rounded, color: Colors.white.withOpacity(0.4), size: 44),
-              const SizedBox(height: 8),
-              Text(
-                _cameraErrorMessage ?? "Kamera tidak aktif",
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70, fontSize: 11),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 10),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF34D399),
-                      side: const BorderSide(color: Color(0xFF34D399)),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    icon: const Icon(Icons.refresh_rounded, size: 14),
-                    label: const Text("Muat Ulang", style: TextStyle(fontSize: 11)),
-                    onPressed: () => _initCamera(),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.white38),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    icon: const Icon(Icons.camera_alt_outlined, size: 14),
-                    label: const Text("Foto Manual", style: TextStyle(fontSize: 11)),
-                    onPressed: _fallbackPickImage,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // Live Front Camera Preview with proper cover aspect ratio
-    return ClipRect(
-      child: OverflowBox(
-        alignment: Alignment.center,
-        child: FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: _cameraController!.value.previewSize?.height ?? 246,
-            height: _cameraController!.value.previewSize?.width ?? 306,
-            child: CameraPreview(_cameraController!),
-          ),
-        ),
-      ),
-    );
   }
 
   @override
@@ -374,12 +192,12 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
               ),
             ),
 
-            // ── 2. CENTER BIOMETRIC FACE FRAME WITH LIVE CAMERA ────────────
+            // ── 2. CENTER BIOMETRIC FACE FRAME ─────────────────────────────
             Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const SizedBox(height: 40),
+                  const SizedBox(height: 36),
                   Stack(
                     alignment: Alignment.center,
                     children: [
@@ -408,13 +226,66 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
                         ),
                       ),
 
-                      // Live Camera Feed inside Oval Frame
+                      // Oval Viewport: Live Photo or Tap to Open Camera
                       ClipRRect(
                         borderRadius: BorderRadius.circular(125),
-                        child: SizedBox(
-                          width: 246,
-                          height: 306,
-                          child: _buildCameraPreviewOrFallback(),
+                        child: GestureDetector(
+                          onTap: _isLoading ? null : _openCamera,
+                          child: Container(
+                            width: 246,
+                            height: 306,
+                            color: const Color(0xFF111827),
+                            child: _capturedBytes != null
+                                ? Image.memory(
+                                    _capturedBytes!,
+                                    fit: BoxFit.cover,
+                                    width: 246,
+                                    height: 306,
+                                  )
+                                : Container(
+                                    color: const Color(0xFF0F172A),
+                                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                                    child: Center(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Container(
+                                            width: 72,
+                                            height: 72,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: const Color(0xFF059669).withOpacity(0.25),
+                                              border: Border.all(color: const Color(0xFF34D399), width: 2),
+                                            ),
+                                            child: const Icon(
+                                              Icons.camera_alt_rounded,
+                                              color: Color(0xFF34D399),
+                                              size: 36,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 14),
+                                          const Text(
+                                            "Buka Kamera Wajah",
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            "Ketuk bingkai untuk mengambil foto presensi",
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              color: Colors.white.withOpacity(0.7),
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                          ),
                         ),
                       ),
 
@@ -446,7 +317,7 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
                                   boxShadow: [
                                     BoxShadow(
                                       color: const Color(0xFF34D399).withOpacity(0.9),
-                                      blurRadius: 12,
+                                      blurRadius: 14,
                                       spreadRadius: 3,
                                     ),
                                   ],
@@ -463,7 +334,7 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
                           height: 306,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(125),
-                            color: Colors.black.withOpacity(0.65),
+                            color: Colors.black.withOpacity(0.7),
                           ),
                           child: const Center(
                             child: Icon(
@@ -480,7 +351,7 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
               ),
             ),
 
-            // ── 3. TOP HUD & INSTRUCTION OVERLAY (HIGH CONTRAST) ───────────
+            // ── 3. TOP HUD & INSTRUCTION OVERLAY ───────────────────────────
             Positioned(
               top: 12,
               left: 16,
@@ -537,44 +408,24 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
                         ),
                       ),
 
-                      // Camera switch & Location GPS pills
-                      Row(
-                        children: [
-                          if (_availableCameras.length > 1) ...[
-                            InkWell(
-                              onTap: _switchCamera,
-                              borderRadius: BorderRadius.circular(20),
-                              child: Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withOpacity(0.5),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.white24),
-                                ),
-                                child: const Icon(Icons.flip_camera_ios_rounded, color: Colors.white, size: 16),
-                              ),
+                      // Location GPS pill
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF064E3B).withOpacity(0.85),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: const Color(0xFF059669)),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.location_on_rounded, color: Color(0xFF34D399), size: 13),
+                            SizedBox(width: 4),
+                            Text(
+                              "Kantor",
+                              style: TextStyle(color: Color(0xFF34D399), fontWeight: FontWeight.w700, fontSize: 11),
                             ),
-                            const SizedBox(width: 6),
                           ],
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF064E3B).withOpacity(0.85),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: const Color(0xFF059669)),
-                            ),
-                            child: const Row(
-                              children: [
-                                Icon(Icons.location_on_rounded, color: Color(0xFF34D399), size: 13),
-                                SizedBox(width: 4),
-                                Text(
-                                  "Kantor",
-                                  style: TextStyle(color: Color(0xFF34D399), fontWeight: FontWeight.w700, fontSize: 11),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ],
                   ),
@@ -715,60 +566,90 @@ class _BiometricVerificationSheetState extends State<BiometricVerificationSheet>
                       ),
                       icon: const Icon(Icons.refresh_rounded, size: 20),
                       label: const Text(
-                        "Coba Ulangi Absen",
+                        "Coba Ambil Foto Ulang",
                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
                       ),
                       onPressed: () {
                         setState(() {
                           _errorMessage = null;
+                          _capturedBytes = null;
+                          _capturedPhotoBase64 = null;
                           _activeChallenge = BiometricSecurityService.getRandomChallenge();
                         });
+                        _openCamera();
                       },
                     ),
                   ] else ...[
-                    // Camera Shutter Button (Floating inside camera viewfinder)
-                    GestureDetector(
-                      onTap: _startScan,
-                      child: Container(
-                        width: 78,
-                        height: 78,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 4),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.5),
-                              blurRadius: 16,
+                    // Primary Action Button
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (_capturedBytes != null) ...[
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: const BorderSide(color: Colors.white38),
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                             ),
-                          ],
-                        ),
-                        child: Center(
+                            icon: const Icon(Icons.replay_rounded, size: 18),
+                            label: const Text("Foto Ulang"),
+                            onPressed: _openCamera,
+                          ),
+                          const SizedBox(width: 12),
+                        ],
+                        GestureDetector(
+                          onTap: _capturedBytes == null
+                              ? _openCamera
+                              : () => _startBiometricVerification(_capturedPhotoBase64),
                           child: Container(
-                            width: 62,
-                            height: 62,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Color(0xFF059669),
+                            height: 56,
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF059669), Color(0xFF10B981)],
+                              ),
+                              borderRadius: BorderRadius.circular(28),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF059669).withOpacity(0.4),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
                             ),
-                            child: const Icon(
-                              Icons.camera_alt_rounded,
-                              color: Colors.white,
-                              size: 30,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _capturedBytes == null ? Icons.camera_alt_rounded : Icons.check_circle_rounded,
+                                  color: Colors.white,
+                                  size: 22,
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  _capturedBytes == null ? "Buka Kamera Depan" : "Kirim Presensi Wajah",
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
-                      ),
+                      ],
                     ),
                     const SizedBox(height: 10),
-                    const Text(
-                      "Ketuk untuk Ambil Foto Presensi",
-                      style: TextStyle(
-                        color: Colors.white,
+                    Text(
+                      _capturedBytes == null
+                          ? "Ketuk untuk mengambil foto wajah secara otomatis"
+                          : "Foto wajah siap diverifikasi dan dikirim ke server",
+                      style: const TextStyle(
+                        color: Colors.white70,
                         fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        shadows: [
-                          Shadow(color: Colors.black87, blurRadius: 4),
-                        ],
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
@@ -791,7 +672,6 @@ class _GridGuidePainter extends CustomPainter {
       ..color = Colors.white.withOpacity(0.04)
       ..strokeWidth = 1.0;
 
-    // Subtle 3x3 photography rule-of-thirds grid
     canvas.drawLine(Offset(size.width / 3, 0), Offset(size.width / 3, size.height), paint);
     canvas.drawLine(Offset(size.width * 2 / 3, 0), Offset(size.width * 2 / 3, size.height), paint);
     canvas.drawLine(Offset(0, size.height / 3), Offset(size.width, size.height / 3), paint);
