@@ -3,6 +3,7 @@ import App from "./App.tsx";
 import "./index.css";
 import "./services/cameraPolyfill.ts";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
+import { initAppUpdater } from "./services/updaterService.ts";
 
 // Otomatisasi HTTPS agar browser mobile mengaktifkan WebRTC Kamera dan PWA
 if (
@@ -63,7 +64,7 @@ if ("serviceWorker" in navigator && !isLovablePreview) {
   } else {
     window.addEventListener("load", () => void initServiceWorker());
   }
-import { initAppUpdater } from "./services/updaterService.ts";
+}
 
 void initAppUpdater();
 

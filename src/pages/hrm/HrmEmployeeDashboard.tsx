@@ -39,7 +39,11 @@ import {
   CreditCard,
   Printer,
   Share2,
+  Copy,
+  ExternalLink,
+  Navigation,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { livenessEngine, LivenessPhase } from '@/services/livenessEngine';
 import { biometricService, BiometricMatchResult } from '@/services/biometricService';
 import { geofenceService, GeofenceEvaluation, AntiSpoofResult } from '@/services/geofenceService';
@@ -64,6 +68,8 @@ export const HrmEmployeeDashboard: React.FC = () => {
   // Geolocation & Office data
   const [office, setOffice] = useState<OfficeLocation | null>(null);
   const [currentCoords, setCurrentCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [coordsAccuracy, setCoordsAccuracy] = useState<number | null>(null);
+  const [showGpsDetailModal, setShowGpsDetailModal] = useState(false);
   const [distanceToOffice, setDistanceToOffice] = useState<number | null>(null);
   const [geofenceEval, setGeofenceEval] = useState<GeofenceEvaluation | null>(null);
   const [locationStatus, setLocationStatus] = useState<'checking' | 'inside' | 'outside' | 'error'>('checking');
@@ -244,8 +250,10 @@ export const HrmEmployeeDashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    loadAttendanceData();
-    fetchUserLocation();
+    hrmService.syncWithBackend().finally(() => {
+      loadAttendanceData();
+      fetchUserLocation();
+    });
 
     const handleNotifUpdate = () => {
       if (user) {
@@ -368,37 +376,49 @@ export const HrmEmployeeDashboard: React.FC = () => {
       return;
     }
 
+    const processPosition = (pos: GeolocationPosition) => {
+      const { latitude, longitude, accuracy } = pos.coords;
+      setCurrentCoords({ lat: latitude, lng: longitude });
+      setCoordsAccuracy(accuracy || null);
+
+      // Anti-Mock GPS & Teleportation Analysis
+      const spoofCheck = geofenceService.evaluateMockGPS(pos, previousPositionRef.current);
+      setAntiSpoofResult(spoofCheck);
+      setIsMockSuspected(spoofCheck.isMockSuspected);
+
+      previousPositionRef.current = { lat: latitude, lng: longitude, timestamp: pos.timestamp || Date.now() };
+
+      if (divLoc) {
+        const evalResult = geofenceService.evaluateGeofence({ lat: latitude, lng: longitude }, divLoc);
+        setGeofenceEval(evalResult);
+        setDistanceToOffice(evalResult.distanceMeters);
+        setLocationStatus(evalResult.isInside ? 'inside' : 'outside');
+      }
+    };
+
+    // Try high accuracy GPS first (8 seconds timeout)
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords;
-        setCurrentCoords({ lat: latitude, lng: longitude });
-
-        // Anti-Mock GPS & Teleportation Analysis
-        const spoofCheck = geofenceService.evaluateMockGPS(pos, previousPositionRef.current);
-        setAntiSpoofResult(spoofCheck);
-        setIsMockSuspected(spoofCheck.isMockSuspected);
-
-        previousPositionRef.current = { lat: latitude, lng: longitude, timestamp: pos.timestamp || Date.now() };
-
-        if (divLoc) {
-          const evalResult = geofenceService.evaluateGeofence({ lat: latitude, lng: longitude }, divLoc);
-          setGeofenceEval(evalResult);
-          setDistanceToOffice(evalResult.distanceMeters);
-          setLocationStatus(evalResult.isInside ? 'inside' : 'outside');
-        }
+      processPosition,
+      () => {
+        // Fallback to standard/network accuracy (10 seconds timeout)
+        navigator.geolocation.getCurrentPosition(
+          processPosition,
+          (err) => {
+            console.warn('[GPS] Geolocation fallback error:', err);
+            // Fallback simulation inside division location for local dev
+            if (divLoc) {
+              const fallbackCoords = { lat: divLoc.latitude, lng: divLoc.longitude };
+              setCurrentCoords(fallbackCoords);
+              const evalResult = geofenceService.evaluateGeofence(fallbackCoords, divLoc);
+              setGeofenceEval(evalResult);
+              setDistanceToOffice(evalResult.distanceMeters);
+              setLocationStatus('inside');
+            }
+          },
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 }
+        );
       },
-      (err) => {
-        // Fallback simulation inside division location for local dev
-        if (divLoc) {
-          const fallbackCoords = { lat: divLoc.latitude, lng: divLoc.longitude };
-          setCurrentCoords(fallbackCoords);
-          const evalResult = geofenceService.evaluateGeofence(fallbackCoords, divLoc);
-          setGeofenceEval(evalResult);
-          setDistanceToOffice(evalResult.distanceMeters);
-          setLocationStatus('inside');
-        }
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
     );
   };
 
@@ -984,13 +1004,15 @@ export const HrmEmployeeDashboard: React.FC = () => {
         {/* Geolocation Status Chip */}
         <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
           <div
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all truncate max-w-full ${
+            onClick={() => setShowGpsDetailModal(true)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all truncate max-w-full cursor-pointer hover:opacity-90 ${
               locationStatus === 'inside'
                 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
                 : locationStatus === 'outside'
                 ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
                 : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
             }`}
+            title="Klik untuk melihat detail koordinat GPS"
           >
             <MapPin className="w-3.5 h-3.5 shrink-0" />
             <span className="truncate">
@@ -1005,12 +1027,32 @@ export const HrmEmployeeDashboard: React.FC = () => {
           <Button
             variant="ghost"
             size="sm"
-            onClick={fetchUserLocation}
+            onClick={() => {
+              hrmService.syncWithBackend().finally(() => {
+                loadAttendanceData();
+                fetchUserLocation();
+              });
+              toast.info('Memperbarui sinyal GPS...');
+            }}
             className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted shrink-0"
             title="Perbarui GPS"
           >
             <RotateCw className="w-3.5 h-3.5" />
           </Button>
+
+          {/* Quick display of detected coordinates */}
+          {currentCoords && (
+            <button
+              type="button"
+              onClick={() => setShowGpsDetailModal(true)}
+              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] font-mono bg-muted/60 hover:bg-muted text-foreground border border-border/70 transition-colors cursor-pointer"
+              title="Klik untuk melihat detail & salin koordinat"
+            >
+              <Navigation className="w-3 h-3 text-primary shrink-0" />
+              <span>{currentCoords.lat.toFixed(5)}, {currentCoords.lng.toFixed(5)}</span>
+              {coordsAccuracy && <span className="text-[10px] text-muted-foreground">±{Math.round(coordsAccuracy)}m</span>}
+            </button>
+          )}
 
           {user?.originalDivisionId && (
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs border border-blue-500/20 font-medium">
@@ -1243,11 +1285,15 @@ export const HrmEmployeeDashboard: React.FC = () => {
                   </button>
                 ) : isClockInBlockedLocation ? (
                   <div
-                    className="w-28 h-28 rounded-full bg-rose-500/10 border-4 border-rose-500/30 text-rose-600 flex flex-col items-center justify-center cursor-not-allowed opacity-85"
-                    title="Presensi Masuk Terkunci: Anda harus berada di dalam area kerja divisi."
+                    onClick={() => setShowGpsDetailModal(true)}
+                    className="w-28 h-28 rounded-full bg-rose-500/10 border-4 border-rose-500/30 text-rose-600 flex flex-col items-center justify-center cursor-pointer hover:bg-rose-500/20 hover:scale-105 active:scale-95 transition-all shadow-sm"
+                    title="Presensi Masuk Terkunci: Ketuk untuk melihat detail koordinat & status."
                   >
-                    <MapPin className="w-8 h-8 mb-1" />
+                    <MapPin className="w-8 h-8 mb-1 animate-pulse" />
                     <span className="text-[10px] font-bold text-center px-1 leading-tight uppercase">DI LUAR AREA</span>
+                    <span className="text-[9px] font-mono font-semibold opacity-90 mt-0.5">
+                      {distanceToOffice !== null ? `${Math.round(distanceToOffice)}m` : ''}
+                    </span>
                   </div>
                 ) : isLockedBreach ? (
                   <button
@@ -2652,6 +2698,140 @@ export const HrmEmployeeDashboard: React.FC = () => {
                 <span>Cetak / Unduh PDF</span>
               </Button>
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL DETAIL GPS & RADAR GEOFENCE ─── */}
+      <Dialog open={showGpsDetailModal} onOpenChange={setShowGpsDetailModal}>
+        <DialogContent className="max-w-md rounded-2xl p-5 border-border bg-card">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2 text-foreground">
+              <MapPin className="w-5 h-5 text-primary" />
+              <span>Detail Sinyal GPS & Radar Kantor</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Informasi posisi satelit GPS perangkat Anda dibandingkan dengan koordinat resmi kantor divisi.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3.5 py-2">
+            {/* Koordinat HP Karyawan */}
+            <div className="p-3 bg-muted/40 rounded-xl border border-border/70 space-y-1.5">
+              <div className="flex items-center justify-between text-xs font-semibold text-foreground">
+                <span className="flex items-center gap-1.5">
+                  <Smartphone className="w-3.5 h-3.5 text-primary" />
+                  Koordinat GPS HP Anda (Terdeteksi)
+                </span>
+                {coordsAccuracy && (
+                  <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/30">
+                    Akurasi: ±{Math.round(coordsAccuracy)}m
+                  </Badge>
+                )}
+              </div>
+              {currentCoords ? (
+                <div className="space-y-2">
+                  <div className="font-mono text-sm font-bold text-foreground tracking-tight select-all bg-card/80 p-2 rounded-lg border border-border/60">
+                    Lat: {currentCoords.lat.toFixed(6)}, Lng: {currentCoords.lng.toFixed(6)}
+                  </div>
+                  <div className="flex items-center gap-2 pt-0.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        navigator.clipboard.writeText(`${currentCoords.lat}, ${currentCoords.lng}`);
+                        toast.success('Koordinat GPS HP berhasil disalin!');
+                      }}
+                      className="h-8 text-xs rounded-xl gap-1.5 border-border hover:bg-muted font-medium"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Salin Koordinat Saya
+                    </Button>
+                    <a
+                      href={`https://www.google.com/maps?q=${currentCoords.lat},${currentCoords.lng}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-primary hover:underline h-8 px-2 font-medium"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Google Maps
+                    </a>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground italic">Mencari satelit GPS...</p>
+              )}
+            </div>
+
+            {/* Titik Kantor Terdaftar */}
+            <div className="p-3 bg-muted/40 rounded-xl border border-border/70 space-y-1.5">
+              <div className="text-xs font-semibold text-foreground flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Briefcase className="w-3.5 h-3.5 text-primary" />
+                  Titik Kantor Divisi: {office?.name || user?.divisionName || 'Pusat'}
+                </span>
+                <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
+                  Radius: {office?.radiusMeters || 150}m
+                </Badge>
+              </div>
+              <div className="font-mono text-xs text-muted-foreground bg-card/80 p-2 rounded-lg border border-border/60">
+                Lat: {office?.latitude?.toFixed(6) || '-'}, Lng: {office?.longitude?.toFixed(6) || '-'}
+              </div>
+            </div>
+
+            {/* Status Radar Geofence */}
+            <div className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
+              locationStatus === 'inside'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-950 dark:text-emerald-100'
+                : 'bg-rose-500/10 border-rose-500/30 text-rose-950 dark:text-rose-100'
+            }`}>
+              {locationStatus === 'inside' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              )}
+              <div className="space-y-1">
+                <div className="font-bold">
+                  {locationStatus === 'inside'
+                    ? `✓ Posisi Sah di Dalam Radius (${distanceToOffice !== null ? `${Math.round(distanceToOffice)}m` : '0m'})`
+                    : `⚠️ Anda Berada di Luar Radius (${distanceToOffice !== null ? `${Math.round(distanceToOffice)}m` : '0m'})`}
+                </div>
+                <p className="text-[11px] opacity-90 leading-relaxed">
+                  {locationStatus === 'inside'
+                    ? 'Posisi HP Anda telah diverifikasi berada di dalam zona kerja resmi divisi. Tombol presensi siap digunakan.'
+                    : `Jarak HP Anda (${Math.round(distanceToOffice || 0)} meter) melebihi batas radius yang diizinkan (${office?.radiusMeters || 150} meter).`}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="pt-2 flex flex-col sm:flex-row gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                hrmService.syncWithBackend().finally(() => {
+                  loadAttendanceData();
+                  fetchUserLocation();
+                });
+                toast.info('Memperbarui sinyal GPS & sinkronisasi kantor...');
+              }}
+              className="rounded-xl text-xs gap-1.5 h-8 w-full sm:w-auto"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+              Perbarui GPS Sekarang
+            </Button>
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              onClick={() => setShowGpsDetailModal(false)}
+              className="rounded-xl text-xs h-8 w-full sm:w-auto"
+            >
+              Tutup
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
