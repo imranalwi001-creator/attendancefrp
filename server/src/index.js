@@ -32,13 +32,13 @@ app.get('/api/health', (req, res) => {
 app.get('/api/app-version', (req, res) => {
   res.json({
     success: true,
-    latestVersion: '1.0.4',
-    versionCode: 5,
+    latestVersion: '1.0.5',
+    versionCode: 6,
     minVersion: '1.0.0',
     downloadUrl: 'https://fawwazreskiperwira.com/downloads/hrm-attendance.apk',
     forceUpdate: false,
-    title: 'Pembaruan Kamera & Presensi Wajah Tersedia',
-    releaseNotes: 'Fitur Live Camera Viewfinder aktif pada Presensi Wajah, verifikasi foto real-time, dan OTA In-App Auto-Updater.',
+    title: 'Pembaruan Stabilitas Kamera & Presensi Wajah',
+    releaseNotes: 'Pembaruan stabilitas kamera biometrik, eliminasi crash Xiaomi/Android, dan verifikasi foto wajah langsung.',
     releasedAt: '2026-10-01'
   });
 });
