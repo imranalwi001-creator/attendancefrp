@@ -1,14 +1,11 @@
 # ==============================================================================
 # CADDY REVERSE PROXY CONFIGURATION
-# Otomatisasi HTTP & HTTPS untuk Akses Web, HP, PWA & Kamera
+# Otomatisasi HTTPS Resmi via nip.io & Akses HTTP Langsung
 # ==============================================================================
 
-{
-    auto_https disable_redirects
-}
-
-# HTTP Handler (Port 80)
-http://103.197.188.211, :80 {
+# 1. Domain Otomatis Resmi HTTPS (Sertifikat SSL Let's Encrypt Gratis Otomatis)
+# Memungkinkan Akses Kamera HP, GPS, & PWA tanpa peringatan keamanan
+103.197.188.211.nip.io {
     handle /api/* {
         reverse_proxy hrm-backend:5000
     }
@@ -27,10 +24,8 @@ http://103.197.188.211, :80 {
     }
 }
 
-# HTTPS Handler (Port 443) dengan Internal TLS untuk IP Address
-https://103.197.188.211, :443 {
-    tls internal
-
+# 2. Port 80 HTTP Biasa (Akses Langsung via IP)
+:80 {
     handle /api/* {
         reverse_proxy hrm-backend:5000
     }
