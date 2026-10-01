@@ -29,11 +29,18 @@ class HrmMobileApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
+        fontFamily: 'PlusJakartaSans',
         scaffoldBackgroundColor: AppColors.background,
         colorScheme: ColorScheme.fromSeed(
           seedColor: AppColors.primary,
           primary: AppColors.primary,
           surface: AppColors.surface,
+        ),
+        textTheme: Typography.material2021().black.apply(
+          fontFamily: 'PlusJakartaSans',
+        ),
+        primaryTextTheme: Typography.material2021().black.apply(
+          fontFamily: 'PlusJakartaSans',
         ),
         splashFactory: InkSparkle.splashFactory,
       ),

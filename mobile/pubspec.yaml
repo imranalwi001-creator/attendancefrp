@@ -1,7 +1,7 @@
 name: hrm_attendance_mobile
 description: "Production-grade Employee Face & Location Attendance Mobile App"
 publish_to: "none"
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ">=3.2.0 <4.0.0"
@@ -27,3 +27,12 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
+    - assets/fonts/
+
+  fonts:
+    - family: PlusJakartaSans
+      fonts:
+        - asset: assets/fonts/PlusJakartaSans.ttf
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter.ttf

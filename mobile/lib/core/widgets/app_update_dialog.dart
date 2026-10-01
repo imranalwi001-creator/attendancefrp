@@ -5,8 +5,8 @@ import '../constants/app_typography.dart';
 import '../services/api_service.dart';
 
 /// Current installed version of this APK client
-const String kCurrentAppVersion = "1.0.1";
-const int kCurrentVersionCode = 2;
+const String kCurrentAppVersion = "1.0.2";
+const int kCurrentVersionCode = 3;
 
 class AppUpdateChecker {
   /// Check with server and prompt modal dialog if newer version is released

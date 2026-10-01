@@ -118,13 +118,20 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [attendanceColor, attendanceColor.withValues(alpha: 0.7)],
+            gradient: const LinearGradient(
+              colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(20),
-            boxShadow: [BoxShadow(color: attendanceColor.withValues(alpha: 0.3), blurRadius: 20, offset: const Offset(0, 8))],
+            border: Border.all(color: const Color(0xFF334155), width: 1),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x1A000000),
+                blurRadius: 16,
+                offset: Offset(0, 8),
+              ),
+            ],
           ),
           child: Row(
             children: [
@@ -132,18 +139,51 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Tingkat Kehadiran', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: attendanceColor.withOpacity(0.18),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: attendanceColor.withOpacity(0.4)),
+                      ),
+                      child: Text(
+                        pct >= 85 ? 'Kehadiran Prima' : pct >= 60 ? 'Cukup Baik' : 'Tingkat Kehadiran',
+                        style: TextStyle(
+                          fontFamily: AppTypography.fontFamily,
+                          color: attendanceColor,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${pct.toStringAsFixed(0)}%',
+                      style: const TextStyle(
+                        fontFamily: AppTypography.fontFamily,
+                        color: Colors.white,
+                        fontSize: 38,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -1,
+                      ),
+                    ),
                     const SizedBox(height: 4),
-                    Text('${pct.toStringAsFixed(0)}%', style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w900, letterSpacing: -1)),
-                    const SizedBox(height: 4),
-                    Text('$hadir dari $target hari kerja', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                    const SizedBox(height: 10),
+                    Text(
+                      '$hadir dari $target hari kerja',
+                      style: const TextStyle(
+                        fontFamily: AppTypography.fontFamily,
+                        color: Color(0xFF94A3B8),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(4),
                       child: LinearProgressIndicator(
                         value: pct / 100,
-                        backgroundColor: Colors.white24,
-                        color: Colors.white,
+                        backgroundColor: const Color(0xFF334155),
+                        color: attendanceColor,
                         minHeight: 6,
                       ),
                     ),
@@ -152,13 +192,17 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
               ),
               const SizedBox(width: 16),
               Container(
-                width: 70,
-                height: 70,
-                decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(16)),
+                width: 68,
+                height: 68,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF334155)),
+                ),
                 child: Icon(
-                  pct >= 85 ? Icons.emoji_events_rounded : pct >= 60 ? Icons.thumb_up_rounded : Icons.warning_rounded,
-                  color: Colors.white,
-                  size: 36,
+                  pct >= 85 ? Icons.emoji_events_rounded : pct >= 60 ? Icons.thumb_up_rounded : Icons.info_outline_rounded,
+                  color: attendanceColor,
+                  size: 32,
                 ),
               ),
             ],
@@ -199,19 +243,46 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
 
   Widget _kpiMini(String title, String value, IconData icon, Color color, Color bg) {
     return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14), border: Border.all(color: color.withValues(alpha: 0.2))),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+        boxShadow: const [
+          BoxShadow(color: Color(0x08000000), blurRadius: 6, offset: Offset(0, 2)),
+        ],
+      ),
       child: Row(
         children: [
-          Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
-            child: Icon(icon, size: 16, color: color)),
+          Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+            child: Icon(icon, size: 16, color: color),
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(value, style: TextStyle(color: color, fontSize: 15, fontWeight: FontWeight.w800)),
-                Text(title, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B), fontWeight: FontWeight.w500)),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontFamily: AppTypography.fontFamily,
+                    color: color,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontFamily: AppTypography.fontFamily,
+                    fontSize: 10.5,
+                    color: Color(0xFF64748B),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ],
             ),
           ),
@@ -228,7 +299,7 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.border),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8, offset: const Offset(0, 2))],
+        boxShadow: const [BoxShadow(color: Color(0x08000000), blurRadius: 8, offset: Offset(0, 2))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -237,10 +308,18 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
             children: [
               const Icon(Icons.beach_access_rounded, size: 18, color: Color(0xFF0284C7)),
               const SizedBox(width: 8),
-              Text('Saldo Hak Cuti Tahunan', style: AppTypography.titleMedium.copyWith(fontSize: 13, fontWeight: FontWeight.w800)),
+              Text(
+                'Saldo Hak Cuti Tahunan',
+                style: TextStyle(
+                  fontFamily: AppTypography.fontFamily,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.textPrimary,
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           Row(
             children: [
               Expanded(child: _leaveStat('Kuota', '$quota hari', const Color(0xFF0284C7))),
@@ -253,13 +332,21 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
               value: pct.clamp(0.0, 1.0),
-              minHeight: 8,
+              minHeight: 7,
               backgroundColor: const Color(0xFFF1F5F9),
               color: pct > 0.8 ? const Color(0xFFDC2626) : const Color(0xFF0284C7),
             ),
           ),
           const SizedBox(height: 6),
-          Text('${(pct * 100).toStringAsFixed(0)}% hak cuti telah digunakan', style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8))),
+          Text(
+            '${(pct * 100).toStringAsFixed(0)}% hak cuti telah digunakan',
+            style: const TextStyle(
+              fontFamily: AppTypography.fontFamily,
+              fontSize: 10.5,
+              color: Color(0xFF94A3B8),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
         ],
       ),
     );
@@ -269,8 +356,25 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(value, style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.w900)),
-        Text(label, style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8))),
+        Text(
+          value,
+          style: TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            color: color,
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 1),
+        Text(
+          label,
+          style: const TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            fontSize: 10.5,
+            color: Color(0xFF94A3B8),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ],
     );
   }
@@ -280,7 +384,15 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
       children: [
         Icon(icon, size: 16, color: AppColors.textMuted),
         const SizedBox(width: 7),
-        Text(title, style: AppTypography.titleMedium.copyWith(fontSize: 14, fontWeight: FontWeight.w800)),
+        Text(
+          title,
+          style: TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            fontSize: 13.5,
+            fontWeight: FontWeight.w800,
+            color: AppColors.textPrimary,
+          ),
+        ),
       ],
     );
   }
@@ -334,12 +446,31 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
             final day     = dateStr.length >= 10 ? dateStr.substring(8, 10) : '';
 
             return Container(
-              decoration: BoxDecoration(color: color.withValues(alpha: status == 'libur' ? 1.0 : 0.9), borderRadius: BorderRadius.circular(8)),
+              decoration: BoxDecoration(
+                color: color.withOpacity(status == 'libur' ? 1.0 : 0.9),
+                borderRadius: BorderRadius.circular(8),
+              ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(label, style: TextStyle(color: status == 'libur' ? const Color(0xFF94A3B8) : Colors.white, fontSize: 14, fontWeight: FontWeight.w900)),
-                  Text(day, style: TextStyle(color: status == 'libur' ? const Color(0xFFCBD5E1) : Colors.white60, fontSize: 9)),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontFamily: AppTypography.fontFamily,
+                      color: status == 'libur' ? const Color(0xFF94A3B8) : Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    day,
+                    style: TextStyle(
+                      fontFamily: AppTypography.fontFamily,
+                      color: status == 'libur' ? const Color(0xFFCBD5E1) : Colors.white60,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ],
               ),
             );
@@ -353,9 +484,17 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(width: 10, height: 10, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(3))),
+        Container(width: 8, height: 8, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
         const SizedBox(width: 4),
-        Text(label, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+        Text(
+          label,
+          style: const TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            fontSize: 10,
+            color: Color(0xFF64748B),
+            fontWeight: FontWeight.w500,
+          ),
+        ),
       ],
     );
   }
