@@ -5,7 +5,18 @@ const config: CapacitorConfig = {
   appName: 'HRM Attendance',
   webDir: 'dist',
   server: {
-    androidScheme: 'https'
+    url: 'https://fawwazreskiperwira.com',
+    cleartext: false,
+    androidScheme: 'https',
+    allowNavigation: [
+      'fawwazreskiperwira.com',
+      '*.fawwazreskiperwira.com'
+    ]
+  },
+  android: {
+    allowMixedContent: true,
+    captureInput: true,
+    webContentsDebuggingEnabled: false
   }
 };
 

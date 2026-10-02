@@ -32,14 +32,14 @@ app.get('/api/health', (req, res) => {
 app.get('/api/app-version', (req, res) => {
   res.json({
     success: true,
-    latestVersion: '1.0.5',
-    versionCode: 6,
+    latestVersion: '1.0.9',
+    versionCode: 9,
     minVersion: '1.0.0',
     downloadUrl: 'https://fawwazreskiperwira.com/downloads/hrm-attendance.apk',
-    forceUpdate: false,
-    title: 'Pembaruan Stabilitas Kamera & Presensi Wajah',
-    releaseNotes: 'Pembaruan stabilitas kamera biometrik, eliminasi crash Xiaomi/Android, dan verifikasi foto wajah langsung.',
-    releasedAt: '2026-10-01'
+    forceUpdate: true,
+    title: 'Pembaruan Aplikasi Tersedia (v1.0.9)',
+    releaseNotes: 'Pembaruan Wajah Presisi 6-Pose (Dekatkan, Jauhkan, Berkedip, Tersenyum, Menoleh Kanan/Kiri), Peningkatan Presisi Koordinat GPS Radius Kantor, dan UI Absensi Modern.',
+    releasedAt: '2026-10-02'
   });
 });
 
