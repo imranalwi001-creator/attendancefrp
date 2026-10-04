@@ -73,12 +73,7 @@ export const HrmEmployeeDashboard: React.FC = () => {
   const { user, refreshUser } = useHrmAuth();
 
   // Mobile & PWA Mode Detection (Lampiran 2 & 3)
-  const [forceDesktopMode, setForceDesktopMode] = useState<boolean>(() => {
-    return localStorage.getItem('hrm_force_desktop_mode') === 'true';
-  });
-
   const isMobileOrPwa = React.useMemo(() => {
-    if (forceDesktopMode) return false;
     if (typeof window === 'undefined') return false;
     const urlParams = new URLSearchParams(window.location.search);
     const isPwa = Boolean(
@@ -89,21 +84,14 @@ export const HrmEmployeeDashboard: React.FC = () => {
       urlParams.get('mode') === 'app' ||
       localStorage.getItem('hrm_pwa_mode') === 'true'
     );
-    const isMobile = window.innerWidth <= 768 || /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+    const isMobile =
+      window.innerWidth <= 1024 ||
+      /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i.test(navigator.userAgent || '');
     return isPwa || isMobile;
-  }, [forceDesktopMode]);
+  }, []);
 
   if (isMobileOrPwa) {
-    return (
-      <HrmPwaAttendanceView
-        onSwitchToDesktop={() => {
-          setForceDesktopMode(true);
-          localStorage.setItem('hrm_force_desktop_mode', 'true');
-          localStorage.removeItem('hrm_pwa_mode');
-          window.location.reload();
-        }}
-      />
-    );
+    return <HrmPwaAttendanceView />;
   }
 
   // Real-time clock state

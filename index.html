@@ -45,14 +45,34 @@
           try { localStorage.removeItem('hrm_attendance'); } catch (_) {}
         }
 
-        // FORCE SERVICE WORKER UPDATE
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then(function(regs) {
-            for (var i = 0; i < regs.length; i++) {
-              regs[i].update();
+        // FORCE CACHE PURGE & SERVICE WORKER UPDATE ON NEW BUILD
+        var PURGE_TAG = 'hrm_deploy_v20261005_lampiran2_fixed';
+        try {
+          localStorage.removeItem('hrm_force_desktop_mode');
+          if (localStorage.getItem('hrm_deploy_tag') !== PURGE_TAG) {
+            localStorage.setItem('hrm_deploy_tag', PURGE_TAG);
+            if ('caches' in window) {
+              caches.keys().then(function(names) {
+                for (var j = 0; j < names.length; j++) {
+                  caches.delete(names[j]);
+                }
+              });
             }
-          });
-        }
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations().then(function(regs) {
+                for (var k = 0; k < regs.length; k++) {
+                  regs[k].unregister();
+                }
+              });
+            }
+          } else if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(regs) {
+              for (var i = 0; i < regs.length; i++) {
+                regs[i].update();
+              }
+            });
+          }
+        } catch (_) {}
       })();
 
       // Capture PWA install prompt BEFORE any JS bundle loads

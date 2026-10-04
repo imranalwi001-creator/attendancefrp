@@ -60,7 +60,6 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   // Mobile & Standalone PWA Mode Detection (Lampiran 2 & 3)
   const isMobileOrPwa = React.useMemo(() => {
     if (typeof window === 'undefined') return false;
-    if (localStorage.getItem('hrm_force_desktop_mode') === 'true') return false;
     const urlParams = new URLSearchParams(window.location.search);
     const isPwa = Boolean(
       window.matchMedia('(display-mode: standalone)').matches ||
@@ -70,11 +69,17 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       urlParams.get('mode') === 'app' ||
       localStorage.getItem('hrm_pwa_mode') === 'true'
     );
-    const isMobile = window.innerWidth <= 768 || /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+    const isMobile =
+      window.innerWidth <= 1024 ||
+      /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i.test(navigator.userAgent || '');
     return isPwa || isMobile;
   }, []);
 
-  if (isMobileOrPwa && (currentRole === 'karyawan' || currentRole === 'staff' || !['superadmin', 'admin', 'hrd', 'keuangan', 'pimpinan'].includes(currentRole) || location.pathname === '/presensi')) {
+  const isEmployeeRole =
+    ['karyawan', 'staff', 'korlap', 'danru', 'security', 'cleaning', 'pengawas', 'kepala_regu'].includes(currentRole) ||
+    !['superadmin', 'admin', 'hrd', 'keuangan', 'pimpinan'].includes(currentRole);
+
+  if (isMobileOrPwa && (isEmployeeRole || location.pathname === '/presensi')) {
     return <div className="min-h-screen bg-[#14532D] text-foreground">{children}</div>;
   }
 
