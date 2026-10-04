@@ -32,6 +32,7 @@ import {
   Monitor,
   Tablet,
   Download,
+  DownloadCloud,
   ScanFace,
   ShieldAlert,
   Activity,
