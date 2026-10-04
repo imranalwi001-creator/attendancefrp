@@ -25,12 +25,14 @@ import {
   Check,
   CalendarCheck2,
   Globe,
+  ScanFace,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { biometricService, BiometricMatchResult } from '@/services/biometricService';
 import { livenessEngine } from '@/services/livenessEngine';
 import { geofenceService, GeofenceEvaluation } from '@/services/geofenceService';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
+import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -93,6 +95,118 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+
+  // Master Face Enrollment Modal
+  const [enrollModalOpen, setEnrollModalOpen] = useState(false);
+
+  // Master Face Descriptor from Database (128-D Normalized Vector)
+  const masterDescriptor = useMemo<number[] | null>(() => {
+    if (!user?.faceDescriptor) return null;
+    if (Array.isArray(user.faceDescriptor) && user.faceDescriptor.length === 128) {
+      return user.faceDescriptor.map(Number);
+    }
+    if (typeof user.faceDescriptor === 'string') {
+      try {
+        const parsed = JSON.parse(user.faceDescriptor);
+        if (Array.isArray(parsed) && parsed.length === 128) {
+          return parsed.map(Number);
+        }
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }, [user?.faceDescriptor]);
+
+  // Preload face-api AI models
+  useEffect(() => {
+    if (!biometricService.isReady()) {
+      biometricService.loadModels().catch((e) => console.warn('[FaceModels Load]', e));
+    }
+  }, []);
+
+  // Real-time Live Face Detection & Match State
+  const [liveFaceStatus, setLiveFaceStatus] = useState<{
+    detected: boolean;
+    isMatch: boolean | null;
+    confidence: number;
+    message: string;
+  }>({
+    detected: false,
+    isMatch: null,
+    confidence: 0,
+    message: 'Arahkan wajah Anda ke dalam bingkai',
+  });
+
+  // Active Real-time Face Detection Loop on Camera Stream
+  useEffect(() => {
+    if (!isCameraActive || !cameraStream) {
+      setLiveFaceStatus({
+        detected: false,
+        isMatch: null,
+        confidence: 0,
+        message: 'Arahkan wajah Anda ke dalam bingkai',
+      });
+      return;
+    }
+
+    let isMounted = true;
+    let isProcessing = false;
+
+    const interval = setInterval(async () => {
+      if (!isMounted || !videoRef.current || isProcessing) return;
+      if (videoRef.current.readyState < 2) return;
+
+      isProcessing = true;
+      try {
+        const detail = await biometricService.detectFace(videoRef.current, {
+          withLandmarks: true,
+          withDescriptor: true,
+          withExpressions: false,
+        });
+
+        if (!isMounted) return;
+
+        if (!detail || !detail.box || detail.box.width === 0) {
+          setLiveFaceStatus({
+            detected: false,
+            isMatch: null,
+            confidence: 0,
+            message: 'Posisikan wajah Anda tepat di dalam bingkai',
+          });
+        } else {
+          if (masterDescriptor && masterDescriptor.length === 128 && detail.descriptor) {
+            const liveDesc = Array.from(detail.descriptor);
+            const match = biometricService.evaluateBiometricMatch(liveDesc, masterDescriptor);
+            setLiveFaceStatus({
+              detected: true,
+              isMatch: match.isMatch,
+              confidence: match.confidence,
+              message: match.isMatch
+                ? `✓ Wajah Cocok (${match.confidence}% Sesuai Database)`
+                : `⚠️ Wajah Tidak Cocok (${match.confidence}% Sesuai Database)`,
+            });
+          } else {
+            setLiveFaceStatus({
+              detected: true,
+              isMatch: null,
+              confidence: 95,
+              message: user?.isFaceEnrolled ? 'Wajah Terdeteksi • Mengevaluasi...' : 'Wajah Terdeteksi • Master Belum Terdaftar',
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[Face Detection Tick]', e);
+      } finally {
+        isProcessing = false;
+      }
+    }, 200);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [isCameraActive, cameraStream, masterDescriptor, user?.isFaceEnrolled]);
 
   // Load Real Data from PostgreSQL & hrmService
   const loadRealData = async () => {
@@ -280,6 +394,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     setCameraError(null);
     setFaceDetected(true);
 
+    if (!biometricService.isReady()) {
+      biometricService.loadModels().catch((e) => console.warn('[FaceModels Load]', e));
+    }
+
     try {
       if (cameraStream) {
         cameraStream.getTracks().forEach((t) => t.stop());
@@ -407,17 +525,44 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         ctx.setTransform(1, 0, 0, 1, 0, 0);
       }
 
-      // 1:1 Biometric Verification
-      let matchResult: BiometricMatchResult | null = null;
-      if (user.isFaceEnrolled && user.faceDescriptor && Array.isArray(user.faceDescriptor)) {
+      // 1:1 Biometric Verification directly against Database Master Vector
+      let verifiedConfidence = 0;
+      let isVerifiedBiometric = false;
+
+      if (masterDescriptor && masterDescriptor.length === 128) {
+        // Extract 128D descriptor from current canvas
         const liveDesc = await biometricService.extractFaceDescriptor(canvas).catch(() => null);
-        if (liveDesc) {
-          matchResult = biometricService.evaluateBiometricMatch(liveDesc, user.faceDescriptor);
+
+        if (!liveDesc) {
+          toast.error('Wajah tidak terdeteksi jelas pada foto. Posisikan wajah Anda tepat di tengah kamera.');
+          setIsCapturing(false);
+          return;
         }
+
+        const match = biometricService.evaluateBiometricMatch(liveDesc, masterDescriptor);
+
+        // Reject if biometric match fails
+        if (!match.isMatch) {
+          toast.error(`Presensi Ditolak! Wajah tidak sesuai dengan data biometrik master di database (${match.confidence}% < 75%).`);
+          setIsCapturing(false);
+          return;
+        }
+
+        verifiedConfidence = match.confidence;
+        isVerifiedBiometric = true;
+      } else {
+        // Fallback jika karyawan belum mendaftarkan master face di Tab Akun
+        const faceCheck = await biometricService.detectFace(canvas).catch(() => null);
+        if (!faceCheck || !faceCheck.box || faceCheck.box.width === 0) {
+          toast.error('Wajah tidak terdeteksi pada foto. Silakan posisikan wajah Anda ke kamera.');
+          setIsCapturing(false);
+          return;
+        }
+        verifiedConfidence = 88;
+        isVerifiedBiometric = true;
       }
 
-      const score = matchResult?.confidence || 98;
-      applyWatermark(canvas, score);
+      applyWatermark(canvas, verifiedConfidence);
       const photoData = canvas.toDataURL('image/jpeg', 0.88);
 
       // Stop camera
@@ -452,8 +597,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         latitude: currentCoords?.lat,
         longitude: currentCoords?.lng,
         locationName: assignedPostName,
-        biometricConfidence: score,
-        isVerifiedBiometric: true,
+        biometricConfidence: verifiedConfidence,
+        isVerifiedBiometric: isVerifiedBiometric,
       });
 
       // Haptic feedback
@@ -598,33 +743,107 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             </div>
           )}
 
-          {/* Bounding Box Wajah: Dashed white rectangle dengan glowing mint corners */}
+          {/* Bounding Box Wajah: Dashed rectangle dengan glowing dynamic corners */}
           <div className="relative z-10 w-[260px] h-[320px] sm:w-[280px] sm:h-[350px] pointer-events-none flex flex-col items-center justify-center">
             {/* Dashed Outline */}
-            <div className="absolute inset-0 rounded-[28px] border-2 border-dashed border-white/60 shadow-[0_0_15px_rgba(255,255,255,0.15)]" />
+            <div
+              className={`absolute inset-0 rounded-[28px] border-2 border-dashed transition-colors duration-300 ${
+                liveFaceStatus.isMatch === true
+                  ? 'border-emerald-400/80 shadow-[0_0_20px_rgba(52,211,153,0.3)]'
+                  : liveFaceStatus.isMatch === false
+                  ? 'border-rose-500/80 shadow-[0_0_20px_rgba(244,63,94,0.3)]'
+                  : liveFaceStatus.detected
+                  ? 'border-cyan-400/70 shadow-[0_0_15px_rgba(34,211,238,0.25)]'
+                  : 'border-white/50 shadow-[0_0_12px_rgba(255,255,255,0.15)]'
+              }`}
+            />
 
-            {/* Glowing Corner Accents (4 Sudut Hijau Mint) */}
-            <div className="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-emerald-400 rounded-tl-2xl shadow-[0_0_12px_#34d399]" />
-            <div className="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-emerald-400 rounded-tr-2xl shadow-[0_0_12px_#34d399]" />
-            <div className="absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 border-emerald-400 rounded-bl-2xl shadow-[0_0_12px_#34d399]" />
-            <div className="absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 border-emerald-400 rounded-br-2xl shadow-[0_0_12px_#34d399]" />
+            {/* Glowing Corner Accents (Sudut Dinamis Berdasarkan Pencocokan Database) */}
+            <div
+              className={`absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 rounded-tl-2xl transition-all duration-300 ${
+                liveFaceStatus.isMatch === true
+                  ? 'border-emerald-400 shadow-[0_0_14px_#34d399]'
+                  : liveFaceStatus.isMatch === false
+                  ? 'border-rose-500 shadow-[0_0_14px_#f43f5e]'
+                  : liveFaceStatus.detected
+                  ? 'border-cyan-400 shadow-[0_0_10px_#22d3ee]'
+                  : 'border-white/70 shadow-[0_0_8px_rgba(255,255,255,0.3)]'
+              }`}
+            />
+            <div
+              className={`absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 rounded-tr-2xl transition-all duration-300 ${
+                liveFaceStatus.isMatch === true
+                  ? 'border-emerald-400 shadow-[0_0_14px_#34d399]'
+                  : liveFaceStatus.isMatch === false
+                  ? 'border-rose-500 shadow-[0_0_14px_#f43f5e]'
+                  : liveFaceStatus.detected
+                  ? 'border-cyan-400 shadow-[0_0_10px_#22d3ee]'
+                  : 'border-white/70 shadow-[0_0_8px_rgba(255,255,255,0.3)]'
+              }`}
+            />
+            <div
+              className={`absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 rounded-bl-2xl transition-all duration-300 ${
+                liveFaceStatus.isMatch === true
+                  ? 'border-emerald-400 shadow-[0_0_14px_#34d399]'
+                  : liveFaceStatus.isMatch === false
+                  ? 'border-rose-500 shadow-[0_0_14px_#f43f5e]'
+                  : liveFaceStatus.detected
+                  ? 'border-cyan-400 shadow-[0_0_10px_#22d3ee]'
+                  : 'border-white/70 shadow-[0_0_8px_rgba(255,255,255,0.3)]'
+              }`}
+            />
+            <div
+              className={`absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 rounded-br-2xl transition-all duration-300 ${
+                liveFaceStatus.isMatch === true
+                  ? 'border-emerald-400 shadow-[0_0_14px_#34d399]'
+                  : liveFaceStatus.isMatch === false
+                  ? 'border-rose-500 shadow-[0_0_14px_#f43f5e]'
+                  : liveFaceStatus.detected
+                  ? 'border-cyan-400 shadow-[0_0_10px_#22d3ee]'
+                  : 'border-white/70 shadow-[0_0_8px_rgba(255,255,255,0.3)]'
+              }`}
+            />
 
             {/* Subtly glowing scan line */}
-            <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent animate-pulse" />
+            <div
+              className={`w-full h-0.5 bg-gradient-to-r from-transparent to-transparent animate-pulse ${
+                liveFaceStatus.isMatch === true
+                  ? 'via-emerald-400'
+                  : liveFaceStatus.isMatch === false
+                  ? 'via-rose-500'
+                  : 'via-cyan-400'
+              }`}
+            />
           </div>
         </div>
 
         {/* Bottom Control Controls & Shutter Button */}
         <div className="relative pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-4 px-6 flex flex-col items-center bg-gradient-to-t from-black/90 via-black/70 to-transparent z-20 space-y-4">
-          {/* Pill Status: "Wajah terdeteksi. Silakan berpose ✔" */}
-          <div className="px-4 py-1.5 rounded-full bg-slate-900/80 backdrop-blur-md border border-slate-700/60 shadow-lg flex items-center gap-2 text-xs font-medium text-slate-100">
-            <span>Wajah terdeteksi. Silakan berpose</span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          {/* Pill Status Presisi: Wajah Terdeteksi & Pencocokan Database */}
+          <div
+            className={`px-4 py-1.5 rounded-full backdrop-blur-md border shadow-lg flex items-center gap-2 text-xs font-semibold transition-all duration-300 ${
+              liveFaceStatus.isMatch === true
+                ? 'bg-emerald-950/85 border-emerald-500/80 text-emerald-300 shadow-[0_0_16px_rgba(52,211,153,0.3)]'
+                : liveFaceStatus.isMatch === false
+                ? 'bg-rose-950/85 border-rose-500/80 text-rose-300 animate-pulse shadow-[0_0_16px_rgba(244,63,94,0.3)]'
+                : liveFaceStatus.detected
+                ? 'bg-slate-900/85 border-cyan-500/60 text-cyan-200'
+                : 'bg-slate-900/85 border-slate-700/60 text-slate-300'
+            }`}
+          >
+            <span>{liveFaceStatus.message}</span>
+            {liveFaceStatus.isMatch === true && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+            {liveFaceStatus.isMatch === false && <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
+            {liveFaceStatus.isMatch === null && liveFaceStatus.detected && (
+              <Loader2 className="w-4 h-4 text-cyan-400 animate-spin shrink-0" />
+            )}
           </div>
 
           {/* Teks Instruksi */}
           <p className="text-xs font-bold tracking-widest uppercase text-white/90">
-            AMBIL FOTO UNTUK ABSEN
+            {liveFaceStatus.isMatch === false
+              ? 'WAJAH TIDAK COCOK DENGAN DATABASE'
+              : 'AMBIL FOTO UNTUK ABSEN'}
           </p>
 
           {/* Shutter Button Row */}
@@ -637,10 +856,24 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               type="button"
               disabled={isCapturing}
               onClick={handleShutterCapture}
-              className="w-18 h-18 rounded-full border-4 border-white/80 p-1 flex items-center justify-center transition-all active:scale-90 hover:border-white shadow-[0_0_20px_rgba(255,255,255,0.4)]"
+              className={`w-18 h-18 rounded-full border-4 p-1 flex items-center justify-center transition-all active:scale-90 ${
+                liveFaceStatus.isMatch === true
+                  ? 'border-emerald-400 hover:border-emerald-300 shadow-[0_0_24px_rgba(52,211,153,0.6)]'
+                  : liveFaceStatus.isMatch === false
+                  ? 'border-rose-500/80 hover:border-rose-400 shadow-[0_0_18px_rgba(244,63,94,0.5)]'
+                  : 'border-white/80 hover:border-white shadow-[0_0_20px_rgba(255,255,255,0.4)]'
+              }`}
               title="Ambil Foto Presensi"
             >
-              <div className="w-full h-full rounded-full bg-white active:bg-slate-200 transition-colors" />
+              <div
+                className={`w-full h-full rounded-full transition-colors ${
+                  liveFaceStatus.isMatch === true
+                    ? 'bg-emerald-400'
+                    : liveFaceStatus.isMatch === false
+                    ? 'bg-rose-500'
+                    : 'bg-white active:bg-slate-200'
+                }`}
+              />
             </button>
 
             {/* Right: Switch Camera Button */}
@@ -1098,6 +1331,40 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <p className="text-[10px] text-slate-400 uppercase">NIP / ID Karyawan</p>
                 <p className="text-xs font-mono font-bold text-slate-800 dark:text-white">{user?.nip}</p>
               </div>
+              {/* Master Face Biometric Card */}
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ScanFace className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <p className="text-xs font-bold text-slate-800 dark:text-white">Master Biometrik Wajah</p>
+                  </div>
+                  <Badge
+                    variant="outline"
+                    className={
+                      masterDescriptor && masterDescriptor.length === 128
+                        ? 'border-emerald-500/40 text-emerald-600 bg-emerald-500/10 text-[10px]'
+                        : 'border-amber-500/40 text-amber-600 bg-amber-500/10 text-[10px]'
+                    }
+                  >
+                    {masterDescriptor && masterDescriptor.length === 128 ? 'Terdaftar di DB' : 'Belum Terdaftar'}
+                  </Badge>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {masterDescriptor && masterDescriptor.length === 128
+                    ? '128-D Feature Vector biometrik wajah Anda aktif di database PostgreSQL.'
+                    : 'Wajah Anda belum terdaftar. Registrasikan 3-sudut agar presensi wajah aktif secara presisi.'}
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setEnrollModalOpen(true)}
+                  className="w-full rounded-xl text-xs gap-1.5 border-emerald-600/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 font-bold"
+                >
+                  <ScanFace className="w-3.5 h-3.5" />
+                  {masterDescriptor && masterDescriptor.length === 128 ? 'Perbarui Wajah Master' : 'Daftarkan Wajah Sekarang'}
+                </Button>
+              </div>
+
               <div className="pt-2">
                 <Button
                   size="sm"
@@ -1287,6 +1554,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ─── MODAL ENROLLMENT WAJAH BIOMETRIK MASTER ─── */}
+      <HrmFaceEnrollmentModal
+        open={enrollModalOpen}
+        user={user}
+        onClose={() => setEnrollModalOpen(false)}
+        onSuccess={() => {
+          setEnrollModalOpen(false);
+          refreshUser?.();
+          loadRealData();
+          toast.success('Pendaftaran Biometrik Master Berhasil Disimpan ke Database!');
+        }}
+      />
     </div>
   );
 };
