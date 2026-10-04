@@ -24,6 +24,7 @@ import {
   Award,
   Check,
   CalendarCheck2,
+  Globe,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { biometricService, BiometricMatchResult } from '@/services/biometricService';
@@ -696,6 +697,21 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             </button>
             <button
               type="button"
+              onClick={() => {
+                if (onSwitchToDesktop) {
+                  onSwitchToDesktop();
+                } else {
+                  localStorage.removeItem('hrm_pwa_mode');
+                  window.location.href = '/dashboard';
+                }
+              }}
+              className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 backdrop-blur-sm flex items-center justify-center text-white transition-all active:scale-90"
+              title="Kembali ke Mode Web Portal"
+            >
+              <Globe className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
               onClick={() => setLogoutDialogOpen(true)}
               className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 backdrop-blur-sm flex items-center justify-center text-white transition-all active:scale-90"
               title="Keluar dari Akun"
@@ -730,11 +746,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
 
               {/* Avatar Round Thumbnail with Subtle Ring */}
-              <div className="relative shrink-0">
+              <div className="relative shrink-0 w-12 h-12 min-w-[48px] min-h-[48px]">
                 <img
                   src={user?.avatarUrl || user?.faceEnrolledPhoto || defaultAvatar}
                   alt={user?.fullName}
-                  className="w-13 h-13 rounded-full object-cover border-2 border-emerald-500/40 shadow-sm bg-slate-100"
+                  className="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-full object-cover border-2 border-emerald-500/40 shadow-sm bg-slate-100"
+                  style={{ width: '48px', height: '48px', objectFit: 'cover' }}
                   onError={(e) => {
                     (e.target as HTMLImageElement).src = defaultAvatar;
                   }}
@@ -807,7 +824,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             {/* ─── KARTU STATUS LOKASI GPS & POS GEOFENCE (PERSIS LAMPIRAN 2) ─── */}
             <div className="bg-slate-50 dark:bg-slate-900/80 border border-slate-200/90 dark:border-slate-800 rounded-2xl p-3 flex items-center gap-3 shadow-xs">
               {/* Mini Map Thumbnail Tile */}
-              <div className="w-13 h-13 rounded-xl bg-slate-200 dark:bg-slate-800 overflow-hidden relative shrink-0 flex items-center justify-center border border-slate-300 dark:border-slate-700">
+              <div className="w-12 h-12 min-w-[48px] min-h-[48px] rounded-xl bg-slate-200 dark:bg-slate-800 overflow-hidden relative shrink-0 flex items-center justify-center border border-slate-300 dark:border-slate-700">
                 <div className="absolute inset-0 bg-emerald-500/10" />
                 <MapPin className="w-6 h-6 text-rose-500 drop-shadow-xs relative z-10 animate-bounce" />
               </div>

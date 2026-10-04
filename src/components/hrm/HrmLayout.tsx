@@ -57,11 +57,11 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   const normalizeRole = (r?: string) => (r || '').toLowerCase().replace(/[\s_-]/g, '');
   const currentRole = normalizeRole(role);
 
-  // Mobile & Standalone PWA Mode Detection (Lampiran 2 & 3)
-  const isMobileOrPwa = React.useMemo(() => {
+  // Standalone PWA Mode Detection (Lampiran 2 & 3 eksklusif untuk PWA terinstall)
+  const isPwaStandalone = React.useMemo(() => {
     if (typeof window === 'undefined') return false;
     const urlParams = new URLSearchParams(window.location.search);
-    const isPwa = Boolean(
+    return Boolean(
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as any).standalone === true ||
       document.referrer.includes('android-app://') ||
@@ -69,17 +69,9 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       urlParams.get('mode') === 'app' ||
       localStorage.getItem('hrm_pwa_mode') === 'true'
     );
-    const isMobile =
-      window.innerWidth <= 1024 ||
-      /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i.test(navigator.userAgent || '');
-    return isPwa || isMobile;
   }, []);
 
-  const isEmployeeRole =
-    ['karyawan', 'staff', 'korlap', 'danru', 'security', 'cleaning', 'pengawas', 'kepala_regu'].includes(currentRole) ||
-    !['superadmin', 'admin', 'hrd', 'keuangan', 'pimpinan'].includes(currentRole);
-
-  if (isMobileOrPwa && (isEmployeeRole || location.pathname === '/presensi')) {
+  if (isPwaStandalone && (location.pathname === '/presensi' || location.pathname === '/dashboard')) {
     return <div className="min-h-screen bg-[#14532D] text-foreground">{children}</div>;
   }
 
@@ -562,7 +554,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
         </div>
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
           <ThemeToggle variant="dropdown" />
-          <ApkDownloadButton variant="header" />
+          <PwaInstallButton variant="header" />
           {renderNotificationBell()}
           <div className="hidden sm:inline-flex">{getRoleBadge(currentRole)}</div>
           <Button
@@ -769,7 +761,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
             <Link
               to="/dashboard"
               onClick={() => setMobileMenuOpen(false)}
-              className="w-13 h-13 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/30 border-4 border-card ring-2 ring-primary/20 hover:scale-105 active:scale-90 transition-all"
+              className="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/30 border-4 border-card ring-2 ring-primary/20 hover:scale-105 active:scale-90 transition-all"
               title="Portal Eksekutif Pimpinan (Bebas Kewajiban Presensi)"
             >
               <TrendingUp className="w-6 h-6" />
@@ -778,7 +770,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
             <Link
               to="/presensi"
               onClick={() => setMobileMenuOpen(false)}
-              className="w-13 h-13 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/30 border-4 border-card ring-2 ring-primary/20 hover:scale-105 active:scale-90 transition-all animate-pulse"
+              className="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/30 border-4 border-card ring-2 ring-primary/20 hover:scale-105 active:scale-90 transition-all animate-pulse"
               title="Presensi Masuk Tersedia — Klik untuk Absen Masuk"
             >
               <Camera className="w-6 h-6" />
@@ -787,7 +779,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
             <Link
               to="/presensi"
               onClick={() => setMobileMenuOpen(false)}
-              className="w-13 h-13 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/30 border-4 border-card ring-2 ring-primary/20 hover:scale-105 active:scale-90 transition-all animate-bounce"
+              className="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/30 border-4 border-card ring-2 ring-primary/20 hover:scale-105 active:scale-90 transition-all animate-bounce"
               title="Waktu Pulang Tiba — Klik untuk Absen Pulang"
             >
               <Camera className="w-6 h-6" />
@@ -796,7 +788,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
             <Link
               to="/presensi"
               onClick={() => setMobileMenuOpen(false)}
-              className="w-13 h-13 rounded-full bg-muted border-4 border-card text-muted-foreground flex items-center justify-center shadow-sm opacity-85 hover:scale-105 active:scale-90 transition-all"
+              className="w-12 h-12 rounded-full bg-muted border-4 border-card text-muted-foreground flex items-center justify-center shadow-sm opacity-85 hover:scale-105 active:scale-90 transition-all"
               title={`Sudah masuk (${todayAtt?.clockIn}). Menunggu waktu pulang pukul ${userShift?.endTime || '17:00'}`}
             >
               <Clock className="w-5 h-5 text-muted-foreground" />
@@ -805,7 +797,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
             <Link
               to="/presensi"
               onClick={() => setMobileMenuOpen(false)}
-              className="w-13 h-13 rounded-full bg-emerald-500/15 border-4 border-card text-emerald-600 flex items-center justify-center shadow-sm hover:scale-105 active:scale-90 transition-all"
+              className="w-12 h-12 rounded-full bg-emerald-500/15 border-4 border-card text-emerald-600 flex items-center justify-center shadow-sm hover:scale-105 active:scale-90 transition-all"
               title="Presensi hari ini selesai"
             >
               <CheckCircle2 className="w-6 h-6 text-emerald-600" />

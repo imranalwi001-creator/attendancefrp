@@ -72,11 +72,11 @@ import { HrmPwaAttendanceView } from '@/components/hrm/HrmPwaAttendanceView';
 export const HrmEmployeeDashboard: React.FC = () => {
   const { user, refreshUser } = useHrmAuth();
 
-  // Mobile & PWA Mode Detection (Lampiran 2 & 3)
-  const isMobileOrPwa = React.useMemo(() => {
+  // Standalone PWA Mode Detection (Lampiran 2 & 3 eksklusif untuk PWA terinstall)
+  const isPwaStandalone = React.useMemo(() => {
     if (typeof window === 'undefined') return false;
     const urlParams = new URLSearchParams(window.location.search);
-    const isPwa = Boolean(
+    return Boolean(
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as any).standalone === true ||
       document.referrer.includes('android-app://') ||
@@ -84,14 +84,20 @@ export const HrmEmployeeDashboard: React.FC = () => {
       urlParams.get('mode') === 'app' ||
       localStorage.getItem('hrm_pwa_mode') === 'true'
     );
-    const isMobile =
-      window.innerWidth <= 1024 ||
-      /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i.test(navigator.userAgent || '');
-    return isPwa || isMobile;
   }, []);
 
-  if (isMobileOrPwa) {
-    return <HrmPwaAttendanceView />;
+  if (isPwaStandalone) {
+    return (
+      <HrmPwaAttendanceView
+        onSwitchToDesktop={() => {
+          localStorage.removeItem('hrm_pwa_mode');
+          const url = new URL(window.location.href);
+          url.searchParams.delete('source');
+          url.searchParams.delete('mode');
+          window.location.href = url.pathname;
+        }}
+      />
+    );
   }
 
   // Real-time clock state
@@ -1460,6 +1466,51 @@ export const HrmEmployeeDashboard: React.FC = () => {
     <div className="space-y-6">
       {/* ─── 0. PWA INSTALL PROMPT & APP READINESS BANNER ─── */}
       <PwaInstallPrompt />
+
+      {/* ─── PROMINENT PWA INSTALL CALLOUT (UNTUK PENGGUNA AKSES VIA BROWSER DOMAIN) ─── */}
+      <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white p-3.5 sm:p-4 rounded-2xl shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0">
+            <Smartphone className="w-5 h-5 text-white" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs sm:text-sm font-bold leading-tight">Pasang Aplikasi PWA Presensi</p>
+            <p className="text-[11px] sm:text-xs text-white/80 leading-tight">
+              Dapatkan tampilan presensi mandiri Lampiran 2 langsung di Layar Utama HP tanpa browser
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            size="sm"
+            onClick={() => {
+              const promptEvent = (window as any).__pwaInstallPrompt;
+              if (promptEvent) {
+                promptEvent.prompt();
+              } else {
+                localStorage.setItem('hrm_pwa_mode', 'true');
+                window.location.href = '/dashboard?source=pwa';
+              }
+            }}
+            className="bg-white text-emerald-800 hover:bg-white/90 text-xs font-bold rounded-xl h-8 px-3.5 shadow-xs gap-1.5"
+          >
+            <DownloadCloud className="w-3.5 h-3.5" />
+            Install PWA
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              localStorage.setItem('hrm_pwa_mode', 'true');
+              window.location.href = '/dashboard?source=pwa';
+            }}
+            className="bg-emerald-700/60 hover:bg-emerald-700 text-white border-white/30 text-xs font-medium rounded-xl h-8 px-2.5"
+            title="Buka Tampilan PWA Presensi Langsung"
+          >
+            Buka PWA
+          </Button>
+        </div>
+      </div>
 
       {/* ─── TOP STATUS & QUICK ACCESS BAR (ICON-DRIVEN & MINIMALIST) ─── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 bg-card border border-border rounded-xl shadow-2xs">
