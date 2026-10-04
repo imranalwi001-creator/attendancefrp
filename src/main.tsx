@@ -4,6 +4,11 @@ import "./index.css";
 import "./services/cameraPolyfill.ts";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { initAppUpdater } from "./services/updaterService.ts";
+import { initLiveDeployWatcher } from "./services/liveDeployWatcher.ts";
+import { isCapacitorApp } from "./services/apiClient.ts";
+
+// Inisialisasi Live Auto-Sync Watcher: Menjamin APK otomatis memuat deploy terbaru dari server
+void initLiveDeployWatcher();
 
 // Otomatisasi HTTPS agar browser mobile mengaktifkan WebRTC Kamera dan PWA
 if (
@@ -24,6 +29,29 @@ const isLovablePreview = hostname.includes("id-preview--");
 async function initServiceWorker() {
   if (!("serviceWorker" in navigator) || isLovablePreview) return;
 
+  const isLocalhost =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1" ||
+    window.location.hostname === "::1" ||
+    import.meta.env.DEV;
+
+  // DI LOCALHOST / DEV MODE: Bersihkan dan matikan Service Worker agar tidak reload loop
+  if (isLocalhost) {
+    try {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const reg of registrations) {
+        await reg.unregister();
+      }
+      if ("caches" in window) {
+        const keys = await caches.keys();
+        for (const k of keys) {
+          await caches.delete(k);
+        }
+      }
+    } catch (_) {}
+    return;
+  }
+
   try {
     const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
     console.log("[PWA] Service Worker active with scope:", registration.scope);
@@ -41,24 +69,43 @@ async function initServiceWorker() {
       if (!installingWorker) return;
 
       installingWorker.addEventListener("statechange", () => {
-        if (installingWorker.state !== "installed" || !navigator.serviceWorker.controller) {
-          return;
+        if (installingWorker.state === "installed" && navigator.serviceWorker.controller) {
+          console.log("[PWA] Update Service Worker terdeteksi. Memperbarui versi terbaru...");
+          installingWorker.postMessage({ type: "SKIP_WAITING" });
         }
-
-        (window as any).__PWA_UPDATE_AVAILABLE__ = true;
-        (window as any).__PWA_DO_UPDATE__ = () => window.location.reload();
-
-        // Silent PWA update without disturbing user with window.confirm dialogs
-        console.log("[PWA] Background service worker update installed.");
       });
+    });
+
+    let hasReloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hasReloaded) {
+        hasReloaded = true;
+        window.location.reload();
+      }
     });
   } catch (err) {
     console.warn("[PWA] Service Worker registration failed:", err);
   }
 }
 
-// Inisialisasi Service Worker untuk mendukung PWA Install di HP dan Desktop
-if ("serviceWorker" in navigator && !isLovablePreview) {
+// KHUSUS NATIVE APK (Capacitor): Hindari Service Worker agar WebView tidak pernah terjebak cache kadaluarsa
+if (isCapacitorApp()) {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.getRegistrations().then((registrations) => {
+      for (const reg of registrations) {
+        reg.unregister().catch(() => {});
+      }
+    });
+  }
+  if ("caches" in window) {
+    caches.keys().then((keys) => {
+      for (const key of keys) {
+        caches.delete(key).catch(() => {});
+      }
+    });
+  }
+} else if ("serviceWorker" in navigator && !isLovablePreview) {
+  // Hanya jalankan Service Worker untuk browser desktop/PWA biasa
   if (document.readyState === "complete") {
     void initServiceWorker();
   } else {

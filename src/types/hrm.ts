@@ -10,6 +10,9 @@ export interface Role {
 export interface AppSettings {
   appName: string;
   logoUrl: string | null;
+  breakPolicyEnabled?: boolean;
+  breakDurationMinutes?: number;
+  breakAllowOutside?: boolean;
 }
 
 // ─── COMPANY PROFILE ─────────────────────────────────────────────────────────
@@ -232,8 +235,58 @@ export interface UserProfile {
   kepalaReguId?: string;         // UUID of assigned Kepala Regu (Danru)
   kepalaReguName?: string;       // Name of assigned Kepala Regu (Danru)
 
+  // ─── Field Sentinel & Dynamic Flexible Geofencing ──────────────
+  assignedLocationName?: string;
+  assignedLatitude?: number;
+  assignedLongitude?: number;
+  assignedRadiusMeters?: number;
+  isFieldSentinelEnabled?: boolean;
+  lastKnownLatitude?: number;
+  lastKnownLongitude?: number;
+  lastKnownAccuracy?: number;
+  lastKnownPingAt?: string;
+  isOutOfBounds?: boolean;
+  outOfBoundsDistance?: number;
+  currentActivePostId?: string;
+  currentActivePostName?: string;
+  currentActivePostEnteredAt?: string;
+  assignedPosts?: FieldAssignedPost[];
+
   // ─── Documents ──────────────────────────────────────────
   employeeDocuments?: EmployeeDocument[];
+}
+
+export interface FieldAssignedPost {
+  id: string;
+  userId: string;
+  postCode: string;
+  postName: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  description?: string;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface FieldPatrolCheck {
+  id: string;
+  userId: string;
+  userName: string;
+  userNip: string;
+  checkType: 'spot_check' | 'clock_in' | 'clock_out' | 'pimpinan_instruction';
+  locationName: string;
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number;
+  distanceFromTarget: number;
+  isWithinRadius: boolean;
+  watermarkedPhotoUrl: string;
+  biometricScore?: number;
+  biometricVerified?: boolean;
+  notes?: string;
+  createdAt: string;
 }
 
 export type AttendanceStatus = 'hadir' | 'terlambat' | 'izin' | 'sakit' | 'cuti' | 'alfa';
@@ -277,6 +330,18 @@ export interface AttendanceRecord {
   isPerimeterBreached?: boolean; // true if employee left office without permit
   perimeterBreachCount?: number; // count of breach events today
   timeOutsideMinutes?: number; // cumulative minutes outside office perimeter
+  // Early Leave & Remote Unlock (Rekomendasi 1, 2, 3)
+  isEarlyLeave?: boolean;
+  earlyLeaveReason?: string;
+  earlyLeaveCategory?: 'sakit_mendadak' | 'darurat_keluarga' | 'tugas_luar' | 'lainnya' | string;
+  isRemoteUnlocked?: boolean;
+  remoteUnlockedBy?: string;
+  remoteUnlockedAt?: string;
+  // 1-Hour Break Time Policy
+  isOnBreak?: boolean;
+  breakStartTime?: string;
+  breakEndTime?: string;
+  breakDurationMinutes?: number;
 }
 
 export type ViolationStatus = 'active' | 'resolved' | 'penalized';
@@ -489,6 +554,14 @@ export interface OvertimeRecord {
   approvedBy?: string;
   approvedByName?: string;
   approvalNotes?: string;
+  supervisorName?: string;
+  supervisorSignature?: string;
+  overtimePhase?: 'requested' | 'in_progress' | 'completed' | 'cancelled';
+  startedAt?: string;
+  scheduledEndTime?: string;
+  actualEndTime?: string;
+  completionNotes?: string;
+  completionPhotos?: string[];
   createdAt: string;
 }
 
@@ -501,6 +574,7 @@ export interface HrmNotification {
   message: string;
   type: 'info' | 'success' | 'warning' | 'transfer' | 'overtime' | 'leave' | 'swap' | string;
   createdAt: string;
+  timestamp?: string;
   isRead: boolean;
   link?: string;
   metadata?: {

@@ -2,12 +2,12 @@
   "name": "HRM Attendance System",
   "short_name": "HRM Presensi",
   "description": "Sistem Presensi & Manajemen SDM Mandiri Tanpa Browser",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#ffffff",
-  "theme_color": "#0d9488",
+  "background_color": "#14532D",
+  "theme_color": "#14532D",
   "categories": ["business", "productivity", "utilities"],
   "icons": [
     {

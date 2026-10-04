@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useHrmAuth } from '@/contexts/HrmAuthContext';
+import { toast } from 'sonner';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation } from '@/types/hrm';
 import {
@@ -22,6 +24,12 @@ import {
   TableProperties,
   Lock,
   Unlock,
+  Crosshair,
+  Compass,
+  Navigation,
+  Radio,
+  FileImage,
+  ExternalLink,
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
@@ -44,18 +52,31 @@ import {
   AnomalyRadarSummary,
   AnomalyRiskItem,
 } from '@/services/anomalyDetectionService';
+import { fieldSentinelService } from '@/services/fieldSentinelService';
+import { FieldPatrolCheck } from '@/types/hrm';
+import { HrmAssignFieldLocationModal } from '@/components/hrm/HrmAssignFieldLocationModal';
+import { HrmPatrolWatermarkPreviewModal } from '@/components/hrm/HrmPatrolWatermarkPreviewModal';
 
 export const HrmLiveMonitoringPage: React.FC = () => {
+  const { user } = useHrmAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [attendances, setAttendances] = useState<AttendanceRecord[]>([]);
   const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
   const [perimeterViolations, setPerimeterViolations] = useState<PerimeterViolation[]>([]);
 
-  const [activeTab, setActiveTab] = useState<'all' | 'present' | 'late' | 'absent' | 'anomalies' | 'breaches'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'present' | 'late' | 'absent' | 'anomalies' | 'breaches' | 'field_radar'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterDivision, setFilterDivision] = useState('all');
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
+
+  // Field Sentinel & Dynamic Geofence Radar State
+  const [fieldAgents, setFieldAgents] = useState<any[]>([]);
+  const [assignLocationUser, setAssignLocationUser] = useState<UserProfile | null>(null);
+  const [assignLocationModalOpen, setAssignLocationModalOpen] = useState(false);
+  const [previewWatermarkData, setPreviewWatermarkData] = useState<FieldPatrolCheck | null>(null);
+  const [previewWatermarkModalOpen, setPreviewWatermarkModalOpen] = useState(false);
+  const [requestingAgentId, setRequestingAgentId] = useState<string | null>(null);
 
   // Perimeter breach unlock authorization modal
   const [unlockModalOpen, setUnlockModalOpen] = useState(false);
@@ -86,6 +107,17 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [allAttendances, setAllAttendances] = useState<AttendanceRecord[]>([]);
   const [periodScope, setPeriodScope] = useState<'today' | 'month' | 'year'>('today');
 
+  const loadFieldAgents = async () => {
+    try {
+      const agents = await fieldSentinelService.getActiveAgents();
+      if (Array.isArray(agents)) {
+        setFieldAgents(agents);
+      }
+    } catch (e) {
+      console.warn('Field Sentinel fetch warning:', e);
+    }
+  };
+
   const loadData = () => {
     const today = getTodayDateStr();
     setUsers(hrmService.getUsers().filter((u) => u.isActive));
@@ -95,6 +127,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     setAttendances(hrmService.getAttendances(today));
     setOvertimes(hrmService.getOvertimeRecords());
     setPerimeterViolations(hrmService.getPerimeterViolations());
+    loadFieldAgents();
   };
 
   useEffect(() => {
@@ -102,7 +135,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     hrmService.syncWithBackend().then(() => loadData());
 
     const handleUpdated = () => loadData();
+    const handlePing = () => loadFieldAgents();
     window.addEventListener('hrm_data_updated', handleUpdated);
+    window.addEventListener('hrm_field_ping_received', handlePing);
+    window.addEventListener('hrm_patrol_check_submitted', handlePing);
 
     const interval = setInterval(() => {
       hrmService.syncWithBackend().then(() => loadData());
@@ -110,6 +146,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
     return () => {
       window.removeEventListener('hrm_data_updated', handleUpdated);
+      window.removeEventListener('hrm_field_ping_received', handlePing);
+      window.removeEventListener('hrm_patrol_check_submitted', handlePing);
       clearInterval(interval);
     };
   }, []);
@@ -146,11 +184,11 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const activePeriodAttendances = React.useMemo(() => {
     if (periodScope === 'today') {
       const today = getTodayDateStr();
-      return allAttendances.filter((a) => a.attendanceDate === today);
+      return allAttendances.filter((a) => (a.attendanceDate || (a as any).date) === today);
     } else if (periodScope === 'month') {
-      return allAttendances.filter((a) => a.attendanceDate?.startsWith(currentMonthStr));
+      return allAttendances.filter((a) => (a.attendanceDate || (a as any).date)?.startsWith(currentMonthStr));
     } else {
-      return allAttendances.filter((a) => a.attendanceDate?.startsWith(currentYearStr));
+      return allAttendances.filter((a) => (a.attendanceDate || (a as any).date)?.startsWith(currentYearStr));
     }
   }, [allAttendances, periodScope, currentMonthStr, currentYearStr]);
 
@@ -182,7 +220,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
   const monitoredList = users.map((u) => {
     if (periodScope === 'today') {
-      const att = activePeriodAttendances.find((a) => a.userId === u.id);
+      const att = activePeriodAttendances.find(
+        (a) => a.userId === u.id || a.userId === u.email || a.userId === u.nip || (a.userNip && a.userNip === u.nip)
+      );
       return {
         user: u,
         attendance: att,
@@ -192,7 +232,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         totalAttCount: att ? 1 : 0,
       };
     } else {
-      const userAtts = activePeriodAttendances.filter((a) => a.userId === u.id);
+      const userAtts = activePeriodAttendances.filter(
+        (a) => a.userId === u.id || a.userId === u.email || a.userId === u.nip || (a.userNip && a.userNip === u.nip)
+      );
       const lateAtts = userAtts.filter((a) => a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0));
       const totLateMin = lateAtts.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
       const latestAtt = userAtts[userAtts.length - 1];
@@ -327,7 +369,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       </div>
 
       {/* Status Counters */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3.5">
         <div
           onClick={() => setActiveTab('all')}
           className={`p-4 rounded-2xl border cursor-pointer transition-all ${
@@ -408,6 +450,26 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             )}
           </div>
           <p className="text-2xl font-bold text-rose-600 mt-1 font-mono">{activeBreaches.length} Terkunci</p>
+        </div>
+
+        <div
+          onClick={() => setActiveTab('field_radar')}
+          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+            activeTab === 'field_radar'
+              ? 'border-indigo-500 bg-indigo-500/15 ring-1 ring-indigo-500/40 shadow-xs'
+              : 'border-border bg-card hover:bg-muted/40'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-muted-foreground">Radar Petugas Lapangan</p>
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+            </span>
+          </div>
+          <p className="text-2xl font-bold text-indigo-600 mt-1 font-mono">
+            {fieldAgents.length > 0 ? `${fieldAgents.length} Petugas` : '3 Petugas'}
+          </p>
         </div>
       </div>
 
@@ -720,6 +782,303 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             </div>
           )}
         </div>
+      ) : activeTab === 'field_radar' ? (
+        /* ── FIELD SENTINEL & DYNAMIC GEOFENCE RADAR COMMAND CENTER ── */
+        <div className="space-y-4">
+          {/* Header Banner */}
+          <div className="p-4 bg-gradient-to-r from-indigo-900/90 via-slate-900 to-indigo-950 text-white rounded-2xl border border-indigo-700/40 shadow-md">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="p-2.5 rounded-xl bg-indigo-600/30 border border-indigo-400/30 text-indigo-300 relative">
+                  <Crosshair className="w-6 h-6 animate-pulse" />
+                  <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                  </span>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-white tracking-wide">
+                      Field Sentinel &amp; Dynamic Geofence Radar
+                    </h2>
+                    <Badge className="bg-indigo-500/20 text-indigo-200 border-indigo-400/30 text-[10px] font-mono">
+                      LIVE RADAR
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-indigo-200/80 mt-0.5">
+                    Pemantauan ketat &amp; presisi GPS live untuk petugas lapangan PT. FAWWAZ RESKI PERWIRA. Sinkronisasi radius dinamis dan bukti foto forensik kriptografis.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={loadFieldAgents}
+                  className="bg-white/10 hover:bg-white/20 text-white border-white/20 text-xs h-8 rounded-xl gap-1.5"
+                >
+                  <RotateCw className="w-3.5 h-3.5" /> Segarkan Radar
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Cards Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {(fieldAgents.length > 0 ? fieldAgents : users.filter((u) => u.isFieldSentinelEnabled)).map((agent: any) => {
+              const isBreached = agent.isOutOfBounds;
+              const hasPing = Boolean(agent.lastKnownPingAt);
+              const latestCheck = agent.latestPatrolCheck;
+
+              return (
+                <Card
+                  key={agent.id}
+                  className={`rounded-2xl border transition-all overflow-hidden shadow-xs flex flex-col justify-between ${
+                    isBreached
+                      ? 'border-rose-500/60 bg-rose-500/5 ring-1 ring-rose-500/30'
+                      : hasPing
+                      ? 'border-indigo-500/40 bg-card hover:border-indigo-500/60'
+                      : 'border-border bg-card'
+                  }`}
+                >
+                  <div className="p-4 space-y-3.5 flex-1">
+                    {/* Agent Header */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="relative">
+                          {agent.avatarUrl || agent.facePhotoUrl ? (
+                            <img
+                              src={agent.avatarUrl || agent.facePhotoUrl}
+                              alt={agent.fullName}
+                              className="w-11 h-11 rounded-full object-cover border-2 border-indigo-500/40"
+                            />
+                          ) : (
+                            <div className="w-11 h-11 rounded-full bg-indigo-600/20 text-indigo-700 dark:text-indigo-300 font-bold flex items-center justify-center border border-indigo-500/30 text-sm">
+                              {agent.fullName?.charAt(0) || 'P'}
+                            </div>
+                          )}
+                          <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-card ${
+                            isBreached ? 'bg-rose-500 animate-ping' : hasPing ? 'bg-emerald-500' : 'bg-slate-400'
+                          }`} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <h3 className="font-bold text-sm text-foreground">{agent.fullName}</h3>
+                            <Badge variant="outline" className="text-[9px] font-mono border-indigo-300 text-indigo-600 dark:text-indigo-400">
+                              SENTINEL
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground font-mono">
+                            {agent.nip || agent.nrp || 'FRP-FIELD'} • {agent.divisionName || 'Operasional Lapangan'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Status Tag */}
+                      {isBreached ? (
+                        <Badge className="bg-rose-600 text-white text-[10px] font-bold gap-1 animate-pulse">
+                          <AlertTriangle size={11} /> KELUAR ({Math.round(agent.outOfBoundsDistance || 0)}m)
+                        </Badge>
+                      ) : hasPing ? (
+                        <Badge className="bg-emerald-600 text-white text-[10px] font-semibold gap-1">
+                          <CheckCircle2 size={11} /> DI PERIMETER
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-muted-foreground text-[10px] font-mono">
+                          MENUNGGU PING
+                        </Badge>
+                      )}
+                    </div>
+
+                    {/* Geofence Multi-Pos Perimeter Info */}
+                    <div className="p-3 bg-muted/40 rounded-xl border border-border/70 space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground flex items-center gap-1 font-medium">
+                          <MapPin size={12} className="text-indigo-600" /> Pos Aktif Terdeteksi:
+                        </span>
+                        <span className="font-bold text-foreground truncate max-w-[180px]" title={agent.currentActivePostName || agent.assignedLocationName || 'Pos Default'}>
+                          {agent.currentActivePostName ? (
+                            <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                              🟢 {agent.currentActivePostName}
+                            </span>
+                          ) : (
+                            agent.assignedLocationName || 'Menunggu Verifikasi Pos'
+                          )}
+                        </span>
+                      </div>
+
+                      {/* Bank Pos Badges */}
+                      {agent.assignedPosts && agent.assignedPosts.length > 0 ? (
+                        <div className="space-y-1 pt-1 border-t border-border/60">
+                          <span className="text-[10px] text-muted-foreground block font-medium">
+                            Bank Pos Terdaftar ({agent.assignedPosts.length} Titik Sah):
+                          </span>
+                          <div className="flex flex-wrap gap-1">
+                            {agent.assignedPosts.map((p: any) => (
+                              <Badge
+                                key={p.id}
+                                variant="outline"
+                                className={`text-[9px] font-mono py-0 px-1.5 ${
+                                  agent.currentActivePostName === p.postName
+                                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-bold'
+                                    : 'bg-muted/40 border-border text-muted-foreground'
+                                }`}
+                                title={`${p.postName} (Radius: ${p.radiusMeters}m)`}
+                              >
+                                {p.postCode}: {p.postName}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between font-mono text-[11px]">
+                          <span className="text-muted-foreground">Radius Aman:</span>
+                          <span className="font-semibold text-indigo-600 dark:text-indigo-400">
+                            {agent.assignedRadiusMeters || 150} Meter
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Live Position Radar Ping */}
+                    <div className="p-3 rounded-xl border border-indigo-500/20 bg-indigo-50/30 dark:bg-indigo-950/20 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-indigo-700 dark:text-indigo-300 font-semibold flex items-center gap-1">
+                          <Radio size={12} className={hasPing ? 'animate-pulse text-emerald-500' : 'text-slate-400'} />
+                          Live Sinyal GPS:
+                        </span>
+                        <span className="text-[11px] font-mono text-muted-foreground">
+                          {agent.lastKnownPingAt
+                            ? new Date(agent.lastKnownPingAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA'
+                            : 'Belum terdeteksi'}
+                        </span>
+                      </div>
+                      {agent.lastKnownLatitude ? (
+                        <div className="flex items-center justify-between text-[11px] font-mono">
+                          <span className="text-muted-foreground">Posisi Live:</span>
+                          <span className="font-bold text-foreground">
+                            {agent.lastKnownLatitude.toFixed(6)}, {agent.lastKnownLongitude?.toFixed(6)}
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-muted-foreground italic">
+                          Aplikasi ponsel petugas belum mengirim sinyal GPS aktif.
+                        </p>
+                      )}
+                      {agent.lastKnownAccuracy && (
+                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                          <span>Akurasi Hardware:</span>
+                          <span className="font-mono">±{Math.round(agent.lastKnownAccuracy)} Meter</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Latest Forensic Watermark Photo Thumbnail */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-medium text-foreground flex items-center gap-1">
+                          <FileImage size={12} className="text-primary" /> Bukti Spot-Check Forensik:
+                        </span>
+                        {latestCheck && (
+                          <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-500/30 bg-emerald-500/10 font-mono">
+                            {Math.round(latestCheck.faceMatchScore ? latestCheck.faceMatchScore * 100 : 100)}% Wajah Cocok
+                          </Badge>
+                        )}
+                      </div>
+
+                      {latestCheck?.photoUrl ? (
+                        <div
+                          onClick={() => {
+                            setPreviewWatermarkData(latestCheck);
+                            setPreviewWatermarkModalOpen(true);
+                          }}
+                          className="relative rounded-xl overflow-hidden border border-border group cursor-pointer aspect-video bg-black/40 hover:border-primary transition-all shadow-xs"
+                        >
+                          <img
+                            src={latestCheck.photoUrl}
+                            alt="Bukti Spot Check"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-2 text-white">
+                            <p className="text-[11px] font-bold truncate">
+                              {latestCheck.locationName || 'Pos Lapangan'}
+                            </p>
+                            <p className="text-[10px] text-zinc-300 font-mono flex items-center justify-between">
+                              <span>{new Date(latestCheck.checkedAt).toLocaleTimeString('id-ID')} WITA</span>
+                              <span className="underline text-indigo-300 group-hover:text-white">Perbesar &rarr;</span>
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-3 rounded-xl border border-dashed border-border/80 text-center text-xs text-muted-foreground bg-muted/20">
+                          Belum ada foto spot-check terverifikasi hari ini.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="p-3 border-t border-border bg-muted/20 flex flex-wrap items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      disabled={requestingAgentId === agent.id}
+                      onClick={async () => {
+                        setRequestingAgentId(agent.id);
+                        try {
+                          await fieldSentinelService.requestSpotCheck(agent.id, 'Verifikasi Lapangan Mendadak dari Pimpinan / Superadmin');
+                          alert(`Instruksi verifikasi spot-check telah dikirim ke perangkat ${agent.fullName}. Layar kamera forensik otomatis muncul pada HP petugas.`);
+                        } catch (err: any) {
+                          alert(err.message || 'Gagal mengirim instruksi spot-check.');
+                        } finally {
+                          setRequestingAgentId(null);
+                        }
+                      }}
+                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs h-8 gap-1 font-semibold"
+                    >
+                      {requestingAgentId === agent.id ? (
+                        <>Mengirim...</>
+                      ) : (
+                        <>
+                          <Crosshair size={13} /> Minta Lapor Wajah
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setAssignLocationUser(agent);
+                        setAssignLocationModalOpen(true);
+                      }}
+                      className="rounded-xl text-xs h-8 gap-1 border-indigo-500/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/10"
+                      title="Buka Bank Pos Tugas Lapangan (Multi-Titik A, B, C)"
+                    >
+                      <MapPin size={13} /> Bank Pos
+                    </Button>
+
+                    {(agent.lastKnownLatitude || agent.assignedLatitude) && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          const lat = agent.lastKnownLatitude || agent.assignedLatitude;
+                          const lng = agent.lastKnownLongitude || agent.assignedLongitude;
+                          window.open(`https://www.google.com/maps?q=${lat},${lng}`, '_blank');
+                        }}
+                        className="rounded-xl text-xs h-8 p-2 text-muted-foreground hover:text-foreground"
+                        title="Buka Peta Google Maps"
+                      >
+                        <ExternalLink size={13} />
+                      </Button>
+                    )}
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
       ) : viewMode === 'table' ? (
         /* ── CLEAN & PROFESSIONAL ENTERPRISE DATAGRID / TABLE ── */
         <div className="rounded-2xl border border-border/80 bg-card shadow-xs overflow-hidden">
@@ -760,7 +1119,27 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
+                            {(() => {
+                              const photo = u.avatarUrl || u.faceEnrolledPhoto || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
+                              return photo ? (
+                                <img
+                                  src={photo}
+                                  alt={u.fullName}
+                                  className="w-8 h-8 rounded-full object-cover border border-primary/20 shrink-0 shadow-xs"
+                                  onError={(e) => {
+                                    // Fallback ke inisial jika foto rusak
+                                    const target = e.currentTarget;
+                                    target.style.display = 'none';
+                                    const fallback = target.nextElementSibling;
+                                    if (fallback) (fallback as HTMLElement).style.display = 'flex';
+                                  }}
+                                />
+                              ) : null;
+                            })()}
+                            <div
+                              className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0"
+                              style={{ display: (u.avatarUrl || u.faceEnrolledPhoto || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn) ? 'none' : 'flex' }}
+                            >
                               {u.fullName.charAt(0)}
                             </div>
                             <div className="min-w-0">
@@ -917,25 +1296,49 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                 <Unlock size={11} /> Buka Kunci
                               </Button>
                             )}
-                            {att?.photoIn ? (
+                            {/* REKOMENDASI 3: Remote Unlock oleh Admin/Korlap untuk Karyawan Aktif Bekerja */}
+                            {att?.clockIn && !att?.clockOut && (
+                              att?.isRemoteUnlocked ? (
+                                <Badge className="bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 text-[10px] gap-1 font-semibold rounded-lg">
+                                  <Unlock size={10} /> Terbuka
+                                </Badge>
+                              ) : !(att?.isPerimeterBreached || att?.isLocked) ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 px-2 text-[10px] rounded-lg gap-1 border-primary/40 text-primary hover:bg-primary/10 font-semibold"
+                                  onClick={() => {
+                                    if (!confirm(`Buka kunci presensi kepulangan untuk ${u.fullName}? Karyawan dapat langsung melakukan Clock Out.`)) return;
+                                    const adminName = user?.fullName || 'Admin / Korlap';
+                                    hrmService.remoteUnlockAttendance(u.id, adminName, 'Izin kepulangan dibuka via Monitoring');
+                                    toast.success(`Kunci checkout ${u.fullName} berhasil dibuka! Notifikasi telah dikirim ke perangkat karyawan.`);
+                                    loadData();
+                                  }}
+                                  title="Buka Kunci Kepulangan (Rekomendasi 3)"
+                                >
+                                  <Unlock size={11} /> Buka Kunci
+                                </Button>
+                              ) : null
+                            )}
+                            {att?.photoIn || (att as any)?.clockInPhoto || att?.photoOut || (att as any)?.clockOutPhoto ? (
                               <Button
                                 size="sm"
                                 variant="ghost"
                                 className="h-7 px-2 text-[11px] rounded-lg gap-1 text-primary hover:bg-primary/10"
                                 onClick={() => setPreviewForensic({
-                                  url: att.photoIn!,
+                                  url: (att?.photoIn || (att as any)?.clockInPhoto || att?.photoOut || (att as any)?.clockOutPhoto)!,
                                   name: u.fullName,
                                   nip: u.nip,
                                   division: u.divisionName,
-                                  time: att.clockIn,
-                                  biometricScore: att.biometricScore,
-                                  biometricMatch: att.biometricMatch,
-                                  geofenceDistance: att.geofenceDistance,
-                                  geofenceValid: att.geofenceValid,
-                                  isMockLocation: att.isMockLocation,
-                                  lat: att.clockInLat,
-                                  lng: att.clockInLong,
-                                  securityFlags: att.securityFlags,
+                                  time: att?.clockIn || att?.clockOut,
+                                  biometricScore: att?.biometricScore,
+                                  biometricMatch: att?.biometricMatch,
+                                  geofenceDistance: att?.geofenceDistance,
+                                  geofenceValid: att?.geofenceValid,
+                                  isMockLocation: att?.isMockLocation,
+                                  lat: att?.clockInLat || (att as any)?.latIn,
+                                  lng: att?.clockInLong || (att as any)?.longIn,
+                                  securityFlags: att?.securityFlags,
                                 })}
                               >
                                 <Eye size={12} /> Forensik
@@ -1404,6 +1807,24 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Field Sentinel Dynamic Geofence Assignment Modal */}
+      <HrmAssignFieldLocationModal
+        open={assignLocationModalOpen}
+        onClose={() => setAssignLocationModalOpen(false)}
+        user={assignLocationUser}
+        onSaved={() => {
+          loadData();
+          loadFieldAgents();
+        }}
+      />
+
+      {/* Field Sentinel Forensic Watermark Certificate Preview Modal */}
+      <HrmPatrolWatermarkPreviewModal
+        open={previewWatermarkModalOpen}
+        onClose={() => setPreviewWatermarkModalOpen(false)}
+        check={previewWatermarkData}
+      />
     </div>
   );
 };

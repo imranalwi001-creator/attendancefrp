@@ -109,73 +109,19 @@ class _AppUpdateDialogState extends State<AppUpdateDialog> {
   Future<void> _startOtaUpdate() async {
     setState(() {
       _isDownloading = true;
-      _downloadPercent = 0;
-      _statusText = "Menghubungkan ke server pembaruan...";
+      _downloadPercent = 50;
+      _statusText = "Membuka peramban untuk mengunduh versi terbaru...";
     });
 
     try {
-      _otaSubscription = OtaUpdate().execute(
-        widget.downloadUrl,
-        destinationFilename: 'hrm-attendance.apk',
-      ).listen(
-        (OtaEvent event) {
-          if (!mounted) return;
-          switch (event.status) {
-            case OtaStatus.DOWNLOADING:
-              final percent = int.tryParse(event.value ?? '0') ?? _downloadPercent;
-              setState(() {
-                _downloadPercent = percent.clamp(0, 100);
-                _statusText = "Mengunduh pembaruan... ($_downloadPercent%)";
-              });
-              break;
-            case OtaStatus.INSTALLING:
-              setState(() {
-                _downloadPercent = 100;
-                _statusText = "Membuka pemasangan aplikasi...";
-              });
-              break;
-            case OtaStatus.ALREADY_RUNNING_ERROR:
-              setState(() {
-                _statusText = "Pengunduhan sedang berlangsung...";
-              });
-              break;
-            case OtaStatus.PERMISSION_NOT_GRANTED_ERROR:
-              setState(() {
-                _isDownloading = false;
-                _statusText = "Izin penginstalan belum aktif. Mengalihkan ke browser...";
-              });
-              _fallbackBrowserDownload();
-              break;
-            case OtaStatus.INTERNAL_ERROR:
-            case OtaStatus.DOWNLOAD_ERROR:
-            case OtaStatus.CHECKSUM_ERROR:
-            default:
-              setState(() {
-                _isDownloading = false;
-                _statusText = "Gagal mengunduh in-app. Membuka tautan peramban...";
-              });
-              _fallbackBrowserDownload();
-              break;
-          }
-        },
-        onError: (e) {
-          debugPrint("[OtaUpdate] Stream error: $e");
-          if (mounted) {
-            setState(() {
-              _isDownloading = false;
-              _statusText = "Terjadi kesalahan koneksi.";
-            });
-            _fallbackBrowserDownload();
-          }
-        },
-      );
+      await _fallbackBrowserDownload();
     } catch (e) {
-      debugPrint("[OtaUpdate] Execute error: $e");
+      debugPrint("[AppUpdateDialog] Download error: $e");
+    } finally {
       if (mounted) {
         setState(() {
           _isDownloading = false;
         });
-        _fallbackBrowserDownload();
       }
     }
   }

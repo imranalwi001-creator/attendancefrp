@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile } from '@/types/hrm';
 import { biometricService } from '@/services/biometricService';
-import { hrmService } from '@/services/hrmService';
+import { hrmService, safeSetJson } from '@/services/hrmService';
 import {
   Dialog,
   DialogContent,
@@ -49,6 +49,7 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [isMobileEnrolledSuccess, setIsMobileEnrolledSuccess] = useState(false);
   const [enrolledPhotoPreview, setEnrolledPhotoPreview] = useState<string | null>(null);
+  const [enrolledUserObj, setEnrolledUserObj] = useState<UserProfile | null>(null);
 
   // Laptop Camera States
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
@@ -93,6 +94,7 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
 
     setIsMobileEnrolledSuccess(false);
     setEnrolledPhotoPreview(null);
+    setEnrolledUserObj(null);
 
     QRCode.toDataURL(mobileEnrollUrl, {
       width: 320,
@@ -114,10 +116,27 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
       // 1. Poll PostgreSQL database on server
       try {
         const res = await api.get<{ success: boolean; data: UserProfile }>(`/users/${user.id}`);
-        if (res && res.success && res.data && res.data.isFaceEnrolled && res.data.faceEnrolledPhoto) {
+        if (res && res.success && res.data && (res.data.isFaceEnrolled || res.data.faceEnrolledPhoto || res.data.avatarUrl)) {
+          const photo = res.data.faceEnrolledPhoto || res.data.avatarUrl || null;
           setIsMobileEnrolledSuccess(true);
-          setEnrolledPhotoPreview(res.data.faceEnrolledPhoto);
-          await hrmService.syncWithBackend().catch(() => null);
+          setEnrolledPhotoPreview(photo);
+          setEnrolledUserObj(res.data);
+
+          // Update local cache immediately
+          const currentUsers = hrmService.getUsers();
+          const uIdx = currentUsers.findIndex((u) => u.id === user.id || u.nip === user.nip);
+          if (uIdx !== -1) {
+            currentUsers[uIdx] = {
+              ...currentUsers[uIdx],
+              ...res.data,
+              isFaceEnrolled: true,
+              avatarUrl: photo || currentUsers[uIdx].avatarUrl,
+              faceEnrolledPhoto: photo || currentUsers[uIdx].faceEnrolledPhoto,
+            };
+            safeSetJson('hrm_users', currentUsers);
+            window.dispatchEvent(new Event('hrm_users_updated'));
+          }
+
           if (onSuccess) onSuccess(res.data);
           return;
         }
@@ -129,12 +148,14 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
       const freshUsers = hrmService.getUsers();
       const targetUser = freshUsers.find((u) => u.id === user.id || u.nip === user.nip);
 
-      if (targetUser && targetUser.isFaceEnrolled && targetUser.faceEnrolledPhoto) {
+      if (targetUser && (targetUser.isFaceEnrolled || targetUser.faceEnrolledPhoto || targetUser.avatarUrl)) {
+        const photo = targetUser.faceEnrolledPhoto || targetUser.avatarUrl || null;
         setIsMobileEnrolledSuccess(true);
-        setEnrolledPhotoPreview(targetUser.faceEnrolledPhoto);
+        setEnrolledPhotoPreview(photo);
+        setEnrolledUserObj(targetUser);
         if (onSuccess) onSuccess(targetUser);
       }
-    }, 2000);
+    }, 1800);
 
     return () => clearInterval(pollInterval);
   }, [open, user, enrollMode, isMobileEnrolledSuccess, onSuccess]);
@@ -417,8 +438,16 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
                 )}
 
                 <div className="pt-2">
-                  <Button onClick={onClose} className="w-full bg-primary hover:bg-primary/90 text-primary-foreground text-xs rounded-xl h-10 font-semibold">
-                    Selesai & Tutup Modal
+                  <Button
+                    onClick={() => {
+                      if (onSuccess && enrolledUserObj) {
+                        onSuccess(enrolledUserObj);
+                      }
+                      onClose();
+                    }}
+                    className="w-full bg-primary hover:bg-primary/90 text-primary-foreground text-xs rounded-xl h-10 font-semibold"
+                  >
+                    Selesai &amp; Tutup Modal
                   </Button>
                 </div>
               </div>
@@ -629,7 +658,17 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
 
         <DialogFooter className="p-4 bg-muted/20 border-t border-border/80 flex sm:justify-between gap-2">
           {enrollMode === 'qr_mobile' ? (
-            <Button variant="outline" size="sm" onClick={onClose} className="rounded-xl text-xs w-full sm:w-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (isMobileEnrolledSuccess && onSuccess && enrolledUserObj) {
+                  onSuccess(enrolledUserObj);
+                }
+                onClose();
+              }}
+              className="rounded-xl text-xs w-full sm:w-auto"
+            >
               Tutup
             </Button>
           ) : step === 'camera' ? (

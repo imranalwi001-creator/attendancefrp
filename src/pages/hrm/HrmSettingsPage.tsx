@@ -115,6 +115,7 @@ export const HrmSettingsPage: React.FC = () => {
   const [settingsMessage, setSettingsMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [officeMessage, setOfficeMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [shiftMessage, setShiftMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [breakMessage, setBreakMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [gettingLocation, setGettingLocation] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -216,6 +217,35 @@ export const HrmSettingsPage: React.FC = () => {
       setTimeout(() => setSettingsMessage(null), 4000);
     } catch (err: any) {
       setSettingsMessage({ type: 'error', text: err.message || 'Gagal menyimpan pengaturan aplikasi' });
+    }
+  };
+
+  const handleSaveBreakPolicy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const updated = {
+        ...appSettings,
+        breakPolicyEnabled: appSettings.breakPolicyEnabled !== false,
+        breakDurationMinutes: Number(appSettings.breakDurationMinutes) || 60,
+        breakAllowOutside: appSettings.breakAllowOutside !== false,
+      };
+      hrmService.updateAppSettings(updated);
+      setAppSettings(updated);
+
+      fetch('/api/settings/break-policy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: updated.breakPolicyEnabled,
+          durationMinutes: updated.breakDurationMinutes,
+          allowOutside: updated.breakAllowOutside,
+        }),
+      }).catch(() => null);
+
+      setBreakMessage({ type: 'success', text: 'Pengaturan Kebijakan Jam Istirahat (1 Jam) berhasil disimpan!' });
+      setTimeout(() => setBreakMessage(null), 4000);
+    } catch (err: any) {
+      setBreakMessage({ type: 'error', text: err.message || 'Gagal menyimpan pengaturan jam istirahat' });
     }
   };
 
@@ -432,6 +462,7 @@ export const HrmSettingsPage: React.FC = () => {
     { id: 'dokumen', label: 'Dokumen', icon: FileText },
     { id: 'lokasi', label: 'Lokasi & GPS', icon: MapPin },
     { id: 'shift', label: 'Shift Kerja', icon: Clock },
+    { id: 'istirahat', label: 'Jam Istirahat', icon: Coffee },
     { id: 'lembur', label: 'Lembur', icon: Zap },
   ];
 
@@ -1155,6 +1186,122 @@ export const HrmSettingsPage: React.FC = () => {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+        </div>
+      )}
+
+      {/* ═══ TAB: JAM ISTIRAHAT ══════════════════════════════════════════════ */}
+      {activeTab === 'istirahat' && (
+        <div className="space-y-5">
+          {breakMessage && (
+            <Alert className={`py-2 text-xs ${breakMessage.type === 'success' ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400' : 'border-destructive/20 bg-destructive/5 text-destructive'}`}>
+              <CheckCircle2 className="w-4 h-4" />
+              <AlertDescription>{breakMessage.text}</AlertDescription>
+            </Alert>
+          )}
+
+          <form onSubmit={handleSaveBreakPolicy} className="space-y-5">
+            <Card className="border-border bg-card rounded-xl shadow-sm">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
+                  <Coffee className="w-5 h-5 text-amber-600" />
+                  Kebijakan Jam Istirahat Karyawan (1 Jam Break Policy)
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Atur hak jam istirahat untuk karyawan yang bertugas. Selama jam istirahat aktif, karyawan diizinkan meninggalkan radius pos kerja tanpa alarm pelanggaran perimeter radar.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 pt-1">
+                {/* Switch Enable */}
+                <div className="flex items-center justify-between p-3.5 bg-muted/30 border border-border rounded-xl">
+                  <div className="space-y-0.5 pr-4">
+                    <Label className="text-xs font-bold text-foreground">
+                      Aktifkan Fitur Jam Istirahat (1 Jam)
+                    </Label>
+                    <p className="text-[11px] text-muted-foreground">
+                      Karyawan yang sudah presensi masuk dapat mengaktifkan jam istirahat melalui dashboard mereka.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={appSettings.breakPolicyEnabled !== false}
+                    onChange={(e) => setAppSettings({ ...appSettings, breakPolicyEnabled: e.target.checked })}
+                    className="w-5 h-5 accent-primary rounded cursor-pointer shrink-0"
+                  />
+                </div>
+
+                {/* Input Durasi */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-foreground">
+                      Batas Durasi Istirahat (Menit)
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        type="number"
+                        min={15}
+                        max={180}
+                        value={appSettings.breakDurationMinutes || 60}
+                        onChange={(e) => setAppSettings({ ...appSettings, breakDurationMinutes: parseInt(e.target.value, 10) || 60 })}
+                        className="text-xs rounded-xl font-mono pr-14"
+                        required
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-semibold">
+                        Menit
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Standar resmi pimpinan adalah 60 menit (1 Jam).
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-foreground">
+                      Izin Meninggalkan Area Pos (Geofence Bypass)
+                    </Label>
+                    <div className="flex items-center gap-2.5 p-2.5 bg-muted/20 border border-border rounded-xl h-9">
+                      <input
+                        type="checkbox"
+                        checked={appSettings.breakAllowOutside !== false}
+                        onChange={(e) => setAppSettings({ ...appSettings, breakAllowOutside: e.target.checked })}
+                        className="w-4 h-4 accent-primary rounded cursor-pointer"
+                        id="breakAllowOutsideCheck"
+                      />
+                      <label htmlFor="breakAllowOutsideCheck" className="text-xs text-foreground font-medium cursor-pointer">
+                        Izinkan keluar area kerja (makan di luar)
+                      </label>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Perimeter breach radar dan alarm WhatsApp dijeda selama masa istirahat berlangsung.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Automatic Notice System Card */}
+                <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-950 dark:text-amber-100 space-y-1.5 leading-relaxed">
+                  <div className="font-bold flex items-center gap-2 text-amber-700 dark:text-amber-300">
+                    <Clock className="w-4 h-4 shrink-0" />
+                    Mekanisme Peringatan Otomatis Sistem
+                  </div>
+                  <ul className="list-disc list-inside space-y-1 text-[11px] text-muted-foreground dark:text-amber-200/80">
+                    <li>
+                      <strong>Countdown Timer Live:</strong> Aplikasi karyawan menampilkan hitung mundur sisa waktu secara langsung.
+                    </li>
+                    <li>
+                      <strong>Peringatan 10 Menit:</strong> Sistem otomatis mengirim peringatan di layar & getar ke HP karyawan 10 menit sebelum waktu habis agar bersiap kembali ke pos.
+                    </li>
+                    <li>
+                      <strong>Peringatan Waktu Habis:</strong> Begitu 60 menit habis, alarm sistem langsung mengingatkan karyawan untuk segera kembali ke lokasi kerja dan menyelesaikan istirahat.
+                    </li>
+                  </ul>
+                </div>
+              </CardContent>
+              <div className="flex justify-end p-4 border-t border-border">
+                <Button type="submit" className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold gap-2 text-xs rounded-xl px-5">
+                  <Save className="w-4 h-4" /> Simpan Pengaturan Jam Istirahat
+                </Button>
+              </div>
+            </Card>
+          </form>
         </div>
       )}
 

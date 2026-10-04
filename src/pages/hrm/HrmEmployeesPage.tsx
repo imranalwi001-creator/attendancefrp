@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
-import { hrmService } from '@/services/hrmService';
+import { hrmService, safeSetJson } from '@/services/hrmService';
+import { api } from '@/services/apiClient';
 import { UserProfile, Role, Division, Shift, EmployeeDocument, EmployeeDocumentType } from '@/types/hrm';
 import {
   Users,
@@ -36,8 +37,10 @@ import {
   Shield,
   ScanFace,
   KeyRound,
+  Crosshair,
 } from 'lucide-react';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
+import { HrmAssignFieldLocationModal } from '@/components/hrm/HrmAssignFieldLocationModal';
 import {
   preprocessKtpImage,
   parseAndValidateNik,
@@ -84,6 +87,10 @@ export const HrmEmployeesPage: React.FC = () => {
   const [reassignNotes, setReassignNotes] = useState('');
   const [reassignSubmitting, setReassignSubmitting] = useState(false);
   const [reassignMessage, setReassignMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Field Sentinel Dynamic Geofence Modal State
+  const [fieldLocationModalOpen, setFieldLocationModalOpen] = useState(false);
+  const [fieldLocationUser, setFieldLocationUser] = useState<UserProfile | null>(null);
 
   // Bulk Import State
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
@@ -215,12 +222,25 @@ export const HrmEmployeesPage: React.FC = () => {
   };
 
   const loadData = async () => {
+    // 1. Initial immediate paint from local storage
     setUsers(hrmService.getUsers());
     setRoles(hrmService.getRoles());
     setDivisions(hrmService.getDivisions());
     setShifts(hrmService.getShifts());
 
-    // Synchronize with PostgreSQL database to ensure fresh records
+    // 2. Direct fetch from PostgreSQL users table for 100% fresh employee biometrics & photo
+    try {
+      const res = await api.get<{ success: boolean; data: UserProfile[] }>('/users');
+      if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+        setUsers(res.data);
+        hrmService.setInMemoryUsers(res.data);
+        safeSetJson('hrm_users', res.data);
+      }
+    } catch {
+      // Continue to syncWithBackend fallback
+    }
+
+    // 3. Synchronize full dataset (roles, shifts, divisions, leaves)
     const synced = await hrmService.syncWithBackend().catch(() => false);
     if (synced) {
       setUsers(hrmService.getUsers());
@@ -695,11 +715,24 @@ export const HrmEmployeesPage: React.FC = () => {
     return matchQuery && matchDiv && matchRole;
   });
 
-  const handleResetDevice = (u: UserProfile) => {
-    if (window.confirm(`Reset kunci perangkat fisik untuk ${u.fullName}?\n\nKaryawan akan dapat menautkan HP/laptop baru saat presensi berikutnya.`)) {
-      hrmService.resetUserDeviceBinding(u.id);
-      loadData();
-      alert(`Kunci perangkat untuk ${u.fullName} berhasil di-reset.`);
+  // Security Reset Hub State for Superadmin (Device, Face, Location)
+  const [securityModalUser, setSecurityModalUser] = useState<UserProfile | null>(null);
+  const [isResettingSecurity, setIsResettingSecurity] = useState(false);
+
+  const handleResetDevice = async (u: UserProfile) => {
+    if (window.confirm(`Reset kunci perangkat fisik untuk ${u.fullName}?\n\nKaryawan akan dapat menautkan HP baru pada saat login berikutnya.`)) {
+      setIsResettingSecurity(true);
+      try {
+        const ok = await hrmService.resetUserDeviceBinding(u.id);
+        await loadData();
+        if (securityModalUser && securityModalUser.id === u.id) {
+          const fresh = hrmService.getUsers().find((x) => x.id === u.id);
+          if (fresh) setSecurityModalUser(fresh);
+        }
+        alert(ok ? `Kunci perangkat untuk ${u.fullName} berhasil di-reset.` : 'Gagal mereset kunci perangkat.');
+      } finally {
+        setIsResettingSecurity(false);
+      }
     }
   };
 
@@ -710,9 +743,52 @@ export const HrmEmployeesPage: React.FC = () => {
 
   const handleResetFace = async (u: UserProfile) => {
     if (window.confirm(`Reset data biometrik wajah master untuk ${u.fullName}?\n\nKaryawan harus mendaftarkan wajahnya kembali agar bisa presensi.`)) {
-      await hrmService.resetMasterFace(u.id);
-      loadData();
-      alert(`Wajah master untuk ${u.fullName} berhasil di-reset.`);
+      setIsResettingSecurity(true);
+      try {
+        await hrmService.resetMasterFace(u.id);
+        await loadData();
+        if (securityModalUser && securityModalUser.id === u.id) {
+          const fresh = hrmService.getUsers().find((x) => x.id === u.id);
+          if (fresh) setSecurityModalUser(fresh);
+        }
+        alert(`Wajah master untuk ${u.fullName} berhasil di-reset.`);
+      } finally {
+        setIsResettingSecurity(false);
+      }
+    }
+  };
+
+  const handleResetLocation = async (u: UserProfile) => {
+    if (window.confirm(`Buka kunci lokasi & pelanggaran perimeter untuk ${u.fullName}?\n\nStatus presensi hari ini yang terkunci akan dipulihkan.`)) {
+      setIsResettingSecurity(true);
+      try {
+        const ok = await hrmService.resetUserLocationLock(u.id, currentUser?.fullName || 'Superadmin');
+        await loadData();
+        if (securityModalUser && securityModalUser.id === u.id) {
+          const fresh = hrmService.getUsers().find((x) => x.id === u.id);
+          if (fresh) setSecurityModalUser(fresh);
+        }
+        alert(ok ? `Kunci lokasi untuk ${u.fullName} berhasil dibuka.` : 'Gagal membuka kunci lokasi.');
+      } finally {
+        setIsResettingSecurity(false);
+      }
+    }
+  };
+
+  const handleResetAllSecurity = async (u: UserProfile) => {
+    if (window.confirm(`Reset SEMUA keamanan (Kunci HP, Wajah Master, dan Lokasi) untuk ${u.fullName}?\n\nSemua penguncian keamanan akan di-reset total.`)) {
+      setIsResettingSecurity(true);
+      try {
+        await hrmService.resetUserSecurityAll(u.id, currentUser?.fullName || 'Superadmin');
+        await loadData();
+        if (securityModalUser && securityModalUser.id === u.id) {
+          const fresh = hrmService.getUsers().find((x) => x.id === u.id);
+          if (fresh) setSecurityModalUser(fresh);
+        }
+        alert(`Semua kunci keamanan untuk ${u.fullName} berhasil di-reset total.`);
+      } finally {
+        setIsResettingSecurity(false);
+      }
     }
   };
 
@@ -864,19 +940,29 @@ export const HrmEmployeesPage: React.FC = () => {
                     <tr key={u.id} className="hover:bg-muted/30 transition-colors">
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2.5">
-                          {u.avatarUrl ? (
-                            <img
-                              src={u.avatarUrl}
-                              alt={u.fullName}
-                              className="w-8 h-8 rounded-full object-cover border border-primary/20 shrink-0"
-                            />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
-                              {u.fullName.charAt(0)}
-                            </div>
-                          )}
+                          {(() => {
+                            const photo = u.avatarUrl || u.faceEnrolledPhoto;
+                            return photo ? (
+                              <img
+                                src={photo}
+                                alt={u.fullName}
+                                className="w-8 h-8 rounded-full object-cover border border-primary/20 shrink-0"
+                              />
+                            ) : (
+                              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
+                                {u.fullName.charAt(0)}
+                              </div>
+                            );
+                          })()}
                           <div>
-                            <p className="font-semibold text-foreground">{u.fullName}</p>
+                            <div className="flex items-center gap-1.5">
+                              <p className="font-semibold text-foreground">{u.fullName}</p>
+                              {u.isFieldSentinelEnabled && (
+                                <Badge className="bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[9px] py-0 px-1.5 font-normal">
+                                  Sentinel
+                                </Badge>
+                              )}
+                            </div>
                             <p className="text-[11px] text-muted-foreground">{u.email}</p>
                           </div>
                         </div>
@@ -907,7 +993,7 @@ export const HrmEmployeesPage: React.FC = () => {
                         </span>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
-                        {u.isFaceEnrolled ? (
+                        {(u.isFaceEnrolled || u.faceEnrolledPhoto || (u.faceDescriptor && u.faceDescriptor.length > 0)) ? (
                           <div className="flex items-center gap-1.5">
                             <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px] py-0 px-2 rounded-full font-medium">
                               ✓ Terdaftar (128-D)
@@ -952,6 +1038,24 @@ export const HrmEmployeesPage: React.FC = () => {
                       </td>
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          {/* Titik Tugas Dinamis (Field Sentinel) Button */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setFieldLocationUser(u);
+                              setFieldLocationModalOpen(true);
+                            }}
+                            className={`h-8 w-8 p-0 rounded-lg transition-colors ${
+                              u.isFieldSentinelEnabled
+                                ? 'text-indigo-600 bg-indigo-500/15 hover:bg-indigo-500/25'
+                                : 'text-muted-foreground hover:text-indigo-600 hover:bg-indigo-500/10'
+                            }`}
+                            title={`Bank Pos Tugas Lapangan (Multi-Titik A, B, C) - ${u.fullName}`}
+                          >
+                            <Crosshair className="w-4 h-4" />
+                          </Button>
+
                           {/* Mutasi / Pindah Lokasi Button */}
                           <Button
                             variant="ghost"
@@ -979,11 +1083,20 @@ export const HrmEmployeesPage: React.FC = () => {
                           <Button
                             variant="ghost"
                             size="sm"
+                            onClick={() => setSecurityModalUser(u)}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-500/10 rounded-lg transition-colors"
+                            title={`Pusat Reset Keamanan: Kunci Perangkat, Wajah, Lokasi (${u.fullName})`}
+                          >
+                            <Shield className={`w-4 h-4 ${u.registeredDeviceId || (u as any).deviceId ? 'text-indigo-600 dark:text-indigo-400' : 'text-muted-foreground/40'}`} />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => handleResetDevice(u)}
                             className="h-8 w-8 p-0 text-muted-foreground hover:text-blue-600 hover:bg-blue-500/10 rounded-lg transition-colors"
-                            title={u.registeredDeviceId ? `Kunci Perangkat Terikat (${u.deviceModel || 'Perangkat'}). Klik untuk Reset.` : 'Belum Ada Perangkat Terikat'}
+                            title={u.registeredDeviceId || (u as any).deviceId ? `Kunci Perangkat Terikat (${u.deviceModel || 'Perangkat'}). Klik untuk Reset.` : 'Belum Ada Perangkat Terikat'}
                           >
-                            <Smartphone className={`w-4 h-4 ${u.registeredDeviceId ? 'text-blue-600' : 'text-muted-foreground/30'}`} />
+                            <Smartphone className={`w-4 h-4 ${u.registeredDeviceId || (u as any).deviceId ? 'text-blue-600' : 'text-muted-foreground/30'}`} />
                           </Button>
                           <Button
                             variant="ghost"
@@ -1857,8 +1970,14 @@ export const HrmEmployeesPage: React.FC = () => {
         onClose={() => {
           setEnrollModalOpen(false);
           setEnrollUser(null);
+          loadData();
         }}
-        onSuccess={() => {
+        onSuccess={(updatedUser) => {
+          if (updatedUser) {
+            setUsers((prev) =>
+              prev.map((u) => (u.id === updatedUser.id || u.nip === updatedUser.nip ? { ...u, ...updatedUser } : u))
+            );
+          }
           loadData();
         }}
       />
@@ -2070,6 +2189,198 @@ export const HrmEmployeesPage: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Security Reset Hub Dialog for Superadmin (Device, Face, Location) */}
+      <Dialog open={!!securityModalUser} onOpenChange={(open) => !open && setSecurityModalUser(null)}>
+        <DialogContent className="max-w-lg rounded-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold text-foreground">
+              <Shield className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+              Pusat Reset Keamanan &amp; Perangkat Karyawan
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Kelola kunci perangkat fisik HP, registrasi biometrik wajah master, dan pembukaan kunci lokasi/perimeter untuk meminimalisir kecurangan akun bersama.
+            </DialogDescription>
+          </DialogHeader>
+
+          {securityModalUser && (
+            <div className="space-y-4 py-2 text-xs">
+              {/* Info Karyawan */}
+              <div className="p-3.5 bg-muted/40 rounded-xl border border-border flex items-center justify-between">
+                <div>
+                  <p className="font-bold text-foreground text-sm">{securityModalUser.fullName}</p>
+                  <p className="text-muted-foreground font-mono text-[11px] mt-0.5">
+                    NIP: {securityModalUser.nip} • {securityModalUser.divisionName || 'Divisi Umum'} • {securityModalUser.roleName}
+                  </p>
+                </div>
+                <Badge variant="outline" className="text-[10px] uppercase font-mono">
+                  {securityModalUser.roleName}
+                </Badge>
+              </div>
+
+              {/* 1. Kunci Perangkat Fisik (Anti Titip Akun) */}
+              <div className="p-3.5 rounded-xl border border-border/80 bg-card space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-600">
+                      <Smartphone className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="font-semibold text-foreground">Perangkat Tertaut (Device Binding)</span>
+                      <p className="text-[11px] text-muted-foreground">1 Karyawan = 1 HP terdaftar saat login pertama</p>
+                    </div>
+                  </div>
+                  {securityModalUser.registeredDeviceId || (securityModalUser as any).deviceId ? (
+                    <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px]">
+                      Terkunci Resmi
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-muted-foreground text-[10px]">
+                      Belum Terikat
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[11px] bg-muted/30 p-2 rounded-lg font-mono text-muted-foreground">
+                  {securityModalUser.registeredDeviceId || (securityModalUser as any).deviceId ? (
+                    <div>
+                      <p className="font-medium text-foreground">{securityModalUser.deviceModel || 'HP Karyawan Terdaftar'}</p>
+                      <p className="text-[10px] truncate">ID: {securityModalUser.registeredDeviceId || (securityModalUser as any).deviceId}</p>
+                    </div>
+                  ) : (
+                    'Belum ada perangkat yang tertaut. Akun akan otomatis terikat pada HP saat karyawan login pertama kali.'
+                  )}
+                </div>
+                <div className="flex justify-end pt-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7 rounded-lg text-rose-600 border-rose-500/30 hover:bg-rose-500/10 gap-1.5"
+                    onClick={() => handleResetDevice(securityModalUser)}
+                    disabled={isResettingSecurity || (!securityModalUser.registeredDeviceId && !(securityModalUser as any).deviceId)}
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Reset Kunci Perangkat
+                  </Button>
+                </div>
+              </div>
+
+              {/* 2. Registrasi Wajah Master */}
+              <div className="p-3.5 rounded-xl border border-border/80 bg-card space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-600">
+                      <ScanFace className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="font-semibold text-foreground">Biometrik Wajah Master (1:1)</span>
+                      <p className="text-[11px] text-muted-foreground">Verifikasi wajah on-device &amp; anti spoofing</p>
+                    </div>
+                  </div>
+                  {(securityModalUser.isFaceEnrolled || securityModalUser.faceEnrolledPhoto || (securityModalUser.faceDescriptor && securityModalUser.faceDescriptor.length > 0)) ? (
+                    <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px]">
+                      ✓ Wajah Terdaftar
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-amber-600 border-amber-500/30 text-[10px]">
+                      Belum Terdaftar
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center justify-between pt-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7 rounded-lg text-amber-700 dark:text-amber-300 border-amber-500/30 hover:bg-amber-500/10 gap-1.5"
+                    onClick={() => {
+                      handleOpenFaceEnrollment(securityModalUser);
+                    }}
+                    disabled={isResettingSecurity}
+                  >
+                    <Camera className="w-3 h-3" />
+                    {(securityModalUser.isFaceEnrolled || securityModalUser.faceEnrolledPhoto) ? 'Daftar Ulang Wajah' : 'Daftarkan Wajah'}
+                  </Button>
+                  {(securityModalUser.isFaceEnrolled || securityModalUser.faceEnrolledPhoto) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-7 rounded-lg text-rose-600 border-rose-500/30 hover:bg-rose-500/10 gap-1.5"
+                      onClick={() => handleResetFace(securityModalUser)}
+                      disabled={isResettingSecurity}
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Reset Data Wajah
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {/* 3. Kunci Lokasi & Perimeter */}
+              <div className="p-3.5 rounded-xl border border-border/80 bg-card space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-600">
+                      <MapPin className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <span className="font-semibold text-foreground">Kunci Lokasi &amp; Perimeter Divisi</span>
+                      <p className="text-[11px] text-muted-foreground">Radius penempatan kerja resmi &amp; geofence</p>
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="text-blue-600 border-blue-500/30 text-[10px]">
+                    Geofence Aktif
+                  </Badge>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Buka status presensi yang dibekukan jika karyawan terdeteksi di luar perimeter karena izin dinas mendesak.
+                </p>
+                <div className="flex justify-end pt-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7 rounded-lg text-emerald-600 border-emerald-500/30 hover:bg-emerald-500/10 gap-1.5"
+                    onClick={() => handleResetLocation(securityModalUser)}
+                    disabled={isResettingSecurity}
+                  >
+                    <CheckCircle2 className="w-3 h-3" />
+                    Buka Kunci Lokasi / Perimeter
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex-col sm:flex-row gap-2 sm:gap-0 justify-between items-center pt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs text-rose-600 hover:bg-rose-500/10 gap-1.5"
+              onClick={() => securityModalUser && handleResetAllSecurity(securityModalUser)}
+              disabled={isResettingSecurity || !securityModalUser}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reset Semua Keamanan Sekaligus
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-xl text-xs"
+              onClick={() => setSecurityModalUser(null)}
+            >
+              Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Field Sentinel Dynamic Geofence Assignment Modal */}
+      <HrmAssignFieldLocationModal
+        open={fieldLocationModalOpen}
+        onClose={() => setFieldLocationModalOpen(false)}
+        user={fieldLocationUser}
+        onSaved={() => {
+          loadData();
+        }}
+      />
     </div>
   );
 };

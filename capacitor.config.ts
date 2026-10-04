@@ -8,6 +8,7 @@ const config: CapacitorConfig = {
     url: 'https://fawwazreskiperwira.com',
     cleartext: false,
     androidScheme: 'https',
+    errorPath: 'error.html',
     allowNavigation: [
       'fawwazreskiperwira.com',
       '*.fawwazreskiperwira.com'

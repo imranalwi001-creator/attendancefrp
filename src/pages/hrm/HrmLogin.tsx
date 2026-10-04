@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import defaultLogo from '@/assets/logo.png';
 import { hrmService } from '@/services/hrmService';
-import { Lock, Eye, EyeOff, User, ShieldCheck, ArrowRight } from 'lucide-react';
+import { Lock, Eye, EyeOff, User, ShieldCheck, ArrowRight, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -106,8 +106,9 @@ export const HrmLogin: React.FC = () => {
 
           <CardContent className="px-4 sm:px-6 pb-5 sm:pb-6 pt-2">
             {error && (
-              <Alert variant="destructive" className="mb-4 py-2 text-xs">
-                <AlertDescription>{error}</AlertDescription>
+              <Alert variant="destructive" className="mb-4 py-2.5 px-3.5 text-xs border-rose-500/30 bg-rose-500/10 text-rose-800 dark:text-rose-200 rounded-xl flex items-start gap-2.5">
+                <ShieldAlert className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400 mt-0.5" />
+                <AlertDescription className="leading-relaxed font-medium">{error}</AlertDescription>
               </Alert>
             )}
 

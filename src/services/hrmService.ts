@@ -303,6 +303,9 @@ const DEFAULT_OFFICE: OfficeLocation = {
 const DEFAULT_APP_SETTINGS: AppSettings = {
   appName: 'PT. FAWWAZ RESKI PERWIRA',
   logoUrl: null,
+  breakPolicyEnabled: true,
+  breakDurationMinutes: 60,
+  breakAllowOutside: true,
 };
 
 const DEFAULT_USERS: UserProfile[] = [
@@ -569,6 +572,108 @@ export const safeGetJson = <T>(key: string, fallback: T): T => {
   }
 };
 
+export const stripLargeMedia = (obj: any): any => {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(stripLargeMedia);
+  }
+  const copy: any = { ...obj };
+  for (const k of Object.keys(copy)) {
+    // STRICT PRESERVATION: Jangan pernah hapus foto avatar / master biometric pendaftaran wajah karyawan!
+    if (
+      k === 'avatarUrl' ||
+      k === 'faceEnrolledPhoto' ||
+      k === 'facePhotoUrl' ||
+      k === 'avatar_url' ||
+      k === 'face_enrolled_photo' ||
+      k === 'photoUrl' ||
+      k === 'photo'
+    ) {
+      continue;
+    }
+    const val = copy[k];
+    if (typeof val === 'string' && val.startsWith('data:image/') && val.length > 2048) {
+      copy[k] = null;
+    } else if (typeof val === 'object' && val !== null) {
+      copy[k] = stripLargeMedia(val);
+    }
+  }
+  return copy;
+};
+
+export const sanitizeAttendanceRecords = (records: any[]): any[] => {
+  if (!Array.isArray(records)) return [];
+  // Keep only up to 35 most recent attendances locally to conserve quota
+  return records.slice(0, 35).map((a) => {
+    const clean = { ...a };
+    if (typeof clean.photoIn === 'string' && clean.photoIn.startsWith('data:image/')) {
+      clean.photoIn = null;
+    }
+    if (typeof clean.clockInPhoto === 'string' && clean.clockInPhoto.startsWith('data:image/')) {
+      clean.clockInPhoto = null;
+    }
+    if (typeof clean.photoOut === 'string' && clean.photoOut.startsWith('data:image/')) {
+      clean.photoOut = null;
+    }
+    if (typeof clean.clockOutPhoto === 'string' && clean.clockOutPhoto.startsWith('data:image/')) {
+      clean.clockOutPhoto = null;
+    }
+    return clean;
+  });
+};
+
+export const safeSetJson = (key: string, data: any): boolean => {
+  try {
+    let toStore = data;
+    if (key === STORAGE_KEYS.ATTENDANCE && Array.isArray(data)) {
+      toStore = sanitizeAttendanceRecords(data);
+    } else if (typeof data === 'object' && data !== null) {
+      toStore = stripLargeMedia(data);
+    }
+    localStorage.setItem(key, JSON.stringify(toStore));
+    return true;
+  } catch (err: any) {
+    console.warn(`[HRM Storage] QuotaExceededError writing ${key}, executing aggressive cache pruning...`);
+    try {
+      // 1. Prune local attendance cache immediately to release megabytes
+      const rawAtt = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
+      if (rawAtt) {
+        try {
+          const parsed = JSON.parse(rawAtt);
+          if (Array.isArray(parsed)) {
+            const stripped = sanitizeAttendanceRecords(parsed).slice(0, 10);
+            localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(stripped));
+          }
+        } catch {
+          localStorage.removeItem(STORAGE_KEYS.ATTENDANCE);
+        }
+      }
+
+      // 2. Remove temporary or non-critical storage items
+      try {
+        localStorage.removeItem(STORAGE_KEYS.PERIMETER_VIOLATIONS);
+      } catch {}
+
+      // 3. Retry saving lean payload
+      let fallbackData = data;
+      if (key === STORAGE_KEYS.ATTENDANCE && Array.isArray(data)) {
+        fallbackData = sanitizeAttendanceRecords(data).slice(0, 15);
+      } else {
+        fallbackData = stripLargeMedia(data);
+      }
+      localStorage.setItem(key, JSON.stringify(fallbackData));
+      return true;
+    } catch (e) {
+      console.error(`[HRM Storage] Fatal storage failure for ${key}:`, e);
+      return false;
+    }
+  }
+};
+
+// Cache memori lokal agar foto face review resolusi penuh & foto master biometrik tetap tersedia di RAM tanpa terpotong kuota 5MB localStorage HP
+let inMemoryAttendances: AttendanceRecord[] = [];
+let inMemoryUsers: UserProfile[] = [];
+
 export const hrmService = {
   // Centralized PostgreSQL Backend Synchronizer
   syncWithBackend: async (): Promise<boolean> => {
@@ -577,25 +682,47 @@ export const hrmService = {
       if (res && res.success && res.data) {
         const { users, roles, divisions, shifts, office, company, attendances } = res.data;
         if (Array.isArray(users) && users.length > 0) {
-          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+          inMemoryUsers = users;
+          safeSetJson(STORAGE_KEYS.USERS, users);
+          window.dispatchEvent(new Event('hrm_users_updated'));
         }
         if (Array.isArray(roles) && roles.length > 0) {
-          localStorage.setItem(STORAGE_KEYS.ROLES, JSON.stringify(roles));
+          safeSetJson(STORAGE_KEYS.ROLES, roles);
         }
         if (Array.isArray(divisions) && divisions.length > 0) {
-          localStorage.setItem(STORAGE_KEYS.DIVISIONS, JSON.stringify(divisions));
+          safeSetJson(STORAGE_KEYS.DIVISIONS, divisions);
         }
         if (Array.isArray(shifts) && shifts.length > 0) {
-          localStorage.setItem(STORAGE_KEYS.SHIFTS, JSON.stringify(shifts));
+          safeSetJson(STORAGE_KEYS.SHIFTS, shifts);
         }
         if (office) {
-          localStorage.setItem(STORAGE_KEYS.OFFICE, JSON.stringify(office));
+          safeSetJson(STORAGE_KEYS.OFFICE, office);
         }
         if (company) {
-          localStorage.setItem(STORAGE_KEYS.COMPANY_PROFILE, JSON.stringify(company));
+          safeSetJson(STORAGE_KEYS.COMPANY_PROFILE, company);
         }
         if (Array.isArray(attendances) && attendances.length > 0) {
-          localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(attendances));
+          const mappedAtts: AttendanceRecord[] = attendances.map((a: any) => {
+            const attDate = a.attendanceDate || a.date || (a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '');
+            const pIn = a.photoIn || a.clockInPhoto || a.photo_in;
+            const pOut = a.photoOut || a.clockOutPhoto || a.photo_out;
+            return {
+              ...a,
+              attendanceDate: attDate,
+              date: attDate,
+              photoIn: pIn,
+              clockInPhoto: pIn,
+              photoOut: pOut,
+              clockOutPhoto: pOut,
+              userName: a.userName || a.user_name || undefined,
+              userNip: a.userNip || a.user_nip || undefined,
+              divisionName: a.divisionName || a.division_name || undefined,
+            };
+          });
+          inMemoryAttendances = mappedAtts;
+          safeSetJson(STORAGE_KEYS.ATTENDANCE, mappedAtts);
+          window.dispatchEvent(new Event('hrm_attendance_updated'));
+          window.dispatchEvent(new Event('hrm_data_updated'));
         }
         if (Array.isArray(res.data.perimeterViolations)) {
           localStorage.setItem(STORAGE_KEYS.PERIMETER_VIOLATIONS, JSON.stringify(res.data.perimeterViolations));
@@ -631,6 +758,12 @@ export const hrmService = {
             const user = currentUsersList.find((u: any) => u.id === o.user_id || u.email === o.user_id || u.nip === o.user_id);
             const hourlyRate = Number(o.rate_applied ?? o.hourly_rate ?? o.hourlyRate ?? 30000);
             const totalPay = Number(o.compensation_amount ?? o.total_pay ?? o.totalPay ?? 0);
+            let parsedPhotos: string[] = [];
+            if (Array.isArray(o.completion_photos)) {
+              parsedPhotos = o.completion_photos;
+            } else if (typeof o.completion_photos === 'string' && o.completion_photos.trim().startsWith('[')) {
+              try { parsedPhotos = JSON.parse(o.completion_photos); } catch { parsedPhotos = []; }
+            }
             return {
               id: o.id,
               userId: o.user_id,
@@ -640,13 +773,22 @@ export const hrmService = {
               date: o.date ? new Date(o.date).toISOString().split('T')[0] : '',
               startTime: o.start_time ? o.start_time.substring(0, 5) : '17:00',
               endTime: o.end_time ? o.end_time.substring(0, 5) : '19:00',
+              scheduledEndTime: o.scheduled_end_time || o.scheduledEndTime || (o.end_time ? o.end_time.substring(0, 5) : '19:00'),
+              actualEndTime: o.actual_end_time || o.actualEndTime || '',
               durationHours: parseFloat(o.duration_hours) || 2,
               durationMinutes: Math.round((parseFloat(o.duration_hours) || 2) * 60),
+              requestedHours: parseFloat(o.requested_hours ?? o.duration_hours) || 2,
+              approvedHours: o.approved_hours != null ? parseFloat(o.approved_hours) : (parseFloat(o.duration_hours) || 2),
               taskDescription: o.task_description || '',
               hourlyRate: hourlyRate,
               rateApplied: hourlyRate,
               totalPay: totalPay,
               compensationAmount: totalPay,
+              supervisorName: o.supervisor_name || o.supervisorName || '',
+              supervisorSignature: o.supervisor_signature || o.supervisorSignature || '',
+              overtimePhase: o.overtime_phase || o.overtimePhase || 'requested',
+              completionNotes: o.completion_notes || o.completionNotes || '',
+              completionPhotos: parsedPhotos,
               status: o.status || 'pending',
               paymentStatus: o.payment_status || 'unpaid',
               approvedBy: o.approved_by,
@@ -667,7 +809,8 @@ export const hrmService = {
             type: n.type || 'info',
             isRead: n.is_read === true,
             link: n.link || undefined,
-            createdAt: n.created_at,
+            createdAt: n.created_at || new Date().toISOString(),
+            timestamp: n.created_at || new Date().toISOString(),
             metadata: n.metadata,
           }));
           localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(mappedNotifs));
@@ -726,6 +869,7 @@ export const hrmService = {
 
   // Initialization
   init: () => {
+    hrmService.cleanupStorageQuota();
     if (!localStorage.getItem(STORAGE_KEYS.ROLES)) {
       localStorage.setItem(STORAGE_KEYS.ROLES, JSON.stringify(DEFAULT_ROLES));
     }
@@ -839,6 +983,20 @@ export const hrmService = {
         },
       ];
       localStorage.setItem(STORAGE_KEYS.LEAVES, JSON.stringify(sampleLeaves));
+    }
+
+    // Auto-sync listener for offline attendance queue when internet returns
+    if (typeof window !== 'undefined' && !(window as any).__hrm_offline_sync_initialized) {
+      (window as any).__hrm_offline_sync_initialized = true;
+      window.addEventListener('online', () => {
+        console.log('[OfflineSync] Internet connection restored, auto-flushing queue...');
+        hrmService.syncOfflineQueue().catch(() => null);
+      });
+      setInterval(() => {
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          hrmService.syncOfflineQueue().catch(() => null);
+        }
+      }, 25000);
     }
   },
 
@@ -1350,7 +1508,8 @@ export const hrmService = {
           type: n.type || 'info',
           isRead: n.is_read === true,
           link: n.link || undefined,
-          createdAt: n.created_at,
+          createdAt: n.created_at || new Date().toISOString(),
+          timestamp: n.created_at || new Date().toISOString(),
           metadata: n.metadata,
         }));
         
@@ -1376,10 +1535,12 @@ export const hrmService = {
     notif: Omit<HrmNotification, 'id' | 'createdAt' | 'isRead'>
   ): HrmNotification => {
     const all = safeGetJson<HrmNotification[]>(STORAGE_KEYS.NOTIFICATIONS, []);
+    const nowIso = new Date().toISOString();
     const newNotif: HrmNotification = {
       ...notif,
       id: `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      timestamp: nowIso,
       isRead: false,
     };
     all.unshift(newNotif);
@@ -1469,7 +1630,18 @@ export const hrmService = {
   // USERS (EMPLOYEES)
   getUsers: (): UserProfile[] => {
     hrmService.init();
-    return safeGetJson<UserProfile[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
+    if (inMemoryUsers && inMemoryUsers.length > 0) {
+      return inMemoryUsers;
+    }
+    const raw = safeGetJson<UserProfile[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
+    inMemoryUsers = raw;
+    return raw;
+  },
+
+  setInMemoryUsers: (users: UserProfile[]) => {
+    if (Array.isArray(users) && users.length > 0) {
+      inMemoryUsers = users;
+    }
   },
 
   addUser: (user: Omit<UserProfile, 'id' | 'createdAt'>): UserProfile => {
@@ -1848,9 +2020,14 @@ export const hrmService = {
 
     // Sync with PostgreSQL backend database
     try {
-      await api.post(`/biometrics/reset/${userId}`, {});
+      await api.post(`/users/${userId}/reset-security`, { target: 'face' });
     } catch (err) {
-      console.warn('[Biometrics] Backend face reset warning:', err);
+      console.warn('[Biometrics] Backend face reset via reset-security warning:', err);
+      try {
+        await api.post(`/biometrics/reset/${userId}`, {});
+      } catch (fallbackErr) {
+        console.warn('[Biometrics] Backend face reset fallback error:', fallbackErr);
+      }
     }
 
     return users[idx];
@@ -1859,17 +2036,56 @@ export const hrmService = {
   // ATTENDANCES
   getAttendances: (date?: string): AttendanceRecord[] => {
     hrmService.init();
-    const all: AttendanceRecord[] = safeGetJson<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, []);
+    const diskRecords: AttendanceRecord[] = safeGetJson<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, []);
+    // Gabungkan foto beresolusi penuh dari memori RAM ke rekaman data lokal
+    const baseSource = inMemoryAttendances.length > 0 ? inMemoryAttendances : diskRecords;
+    const normalized: AttendanceRecord[] = baseSource.map((a: any) => {
+      const mem = inMemoryAttendances.find((m) => m.id === a.id);
+      const attDate = a.attendanceDate || a.date || (a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '');
+      const pIn = mem?.photoIn || mem?.clockInPhoto || a.photoIn || a.clockInPhoto || a.photo_in;
+      const pOut = mem?.photoOut || mem?.clockOutPhoto || a.photoOut || a.clockOutPhoto || a.photo_out;
+      return {
+        ...a,
+        attendanceDate: attDate,
+        date: attDate,
+        photoIn: pIn,
+        clockInPhoto: pIn,
+        photoOut: pOut,
+        clockOutPhoto: pOut,
+      };
+    });
     if (date) {
-      return all.filter((a) => a.attendanceDate === date);
+      return normalized.filter((a) => (a.attendanceDate || (a as any).date) === date);
     }
-    return all;
+    return normalized;
   },
 
   getUserTodayAttendance: (userId: string): AttendanceRecord | undefined => {
     const today = getTodayDateStr();
     const list = hrmService.getAttendances(today);
-    return list.find((a) => a.userId === userId);
+    const users = hrmService.getUsers();
+    const u = users.find((x) => x.id === userId || x.email === userId || x.nip === userId);
+    return list.find((a) => a.userId === userId || (u && (a.userId === u.id || a.userId === u.email || a.userId === u.nip)));
+  },
+
+  saveAttendances: (attendances: AttendanceRecord[]): boolean => {
+    return safeSetJson(STORAGE_KEYS.ATTENDANCE, attendances);
+  },
+
+  cleanupStorageQuota: () => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
+      if (raw && (raw.includes('data:image/') || raw.length > 300000)) {
+        console.info('[HRM Storage] Local attendance cache exceeds safe size or contains raw base64 photos, cleaning up...');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const cleaned = sanitizeAttendanceRecords(parsed);
+          localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(cleaned));
+        }
+      }
+    } catch (e) {
+      console.warn('[HRM Storage] Auto-cleanup warning:', e);
+    }
   },
 
   // ─── ANTI-FRAUD & SECURITY ENGINE ──────────────────────────────────────────
@@ -1896,15 +2112,192 @@ export const hrmService = {
     return 'Web Browser Device';
   },
 
-  resetUserDeviceBinding: (userId: string): boolean => {
+  resetUserDeviceBinding: async (userId: string): Promise<boolean> => {
+    // 1. Reset local state
     const users = hrmService.getUsers();
     const idx = users.findIndex((u) => u.id === userId);
-    if (idx === -1) return false;
-    users[idx].registeredDeviceId = undefined;
-    users[idx].deviceModel = undefined;
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    if (idx !== -1) {
+      users[idx].registeredDeviceId = undefined;
+      (users[idx] as any).deviceId = undefined;
+      users[idx].deviceModel = undefined;
+      (users[idx] as any).isDeviceBound = false;
+      (users[idx] as any).deviceBoundAt = undefined;
+      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+      window.dispatchEvent(new Event('hrm_users_updated'));
+    }
+
+    // 2. Reset database state via backend API
+    try {
+      await api.post(`/users/${userId}/reset-security`, { target: 'device' });
+      return true;
+    } catch (err) {
+      console.warn('[Security] Backend reset-security device error, trying fallback:', err);
+      try {
+        await api.post('/biometric/reset-device', { userId });
+        return true;
+      } catch (fallbackErr) {
+        console.error('[Security] Backend reset-device fallback error:', fallbackErr);
+        return false;
+      }
+    }
+  },
+
+  bindUserDevice: async (userId: string, deviceId?: string, deviceModel?: string): Promise<{ success: boolean; message?: string }> => {
+    const currentDeviceId = deviceId || hrmService.getDeviceFingerprint();
+    const currentDeviceModel = deviceModel || hrmService.getDeviceModel();
+
+    // 1. Update local users cache
+    const users = hrmService.getUsers();
+    const idx = users.findIndex((u) => u.id === userId);
+    if (idx !== -1) {
+      users[idx].registeredDeviceId = currentDeviceId;
+      (users[idx] as any).deviceId = currentDeviceId;
+      users[idx].deviceModel = currentDeviceModel;
+      (users[idx] as any).isDeviceBound = true;
+      (users[idx] as any).deviceBoundAt = new Date().toISOString();
+      hrmService.saveUsers(users);
+    }
+
+    // 2. Update current logged-in user in session/localStorage
+    const current = hrmService.getCurrentUser();
+    if (current && (current.id === userId || current.nip === userId)) {
+      current.registeredDeviceId = currentDeviceId;
+      (current as any).deviceId = currentDeviceId;
+      current.deviceModel = currentDeviceModel;
+      (current as any).isDeviceBound = true;
+      (current as any).deviceBoundAt = new Date().toISOString();
+      safeSetJson(STORAGE_KEYS.CURRENT_USER, current);
+      try {
+        sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(current));
+      } catch {}
+    }
+
     window.dispatchEvent(new Event('hrm_users_updated'));
-    return true;
+
+    // 3. Send to backend PostgreSQL API
+    try {
+      const res = await api.post<{ success: boolean; message?: string }>(`/users/${userId}/bind-device`, {
+        deviceId: currentDeviceId,
+        deviceModel: currentDeviceModel,
+      });
+      return { success: true, message: res?.message || 'Perangkat berhasil ditautkan ke akun Anda.' };
+    } catch (err: any) {
+      console.warn('[Security] Backend bind-device notice:', err.message || err);
+      return { success: true, message: 'Perangkat berhasil ditautkan secara lokal.' };
+    }
+  },
+
+  resetUserLocationLock: async (userId: string, adminName = 'Superadmin'): Promise<boolean> => {
+    // 1. Reset local state
+    const attendances = hrmService.getAttendances();
+    let updated = false;
+    attendances.forEach((a) => {
+      if (a.userId === userId && (a.isLocked || a.isPerimeterBreached)) {
+        a.isLocked = false;
+        a.isPerimeterBreached = false;
+        a.notes = (a.notes || '') + ' [Dispensasi Lokasi Atasan]';
+        updated = true;
+      }
+    });
+    if (updated) {
+      hrmService.saveAttendances(attendances);
+      window.dispatchEvent(new Event('hrm_attendance_updated'));
+      window.dispatchEvent(new Event('hrm_data_updated'));
+    }
+
+    // 2. Call backend reset-security
+    try {
+      await api.post(`/users/${userId}/reset-security`, { target: 'location', adminName });
+      return true;
+    } catch (err) {
+      console.warn('[Security] Backend reset location lock warning:', err);
+      return false;
+    }
+  },
+
+  resetUserSecurityAll: async (userId: string, adminName = 'Superadmin'): Promise<boolean> => {
+    await hrmService.resetUserDeviceBinding(userId);
+    await hrmService.resetMasterFace(userId);
+    await hrmService.resetUserLocationLock(userId, adminName);
+    try {
+      await api.post(`/users/${userId}/reset-security`, { target: 'all', adminName });
+      return true;
+    } catch (err) {
+      console.warn('[Security] Backend reset-security all error:', err);
+      return false;
+    }
+  },
+
+  // ─── OFFLINE SYNC QUEUE ENGINE (Blackout & Zero Quota Resilience) ────────────
+  enqueueOfflineSync: (type: 'clock-in' | 'clock-out', payload: any): void => {
+    try {
+      const queueKey = 'hrm_offline_sync_queue';
+      const queue = safeGetJson<Array<{ id: string; type: 'clock-in' | 'clock-out'; payload: any; timestamp: number }>>(
+        queueKey,
+        []
+      );
+      // Remove any pending duplicate for same user, date and type
+      const filtered = queue.filter(
+        (item) => !(item.type === type && item.payload?.userId === payload?.userId && item.payload?.date === payload?.date)
+      );
+      filtered.push({
+        id: `offline-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        type,
+        payload,
+        timestamp: Date.now(),
+      });
+      localStorage.setItem(queueKey, JSON.stringify(filtered));
+      console.log(`[OfflineQueue] Enqueued ${type} for user ${payload?.userId}. Pending in queue: ${filtered.length}`);
+    } catch (err) {
+      console.error('[OfflineQueue] Failed to enqueue offline item:', err);
+    }
+  },
+
+  getOfflineQueueCount: (): number => {
+    try {
+      const queue = safeGetJson<any[]>('hrm_offline_sync_queue', []);
+      return queue.length;
+    } catch {
+      return 0;
+    }
+  },
+
+  syncOfflineQueue: async (): Promise<{ syncedCount: number; errors: string[] }> => {
+    if (typeof window === 'undefined' || !navigator.onLine) {
+      return { syncedCount: 0, errors: [] };
+    }
+    const queueKey = 'hrm_offline_sync_queue';
+    const queue = safeGetJson<Array<{ id: string; type: 'clock-in' | 'clock-out'; payload: any; timestamp: number }>>(
+      queueKey,
+      []
+    );
+    if (queue.length === 0) return { syncedCount: 0, errors: [] };
+
+    console.log(`[OfflineSync] Starting auto-flush of ${queue.length} offline attendance items...`);
+    let syncedCount = 0;
+    const remaining: typeof queue = [];
+    const errors: string[] = [];
+
+    for (const item of queue) {
+      try {
+        const endpoint = item.type === 'clock-in' ? '/attendances/clock-in' : '/attendances/clock-out';
+        await api.post(endpoint, item.payload);
+        syncedCount++;
+        console.log(`[OfflineSync] Successfully flushed ${item.type} for user ${item.payload?.userId}`);
+      } catch (err: any) {
+        console.warn(`[OfflineSync] Retrying later for ${item.type}:`, err.message);
+        remaining.push(item);
+        errors.push(err.message);
+      }
+    }
+
+    localStorage.setItem(queueKey, JSON.stringify(remaining));
+    if (syncedCount > 0) {
+      window.dispatchEvent(new Event('hrm_attendance_updated'));
+      window.dispatchEvent(new Event('hrm_data_updated'));
+      hrmService.syncWithBackend().catch(() => null);
+    }
+    return { syncedCount, errors };
   },
 
   changePassword: async (userId: string, oldPassword: string, newPassword: string): Promise<{ success: boolean; message?: string; error?: string }> => {
@@ -2121,10 +2514,12 @@ export const hrmService = {
       userAvatar: user.avatarUrl,
       divisionName: user.divisionName || '-',
       attendanceDate: today,
+      date: today as any,
       clockIn: clockInStr,
       latIn: data.latitude,
       longIn: data.longitude,
-      photoIn: data.photoUrl,
+      photoIn: (typeof data.photoUrl === 'string' && data.photoUrl.startsWith('data:image/')) ? undefined : data.photoUrl,
+      clockInPhoto: (typeof data.photoUrl === 'string' && data.photoUrl.startsWith('data:image/')) ? undefined : (data.photoUrl as any),
       status,
       lateMinutes,
       earlyLeavingMinutes: 0,
@@ -2151,10 +2546,21 @@ export const hrmService = {
       all.push(newRecord);
     }
 
-    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(all));
+    const memRec = {
+      ...newRecord,
+      photoIn: data.photoUrl,
+      clockInPhoto: data.photoUrl as any,
+    };
+    const memIdx = inMemoryAttendances.findIndex((m) => m.id === newRecord.id);
+    if (memIdx !== -1) inMemoryAttendances[memIdx] = memRec;
+    else inMemoryAttendances.unshift(memRec);
+
+    hrmService.saveAttendances(all);
+    window.dispatchEvent(new Event('hrm_attendance_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
 
     // Push clock-in to PostgreSQL backend API
-    api.post('/attendances/clock-in', {
+    const clockInPayload = {
       userId: user.id,
       date: today,
       time: clockInStr,
@@ -2170,7 +2576,14 @@ export const hrmService = {
       geofenceValid: data.geofenceValid,
       isMockLocation: data.isMockLocation,
       securityFlags: flags,
-    }).catch((err) => console.warn('[Attendance] Backend clock-in warning:', err));
+      deviceId: currentDeviceId,
+      deviceModel: currentModel,
+    };
+
+    api.post('/attendances/clock-in', clockInPayload).catch((err) => {
+      console.warn('[Attendance] Backend clock-in warning (enqueued for offline sync):', err);
+      hrmService.enqueueOfflineSync('clock-in', clockInPayload);
+    });
 
     return newRecord;
   },
@@ -2238,7 +2651,9 @@ export const hrmService = {
     existing.clockOut = clockOutStr;
     existing.latOut = data.latitude;
     existing.longOut = data.longitude;
-    existing.photoOut = data.photoUrl;
+    existing.photoOut = (typeof data.photoUrl === 'string' && data.photoUrl.startsWith('data:image/')) ? undefined : data.photoUrl;
+    (existing as any).clockOutPhoto = (typeof data.photoUrl === 'string' && data.photoUrl.startsWith('data:image/')) ? undefined : data.photoUrl;
+    (existing as any).date = existing.attendanceDate;
     existing.workDurationMinutes = durationMins;
     if (data.notes) existing.notes = (existing.notes ? existing.notes + ' | ' : '') + data.notes;
     existing.securityFlags = flags;
@@ -2250,10 +2665,22 @@ export const hrmService = {
     if (data.isMockLocation != null) existing.isMockLocation = data.isMockLocation;
 
     all[idx] = existing;
-    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(all));
+
+    const memRec = {
+      ...existing,
+      photoOut: data.photoUrl,
+      clockOutPhoto: data.photoUrl as any,
+    };
+    const memIdx = inMemoryAttendances.findIndex((m) => m.id === existing.id);
+    if (memIdx !== -1) inMemoryAttendances[memIdx] = memRec;
+    else inMemoryAttendances.unshift(memRec);
+
+    hrmService.saveAttendances(all);
+    window.dispatchEvent(new Event('hrm_attendance_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
 
     // Push clock-out to PostgreSQL backend API
-    api.post('/attendances/clock-out', {
+    const clockOutPayload = {
       userId: existing.userId,
       date: existing.attendanceDate,
       time: clockOutStr,
@@ -2268,7 +2695,211 @@ export const hrmService = {
       geofenceValid: data.geofenceValid,
       isMockLocation: data.isMockLocation,
       securityFlags: flags,
-    }).catch((err) => console.warn('[Attendance] Backend clock-out warning:', err));
+      deviceId: currentDeviceId,
+      deviceModel: hrmService.getDeviceModel(),
+    };
+
+    api.post('/attendances/clock-out', clockOutPayload).catch((err) => {
+      console.warn('[Attendance] Backend clock-out warning (enqueued for offline sync):', err);
+      hrmService.enqueueOfflineSync('clock-out', clockOutPayload);
+    });
+
+    return existing;
+  },
+
+  // ─── REKOMENDASI 1: Self-Service Pulang Awal Darurat (Mandiri Tanpa Approval) ───
+  recordEarlyLeave: (data: {
+    userId: string;
+    category: 'sakit_mendadak' | 'darurat_keluarga' | 'tugas_luar' | 'lainnya' | string;
+    reason: string;
+    latitude?: number;
+    longitude?: number;
+    photoUrl?: string;
+    biometricScore?: number;
+    biometricMatch?: boolean;
+    geofenceDistance?: number;
+    geofenceValid?: boolean;
+  }): AttendanceRecord => {
+    const existing = hrmService.getUserTodayAttendance(data.userId);
+    if (!existing || !existing.clockIn) {
+      throw new Error('Anda belum melakukan presensi masuk hari ini');
+    }
+    if (existing.clockOut) {
+      throw new Error('Anda sudah melakukan presensi pulang hari ini');
+    }
+
+    const now = new Date();
+    const clockOutStr = now.toTimeString().split(' ')[0];
+    const [inH, inM] = existing.clockIn.split(':').map(Number);
+    const inTotalMins = inH * 60 + inM;
+    const outTotalMins = now.getHours() * 60 + now.getMinutes();
+    const durationMins = Math.max(0, outTotalMins - inTotalMins);
+
+    const all = hrmService.getAttendances();
+    const idx = all.findIndex((a) => a.id === existing.id);
+
+    existing.clockOut = clockOutStr;
+    existing.latOut = data.latitude;
+    existing.longOut = data.longitude;
+    existing.photoOut = (typeof data.photoUrl === 'string' && data.photoUrl.startsWith('data:image/')) ? undefined : data.photoUrl;
+    (existing as any).clockOutPhoto = (typeof data.photoUrl === 'string' && data.photoUrl.startsWith('data:image/')) ? undefined : data.photoUrl;
+    existing.workDurationMinutes = durationMins;
+    existing.isEarlyLeave = true;
+    existing.earlyLeaveCategory = data.category;
+    existing.earlyLeaveReason = data.reason;
+    existing.isLocked = false;
+    existing.isPerimeterBreached = false;
+    existing.notes = (existing.notes ? existing.notes + ' | ' : '') + `[PULANG AWAL DARURAT: ${data.category.toUpperCase()}] ${data.reason}`;
+
+    if (data.biometricScore != null) existing.biometricScore = data.biometricScore;
+    if (data.biometricMatch != null) existing.biometricMatch = data.biometricMatch;
+    if (data.geofenceDistance != null) existing.geofenceDistance = data.geofenceDistance;
+    if (data.geofenceValid != null) existing.geofenceValid = data.geofenceValid;
+
+    all[idx] = existing;
+
+    const memRec = {
+      ...existing,
+      photoOut: data.photoUrl,
+      clockOutPhoto: data.photoUrl as any,
+    };
+    const memIdx = inMemoryAttendances.findIndex((m) => m.id === existing.id);
+    if (memIdx !== -1) inMemoryAttendances[memIdx] = memRec;
+    else inMemoryAttendances.unshift(memRec);
+
+    hrmService.saveAttendances(all);
+    window.dispatchEvent(new Event('hrm_attendance_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+
+    const payload = {
+      userId: existing.userId,
+      date: existing.attendanceDate,
+      time: clockOutStr,
+      category: data.category,
+      reason: data.reason,
+      latitude: data.latitude,
+      longitude: data.longitude,
+      photo: data.photoUrl,
+      workDurationMinutes: durationMins,
+      biometricScore: data.biometricScore,
+      biometricMatch: data.biometricMatch,
+      geofenceDistance: data.geofenceDistance,
+      geofenceValid: data.geofenceValid,
+    };
+
+    api.post('/attendances/early-leave', payload).catch((err) => {
+      console.warn('[Early Leave] Push to backend failed, queuing offline:', err);
+      hrmService.enqueueOfflineSync('early-leave', payload);
+    });
+
+    return existing;
+  },
+
+  // ─── REKOMENDASI 3: Remote Unlock Kepulangan oleh Admin / Korlap ───
+  remoteUnlockAttendance: (userId: string, unlockedByName: string, reason?: string): boolean => {
+    const existing = hrmService.getUserTodayAttendance(userId);
+    if (!existing) {
+      console.warn('[Remote Unlock] Presensi user hari ini tidak ditemukan:', userId);
+      return false;
+    }
+
+    const all = hrmService.getAttendances();
+    const idx = all.findIndex((a) => a.id === existing.id);
+    if (idx === -1) return false;
+
+    existing.isRemoteUnlocked = true;
+    existing.remoteUnlockedBy = unlockedByName;
+    existing.remoteUnlockedAt = new Date().toISOString();
+    existing.isLocked = false;
+    existing.isPerimeterBreached = false;
+    if (reason) {
+      existing.notes = (existing.notes ? existing.notes + ' | ' : '') + `[REMOTE UNLOCK oleh ${unlockedByName}]: ${reason}`;
+    }
+
+    all[idx] = existing;
+    hrmService.saveAttendances(all);
+    window.dispatchEvent(new Event('hrm_attendance_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+
+    api.post('/attendances/remote-unlock', {
+      userId,
+      date: existing.attendanceDate,
+      unlockedBy: unlockedByName,
+      reason: reason || 'Izin kepulangan disetujui / dibuka oleh pimpinan/korlap',
+    }).catch((err) => {
+      console.warn('[Remote Unlock] Backend push failed:', err);
+    });
+
+    return true;
+  },
+
+  // ─── FITUR JAM ISTIRAHAT (1 Hour Break Time Policy) ───
+  startBreakTime: (userId: string): AttendanceRecord => {
+    const existing = hrmService.getUserTodayAttendance(userId);
+    if (!existing || !existing.clockIn) {
+      throw new Error('Anda belum melakukan presensi masuk');
+    }
+    if (existing.clockOut) {
+      throw new Error('Anda sudah melakukan presensi pulang');
+    }
+
+    const all = hrmService.getAttendances();
+    const idx = all.findIndex((a) => a.id === existing.id);
+
+    const nowIso = new Date().toISOString();
+    existing.isOnBreak = true;
+    existing.breakStartTime = nowIso;
+    all[idx] = existing;
+
+    hrmService.saveAttendances(all);
+    window.dispatchEvent(new Event('hrm_attendance_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+
+    api.post('/attendances/break/start', {
+      userId,
+      date: existing.attendanceDate,
+      startTime: nowIso,
+    }).catch((err) => {
+      console.warn('[Break Start] Backend warning:', err);
+    });
+
+    return existing;
+  },
+
+  endBreakTime: (userId: string): AttendanceRecord => {
+    const existing = hrmService.getUserTodayAttendance(userId);
+    if (!existing || !existing.isOnBreak) {
+      throw new Error('Anda tidak sedang dalam masa istirahat');
+    }
+
+    const all = hrmService.getAttendances();
+    const idx = all.findIndex((a) => a.id === existing.id);
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    let durationMins = 0;
+    if (existing.breakStartTime) {
+      const startMs = new Date(existing.breakStartTime).getTime();
+      durationMins = Math.max(0, Math.round((now.getTime() - startMs) / 60000));
+    }
+
+    existing.isOnBreak = false;
+    existing.breakEndTime = nowIso;
+    existing.breakDurationMinutes = (existing.breakDurationMinutes || 0) + durationMins;
+    all[idx] = existing;
+
+    hrmService.saveAttendances(all);
+    window.dispatchEvent(new Event('hrm_attendance_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+
+    api.post('/attendances/break/end', {
+      userId,
+      date: existing.attendanceDate,
+      endTime: nowIso,
+      durationMinutes: durationMins,
+    }).catch((err) => {
+      console.warn('[Break End] Backend warning:', err);
+    });
 
     return existing;
   },
@@ -2378,7 +3009,7 @@ export const hrmService = {
     });
 
     if (lockedCount > 0) {
-      localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(all));
+      hrmService.saveAttendances(all);
       window.dispatchEvent(new Event('hrm_attendance_updated'));
     }
 
@@ -2528,6 +3159,20 @@ export const hrmService = {
       `Pengajuan ${statusText}`,
       `Pengajuan ${leaves[idx].userName} telah ${statusText.toLowerCase()}`
     );
+
+    // REKOMENDASI 2: Jika permohonan disetujui untuk izin pulang awal atau tanggal hari ini, buka kunci checkout otomatis
+    if (status === 'approved') {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const isTodayLeave = leaves[idx].startDate === todayStr || leaves[idx].endDate === todayStr;
+      const isEarlyType = leaves[idx].leaveType === 'izin_pulang_awal' || (leaves[idx] as any).type === 'izin_pulang_awal';
+      if (isTodayLeave || isEarlyType) {
+        hrmService.remoteUnlockAttendance(
+          leaves[idx].userId,
+          approver?.fullName || 'Atasan / Korlap',
+          `Disetujui Izin: ${leaves[idx].leaveType.replace('_', ' ').toUpperCase()}`
+        );
+      }
+    }
 
     // Asynchronously push approval/rejection to backend database
     api.put(`/leaves/${leaveId}/status`, {
@@ -2872,7 +3517,7 @@ export const hrmService = {
     return record;
   },
 
-  // Employee Overtime Request
+  // Employee Overtime Request (dengan Paraf & Nama Kepala Regu)
   requestOvertime: (data: {
     userId: string;
     date: string;
@@ -2880,6 +3525,8 @@ export const hrmService = {
     endTime: string;
     hours: number;
     taskDescription: string;
+    supervisorName?: string;
+    supervisorSignature?: string;
   }): OvertimeRecord => {
     hrmService.init();
     const users = hrmService.getUsers();
@@ -2904,6 +3551,7 @@ export const hrmService = {
       date: data.date,
       startTime: data.startTime,
       endTime: data.endTime,
+      scheduledEndTime: data.endTime,
       durationMinutes: data.hours * 60,
       durationHours: data.hours,
       requestedHours: data.hours,
@@ -2913,26 +3561,85 @@ export const hrmService = {
       rateMultiplier,
       totalPay,
       taskDescription: data.taskDescription,
+      supervisorName: data.supervisorName,
+      supervisorSignature: data.supervisorSignature,
+      overtimePhase: 'requested',
       status: 'pending',
       paymentStatus: 'unpaid',
     });
+
+    // Push to backend PostgreSQL
+    api.post('/overtime', {
+      userId: user.id,
+      date: data.date,
+      startTime: data.startTime,
+      endTime: data.endTime,
+      scheduledEndTime: data.endTime,
+      durationHours: data.hours,
+      taskDescription: data.taskDescription,
+      supervisorName: data.supervisorName,
+      supervisorSignature: data.supervisorSignature,
+    }).catch((err) => console.warn('[Overtime] Backend request warning:', err));
 
     // Notify Admin
     hrmService.addNotification({
       userId: 'all_admin',
       recipientRole: 'admin',
-      title: 'Pengajuan Lembur Baru',
-      message: `${user.fullName} (${user.divisionName || 'Umum'}) mengajukan lembur ${data.hours} Jam pada ${data.date}. Alasan: ${data.taskDescription}`,
+      title: 'Pengajuan Lembur Baru (Paraf Karu)',
+      message: `${user.fullName} (${user.divisionName || 'Umum'}) mengajukan lembur ${data.hours} Jam pada ${data.date} (Karu: ${data.supervisorName || '-'}). Alasan: ${data.taskDescription}`,
       type: 'overtime',
       metadata: {
         employeeId: user.id,
         employeeName: user.fullName,
         overtimeId: record.id,
         overtimeHours: data.hours,
+        supervisorName: data.supervisorName,
       },
     });
 
     return record;
+  },
+
+  // Selesaikan Pekerjaan Lembur (Early / Regular Finish dengan Upload Bukti Foto & Keterangan)
+  completeOvertimeWork: async (
+    id: string,
+    data: {
+      completionNotes: string;
+      completionPhotos: string[];
+      actualEndTime?: string;
+    }
+  ): Promise<OvertimeRecord> => {
+    hrmService.init();
+    const records = hrmService.getOvertimeRecords();
+    const index = records.findIndex((r) => r.id === id);
+    if (index === -1) throw new Error('Catatan lembur tidak ditemukan.');
+
+    const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    const actualEndTime = data.actualEndTime || nowStr;
+
+    records[index] = {
+      ...records[index],
+      overtimePhase: 'completed',
+      actualEndTime,
+      completionNotes: data.completionNotes,
+      completionPhotos: data.completionPhotos,
+    };
+
+    localStorage.setItem(STORAGE_KEYS.OVERTIME_RECORDS, JSON.stringify(records));
+    window.dispatchEvent(new Event('hrm_overtime_updated'));
+
+    // Push to backend PostgreSQL
+    try {
+      await api.post(`/overtime/${id}/complete`, {
+        completionNotes: data.completionNotes,
+        completionPhotos: data.completionPhotos,
+        actualEndTime,
+      });
+    } catch (err) {
+      console.warn('[Overtime] Backend complete warning:', err);
+    }
+
+    return records[index];
   },
 
   // Admin Approval with Specified Approved Hours
@@ -2950,6 +3657,9 @@ export const hrmService = {
 
     const rec = records[index];
     const totalPay = Math.round(approvedHours * rec.hourlyRate * rec.rateMultiplier);
+    const startedAt = rec.startedAt || new Date().toISOString();
+    const scheduledEndMs = new Date(startedAt).getTime() + approvedHours * 3600 * 1000;
+    const scheduledEndTime = rec.scheduledEndTime || new Date(scheduledEndMs).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
     records[index] = {
       ...rec,
@@ -2958,6 +3668,9 @@ export const hrmService = {
       durationHours: approvedHours,
       durationMinutes: approvedHours * 60,
       totalPay,
+      overtimePhase: 'in_progress',
+      startedAt,
+      scheduledEndTime,
       approvedBy: adminId,
       approvedByName: adminName,
       approvalNotes: notes || `Disetujui ${approvedHours} Jam lembur`,
@@ -3713,7 +4426,7 @@ export const hrmService = {
       if (!attendances[attIdx].securityFlags!.includes('PERIMETER_ABANDONMENT_BREACH_DETECTED')) {
         attendances[attIdx].securityFlags!.push('PERIMETER_ABANDONMENT_BREACH_DETECTED');
       }
-      localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(attendances));
+      hrmService.saveAttendances(attendances);
     }
 
     // Add high-priority local notification
@@ -3764,7 +4477,7 @@ export const hrmService = {
           attendances[attIdx].isLocked = false;
           attendances[attIdx].isPerimeterBreached = false;
           attendances[attIdx].notes = (attendances[attIdx].notes ? attendances[attIdx].notes + ' | ' : '') + `[Dispensasi Perimeter oleh Atasan: ${data.resolutionNotes}]`;
-          localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(attendances));
+          hrmService.saveAttendances(attendances);
         }
       }
     }

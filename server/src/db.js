@@ -121,6 +121,38 @@ export async function initDb() {
       ALTER TABLE hrm_attendances 
       ADD COLUMN IF NOT EXISTS time_outside_minutes INTEGER DEFAULT 0;
 
+      -- Early Leave & Remote Unlock Columns
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS is_early_leave BOOLEAN DEFAULT false;
+
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS early_leave_reason TEXT;
+
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS early_leave_category VARCHAR(50);
+
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS is_remote_unlocked BOOLEAN DEFAULT false;
+
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS remote_unlocked_by VARCHAR(100);
+
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS remote_unlocked_at TIMESTAMP WITH TIME ZONE;
+
+      -- Break Time (1 Hour Allowance) Columns
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS is_on_break BOOLEAN DEFAULT false;
+
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS break_start_time TIMESTAMP WITH TIME ZONE;
+
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS break_end_time TIMESTAMP WITH TIME ZONE;
+
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS break_duration_minutes INTEGER DEFAULT 0;
+
       -- Perimeter Disciplinary Violations Table (Tracking leaving office without permit)
       CREATE TABLE IF NOT EXISTS hrm_perimeter_violations (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -240,6 +272,59 @@ export async function initDb() {
       ALTER TABLE hrm_notifications
       ADD COLUMN IF NOT EXISTS is_read BOOLEAN DEFAULT false;
 
+      -- ─── EXTENDED OVERTIME WORKFLOW (PARAF KEPALA REGU, BUKTI SELESAI LEMBUR) ───
+      CREATE TABLE IF NOT EXISTS hrm_overtime_records (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID NOT NULL REFERENCES hrm_profiles(id) ON DELETE CASCADE,
+        date DATE NOT NULL,
+        start_time VARCHAR(10) DEFAULT '17:00',
+        end_time VARCHAR(10) DEFAULT '19:00',
+        duration_minutes INTEGER DEFAULT 120,
+        duration_hours NUMERIC(4,2) DEFAULT 2.0,
+        requested_hours NUMERIC(4,2) DEFAULT 2.0,
+        approved_hours NUMERIC(4,2) DEFAULT 2.0,
+        task_description TEXT,
+        status VARCHAR(30) DEFAULT 'pending', -- pending, approved, rejected, in_progress, completed
+        payment_status VARCHAR(30) DEFAULT 'unpaid',
+        approved_by UUID REFERENCES hrm_profiles(id) ON DELETE SET NULL,
+        approved_by_name VARCHAR(150),
+        approval_notes TEXT,
+        supervisor_name VARCHAR(150),
+        supervisor_signature TEXT,
+        overtime_phase VARCHAR(30) DEFAULT 'requested', -- requested, in_progress, completed
+        started_at TIMESTAMP WITH TIME ZONE,
+        scheduled_end_time VARCHAR(10),
+        actual_end_time VARCHAR(10),
+        completion_notes TEXT,
+        completion_photos JSONB DEFAULT '[]'::jsonb,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS supervisor_name VARCHAR(150);
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS supervisor_signature TEXT;
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS overtime_phase VARCHAR(30) DEFAULT 'requested';
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS started_at TIMESTAMP WITH TIME ZONE;
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS scheduled_end_time VARCHAR(10);
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS actual_end_time VARCHAR(10);
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS completion_notes TEXT;
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS completion_photos JSONB DEFAULT '[]'::jsonb;
+
       -- ─── SALARY PROFILES COMPLIANCE ───
       CREATE TABLE IF NOT EXISTS hrm_payroll_salary_profiles (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -343,9 +428,49 @@ export async function initDb() {
       INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
       SELECT 'Shift III (22:30 - 07:30 WITA)', '22:30:00', '07:30:00', 15, false
       WHERE NOT EXISTS (SELECT 1 FROM hrm_shifts WHERE name ILIKE '%Shift III%' OR name ILIKE '%Shift 3%');
+
+      -- ─── 15. BANK POS TUGAS LAPANGAN & GEOFENCE MULTI-TITIK ───
+      CREATE TABLE IF NOT EXISTS hrm_field_assigned_posts (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES hrm_profiles(id) ON DELETE CASCADE,
+        post_code VARCHAR(50) NOT NULL,
+        post_name VARCHAR(255) NOT NULL,
+        latitude DOUBLE PRECISION NOT NULL,
+        longitude DOUBLE PRECISION NOT NULL,
+        radius_meters INTEGER NOT NULL DEFAULT 150,
+        description TEXT DEFAULT '',
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_hrm_field_assigned_posts_user ON hrm_field_assigned_posts(user_id, is_active);
+
+      ALTER TABLE hrm_profiles
+      ADD COLUMN IF NOT EXISTS current_active_post_id UUID,
+      ADD COLUMN IF NOT EXISTS current_active_post_name VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS current_active_post_entered_at TIMESTAMPTZ;
+
+      CREATE TABLE IF NOT EXISTS hrm_system_settings (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      INSERT INTO hrm_system_settings (key, value)
+      VALUES 
+        ('wa_gateway_endpoint', 'https://api.mpwa.id/v1/send-message'),
+        ('wa_gateway_api_key', ''),
+        ('wa_gateway_sender', ''),
+        ('wa_superadmin_phone', '081234567890'),
+        ('wa_pimpinan_phone', '081234567892'),
+        ('break_policy_enabled', 'true'),
+        ('break_duration_minutes', '60'),
+        ('break_allow_outside', 'true')
+      ON CONFLICT (key) DO NOTHING;
     `);
 
-    console.log('[Database] Schema verification, Biometric, Geofence, Shift Swaps, Schedules & Notifications extensions completed.');
+    console.log('[Database] Schema verification, Biometric, Geofence, Field Sentinel Multi-Posts & Notifications extensions completed.');
   } catch (err) {
     console.error('[Database] Initialization error:', err.message);
     throw err;

@@ -20,6 +20,41 @@
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" href="/pwa-192x192.png">
     <script>
+      // EMERGENCY STORAGE SANITIZER: Langsung bersihkan hrm_attendance yang kembung dari browser/PWA
+      (function() {
+        try {
+          var raw = localStorage.getItem('hrm_attendance');
+          if (raw && (raw.indexOf('data:image/') !== -1 || raw.length > 50000)) {
+            console.warn('[Storage Sanitizer] Auto-pruning bloated hrm_attendance...');
+            var list = JSON.parse(raw);
+            if (Array.isArray(list)) {
+              var lean = list.slice(0, 10).map(function(item) {
+                var c = Object.assign({}, item);
+                delete c.photoIn;
+                delete c.clockInPhoto;
+                delete c.photoOut;
+                delete c.clockOutPhoto;
+                return c;
+              });
+              localStorage.setItem('hrm_attendance', JSON.stringify(lean));
+            } else {
+              localStorage.removeItem('hrm_attendance');
+            }
+          }
+        } catch (e) {
+          try { localStorage.removeItem('hrm_attendance'); } catch (_) {}
+        }
+
+        // FORCE SERVICE WORKER UPDATE
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(regs) {
+            for (var i = 0; i < regs.length; i++) {
+              regs[i].update();
+            }
+          });
+        }
+      })();
+
       // Capture PWA install prompt BEFORE any JS bundle loads
       window.__pwaInstallPrompt = null;
       window.__pwaInstallPromptListeners = new Set();

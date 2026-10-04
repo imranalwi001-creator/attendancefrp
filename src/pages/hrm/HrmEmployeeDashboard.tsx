@@ -42,12 +42,21 @@ import {
   Copy,
   ExternalLink,
   Navigation,
+  PenTool,
+  UploadCloud,
+  Trash2,
+  Image as ImageIcon,
+  Radio,
+  Coffee,
+  AlertOctagon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { livenessEngine, LivenessPhase } from '@/services/livenessEngine';
 import { biometricService, BiometricMatchResult } from '@/services/biometricService';
 import { geofenceService, GeofenceEvaluation, AntiSpoofResult } from '@/services/geofenceService';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
+import { HrmSpotCheckModal } from '@/components/hrm/HrmSpotCheckModal';
+import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { PwaInstallPrompt } from '@/components/hrm/PwaInstallPrompt';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -58,9 +67,42 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Link } from 'react-router-dom';
+import { HrmPwaAttendanceView } from '@/components/hrm/HrmPwaAttendanceView';
 
 export const HrmEmployeeDashboard: React.FC = () => {
   const { user, refreshUser } = useHrmAuth();
+
+  // PWA Standalone Mode Detection (Lampiran 2 & 3)
+  const [forceDesktopMode, setForceDesktopMode] = useState<boolean>(() => {
+    return localStorage.getItem('hrm_force_desktop_mode') === 'true';
+  });
+
+  const isPwaStandalone = React.useMemo(() => {
+    if (forceDesktopMode) return false;
+    if (typeof window === 'undefined') return false;
+    const urlParams = new URLSearchParams(window.location.search);
+    return Boolean(
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true ||
+      document.referrer.includes('android-app://') ||
+      urlParams.get('source') === 'pwa' ||
+      urlParams.get('mode') === 'app' ||
+      localStorage.getItem('hrm_pwa_mode') === 'true'
+    );
+  }, [forceDesktopMode]);
+
+  if (isPwaStandalone) {
+    return (
+      <HrmPwaAttendanceView
+        onSwitchToDesktop={() => {
+          setForceDesktopMode(true);
+          localStorage.setItem('hrm_force_desktop_mode', 'true');
+          localStorage.removeItem('hrm_pwa_mode');
+          window.location.reload();
+        }}
+      />
+    );
+  }
 
   // Real-time clock state
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -86,13 +128,23 @@ export const HrmEmployeeDashboard: React.FC = () => {
   const [userShift, setUserShift] = useState<Shift | null>(null);
   const [todaySchedule, setTodaySchedule] = useState<EmployeeSchedule | null>(null);
 
-  // Overtime state
+  // Overtime state with Karu Signature and Early Finish Report
   const [todayApprovedOvertime, setTodayApprovedOvertime] = useState<OvertimeRecord | null>(null);
   const [userOvertimeRequests, setUserOvertimeRequests] = useState<OvertimeRecord[]>([]);
   const [overtimeModalOpen, setOvertimeModalOpen] = useState(false);
   const [overtimeHoursInput, setOvertimeHoursInput] = useState('2');
   const [overtimeReasonInput, setOvertimeReasonInput] = useState('');
+  const [supervisorNameInput, setSupervisorNameInput] = useState('');
+  const [hasSignature, setHasSignature] = useState(false);
+  const [isDrawingSignature, setIsDrawingSignature] = useState(false);
+  const signatureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [submittingOvertime, setSubmittingOvertime] = useState(false);
+
+  // Finish Overtime Early & Evidence Report States
+  const [finishOvertimeModalOpen, setFinishOvertimeModalOpen] = useState(false);
+  const [overtimeCompletionNotes, setOvertimeCompletionNotes] = useState('');
+  const [overtimeProofPhotos, setOvertimeProofPhotos] = useState<string[]>([]);
+  const [isSubmittingFinishOt, setIsSubmittingFinishOt] = useState(false);
 
   // In-App Notifications
   const [notifications, setNotifications] = useState<HrmNotification[]>([]);
@@ -108,18 +160,14 @@ export const HrmEmployeeDashboard: React.FC = () => {
   const consecutiveOutsideCountRef = useRef<number>(0);
   const isBreachReportedRef = useRef<boolean>(false);
 
-  // Presensi Flow State (Immersive Full-Screen Selfie + Step 2 Barcode)
+  // Presensi Flow State (Face AI Biometrics & Geofence Instant Submit - No Barcode Required)
   const [cameraModalOpen, setCameraModalOpen] = useState(false); // Controls Fullscreen Selfie Viewfinder
-  const [barcodeModalOpen, setBarcodeModalOpen] = useState(false); // Controls Step 2 Barcode Dialog
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [actionType, setActionType] = useState<'clock_in' | 'clock_out'>('clock_in');
-  const [clockInStep, setClockInStep] = useState<'selfie' | 'barcode'>('selfie');
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [dynamicQrInput, setDynamicQrInput] = useState('');
-  const [qrValidationError, setQrValidationError] = useState<string | null>(null);
   const [attendanceMessage, setAttendanceMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Biometric Master Face Enrollment & 1:1 Verification States
@@ -135,7 +183,185 @@ export const HrmEmployeeDashboard: React.FC = () => {
   // Multi-Device Collision & Employee Password Change States
   const currentDeviceFingerprint = hrmService.getDeviceFingerprint();
   const currentDeviceModel = hrmService.getDeviceModel();
-  const isMultiDeviceDetected = Boolean(user?.registeredDeviceId && user.registeredDeviceId !== currentDeviceFingerprint);
+  const isLegacyGenericId = user?.registeredDeviceId === 'DEV-HW-UUID-ANDROID-882910';
+  const isBothAndroid = Boolean(
+    (/Android/i.test(user?.deviceModel || '') || isLegacyGenericId) && 
+    /Android/i.test(currentDeviceModel || '')
+  );
+  const isMultiDeviceDetected = Boolean(
+    user?.registeredDeviceId && 
+    user.registeredDeviceId !== currentDeviceFingerprint &&
+    !isBothAndroid
+  );
+
+  const [isBindingDevice, setIsBindingDevice] = useState(false);
+  const handleBindCurrentDevice = async () => {
+    if (!user) return;
+    setIsBindingDevice(true);
+    try {
+      const res = await hrmService.bindUserDevice(user.id, currentDeviceFingerprint, currentDeviceModel);
+      if (res.success) {
+        toast.success('Perangkat ini berhasil ditautkan sebagai perangkat resmi Anda.');
+        refreshUser();
+      } else {
+        toast.error(res.message || 'Gagal menautkan perangkat');
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Terjadi kesalahan sistem');
+    } finally {
+      setIsBindingDevice(false);
+    }
+  };
+
+  // Seamless auto-sync for same physical Android device (e.g. Flutter APK to Web APK transition)
+  useEffect(() => {
+    if (user && isBothAndroid && user.registeredDeviceId && user.registeredDeviceId !== currentDeviceFingerprint) {
+      console.info('[Security] Seamlessly synchronizing Android device binding on same physical device...');
+      hrmService.bindUserDevice(user.id, currentDeviceFingerprint, currentDeviceModel).then(() => {
+        refreshUser();
+      }).catch(() => null);
+    }
+  }, [user?.id, user?.registeredDeviceId, isBothAndroid, currentDeviceFingerprint]);
+
+  // Field Sentinel Spot-Check State
+  const [spotCheckModalOpen, setSpotCheckModalOpen] = useState(false);
+  const [spotCheckInstruction, setSpotCheckInstruction] = useState<string>('');
+
+  useEffect(() => {
+    const handleSpotCheck = (e: any) => {
+      const detail = e?.detail;
+      if (detail && (!detail.targetUserId || detail.targetUserId === user?.id)) {
+        setSpotCheckInstruction(detail.message || 'Pimpinan meminta konfirmasi scan wajah ber-watermark di titik tugas sekarang.');
+        setSpotCheckModalOpen(true);
+      }
+    };
+    window.addEventListener('hrm_spot_check_requested', handleSpotCheck);
+    return () => window.removeEventListener('hrm_spot_check_requested', handleSpotCheck);
+  }, [user]);
+
+  // ─── REKOMENDASI 1 & 2: EARLY LEAVE STATES ───
+  const [earlyLeaveModalOpen, setEarlyLeaveModalOpen] = useState(false);
+  const [earlyLeaveCategory, setEarlyLeaveCategory] = useState<'sakit_mendadak' | 'darurat_keluarga' | 'tugas_luar' | 'lainnya'>('sakit_mendadak');
+  const [earlyLeaveReason, setEarlyLeaveReason] = useState('');
+  const [isSubmittingEarlyLeave, setIsSubmittingEarlyLeave] = useState(false);
+
+  // ─── FITUR JAM ISTIRAHAT 1 JAM (BREAK TIME POLICY) ───
+  const [breakRemainingSeconds, setBreakRemainingSeconds] = useState<number>(0);
+  const [breakWarningNotified, setBreakWarningNotified] = useState(false);
+  const [breakExpiredNotified, setBreakExpiredNotified] = useState(false);
+  const [isStartingBreak, setIsStartingBreak] = useState(false);
+  const [isEndingBreak, setIsEndingBreak] = useState(false);
+
+  // Break policy config from app settings
+  const appSettings = hrmService.getAppSettings();
+  const breakPolicyEnabled = appSettings.breakPolicyEnabled !== false;
+  const breakDurationLimitMinutes = appSettings.breakDurationMinutes || 60;
+
+  // Real-time Break Countdown Ticker
+  useEffect(() => {
+    if (!todayAttendance?.isOnBreak || !todayAttendance?.breakStartTime) {
+      setBreakRemainingSeconds(0);
+      setBreakWarningNotified(false);
+      setBreakExpiredNotified(false);
+      return;
+    }
+
+    const calcRemaining = () => {
+      const startMs = new Date(todayAttendance.breakStartTime!).getTime();
+      const totalAllowedSecs = breakDurationLimitMinutes * 60;
+      const elapsedSecs = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+      const remaining = Math.max(0, totalAllowedSecs - elapsedSecs);
+      setBreakRemainingSeconds(remaining);
+
+      // Warning at <= 10 minutes (600s)
+      if (remaining <= 600 && remaining > 0 && !breakWarningNotified) {
+        setBreakWarningNotified(true);
+        if ('vibrate' in navigator) navigator.vibrate([200, 100, 200]);
+        toast.warning('⚠️ Sisa waktu istirahat kurang dari 10 menit! Segera bersiap kembali ke lokasi tugas.');
+      }
+
+      // Expired at 0s
+      if (remaining <= 0 && !breakExpiredNotified) {
+        setBreakExpiredNotified(true);
+        if ('vibrate' in navigator) navigator.vibrate([500, 200, 500, 200, 500]);
+        toast.error('⏰ Waktu istirahat 1 jam telah berakhir! Silakan segera kembali ke pos dan akhiri masa istirahat.');
+      }
+    };
+
+    calcRemaining();
+    const interval = setInterval(calcRemaining, 1000);
+    return () => clearInterval(interval);
+  }, [todayAttendance?.isOnBreak, todayAttendance?.breakStartTime, breakDurationLimitMinutes, breakWarningNotified, breakExpiredNotified]);
+
+  const handleStartBreak = async () => {
+    if (!user) return;
+    setIsStartingBreak(true);
+    try {
+      hrmService.startBreakTime(user.id);
+      toast.success('Masa istirahat 1 jam dimulai! Anda dapat meninggalkan pos tanpa alarm perimeter.');
+    } catch (err: any) {
+      toast.error(err.message || 'Gagal memulai jam istirahat');
+    } finally {
+      setIsStartingBreak(false);
+    }
+  };
+
+  const handleEndBreak = async () => {
+    if (!user) return;
+    setIsEndingBreak(true);
+    try {
+      hrmService.endBreakTime(user.id);
+      toast.success('Masa istirahat selesai! Sistem pemantauan pos kembali aktif.');
+    } catch (err: any) {
+      toast.error(err.message || 'Gagal mengakhiri masa istirahat');
+    } finally {
+      setIsEndingBreak(false);
+    }
+  };
+
+  const handleConfirmEarlyLeave = async () => {
+    if (!user) return;
+    if (!earlyLeaveReason.trim()) {
+      toast.error('Harap tuliskan alasan atau keterangan darurat.');
+      return;
+    }
+    setIsSubmittingEarlyLeave(true);
+    try {
+      let curLat: number | undefined;
+      let curLon: number | undefined;
+      if (navigator.geolocation) {
+        await new Promise<void>((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              curLat = pos.coords.latitude;
+              curLon = pos.coords.longitude;
+              resolve();
+            },
+            () => resolve(),
+            { timeout: 4000 }
+          );
+        });
+      }
+
+      hrmService.recordEarlyLeave({
+        userId: user.id,
+        category: earlyLeaveCategory,
+        reason: earlyLeaveReason.trim(),
+        latitude: curLat,
+        longitude: curLon,
+        photoUrl: user.avatarUrl || user.faceEnrolledPhoto,
+        geofenceValid: true,
+      });
+
+      toast.success('Presensi Pulang Awal Darurat berhasil! Laporan resmi terkirim via Aplikasi & WhatsApp ke Pimpinan.');
+      setEarlyLeaveModalOpen(false);
+      setEarlyLeaveReason('');
+    } catch (err: any) {
+      toast.error(err.message || 'Gagal memproses pulang awal darurat');
+    } finally {
+      setIsSubmittingEarlyLeave(false);
+    }
+  };
 
   const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
@@ -220,6 +446,25 @@ export const HrmEmployeeDashboard: React.FC = () => {
   const [chromaticFlash, setChromaticFlash] = useState<boolean>(false);
   const isLivenessCapturingRef = useRef<boolean>(false);
   const takeSnapshotRef = useRef<() => void>(() => {});
+
+  // Emergency Quota Sanitizer on Dashboard Mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('hrm_attendance');
+      if (raw && (raw.includes('data:image/') || raw.length > 30000)) {
+        console.warn('[Dashboard] Quota protection: pruning bloated hrm_attendance...');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const lean = parsed.slice(0, 10).map(({ photoIn, clockInPhoto, photoOut, clockOutPhoto, ...r }: any) => r);
+          localStorage.setItem('hrm_attendance', JSON.stringify(lean));
+        } else {
+          localStorage.removeItem('hrm_attendance');
+        }
+      }
+    } catch {
+      try { localStorage.removeItem('hrm_attendance'); } catch (_) {}
+    }
+  }, []);
 
   // Preload Face-API AI Neural Network models on dashboard mount
   useEffect(() => {
@@ -321,9 +566,9 @@ export const HrmEmployeeDashboard: React.FC = () => {
     };
   }, [user]);
 
-  // Periodic Geofence Perimeter Watchdog (Active during shift when employee clocked in and not clocked out)
+  // Periodic Geofence Perimeter Watchdog (Active during shift when employee clocked in, not clocked out, and not on break)
   useEffect(() => {
-    if (!user || !todayAttendance?.clockIn || todayAttendance?.clockOut) {
+    if (!user || !todayAttendance?.clockIn || todayAttendance?.clockOut || todayAttendance?.isOnBreak || todayAttendance?.isEarlyLeave) {
       consecutiveOutsideCountRef.current = 0;
       return;
     }
@@ -336,7 +581,18 @@ export const HrmEmployeeDashboard: React.FC = () => {
 
     const checkPerimeter = () => {
       if (!navigator.geolocation) return;
-      const divLoc = hrmService.getDivisionLocation(user.divisionId);
+      const assignedLoc = (user.assignedLatitude && user.assignedLongitude)
+        ? {
+            id: 'assigned-loc',
+            name: user.assignedLocationName || 'Titik Tugas Khusus',
+            latitude: user.assignedLatitude,
+            longitude: user.assignedLongitude,
+            radiusMeters: user.assignedRadiusMeters || 150,
+            locationName: user.assignedLocationName || 'Titik Tugas Khusus',
+            address: user.assignedLocationName || 'Titik Tugas Khusus',
+          }
+        : null;
+      const divLoc = assignedLoc || hrmService.getDivisionLocation(user.divisionId);
       if (!divLoc) return;
 
       navigator.geolocation.getCurrentPosition(
@@ -344,6 +600,17 @@ export const HrmEmployeeDashboard: React.FC = () => {
           const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
           const todayStr = getTodayDateStr();
           const hasPermit = hrmService.isUserOnApprovedPermit(user.id, todayStr);
+
+          // Continuous Field Sentinel Background GPS Ping to Server
+          if (user.isFieldSentinelEnabled || ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes(user.email.toLowerCase())) {
+            fieldSentinelService.sendLocationPing({
+              userId: user.id,
+              latitude: coords.lat,
+              longitude: coords.lng,
+              accuracy: pos.coords.accuracy || 5,
+              isMockLocation: Boolean((pos.coords as any).isMock),
+            }).catch(() => null);
+          }
 
           const watchdogEval = geofenceService.evaluateWatchdogTick({
             coords,
@@ -406,14 +673,25 @@ export const HrmEmployeeDashboard: React.FC = () => {
     // Evaluate location perimeter watchdog every 20 seconds
     const interval = setInterval(checkPerimeter, 20000);
     return () => clearInterval(interval);
-  }, [user, todayAttendance?.clockIn, todayAttendance?.clockOut, todayAttendance?.isLocked, todayAttendance?.isPerimeterBreached]);
+  }, [user, todayAttendance?.clockIn, todayAttendance?.clockOut, todayAttendance?.isLocked, todayAttendance?.isPerimeterBreached, todayAttendance?.isOnBreak, todayAttendance?.isEarlyLeave]);
 
   // Check Geolocation against Division-specific coordinates via Enterprise Geofence Service
   const fetchUserLocation = () => {
     setLocationStatus('checking');
     setLocationError(null);
 
-    const divLoc = hrmService.getDivisionLocation(user?.divisionId);
+    const assignedLoc = (user?.assignedLatitude && user?.assignedLongitude)
+      ? {
+          id: 'assigned-loc',
+          name: user.assignedLocationName || 'Titik Tugas Khusus',
+          latitude: user.assignedLatitude,
+          longitude: user.assignedLongitude,
+          radiusMeters: user.assignedRadiusMeters || 150,
+          locationName: user.assignedLocationName || 'Titik Tugas Khusus',
+          address: user.assignedLocationName || 'Titik Tugas Khusus',
+        }
+      : null;
+    const divLoc = assignedLoc || hrmService.getDivisionLocation(user?.divisionId);
 
     if (!navigator.geolocation) {
       setLocationStatus('error');
@@ -516,7 +794,7 @@ export const HrmEmployeeDashboard: React.FC = () => {
     ctx.fillStyle = '#94a3b8';
     ctx.textAlign = 'right';
     const spoofLabel = isMockSuspected ? 'MOCK_ALERT' : 'GPS_HW_OK';
-    ctx.fillText(`ANTI-SPOOF: ${spoofLabel} • DEV: ${deviceFp.slice(0, 10)}`, w - 18, h - 22);
+    ctx.fillText(`ANTI-SPOOF: ${spoofLabel} • DEV: ${(deviceFp || '').slice(0, 10)}`, w - 18, h - 22);
     ctx.textAlign = 'left';
   };
 
@@ -632,12 +910,8 @@ export const HrmEmployeeDashboard: React.FC = () => {
     }
 
     setActionType(type);
-    setClockInStep('selfie');
     setPhotoDataUrl(null);
     setBiometricResult(null);
-    setDynamicQrInput('');
-    setQrValidationError(null);
-    setBarcodeModalOpen(false);
     setCameraModalOpen(true);
 
     // Reset Liveness Engine
@@ -688,18 +962,7 @@ export const HrmEmployeeDashboard: React.FC = () => {
     setCameraModalOpen(false);
   };
 
-  // Move from Step 1 (Selfie) to Step 2 (Barcode Terminal Divisi) for Clock In
-  const handleProceedToBarcode = () => {
-    if (biometricResult && !biometricResult.isMatch) {
-      alert(`Presensi Ditolak! Kemiripan biometrik hanya ${biometricResult.confidence}%. Wajah tidak sesuai dengan data master.`);
-      return;
-    }
-    handleCloseCameraModal();
-    setClockInStep('barcode');
-    setBarcodeModalOpen(true);
-  };
-
-  // Capture snapshot with 1:1 Biometric Verification & Forensic Watermark
+  // Capture snapshot with 1:1 Biometric Verification, Forensic Watermark & Direct Auto-Submit
   const takeSnapshot = async () => {
     if (videoRef.current && user) {
       const canvas = document.createElement('canvas');
@@ -728,13 +991,28 @@ export const HrmEmployeeDashboard: React.FC = () => {
         }
 
         applyForensicWatermark(canvas, matchResult?.confidence);
-        setPhotoDataUrl(canvas.toDataURL('image/jpeg', 0.9));
+        const capturedPhoto = canvas.toDataURL('image/jpeg', 0.9);
+        setPhotoDataUrl(capturedPhoto);
 
         // Stop camera stream once captured
         if (cameraStream) {
           cameraStream.getTracks().forEach((track) => track.stop());
           setCameraStream(null);
         }
+
+        // Instant Submit: If biometric match is valid (or user not enrolled) and location is valid, auto-submit directly!
+        if (matchResult && !matchResult.isMatch) {
+          // Do not auto-submit if biometric mismatch
+          return;
+        }
+
+        if (locationStatus === 'outside') {
+          // Do not auto-submit if outside perimeter
+          return;
+        }
+
+        // Auto-submit immediately without needing barcode scan!
+        await handleSubmitAttendance(capturedPhoto, matchResult);
       }
     } else {
       console.warn('[Camera] videoRef stream tidak tersedia saat snapshot');
@@ -810,31 +1088,26 @@ export const HrmEmployeeDashboard: React.FC = () => {
     };
   }, [cameraModalOpen, cameraStream, photoDataUrl]);
 
-  // Auto-fill active dynamic QR from division terminal (for desktop/testing convenience)
-  const handleAutoFillDivisionQr = () => {
-    const activeQr = hrmService.getDynamicOfficeQrCode(user?.divisionId);
-    setDynamicQrInput(activeQr.code);
-    setQrValidationError(null);
-  };
-
-  // Submit Presensi (Clock In or Out)
-  const handleSubmitAttendance = async () => {
+  // Submit Presensi (Clock In or Out) with Direct Auto-Submit & Rolling Photo Overwrite
+  const handleSubmitAttendance = async (overridePhoto?: string, overrideBio?: BiometricMatchResult | null) => {
     if (!user) return;
     setSubmitting(true);
     setAttendanceMessage(null);
-    setQrValidationError(null);
+
+    const activePhoto = overridePhoto || photoDataUrl;
+    const activeBio = overrideBio !== undefined ? overrideBio : biometricResult;
 
     // Enforce 1:1 Biometric Match Check
-    if (biometricResult && !biometricResult.isMatch) {
+    if (activeBio && !activeBio.isMatch) {
       setAttendanceMessage({
         type: 'error',
-        text: `Presensi Ditolak! Wajah tidak cocok dengan Wajah Master karyawan (${biometricResult.confidence}% kemiripan). Presensi dibatalkan demi integritas data.`,
+        text: `Presensi Ditolak! Wajah tidak cocok dengan Wajah Master karyawan (${activeBio.confidence}% kemiripan). Presensi dibatalkan demi integritas data.`,
       });
       setSubmitting(false);
       return;
     }
 
-    // Enforce Geofence Perimeter Check (if location checked)
+    // Enforce Geofence Perimeter Check
     if (locationStatus === 'outside') {
       const dist = geofenceEval ? Math.round(geofenceEval.distanceMeters) : (distanceToOffice ? Math.round(distanceToOffice) : 0);
       setAttendanceMessage({
@@ -865,58 +1138,51 @@ export const HrmEmployeeDashboard: React.FC = () => {
       flags.push(...antiSpoofResult.anomalyFlags);
     }
 
-    if (actionType === 'clock_in') {
-      // Step 2 validation: Verify Barcode
-      const isValidBarcode = hrmService.validateDynamicOfficeQrCode(dynamicQrInput, user.divisionId);
-      if (!isValidBarcode) {
-        setQrValidationError('Kode Barcode Terminal Divisi tidak valid atau telah kedaluwarsa. Masukkan kode barcode aktif dari layar terminal divisi Anda.');
-        setSubmitting(false);
-        return;
-      }
-      flags.push('TERMINAL_BARCODE_VERIFIED');
-    }
-
     if (!cameraSecurityWarning) flags.push('HARDWARE_CAMERA_VERIFIED');
-    if (biometricResult?.isMatch) flags.push(`BIOMETRIC_MATCH_${biometricResult.confidence}PCT`);
+    if (activeBio?.isMatch) flags.push(`BIOMETRIC_MATCH_${activeBio.confidence}PCT`);
 
     try {
       if (actionType === 'clock_in') {
-        hrmService.recordClockIn({
+        const savedAtt = hrmService.recordClockIn({
           userId: user.id,
           latitude: currentCoords?.lat,
           longitude: currentCoords?.lng,
-          photoUrl: photoDataUrl || undefined,
+          photoUrl: activePhoto || undefined,
           deviceId,
           isMockSuspected,
           securityFlags: flags,
-          biometricScore: biometricResult?.confidence,
-          biometricMatch: biometricResult ? biometricResult.isMatch : undefined,
+          biometricScore: activeBio?.confidence,
+          biometricMatch: activeBio ? activeBio.isMatch : undefined,
           geofenceDistance: geofenceEval?.distanceMeters ?? distanceToOffice ?? undefined,
           geofenceValid: geofenceEval?.isInside ?? (locationStatus === 'inside'),
           isMockLocation: isMockSuspected,
         });
+        setTodayAttendance(savedAtt);
+        toast.success('Presensi Masuk Berhasil Direkam!');
         setAttendanceMessage({
           type: 'success',
-          text: `Presensi Masuk Berhasil! Biometrik wajah (${biometricResult ? `${biometricResult.confidence}% cocok` : 'terverifikasi'}), perimeter radius (${Math.round(geofenceEval?.distanceMeters || 0)}m valid), dan Barcode Terminal Divisi ${user.divisionName || ''} tersinkronisasi ke database.`,
+          text: `Presensi Masuk Berhasil! Biometrik wajah (${activeBio ? `${activeBio.confidence}% cocok` : 'terverifikasi'}) dan radius perimeter lokasi valid. Foto tersimpan sebagai arsip review.`,
         });
       } else {
-        hrmService.recordClockOut({
+        const savedAtt = hrmService.recordClockOut({
           userId: user.id,
           latitude: currentCoords?.lat,
           longitude: currentCoords?.lng,
-          photoUrl: photoDataUrl || undefined,
+          photoUrl: activePhoto || undefined,
           deviceId,
           isMockSuspected,
           securityFlags: flags,
-          biometricScore: biometricResult?.confidence,
-          biometricMatch: biometricResult ? biometricResult.isMatch : undefined,
+          biometricScore: activeBio?.confidence,
+          biometricMatch: activeBio ? activeBio.isMatch : undefined,
           geofenceDistance: geofenceEval?.distanceMeters ?? distanceToOffice ?? undefined,
           geofenceValid: geofenceEval?.isInside ?? (locationStatus === 'inside'),
           isMockLocation: isMockSuspected,
         });
+        setTodayAttendance(savedAtt);
+        toast.success('Presensi Pulang Berhasil Direkam!');
         setAttendanceMessage({
           type: 'success',
-          text: `Presensi Pulang Berhasil! Foto selfie kepulangan ${biometricResult ? `(Biometrik ${biometricResult.confidence}% cocok)` : ''} dan koordinat perimeter tersinkronisasi ke database.`,
+          text: `Presensi Pulang Berhasil! Foto selfie kepulangan ${activeBio ? `(Biometrik ${activeBio.confidence}% cocok)` : ''} dan koordinat perimeter tersinkronisasi ke database.`,
         });
       }
 
@@ -924,13 +1190,64 @@ export const HrmEmployeeDashboard: React.FC = () => {
       loadAttendanceData();
       refreshUser();
     } catch (err: any) {
+      if (err.message && (err.message.includes('quota') || err.message.includes('Quota'))) {
+        try {
+          localStorage.removeItem('hrm_attendance');
+          console.warn('[Dashboard] QuotaExceededError auto-remediated by clearing hrm_attendance.');
+        } catch (_) {}
+      }
       setAttendanceMessage({ type: 'error', text: err.message || 'Gagal menyimpan presensi.' });
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Submit Overtime Request by Employee
+  // Digital Signature Pad Handlers for Karu (Touch & Mouse Support)
+  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = signatureCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    setIsDrawingSignature(true);
+    setHasSignature(true);
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#0f172a';
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isDrawingSignature) return;
+    const canvas = signatureCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  };
+
+  const handlePointerUp = () => {
+    setIsDrawingSignature(false);
+  };
+
+  const handleClearSignature = () => {
+    const canvas = signatureCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setHasSignature(false);
+  };
+
+  // Submit Overtime Request by Employee with Karu Name & Digital Signature
   const handleRequestOvertime = () => {
     if (!user) return;
     const hours = parseFloat(overtimeHoursInput);
@@ -938,10 +1255,20 @@ export const HrmEmployeeDashboard: React.FC = () => {
       alert('Jumlah jam lembur harus antara 0.5 hingga 8 jam.');
       return;
     }
+    if (!supervisorNameInput.trim()) {
+      alert('Mohon masukkan Nama Kepala Regu (Karu) yang bertugas di lokasi.');
+      return;
+    }
+    if (!hasSignature || !signatureCanvasRef.current) {
+      alert('Mohon minta Kepala Regu membubuhkan paraf pada area tanda tangan digital.');
+      return;
+    }
     if (!overtimeReasonInput.trim()) {
       alert('Mohon isi alasan / rincian pekerjaan lembur Anda.');
       return;
     }
+
+    const signatureData = signatureCanvasRef.current.toDataURL('image/png');
 
     setSubmittingOvertime(true);
     try {
@@ -949,12 +1276,17 @@ export const HrmEmployeeDashboard: React.FC = () => {
         userId: user.id,
         hours,
         taskDescription: overtimeReasonInput.trim(),
+        supervisorName: supervisorNameInput.trim(),
+        supervisorSignature: signatureData,
       });
       setOvertimeModalOpen(false);
       setOvertimeReasonInput('');
+      setSupervisorNameInput('');
+      handleClearSignature();
+      toast.success(`Pengajuan lembur ${hours} Jam telah dikirim dengan paraf Kepala Regu!`);
       setAttendanceMessage({
         type: 'success',
-        text: `Pengajuan lembur ${hours} Jam telah dikirim ke Admin/HRD untuk persetujuan resmi.`,
+        text: `Pengajuan lembur ${hours} Jam (Karu: ${supervisorNameInput.trim()}) telah diajukan dengan verifikasi paraf untuk persetujuan resmi.`,
       });
       loadAttendanceData();
     } catch (err: any) {
@@ -964,22 +1296,116 @@ export const HrmEmployeeDashboard: React.FC = () => {
     }
   };
 
+  // Multi-Photo Upload Handler for Overtime Completion Evidence
+  const handlePhotoUploadForOvertime = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    Array.from(files).forEach((file) => {
+      if (!file.type.startsWith('image/')) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const result = event.target?.result as string;
+        if (result) {
+          setOvertimeProofPhotos((prev) => [...prev, result]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRemoveProofPhoto = (index: number) => {
+    setOvertimeProofPhotos((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  // Selesaikan Lembur & Laporkan Bukti Kerja (Early / Regular Finish)
+  const handleFinishOvertimeSubmit = async () => {
+    if (!todayApprovedOvertime) return;
+    if (!overtimeCompletionNotes.trim()) {
+      alert('Mohon isi keterangan atau status rincian hasil pekerjaan lembur.');
+      return;
+    }
+
+    setIsSubmittingFinishOt(true);
+    try {
+      await hrmService.completeOvertimeWork(todayApprovedOvertime.id, {
+        completionNotes: overtimeCompletionNotes.trim(),
+        completionPhotos: overtimeProofPhotos,
+      });
+      toast.success('Pekerjaan lembur berhasil diakhiri! Tombol Presensi Pulang telah aktif.');
+      setFinishOvertimeModalOpen(false);
+      setOvertimeCompletionNotes('');
+      setOvertimeProofPhotos([]);
+      loadAttendanceData();
+    } catch (err: any) {
+      alert(err.message || 'Gagal mengakhiri lembur.');
+    } finally {
+      setIsSubmittingFinishOt(false);
+    }
+  };
+
   const hasClockedIn = Boolean(todayAttendance?.clockIn);
   const hasClockedOut = Boolean(todayAttendance?.clockOut);
 
-  // Calculate clock out eligibility and auto-lock warning based on shift
+  // Calculate clock out eligibility and auto-lock warning based on shift & overtime
   const { isTimeForClockOut, timeRemainingFormatted, isAutoLockWarning } = (() => {
-    if (!userShift?.endTime) {
+    const parseTime = (timeStr?: any): { hours: number; minutes: number } | null => {
+      if (!timeStr || typeof timeStr !== 'string') return null;
+      const clean = timeStr.trim().replace('.', ':');
+      const parts = clean.split(':').map(Number);
+      if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        return { hours: parts[0], minutes: parts[1] };
+      }
+      return null;
+    };
+
+    // 1. Check if employee has an approved overtime today
+    if (todayApprovedOvertime && todayApprovedOvertime.status === 'approved') {
+      // If employee completed overtime early
+      if (todayApprovedOvertime.overtimePhase === 'completed') {
+        return { isTimeForClockOut: true, timeRemainingFormatted: 'Lembur Selesai', isAutoLockWarning: false };
+      }
+
+      // Overtime in progress: compute against scheduledEndTime or endTime
+      const otTime = parseTime(todayApprovedOvertime.scheduledEndTime || todayApprovedOvertime.endTime);
+      if (otTime) {
+        const otEndTime = new Date(currentTime);
+        otEndTime.setHours(otTime.hours, otTime.minutes, 0, 0);
+
+        const otDiffMs = otEndTime.getTime() - currentTime.getTime();
+        const isPastOtEnd = otDiffMs <= 0;
+
+        let remainingOtStr = '';
+        if (!isPastOtEnd) {
+          const remSecs = Math.floor(otDiffMs / 1000);
+          const hrs = Math.floor(remSecs / 3600);
+          const mins = Math.floor((remSecs % 3600) / 60);
+          const secs = remSecs % 60;
+          remainingOtStr = `${hrs > 0 ? `${hrs}j ` : ''}${mins}m ${secs}d`;
+        } else {
+          remainingOtStr = 'Waktu Lembur Selesai';
+        }
+
+        return {
+          isTimeForClockOut: isPastOtEnd,
+          timeRemainingFormatted: remainingOtStr,
+          isAutoLockWarning: false,
+        };
+      }
+    }
+
+    // 2. Normal Shift End Time Calculation
+    const endTimeParts = parseTime(userShift?.endTime);
+    if (!endTimeParts) {
       return { isTimeForClockOut: true, timeRemainingFormatted: '', isAutoLockWarning: false };
     }
 
-    const [endHours, endMinutes] = userShift.endTime.split(':').map(Number);
     const shiftEndTime = new Date(currentTime);
-    shiftEndTime.setHours(endHours, endMinutes, 0, 0);
+    shiftEndTime.setHours(endTimeParts.hours, endTimeParts.minutes, 0, 0);
 
-    const [startHours] = (userShift.startTime || '08:00').split(':').map(Number);
-    if (userShift.isCrossDay && endHours < startHours) {
-      if (currentTime.getHours() >= startHours) {
+    const startTimeParts = parseTime(userShift?.startTime) || { hours: 8, minutes: 0 };
+    if (userShift?.isCrossDay && endTimeParts.hours < startTimeParts.hours) {
+      if (currentTime.getHours() >= startTimeParts.hours) {
         shiftEndTime.setDate(shiftEndTime.getDate() + 1);
       }
     }
@@ -1009,8 +1435,9 @@ export const HrmEmployeeDashboard: React.FC = () => {
 
   const canClockIn = !hasClockedIn && locationStatus === 'inside';
   const isClockInBlockedLocation = !hasClockedIn && locationStatus !== 'inside';
-  const isWaitingClockOut = hasClockedIn && !hasClockedOut && !isTimeForClockOut && !isLockedBreach;
-  const canClockOut = hasClockedIn && !hasClockedOut && isTimeForClockOut && !isLockedBreach;
+  const isRemoteUnlocked = Boolean(todayAttendance?.isRemoteUnlocked);
+  const isWaitingClockOut = hasClockedIn && !hasClockedOut && !isTimeForClockOut && !isRemoteUnlocked && !isLockedBreach;
+  const canClockOut = hasClockedIn && !hasClockedOut && (isTimeForClockOut || isRemoteUnlocked) && !isLockedBreach;
   const isCompleted = hasClockedIn && hasClockedOut;
 
   // Monthly stats
@@ -1105,6 +1532,26 @@ export const HrmEmployeeDashboard: React.FC = () => {
               <span>Mutasi: {user.divisionName}</span>
             </span>
           )}
+
+          {user?.isFieldSentinelEnabled && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-xs border border-indigo-500/20 font-medium">
+                <Radio className="w-3.5 h-3.5 animate-pulse text-indigo-600 dark:text-indigo-400" />
+                <span>Pos: {user.assignedLocationName || 'Titik Khusus'} ({user.assignedRadiusMeters || 150}m)</span>
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setSpotCheckModalOpen(true)}
+                className="h-7 text-xs px-2.5 rounded-lg border-primary/30 text-primary hover:bg-primary/10 gap-1 font-semibold shadow-2xs"
+                title="Lakukan konfirmasi scan wajah ber-watermark sekarang"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                Lapor Wajah Titik
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Quick Actions (Kios & Notif: only shown on desktop/tablet since mobile navbar has them) */}
@@ -1161,7 +1608,16 @@ export const HrmEmployeeDashboard: React.FC = () => {
             <p>
               Akun Anda terikat pada <strong>{user?.deviceModel || 'Perangkat Utama'}</strong>, namun aplikasi saat ini terdeteksi dibuka pada perangkat berbeda (<strong>{currentDeviceModel}</strong>). Sesuai kebijakan keamanan PT. Fawwaz Reski Perwira, dilarang keras membagikan akun untuk presensi titipan. Jika Anda merasa akun Anda diakses orang lain, segera ganti kata sandi.
             </p>
-            <div className="flex items-center gap-2 pt-1">
+            <div className="flex items-center flex-wrap gap-2 pt-1">
+              <Button
+                size="sm"
+                variant="default"
+                disabled={isBindingDevice}
+                onClick={handleBindCurrentDevice}
+                className="rounded-xl text-xs h-8 px-3 font-semibold bg-amber-600 hover:bg-amber-700 text-white shadow-xs"
+              >
+                {isBindingDevice ? 'Menautkan...' : 'Tautkan ke Perangkat Ini'}
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -1251,8 +1707,25 @@ export const HrmEmployeeDashboard: React.FC = () => {
           ) : (
             <AlertCircle className="h-4 w-4" />
           )}
-          <AlertDescription className="text-sm font-medium">
-            {attendanceMessage.text}
+          <AlertDescription className="text-sm font-medium flex items-center justify-between flex-wrap gap-2">
+            <span>{attendanceMessage.text}</span>
+            {attendanceMessage.text.includes('quota') && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs font-semibold bg-background hover:bg-muted text-foreground border-rose-500/40 rounded-xl"
+                onClick={() => {
+                  try {
+                    localStorage.removeItem('hrm_attendance');
+                    localStorage.removeItem('hrm_perimeter_violations');
+                    setAttendanceMessage(null);
+                    window.location.reload();
+                  } catch (e) {}
+                }}
+              >
+                🧹 Bersihkan Cache & Muat Ulang
+              </Button>
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -1519,8 +1992,8 @@ export const HrmEmployeeDashboard: React.FC = () => {
                   <span className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">
                     Presensi Masuk
                   </span>
-                  <Badge variant="outline" className="text-[10px]">
-                    Selfie + Barcode
+                  <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20 font-medium">
+                    Face AI + GPS Lokasi
                   </Badge>
                 </div>
                 <div className="flex items-baseline gap-2">
@@ -1542,7 +2015,7 @@ export const HrmEmployeeDashboard: React.FC = () => {
                       ? 'Sudah Presensi Masuk'
                       : isClockInBlockedLocation
                       ? 'Terkunci (Di Luar Area)'
-                      : 'Clock In Sekarang'}
+                      : 'Clock In Sekarang (Instant)'}
                   </Button>
                 </div>
               </div>
@@ -1553,8 +2026,8 @@ export const HrmEmployeeDashboard: React.FC = () => {
                   <span className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">
                     Presensi Pulang
                   </span>
-                  <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
-                    Hanya Selfie
+                  <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20 font-medium">
+                    Face AI + GPS Lokasi
                   </Badge>
                 </div>
                 <div className="flex items-baseline gap-2">
@@ -1589,7 +2062,7 @@ export const HrmEmployeeDashboard: React.FC = () => {
                     ) : isWaitingClockOut ? (
                       <>
                         <Lock className="w-4 h-4" />
-                        Terkunci s/d {userShift?.endTime || '17:00'} ({timeRemainingFormatted})
+                        Terkunci s/d {todayApprovedOvertime?.scheduledEndTime || userShift?.endTime || '17:00'} ({timeRemainingFormatted})
                       </>
                     ) : (
                       <>
@@ -1598,30 +2071,150 @@ export const HrmEmployeeDashboard: React.FC = () => {
                           ? 'Sudah Presensi Pulang'
                           : !hasClockedIn
                           ? 'Belum Clock In'
-                          : 'Clock Out (Selfie Saja)'}
+                          : 'Clock Out Sekarang (Instant)'}
                       </>
                     )}
                   </Button>
+
+                  {/* Remote Unlock Status Badge */}
+                  {todayAttendance?.isRemoteUnlocked && !hasClockedOut && (
+                    <div className="flex items-center gap-2 p-2 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 rounded-lg text-xs font-semibold border border-emerald-500/30">
+                      <Unlock className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+                      <span>Kunci Checkout Telah Dibuka oleh {todayAttendance.remoteUnlockedBy || 'Atasan'}</span>
+                    </div>
+                  )}
+
+                  {/* Early Leave Status Badge */}
+                  {todayAttendance?.isEarlyLeave && (
+                    <div className="flex items-center gap-2 p-2 bg-amber-500/10 text-amber-700 dark:text-amber-300 rounded-lg text-xs font-semibold border border-amber-500/30">
+                      <AlertOctagon className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+                      <span>Presensi Pulang Awal Darurat ({todayAttendance.earlyLeaveCategory}) - Laporan Masuk ke Pimpinan</span>
+                    </div>
+                  )}
+
+                  {/* REKOMENDASI 1 & 2: Tombol Pilihan Ketika Belum Jam Pulang */}
+                  {isWaitingClockOut && (
+                    <div className="pt-2 space-y-1.5 border-t border-border/60">
+                      <Button
+                        type="button"
+                        onClick={() => setEarlyLeaveModalOpen(true)}
+                        variant="outline"
+                        className="w-full text-xs font-bold gap-1.5 text-rose-600 border-rose-200 dark:border-rose-900/50 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl py-2"
+                      >
+                        <AlertOctagon className="w-3.5 h-3.5 shrink-0" />
+                        🚨 Izin Pulang Awal Darurat (Sakit / Urgent)
+                      </Button>
+                      <p className="text-[10px] text-muted-foreground text-center">
+                        Tanpa tunggu atasan • Langsung terkirim ke WhatsApp Pimpinan & Superadmin
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
+            {/* ─── FITUR JAM ISTIRAHAT 1 JAM (BREAK TIME POLICY) ─── */}
+            {hasClockedIn && !hasClockedOut && breakPolicyEnabled && (
+              <div className={`p-4 rounded-xl border transition-all ${
+                todayAttendance?.isOnBreak
+                  ? 'bg-amber-500/10 border-amber-500/30 dark:bg-amber-950/20'
+                  : 'bg-card border-border'
+              }`}>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Coffee className={`w-4 h-4 ${todayAttendance?.isOnBreak ? 'text-amber-600 animate-bounce' : 'text-primary'}`} />
+                      <h4 className="text-sm font-bold text-foreground">
+                        {todayAttendance?.isOnBreak ? '☕ Sedang Masa Istirahat (1 Jam)' : 'Hak Jam Istirahat (1 Jam Keluar Pos)'}
+                      </h4>
+                      {todayAttendance?.isOnBreak && (
+                        <Badge className="bg-amber-600 text-white text-[10px] animate-pulse">
+                          Radar Dijeda (Aman)
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {todayAttendance?.isOnBreak
+                        ? 'Anda bebas berada di luar pos untuk makan/istirahat. Perimeter breach dijeda selama 1 jam.'
+                        : 'Karyawan diizinkan meninggalkan pos selama 1 jam (makan di luar) tanpa memicu alarm perimeter.'}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {todayAttendance?.isOnBreak ? (
+                      <div className="flex items-center gap-2">
+                        <div className="px-3 py-1.5 bg-background border border-amber-500/40 rounded-xl text-center">
+                          <span className="text-[10px] uppercase font-bold text-muted-foreground block">Sisa Waktu</span>
+                          <span className={`text-base font-black font-mono ${
+                            breakRemainingSeconds <= 600 ? 'text-rose-600 animate-pulse' : 'text-amber-600'
+                          }`}>
+                            {String(Math.floor(breakRemainingSeconds / 60)).padStart(2, '0')}:
+                            {String(breakRemainingSeconds % 60).padStart(2, '0')}
+                          </span>
+                        </div>
+                        <Button
+                          onClick={handleEndBreak}
+                          disabled={isEndingBreak}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold gap-1.5 rounded-xl shadow-xs"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          {isEndingBreak ? 'Menyimpan...' : 'Selesai Istirahat'}
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        onClick={handleStartBreak}
+                        disabled={isStartingBreak}
+                        variant="outline"
+                        className="border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 text-xs font-semibold gap-1.5 rounded-xl"
+                      >
+                        <Coffee className="w-3.5 h-3.5" />
+                        {isStartingBreak ? 'Memproses...' : 'Mulai Jam Istirahat (1 Jam)'}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Attendance Details Card if recorded */}
             {todayAttendance && (
-              <div className="p-3.5 bg-muted/30 rounded-xl border border-border text-xs text-foreground flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>
-                    Durasi Kerja: <strong>{Math.floor(todayAttendance.workDurationMinutes / 60)} Jam {todayAttendance.workDurationMinutes % 60} Menit</strong>
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {todayAttendance.securityFlags?.map((flag, idx) => (
-                    <span key={idx} className="px-2 py-0.5 rounded-full bg-background border text-[10px] font-mono text-muted-foreground">
-                      ✓ {flag.replace(/_/g, ' ')}
+              <div className="p-3.5 bg-muted/30 rounded-xl border border-border text-xs text-foreground space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>
+                      Durasi Kerja: <strong>{Math.floor(todayAttendance.workDurationMinutes / 60)} Jam {todayAttendance.workDurationMinutes % 60} Menit</strong>
                     </span>
-                  ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {Array.isArray(todayAttendance.securityFlags) && todayAttendance.securityFlags.map((flag, idx) => (
+                      <span key={idx} className="px-2 py-0.5 rounded-full bg-background border text-[10px] font-mono text-muted-foreground">
+                        ✓ {String(flag).replace(/_/g, ' ')}
+                      </span>
+                    ))}
+                  </div>
                 </div>
+
+                {/* Arsip Foto Wajah Presensi Review */}
+                {Boolean(todayAttendance.photoOut || todayAttendance.photoIn || (todayAttendance as any).photoUrl) && (
+                  <div className="flex items-center gap-3 pt-2 border-t border-border/50">
+                    <img
+                      src={todayAttendance.photoOut || todayAttendance.photoIn || (todayAttendance as any).photoUrl}
+                      alt="Arsip Presensi"
+                      className="w-11 h-11 rounded-lg object-cover border border-emerald-500/50 shrink-0 shadow-xs"
+                    />
+                    <div className="text-[11px] leading-tight">
+                      <p className="font-semibold text-foreground flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                        <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                        Arsip Foto Presensi Wajah Terverifikasi
+                      </p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        Watermark waktu atomik WIB &amp; koordinat GPS tertanam sebagai bukti audit forensik.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
@@ -1638,12 +2231,18 @@ export const HrmEmployeeDashboard: React.FC = () => {
                   Status Lembur Hari Ini
                 </CardTitle>
                 {todayApprovedOvertime ? (
-                  <Badge className="bg-emerald-600 text-white text-[10px]">
-                    Disetujui Admin
-                  </Badge>
+                  todayApprovedOvertime.overtimePhase === 'completed' ? (
+                    <Badge className="bg-emerald-600 text-white text-[10px]">
+                      Selesai Dilaporkan
+                    </Badge>
+                  ) : (
+                    <Badge className="bg-emerald-600 text-white text-[10px] animate-pulse">
+                      ● Lembur Berjalan
+                    </Badge>
+                  )
                 ) : userOvertimeRequests.some((r) => r.status === 'pending') ? (
                   <Badge variant="outline" className="text-amber-600 border-amber-300 bg-amber-50 text-[10px]">
-                    Menunggu Approval
+                    Menunggu Approval Karu/Admin
                   </Badge>
                 ) : (
                   <Badge variant="outline" className="text-muted-foreground text-[10px]">
@@ -1655,22 +2254,103 @@ export const HrmEmployeeDashboard: React.FC = () => {
 
             <CardContent className="pt-4 space-y-3 text-xs">
               {todayApprovedOvertime ? (
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-1.5 text-emerald-950 dark:text-emerald-100">
-                  <div className="flex items-center justify-between font-bold">
-                    <span>Lembur Resmi Aktif</span>
-                    <span className="text-sm font-mono">{todayApprovedOvertime.approvedHours || todayApprovedOvertime.durationHours} Jam</span>
+                todayApprovedOvertime.overtimePhase === 'completed' ? (
+                  /* Lembur Selesai Card */
+                  <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/25 rounded-2xl space-y-2 text-emerald-950 dark:text-emerald-100">
+                    <div className="flex items-center justify-between font-bold">
+                      <span className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300 text-xs">
+                        <CheckCircle2 className="w-4 h-4" />
+                        Lembur Telah Selesai &amp; Dilaporkan
+                      </span>
+                      <span className="text-xs font-mono bg-emerald-500/20 px-2 py-0.5 rounded-md">
+                        {todayApprovedOvertime.actualEndTime || 'Selesai'} WIB
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-muted-foreground">
+                      Hasil Kerja: <em>"{todayApprovedOvertime.completionNotes || '-'}"</em>
+                    </p>
+
+                    {Array.isArray(todayApprovedOvertime.completionPhotos) && todayApprovedOvertime.completionPhotos.length > 0 && (
+                      <div className="space-y-1 pt-1">
+                        <span className="text-[10px] font-semibold text-muted-foreground">
+                          Bukti Foto Hasil Kerja ({todayApprovedOvertime.completionPhotos.length} foto):
+                        </span>
+                        <div className="flex items-center gap-2 overflow-x-auto py-1">
+                          {todayApprovedOvertime.completionPhotos.map((photo, i) => (
+                            <img
+                              key={i}
+                              src={photo}
+                              alt={`Bukti ${i + 1}`}
+                              className="w-12 h-12 rounded-lg object-cover border border-emerald-500/40 shrink-0"
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="p-2 bg-emerald-600/15 rounded-xl text-[10px] text-emerald-800 dark:text-emerald-200 font-medium">
+                      ✓ Pekerjaan lembur telah selesai dilaporkan. Tombol <strong>Presensi Pulang</strong> kini aktif.
+                    </div>
                   </div>
-                  <p className="text-[11px] opacity-90">
-                    Disetujui oleh: <strong>{todayApprovedOvertime.approvedByName || 'Admin/HRD'}</strong>
-                  </p>
-                  <p className="text-[11px] italic">
-                    "{todayApprovedOvertime.taskDescription}"
-                  </p>
-                  <div className="text-[10px] pt-1 text-emerald-700 dark:text-emerald-300">
-                    Estimasi Uang Lembur: Rp {Number(todayApprovedOvertime.totalPay ?? todayApprovedOvertime.compensationAmount ?? 0).toLocaleString('id-ID')}
+                ) : (
+                  /* Lembur Berjalan dengan Countdown Timer Otomatis */
+                  <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl space-y-3 text-emerald-950 dark:text-emerald-100">
+                    <div className="flex items-center justify-between font-bold">
+                      <span className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300 text-xs">
+                        <Timer className="w-4 h-4 animate-spin" />
+                        Lembur Sedang Berjalan
+                      </span>
+                      <span className="text-xs font-mono bg-emerald-500/20 px-2 py-0.5 rounded-md">
+                        {todayApprovedOvertime.approvedHours || todayApprovedOvertime.durationHours} Jam Lembur
+                      </span>
+                    </div>
+
+                    {/* LIVE COUNTDOWN DISPLAY */}
+                    <div className="p-3 bg-card border border-emerald-500/30 rounded-xl text-center space-y-1">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
+                        Sisa Waktu Lembur Otomatis
+                      </span>
+                      <div className="text-2xl font-black font-mono tracking-tight text-emerald-600 dark:text-emerald-400">
+                        {timeRemainingFormatted || '00j 00m 00d'}
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">
+                        Batas Waktu Selesai: <strong>{todayApprovedOvertime.scheduledEndTime || 'Sesuai Jadwal'} WIB</strong>
+                      </p>
+                    </div>
+
+                    <div className="space-y-1 text-[11px]">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Karu Otorisasi:</span>
+                        <strong className="text-foreground">{todayApprovedOvertime.supervisorName || 'Kepala Regu'}</strong>
+                      </div>
+                      {todayApprovedOvertime.supervisorSignature && (
+                        <div className="flex items-center justify-between pt-0.5">
+                          <span className="text-muted-foreground">Paraf Karu:</span>
+                          <img
+                            src={todayApprovedOvertime.supervisorSignature}
+                            alt="Paraf Karu"
+                            className="h-7 max-w-[90px] object-contain border border-border/70 rounded bg-white p-0.5"
+                          />
+                        </div>
+                      )}
+                      <p className="text-muted-foreground italic pt-1 truncate">
+                        "{todayApprovedOvertime.taskDescription}"
+                      </p>
+                    </div>
+
+                    {/* Button Akhiri Lembur Sekarang */}
+                    <Button
+                      type="button"
+                      onClick={() => setFinishOvertimeModalOpen(true)}
+                      className="w-full rounded-xl text-xs font-semibold h-9 gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      Akhiri Lembur Sekarang (Selesai Lebih Awal)
+                    </Button>
                   </div>
-                </div>
-              ) : userOvertimeRequests.length > 0 ? (
+                )
+              ) : Array.isArray(userOvertimeRequests) && userOvertimeRequests.length > 0 ? (
                 <div className="space-y-2">
                   {userOvertimeRequests.map((ot) => (
                     <div key={ot.id} className="p-2.5 bg-muted/40 rounded-xl border border-border space-y-1">
@@ -1686,7 +2366,7 @@ export const HrmEmployeeDashboard: React.FC = () => {
                 </div>
               ) : (
                 <p className="text-muted-foreground text-xs">
-                  Hanya karyawan dengan persetujuan atau mandat resmi dari Admin yang berhak menjalankan jam lembur.
+                  Hanya karyawan dengan persetujuan atau mandat resmi Kepala Regu &amp; Admin yang berhak menjalankan jam lembur.
                 </p>
               )}
 
@@ -1803,7 +2483,7 @@ export const HrmEmployeeDashboard: React.FC = () => {
             <Timer className="w-4 h-4 text-primary" />
           </div>
           <p className="text-lg font-bold text-foreground truncate">
-            {userShift?.name.split(' ')[0] || 'Reguler'}
+            {userShift?.name ? userShift.name.split(' ')[0] : 'Reguler'}
           </p>
         </div>
       </div>
@@ -2150,145 +2830,34 @@ export const HrmEmployeeDashboard: React.FC = () => {
                     <AlertTriangle className="w-4 h-4" />
                     <span>Wajah Mismatch ({biometricResult.confidence}%)</span>
                   </Button>
-                ) : actionType === 'clock_in' ? (
-                  <Button
-                    type="button"
-                    onClick={handleProceedToBarcode}
-                    className="w-full sm:w-auto rounded-xl text-xs font-bold h-11 px-6 gap-2 bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg"
-                  >
-                    <span>Lanjut ke Step 2: Barcode Divisi</span>
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
                 ) : (
                   <Button
                     type="button"
-                    onClick={handleSubmitAttendance}
+                    onClick={() => handleSubmitAttendance(photoDataUrl || undefined, biometricResult)}
                     disabled={submitting}
                     className="w-full sm:w-auto rounded-xl text-xs font-bold h-11 px-6 gap-2 bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg"
                   >
                     <Check className="w-4 h-4" />
-                    <span>{submitting ? 'Menyimpan Presensi...' : 'Konfirmasi Presensi Pulang'}</span>
+                    <span>
+                      {submitting
+                        ? 'Menyimpan Presensi...'
+                        : actionType === 'clock_in'
+                        ? 'Konfirmasi Presensi Masuk'
+                        : 'Konfirmasi Presensi Pulang'}
+                    </span>
                   </Button>
                 )}
               </div>
             )}
 
             <p className="text-[11px] text-white/75 font-sans tracking-tight text-center max-w-xs leading-tight">
-              🛡️ <strong>Anti-Kecurangan Aktif:</strong> Ikuti petunjuk oval (posisikan wajah, lalu jauhkan kamera HP perlahan). Foto otomatis diambil saat terverifikasi.
+              🛡️ <strong>Anti-Kecurangan Aktif:</strong> Posisikan wajah di lingkaran. Presensi otomatis tersimpan instan ke server begitu biometrik wajah dan radius GPS valid.
             </p>
           </div>
         </div>
       )}
 
-      {/* ─── 8B. STEP 2 BARCODE TERMINAL DIVISI MODAL (CLOCK IN ONLY) ─── */}
-      <Dialog open={barcodeModalOpen} onOpenChange={setBarcodeModalOpen}>
-        <DialogContent className="max-w-md rounded-2xl border border-border shadow-2xl">
-          <DialogHeader>
-            <div className="flex items-center justify-between">
-              <DialogTitle className="flex items-center gap-2 text-base font-bold">
-                <QrCode className="w-5 h-5 text-emerald-600" />
-                Step 2: Scan Barcode Terminal Divisi
-              </DialogTitle>
-              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
-                Validasi Lokasi Fisik
-              </Badge>
-            </div>
-            <DialogDescription className="text-xs">
-              Foto selfie telah diverifikasi. Masukkan atau scan kode barcode aktif dari monitor terminal divisi {user?.divisionName || ''}.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-3.5 my-1">
-            {/* Selfie Verification Preview Thumbnail */}
-            {photoDataUrl && (
-              <div className="flex items-center gap-3 p-2.5 rounded-xl bg-muted/40 border border-border">
-                <img
-                  src={photoDataUrl}
-                  alt="Selfie Terverifikasi"
-                  className="w-14 h-14 rounded-lg object-cover border border-emerald-400"
-                />
-                <div className="text-xs space-y-0.5">
-                  <p className="font-semibold text-foreground flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    Selfie Biometrik Terverifikasi
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {user?.fullName} ({user?.nip})
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBarcodeModalOpen(false);
-                      setCameraModalOpen(true);
-                      handleRetakePhoto();
-                    }}
-                    className="text-[10px] text-primary hover:underline font-medium"
-                  >
-                    Ganti / Ambil Ulang Foto
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-1.5 pt-1">
-              <label className="text-xs font-semibold text-foreground">
-                Kode Barcode Terminal Divisi Aktif
-              </label>
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Contoh: HRM-QR-XXXX-XXXXXX"
-                  value={dynamicQrInput}
-                  onChange={(e) => {
-                    setDynamicQrInput(e.target.value.toUpperCase());
-                    setQrValidationError(null);
-                  }}
-                  className="font-mono text-xs uppercase h-9 rounded-xl tracking-wider"
-                />
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={handleAutoFillDivisionQr}
-                  className="text-[11px] font-semibold h-9 rounded-xl shrink-0 gap-1 bg-primary/10 text-primary hover:bg-primary/20"
-                  title="Ambil token aktif dari terminal divisi ini (Simulasi Scan)"
-                >
-                  <QrCode className="w-3.5 h-3.5" />
-                  Ambil Kode
-                </Button>
-              </div>
-              {qrValidationError && (
-                <p className="text-[11px] text-red-600 leading-tight mt-1">{qrValidationError}</p>
-              )}
-            </div>
-
-            <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-2.5 text-[11px] text-blue-900 dark:text-blue-200">
-              ℹ️ Barcode terminal divisi berputar otomatis setiap 15 detik untuk mencegah kecurangan dan titip absensi.
-            </div>
-          </div>
-
-          <DialogFooter className="gap-2 sm:gap-0 mt-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setBarcodeModalOpen(false);
-                setCameraModalOpen(true);
-              }}
-              className="rounded-xl text-xs h-9"
-            >
-              Kembali ke Kamera
-            </Button>
-
-            <Button
-              onClick={handleSubmitAttendance}
-              disabled={submitting || !dynamicQrInput}
-              className="rounded-xl text-xs font-semibold h-9 shadow-xs bg-primary text-primary-foreground"
-            >
-              {submitting ? 'Menyimpan...' : 'Konfirmasi & Selesaikan Presensi Masuk'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ─── 9. DIALOG AJUKAN LEMBUR ─── */}
+      {/* ─── 9. DIALOG AJUKAN LEMBUR (DENGAN NAMA & PARAF KEPALA REGU) ─── */}
       <Dialog open={overtimeModalOpen} onOpenChange={setOvertimeModalOpen}>
         <DialogContent className="max-w-md rounded-2xl border border-border shadow-2xl">
           <DialogHeader>
@@ -2297,12 +2866,12 @@ export const HrmEmployeeDashboard: React.FC = () => {
               Pengajuan Jam Lembur (Overtime)
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Sesuai kebijakan ketat, lembur hanya berlaku setelah mendapat persetujuan resmi dari Admin / HRD dengan batasan jam yang disepakati.
+              Sesuai kebijakan ketat, lembur harus disertai mandat dan paraf digital Kepala Regu (Karu) yang bertugas di lokasi.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
+          <div className="space-y-3.5 py-1">
+            <div className="space-y-1">
               <label className="text-xs font-semibold text-foreground">
                 Jumlah Jam Lembur yang Diajukan
               </label>
@@ -2320,25 +2889,73 @@ export const HrmEmployeeDashboard: React.FC = () => {
                   </Button>
                 ))}
               </div>
-              <p className="text-[11px] text-muted-foreground mt-1">
-                Admin berhak menyetujui, mengurangi, atau menolak jumlah jam lembur sesuai kebutuhan pekerjaan.
+            </div>
+
+            {/* Nama Kepala Regu di Lokasi */}
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-foreground flex items-center justify-between">
+                <span>Nama Kepala Regu (Karu) di Lokasi <span className="text-rose-500">*</span></span>
+                <span className="text-[10px] text-muted-foreground">Wajib Diisi</span>
+              </label>
+              <Input
+                placeholder="Contoh: Bpk. Bambang Sutrisno (Karu Lapangan)"
+                value={supervisorNameInput}
+                onChange={(e) => setSupervisorNameInput(e.target.value)}
+                className="text-xs rounded-xl h-9"
+              />
+            </div>
+
+            {/* Interactive Digital Signature Canvas for Karu */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                  <PenTool className="w-3.5 h-3.5 text-primary" />
+                  <span>Paraf Kepala Regu di Lokasi <span className="text-rose-500">*</span></span>
+                </label>
+                {hasSignature && (
+                  <button
+                    type="button"
+                    onClick={handleClearSignature}
+                    className="text-[11px] text-rose-500 hover:underline flex items-center gap-1"
+                  >
+                    <RotateCw className="w-3 h-3" />
+                    Hapus / Ulangi Paraf
+                  </button>
+                )}
+              </div>
+              <div className="border border-border/80 rounded-xl overflow-hidden bg-card relative touch-none">
+                <canvas
+                  ref={signatureCanvasRef}
+                  width={380}
+                  height={120}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerLeave={handlePointerUp}
+                  className="w-full h-[120px] cursor-crosshair bg-slate-50 dark:bg-slate-900/60"
+                />
+                {!hasSignature && (
+                  <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center text-muted-foreground/60 gap-1 text-[11px]">
+                    <PenTool className="w-4 h-4 opacity-50" />
+                    <span>Bubuhkan paraf Kepala Regu di sini (jari / stylus)</span>
+                  </div>
+                )}
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Tanda tangan digital langsung di layar HP sebagai bukti otorisasi langsung di lokasi kerja.
               </p>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <label className="text-xs font-semibold text-foreground">
                 Alasan / Rincian Pekerjaan Lembur <span className="text-rose-500">*</span>
               </label>
               <Textarea
-                placeholder="Contoh: Menyelesaikan laporan penutupan buku kas akhir bulan atau lembur perbaikan jaringan server..."
+                placeholder="Contoh: Menyelesaikan pekerjaan penutupan instalasi server divisi yang mendesak..."
                 value={overtimeReasonInput}
                 onChange={(e) => setOvertimeReasonInput(e.target.value)}
-                className="text-xs rounded-xl min-h-[80px]"
+                className="text-xs rounded-xl min-h-[70px]"
               />
-            </div>
-
-            <div className="p-3 bg-muted/30 rounded-xl border border-border text-[11px] text-muted-foreground">
-              💡 Setelah diajukan, Admin akan menerima notifikasi langsung untuk memberikan persetujuan resmi jumlah jam lembur Anda.
             </div>
           </div>
 
@@ -2348,10 +2965,106 @@ export const HrmEmployeeDashboard: React.FC = () => {
             </Button>
             <Button
               onClick={handleRequestOvertime}
-              disabled={submittingOvertime || !overtimeReasonInput.trim()}
+              disabled={submittingOvertime || !overtimeReasonInput.trim() || !supervisorNameInput.trim() || !hasSignature}
               className="rounded-xl text-xs font-semibold h-9"
             >
               {submittingOvertime ? 'Mengirim...' : 'Kirim Pengajuan ke Admin'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── 9B. DIALOG SELESAIKAN LEMBUR & BUKTI KERJA ─── */}
+      <Dialog open={finishOvertimeModalOpen} onOpenChange={setFinishOvertimeModalOpen}>
+        <DialogContent className="max-w-md rounded-2xl border border-border shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+              Akhiri Lembur &amp; Lapor Hasil Kerja
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Laporkan status penyelesaian pekerjaan lembur Anda dan lampirkan bukti foto (bisa lebih dari 1 foto). Setelah disubmit, tombol Presensi Pulang akan aktif.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3.5 py-1 text-xs">
+            <div className="p-3 bg-muted/40 rounded-xl border border-border space-y-1">
+              <div className="flex items-center justify-between font-semibold text-foreground">
+                <span>Lembur Hari Ini: {todayApprovedOvertime?.approvedHours || todayApprovedOvertime?.durationHours} Jam</span>
+                <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-300 bg-emerald-50 dark:bg-emerald-950/40">
+                  {todayApprovedOvertime?.scheduledEndTime ? `Batas: ${todayApprovedOvertime.scheduledEndTime} WIB` : 'Aktif'}
+                </Badge>
+              </div>
+              <p className="text-[11px] text-muted-foreground truncate">
+                Karu Otorisasi: <strong>{todayApprovedOvertime?.supervisorName || '-'}</strong>
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="font-semibold text-foreground">
+                Keterangan / Status Hasil Pekerjaan <span className="text-rose-500">*</span>
+              </label>
+              <Textarea
+                placeholder="Contoh: Pekerjaan perbaikan divisi telah selesai lebih awal, seluruh fungsi diuji dan berjalan normal..."
+                value={overtimeCompletionNotes}
+                onChange={(e) => setOvertimeCompletionNotes(e.target.value)}
+                className="text-xs rounded-xl min-h-[75px]"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="font-semibold text-foreground flex items-center gap-1.5">
+                  <UploadCloud className="w-3.5 h-3.5 text-primary" />
+                  <span>Upload Foto Bukti Hasil Kerja (Bisa &gt; 1 Foto)</span>
+                </label>
+                <span className="text-[10px] text-muted-foreground">
+                  {overtimeProofPhotos.length} foto dipilih
+                </span>
+              </div>
+
+              <label className="cursor-pointer flex items-center justify-center gap-2 px-3 py-2 border-2 border-dashed border-border hover:border-primary/60 rounded-xl bg-card hover:bg-muted/30 transition-colors w-full text-center">
+                <ImageIcon className="w-4 h-4 text-primary" />
+                <span className="text-xs font-medium text-foreground">Pilih / Tambah Foto Bukti</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handlePhotoUploadForOvertime}
+                  className="hidden"
+                />
+              </label>
+
+              {overtimeProofPhotos.length > 0 && (
+                <div className="grid grid-cols-3 gap-2 pt-1 max-h-44 overflow-y-auto p-1 bg-muted/20 rounded-xl border border-border/50">
+                  {overtimeProofPhotos.map((photo, index) => (
+                    <div key={index} className="relative group rounded-lg overflow-hidden border border-border aspect-square bg-black">
+                      <img src={photo} alt={`Bukti ${index + 1}`} className="w-full h-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveProofPhoto(index)}
+                        className="absolute top-1 right-1 bg-rose-600 text-white rounded-full p-1 shadow-md hover:bg-rose-700 transition-colors"
+                        title="Hapus foto ini"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" onClick={() => setFinishOvertimeModalOpen(false)} className="rounded-xl text-xs h-9">
+              Batal
+            </Button>
+            <Button
+              onClick={handleFinishOvertimeSubmit}
+              disabled={isSubmittingFinishOt || !overtimeCompletionNotes.trim()}
+              className="rounded-xl text-xs font-semibold h-9 bg-emerald-600 hover:bg-emerald-500 text-white"
+            >
+              {isSubmittingFinishOt ? 'Menyimpan...' : 'Selesaikan Lembur & Aktifkan Pulang'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2379,41 +3092,24 @@ export const HrmEmployeeDashboard: React.FC = () => {
                   }}
                   className="text-[11px] text-muted-foreground h-7"
                 >
-                  Hapus Semua
+                  Bersihkan
                 </Button>
               )}
             </div>
           </DialogHeader>
-
-          <div className="max-h-[350px] overflow-y-auto space-y-2.5 py-1">
+          <div className="space-y-2 py-2 max-h-[60vh] overflow-y-auto">
             {notifications.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground text-xs">
-                Tidak ada notifikasi saat ini.
-              </div>
+              <p className="text-center text-xs text-muted-foreground py-6">Tidak ada notifikasi baru.</p>
             ) : (
-              notifications.map((n) => (
-                <div
-                  key={n.id}
-                  onClick={() => {
-                    if (!n.isRead) {
-                      hrmService.markNotificationAsRead(n.id);
-                    }
-                  }}
-                  className={`p-3 rounded-xl border text-xs transition-colors cursor-pointer ${
-                    n.isRead
-                      ? 'bg-card border-border text-muted-foreground'
-                      : 'bg-primary/5 border-primary/20 text-foreground font-medium'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-bold text-foreground">{n.title}</span>
+              (Array.isArray(notifications) ? notifications : []).map((n) => (
+                <div key={n.id} className="p-3 bg-muted/40 rounded-xl border border-border text-xs space-y-1">
+                  <div className="flex items-center justify-between font-semibold">
+                    <span>{n.title}</span>
                     <span className="text-[10px] text-muted-foreground">
-                      {new Date(n.createdAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                      {(n.createdAt || n.timestamp || '').slice(11, 16) || '-'}
                     </span>
                   </div>
-                  <p className="text-[11px] mt-1 text-muted-foreground leading-relaxed">
-                    {n.message}
-                  </p>
+                  <p className="text-muted-foreground">{n.message}</p>
                 </div>
               ))
             )}
@@ -3000,6 +3696,109 @@ export const HrmEmployeeDashboard: React.FC = () => {
             >
               <Lock size={14} />
               {isChangingPassword ? 'Memperbarui...' : 'Simpan Kata Sandi'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── FIELD SENTINEL: PIMPINAN SPOT CHECK MODAL ─── */}
+      {user && (
+        <HrmSpotCheckModal
+          open={spotCheckModalOpen}
+          user={user}
+          instructionNotes={spotCheckInstruction}
+          onClose={() => setSpotCheckModalOpen(false)}
+          onSuccess={() => {
+            toast.success('Bukti verifikasi wajah ber-watermark berhasil dikirim ke Pimpinan & Superadmin!');
+            loadAttendanceData();
+          }}
+        />
+      )}
+
+      {/* ─── REKOMENDASI 1: EARLY LEAVE EMERGENCY MODAL DIALOG ─── */}
+      <Dialog open={earlyLeaveModalOpen} onOpenChange={setEarlyLeaveModalOpen}>
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold text-rose-600">
+              <AlertOctagon className="w-5 h-5 shrink-0" />
+              Izin Pulang Awal Darurat (Self-Service)
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Pilihan kepulangan khusus situasi darurat/sakit tanpa menunggu persetujuan atasan. Sistem akan memproses checkout dan mengirim notifikasi WhatsApp langsung ke Pimpinan & Superadmin.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3.5 py-2 text-xs">
+            <div className="space-y-1.5">
+              <label className="font-semibold text-foreground">Kategori Kepulangan Darurat</label>
+              <div className="grid grid-cols-1 gap-2">
+                {[
+                  { id: 'sakit_mendadak', label: '🤒 Sakit Mendadak / Butuh Medis' },
+                  { id: 'darurat_keluarga', label: '👨‍👩‍👧‍👦 Darurat Keluarga / Musibah' },
+                  { id: 'tugas_luar', label: '💼 Tugas Luar / Panggilan Mendesak' },
+                  { id: 'lainnya', label: '⚠️ Keperluan Mendesak Lainnya' },
+                ].map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setEarlyLeaveCategory(cat.id as any)}
+                    className={`flex items-center justify-between p-2.5 rounded-xl border text-xs font-medium text-left transition-all ${
+                      earlyLeaveCategory === cat.id
+                        ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 font-bold'
+                        : 'border-border bg-card hover:bg-muted/50 text-foreground'
+                    }`}
+                  >
+                    <span>{cat.label}</span>
+                    {earlyLeaveCategory === cat.id && (
+                      <Check className="w-4 h-4 text-rose-600 shrink-0" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="font-semibold text-foreground">Alasan / Penjelasan Terinci *</label>
+              <textarea
+                rows={3}
+                value={earlyLeaveReason}
+                onChange={(e) => setEarlyLeaveReason(e.target.value)}
+                placeholder="Contoh: Mengalami demam tinggi dan harus segera ke klinik terdekat..."
+                className="w-full p-2.5 rounded-xl border border-border bg-background text-xs resize-none focus:outline-none focus:ring-2 focus:ring-rose-500"
+                required
+              />
+            </div>
+
+            <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-900 dark:text-amber-200 space-y-1 text-[11px] leading-relaxed">
+              <div className="font-bold flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
+                <Info className="w-3.5 h-3.5 shrink-0" />
+                Dual-Channel Broadcast Instan Aktif
+              </div>
+              <p>
+                Data kepulangan Anda akan langsung diteruskan ke WhatsApp Pimpinan (Drs. Hendra Gunawan) dan Superadmin. Alarm pelanggaran perimeter tidak akan dibunyikan.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="pt-2 flex flex-col sm:flex-row gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setEarlyLeaveModalOpen(false)}
+              className="rounded-xl text-xs h-9 w-full sm:w-auto"
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={isSubmittingEarlyLeave || !earlyLeaveReason.trim()}
+              onClick={handleConfirmEarlyLeave}
+              className="bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold gap-1.5 h-9 w-full sm:w-auto"
+            >
+              <AlertOctagon className="w-3.5 h-3.5" />
+              {isSubmittingEarlyLeave ? 'Memproses...' : 'Konfirmasi Pulang Darurat'}
             </Button>
           </DialogFooter>
         </DialogContent>

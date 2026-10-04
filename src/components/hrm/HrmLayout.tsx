@@ -56,6 +56,26 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   const navigate = useNavigate();
   const normalizeRole = (r?: string) => (r || '').toLowerCase().replace(/[\s_-]/g, '');
   const currentRole = normalizeRole(role);
+
+  // Standalone PWA Mode Detection (Lampiran 2 & 3)
+  const isPwaStandalone = React.useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    if (localStorage.getItem('hrm_force_desktop_mode') === 'true') return false;
+    const urlParams = new URLSearchParams(window.location.search);
+    return Boolean(
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true ||
+      document.referrer.includes('android-app://') ||
+      urlParams.get('source') === 'pwa' ||
+      urlParams.get('mode') === 'app' ||
+      localStorage.getItem('hrm_pwa_mode') === 'true'
+    );
+  }, []);
+
+  if (isPwaStandalone && (location.pathname === '/presensi' || location.pathname === '/dashboard')) {
+    return <div className="min-h-screen bg-[#14532D] text-foreground">{children}</div>;
+  }
+
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
     return localStorage.getItem('hrm_sidebar_collapsed') === 'true';
@@ -439,10 +459,10 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
         {/* User Card */}
         <div className={cn('m-2 rounded-xl bg-muted/30 border border-border transition-all', isCompact ? 'p-2 flex justify-center' : 'p-3')}>
           <div className={cn('flex items-center', isCompact ? 'justify-center' : 'gap-2.5')}>
-            {user?.avatarUrl ? (
+            {(user?.avatarUrl || (user as any)?.faceEnrolledPhoto) ? (
               <img
-                src={user.avatarUrl}
-                alt={user.fullName}
+                src={user?.avatarUrl || (user as any)?.faceEnrolledPhoto}
+                alt={user?.fullName || ''}
                 className="w-8 h-8 rounded-full object-cover shadow-2xs border border-primary/20 shrink-0"
               />
             ) : (
@@ -557,10 +577,10 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
           style={{ top: 'calc(54px + max(env(safe-area-inset-top, 0px), 24px))' }}
         >
           <div className="p-3 bg-muted rounded-xl mb-2 flex items-center gap-3">
-            {user?.avatarUrl ? (
+            {(user?.avatarUrl || (user as any)?.faceEnrolledPhoto) ? (
               <img
-                src={user.avatarUrl}
-                alt={user.fullName}
+                src={user?.avatarUrl || (user as any)?.faceEnrolledPhoto}
+                alt={user?.fullName || ''}
                 className="w-9 h-9 rounded-full object-cover shadow-sm border border-primary/20 shrink-0"
               />
             ) : (

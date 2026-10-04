@@ -36,11 +36,18 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     ...(options.headers || {}),
   };
 
+  const controller = new AbortController();
+  const timeoutMs = endpoint.includes('/bootstrap') ? 10000 : 8000;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
     const res = await fetch(url, {
       ...options,
       headers,
+      signal: options.signal || controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     const data = await res.json().catch(() => null);
 
@@ -51,8 +58,12 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
     return data as T;
   } catch (err: any) {
+    clearTimeout(timeoutId);
     if (err instanceof ApiError) {
       throw err;
+    }
+    if (err.name === 'AbortError') {
+      throw new ApiError('Koneksi ke backend waktu habis (timeout)', 408);
     }
     throw new ApiError(err.message || 'Gagal terhubung ke server backend', 0);
   }

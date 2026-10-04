@@ -25,16 +25,36 @@ export default defineConfig(({ mode }) => {
   plugins: [
     react(),
     mode === "development" && componentTagger(),
+    {
+      name: "generate-deploy-json",
+      generateBundle() {
+        const buildId = Date.now().toString();
+        const meta = {
+          buildId,
+          builtAt: new Date().toISOString(),
+          version: "2.1.0",
+        };
+        this.emitFile({
+          type: "asset",
+          fileName: "deploy.json",
+          source: JSON.stringify(meta, null, 2),
+        });
+      },
+    },
     enablePwa && VitePWA({
       registerType: "autoUpdate",
       injectRegister: "auto",
       includeAssets: ["favicon.ico", "pwa-192x192.png", "pwa-512x512.png", "manifest.webmanifest"],
       devOptions: {
-        enabled: true,
+        enabled: false,
       },
       workbox: {
         maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
-        globPatterns: ["**/*.{js,css,html,ico,png,svg,jpg,jpeg,webp,woff,woff2,json,bin}"],
+        globPatterns: ["**/*.{js,css,ico,png,svg,jpg,jpeg,webp,woff,woff2,json,bin}"],
+        navigateFallback: null,
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -47,12 +67,12 @@ export default defineConfig(({ mode }) => {
         name: "HRM Attendance System",
         short_name: "HRM Presensi",
         description: "Sistem Presensi & Manajemen SDM Mandiri Tanpa Browser",
-        theme_color: "#0d9488",
-        background_color: "#ffffff",
+        theme_color: "#14532D",
+        background_color: "#14532D",
         display: "standalone",
         orientation: "portrait-primary",
         scope: "/",
-        start_url: "/",
+        start_url: "/?source=pwa",
         icons: [
           { src: "/pwa-192x192.png", sizes: "192x192", type: "image/png", purpose: "any" },
           { src: "/pwa-512x512.png", sizes: "512x512", type: "image/png", purpose: "any" },

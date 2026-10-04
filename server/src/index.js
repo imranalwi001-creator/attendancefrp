@@ -32,20 +32,20 @@ app.get('/api/health', (req, res) => {
 app.get('/api/app-version', (req, res) => {
   res.json({
     success: true,
-    latestVersion: '1.0.9',
-    versionCode: 9,
+    latestVersion: '1.0.5',
+    versionCode: 6,
     minVersion: '1.0.0',
     downloadUrl: 'https://fawwazreskiperwira.com/downloads/hrm-attendance.apk',
-    forceUpdate: true,
-    title: 'Pembaruan Aplikasi Tersedia (v1.0.9)',
-    releaseNotes: 'Pembaruan Wajah Presisi 6-Pose (Dekatkan, Jauhkan, Berkedip, Tersenyum, Menoleh Kanan/Kiri), Peningkatan Presisi Koordinat GPS Radius Kantor, dan UI Absensi Modern.',
-    releasedAt: '2026-10-02'
+    forceUpdate: false,
+    title: 'Sistem Presensi HRM FRP',
+    releaseNotes: 'Sistem presensi biometrik & pelacakan multi-titik pos lapangan stabil.',
+    releasedAt: '2026-10-04'
   });
 });
 
 // ─── 1. AUTHENTICATION ────────────────────────────────────────────────────────
 app.post('/api/auth/login', async (req, res) => {
-  const { identifier, password } = req.body;
+  const { identifier, password, deviceId, deviceModel } = req.body;
   if (!identifier || !password) {
     return res.status(400).json({ success: false, error: 'Email/NIP dan kata sandi wajib diisi' });
   }
@@ -72,6 +72,47 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Kata sandi tidak sesuai' });
     }
 
+    const roleName = (row.role_code || row.role_name || '').toLowerCase().replace(/[\s_-]/g, '');
+    const isRestrictedRole = roleName === 'karyawan' || roleName === 'staff' || roleName === 'security' || roleName === 'cleaning' || roleName === 'danru';
+
+    // Anti Titip Akun / Multi-Device Protection:
+    // Karyawan hanya boleh mengakses dari 1 perangkat HP yang terikat pada login pertama kali
+    if (isRestrictedRole) {
+      const isLegacyGenericAndroidId = row.device_id === 'DEV-HW-UUID-ANDROID-882910';
+      const isBothAndroid = (/Android/i.test(row.device_model || '') || isLegacyGenericAndroidId) && /Android/i.test(deviceModel || '');
+
+      if (row.is_device_bound && row.device_id) {
+        if (deviceId && row.device_id !== deviceId) {
+          if (isLegacyGenericAndroidId || isBothAndroid) {
+            const boundModel = deviceModel || row.device_model || 'Android Device';
+            await pool.query(
+              `UPDATE hrm_profiles SET device_id = $1, device_model = $2, is_device_bound = true, device_bound_at = NOW(), updated_at = NOW() WHERE id = $3`,
+              [deviceId, boundModel, row.id]
+            );
+            row.device_id = deviceId;
+            row.device_model = boundModel;
+          } else {
+            return res.status(403).json({
+              success: false,
+              code: 'DEVICE_BINDING_MISMATCH',
+              error: `Akses Ditolak: Akun Anda telah terkunci secara permanen pada perangkat (${row.device_model || 'HP Karyawan Terdaftar'}). Penggunaan akun bersama dilarang untuk meminimalisir kecurangan. Silakan hubungi Superadmin / HRD jika Anda telah mengganti HP.`
+            });
+          }
+        }
+      } else if (deviceId) {
+        // Tautkan perangkat secara otomatis pada login pertama kali
+        const boundModel = deviceModel || 'Perangkat Karyawan';
+        await pool.query(
+          `UPDATE hrm_profiles SET device_id = $1, device_model = $2, is_device_bound = true, device_bound_at = NOW() WHERE id = $3`,
+          [deviceId, boundModel, row.id]
+        );
+        row.device_id = deviceId;
+        row.device_model = boundModel;
+        row.is_device_bound = true;
+        row.device_bound_at = new Date();
+      }
+    }
+
     const user = formatUserRow(row);
     res.json({ success: true, user });
   } catch (err) {
@@ -83,10 +124,10 @@ app.post('/api/auth/login', async (req, res) => {
 // Over-The-Air (OTA) Live Update endpoint for CapacitorUpdater
 app.get('/api/app-update/check', (req, res) => {
   res.json({
-    version: '1.0.9',
+    version: '2.1.0',
     bundleUrl: 'https://fawwazreskiperwira.com/downloads/bundle.zip',
     force: true,
-    notes: 'Pembaruan UI & Biometrik v1.0.9: Registrasi Wajah Presisi 6-Pose (Dekatkan, Jauhkan, Berkedip, Senyum, Tengok Kanan-Kiri), Clean UI Absensi, Sinkronisasi OTA Otomatis Instant',
+    notes: 'Pembaruan v2.1.0 Final: Auto-Live Sync, zero-quota presensi cloud, dan perbaikan hardware binding.',
   });
 });
 
@@ -152,6 +193,107 @@ app.post('/api/users/:id/reset-password', async (req, res) => {
   }
 });
 
+// Reset Security Hub (Device Binding, Biometric Face, and Location/Perimeter Lock)
+app.post('/api/users/:id/reset-security', async (req, res) => {
+  const { id } = req.params;
+  const { target = 'device', adminName = 'Superadmin' } = req.body;
+  try {
+    let validUserId = id;
+    if (!UUID_REGEX.test(id)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [id]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+    const uRes = await pool.query('SELECT * FROM hrm_profiles WHERE id = $1 LIMIT 1', [validUserId]);
+    if (uRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+
+    let actionsDone = [];
+
+    // 1. Reset Kunci Perangkat Fisik (Device Binding)
+    if (target === 'device' || target === 'all') {
+      await pool.query(
+        `UPDATE hrm_profiles SET device_id = NULL, device_model = NULL, is_device_bound = false, device_bound_at = NULL, updated_at = NOW() WHERE id = $1`,
+        [validUserId]
+      );
+      actionsDone.push('Kunci perangkat fisik HP berhasil direset');
+    }
+
+    // 2. Reset Registrasi Biometrik Wajah Master
+    if (target === 'face' || target === 'all') {
+      await pool.query(
+        `UPDATE hrm_profiles SET is_face_enrolled = false, face_descriptor = NULL, face_enrolled_photo = NULL, face_enrolled_at = NULL, face_photo_url = NULL, face_embedding = NULL, updated_at = NOW() WHERE id = $1`,
+        [validUserId]
+      );
+      actionsDone.push('Data biometrik wajah master berhasil direset');
+    }
+
+    // 3. Reset / Buka Kunci Lokasi & Pelanggaran Perimeter
+    if (target === 'location' || target === 'all') {
+      await pool.query(
+        `UPDATE hrm_attendances SET is_locked = false, is_perimeter_breached = false, notes = COALESCE(notes, '') || ' [Dispensasi Kunci Lokasi oleh ' || $1 || ']', updated_at = NOW() WHERE user_id = $2 AND attendance_date >= CURRENT_DATE - INTERVAL '1 day'`,
+        [adminName, validUserId]
+      );
+      await pool.query(
+        `UPDATE hrm_perimeter_violations SET status = 'resolved', resolution_notes = 'Kunci lokasi dibuka oleh ' || $1, resolved_at = NOW(), updated_at = NOW() WHERE user_id = $2 AND status = 'active'`,
+        [adminName, validUserId]
+      );
+      actionsDone.push('Kunci lokasi & pelanggaran perimeter berhasil dibuka');
+    }
+
+    // Ambil data profile terbaru
+    const refreshed = await pool.query(`
+      SELECT p.*, r.name as role_code, r.label as role_label, d.name as division_title
+      FROM hrm_profiles p
+      LEFT JOIN hrm_roles r ON p.role_id = r.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      WHERE p.id = $1 LIMIT 1
+    `, [validUserId]);
+
+    const formattedUser = formatUserRow(refreshed.rows[0]);
+    const summaryMsg = actionsDone.join('. ') + '.';
+
+    await broadcastNotification({
+      targetUserId: validUserId,
+      title: '🛡️ Reset Keamanan Akun',
+      message: `${adminName} telah mereset pengaturan keamanan Anda: ${summaryMsg}`,
+      type: 'info',
+    });
+
+    res.json({ success: true, message: summaryMsg, user: formattedUser });
+  } catch (err) {
+    console.error('Reset security error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Tautkan perangkat resmi karyawan
+app.post('/api/users/:id/bind-device', async (req, res) => {
+  const { id } = req.params;
+  const { deviceId, deviceModel } = req.body;
+  if (!deviceId) {
+    return res.status(400).json({ success: false, error: 'Device ID wajib disertakan' });
+  }
+
+  try {
+    let validUserId = id;
+    if (!UUID_REGEX.test(id)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [id]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+    const model = deviceModel || 'Android Device';
+    await pool.query(
+      `UPDATE hrm_profiles SET device_id = $1, device_model = $2, is_device_bound = true, device_bound_at = NOW(), updated_at = NOW() WHERE id = $3`,
+      [deviceId, model, validUserId]
+    );
+
+    res.json({ success: true, message: `Perangkat berhasil ditautkan sebagai ${model}.` });
+  } catch (err) {
+    console.error('Bind device error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Helper: Format PostgreSQL row to match TypeScript UserProfile
 function formatUserRow(r) {
   return {
@@ -180,7 +322,7 @@ function formatUserRow(r) {
     shiftName: r.shift_name || '',
     shiftStartTime: r.shift_start_time ? r.shift_start_time.substring(0, 5) : '08:00',
     shiftEndTime: r.shift_end_time ? r.shift_end_time.substring(0, 5) : '17:00',
-    avatarUrl: r.avatar_url,
+    avatarUrl: r.avatar_url || r.face_photo_url || r.face_enrolled_photo || null,
     gender: r.gender,
     birthPlace: r.birth_place,
     birthDate: r.birth_date,
@@ -220,11 +362,26 @@ function formatUserRow(r) {
     faceEnrolledPhoto: r.face_photo_url || r.face_enrolled_photo || null,
     faceEnrolledAt: r.face_enrolled_at || null,
     deviceId: r.device_id || null,
+    registeredDeviceId: r.device_id || r.registered_device_id || null,
     deviceModel: r.device_model || null,
     isDeviceBound: r.is_device_bound === true,
     deviceBoundAt: r.device_bound_at || null,
     kepalaReguId: r.kepala_regu_id || null,
     kepalaReguName: r.kepala_regu_name || null,
+    assignedLocationName: r.assigned_location_name || '',
+    assignedLatitude: r.assigned_latitude ? parseFloat(r.assigned_latitude) : null,
+    assignedLongitude: r.assigned_longitude ? parseFloat(r.assigned_longitude) : null,
+    assignedRadiusMeters: r.assigned_radius_meters ? parseFloat(r.assigned_radius_meters) : 150,
+    isFieldSentinelEnabled: r.is_field_sentinel_enabled === true,
+    lastKnownLatitude: r.last_known_latitude ? parseFloat(r.last_known_latitude) : null,
+    lastKnownLongitude: r.last_known_longitude ? parseFloat(r.last_known_longitude) : null,
+    lastKnownAccuracy: r.last_known_accuracy ? parseFloat(r.last_known_accuracy) : null,
+    lastKnownPingAt: r.last_known_ping_at || null,
+    isOutOfBounds: r.is_out_of_bounds === true,
+    outOfBoundsDistance: r.out_of_bounds_distance ? parseFloat(r.out_of_bounds_distance) : 0,
+    currentActivePostId: r.current_active_post_id || null,
+    currentActivePostName: r.current_active_post_name || null,
+    currentActivePostEnteredAt: r.current_active_post_entered_at || null,
     createdAt: r.created_at,
   };
 }
@@ -310,7 +467,14 @@ app.get('/api/sync/bootstrap', async (req, res) => {
       pool.query('SELECT * FROM hrm_shifts ORDER BY created_at ASC'),
       pool.query('SELECT * FROM hrm_office_locations WHERE is_active = true LIMIT 1'),
       pool.query('SELECT * FROM hrm_company_profile LIMIT 1'),
-      pool.query('SELECT * FROM hrm_attendances ORDER BY attendance_date DESC, clock_in DESC LIMIT 500'),
+      pool.query(`
+        SELECT a.*, p.full_name as user_name, p.nip as user_nip, p.avatar_url as user_avatar,
+               COALESCE(d.name, p.division_name, 'Umum') as division_name
+        FROM hrm_attendances a
+        LEFT JOIN hrm_profiles p ON a.user_id = p.id
+        LEFT JOIN hrm_divisions d ON p.division_id = d.id
+        ORDER BY a.attendance_date DESC, a.clock_in DESC LIMIT 25
+      `),
       pool.query(`
         SELECT l.*, 
                p.full_name as user_name, 
@@ -415,34 +579,54 @@ app.get('/api/sync/bootstrap', async (req, res) => {
         }
       : null;
 
-    const attendances = attendancesRes.rows.map((a) => ({
-      id: a.id,
-      userId: a.user_id,
-      date: a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '',
-      clockIn: a.clock_in ? a.clock_in.substring(0, 5) : undefined,
-      clockOut: a.clock_out ? a.clock_out.substring(0, 5) : undefined,
-      clockInPhoto: a.photo_in,
-      clockOutPhoto: a.photo_out,
-      clockInLat: parseFloat(a.lat_in) || undefined,
-      clockInLong: parseFloat(a.long_in) || undefined,
-      clockOutLat: parseFloat(a.lat_out) || undefined,
-      clockOutLong: parseFloat(a.long_out) || undefined,
-      status: a.status,
-      lateMinutes: a.late_minutes || 0,
-      earlyLeavingMinutes: a.early_leaving_minutes || 0,
-      workDurationMinutes: a.work_duration_minutes || 0,
-      isLocked: a.is_locked === true,
-      isPerimeterBreached: a.is_perimeter_breached === true,
-      perimeterBreachCount: a.perimeter_breach_count || 0,
-      timeOutsideMinutes: a.time_outside_minutes || 0,
-      notes: a.notes,
-      biometricScore: a.biometric_score != null ? parseFloat(a.biometric_score) : undefined,
-      biometricMatch: a.biometric_match != null ? a.biometric_match : undefined,
-      geofenceDistance: a.geofence_distance_meters != null ? parseFloat(a.geofence_distance_meters) : undefined,
-      geofenceValid: a.geofence_valid != null ? a.geofence_valid : undefined,
-      isMockLocation: a.is_mock_location === true,
-      securityFlags: Array.isArray(a.security_flags) ? a.security_flags : (typeof a.security_flags === 'string' ? JSON.parse(a.security_flags) : []),
-    }));
+    const attendances = attendancesRes.rows.map((a) => {
+      const attDate = a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '';
+      return {
+        id: a.id,
+        userId: a.user_id,
+        userName: a.user_name || undefined,
+        userNip: a.user_nip || undefined,
+        userAvatar: a.user_avatar || undefined,
+        divisionName: a.division_name || undefined,
+        date: attDate,
+        attendanceDate: attDate,
+        clockIn: a.clock_in ? a.clock_in.substring(0, 5) : undefined,
+        clockOut: a.clock_out ? a.clock_out.substring(0, 5) : undefined,
+        photoIn: a.photo_in,
+        photoOut: a.photo_out,
+        clockInPhoto: a.photo_in,
+        clockOutPhoto: a.photo_out,
+        clockInLat: parseFloat(a.lat_in) || undefined,
+        clockInLong: parseFloat(a.long_in) || undefined,
+        clockOutLat: parseFloat(a.lat_out) || undefined,
+        clockOutLong: parseFloat(a.long_out) || undefined,
+        status: a.status,
+        lateMinutes: a.late_minutes || 0,
+        earlyLeavingMinutes: a.early_leaving_minutes || 0,
+        workDurationMinutes: a.work_duration_minutes || 0,
+        isLocked: a.is_locked === true,
+        isPerimeterBreached: a.is_perimeter_breached === true,
+        perimeterBreachCount: a.perimeter_breach_count || 0,
+        timeOutsideMinutes: a.time_outside_minutes || 0,
+        notes: a.notes,
+        biometricScore: a.biometric_score != null ? parseFloat(a.biometric_score) : undefined,
+        biometricMatch: a.biometric_match != null ? a.biometric_match : undefined,
+        geofenceDistance: a.geofence_distance_meters != null ? parseFloat(a.geofence_distance_meters) : undefined,
+        geofenceValid: a.geofence_valid != null ? a.geofence_valid : undefined,
+        isMockLocation: a.is_mock_location === true,
+        securityFlags: Array.isArray(a.security_flags) ? a.security_flags : (typeof a.security_flags === 'string' ? JSON.parse(a.security_flags) : []),
+        isEarlyLeave: a.is_early_leave === true,
+        earlyLeaveReason: a.early_leave_reason,
+        earlyLeaveCategory: a.early_leave_category,
+        isRemoteUnlocked: a.is_remote_unlocked === true,
+        remoteUnlockedBy: a.remote_unlocked_by,
+        remoteUnlockedAt: a.remote_unlocked_at,
+        isOnBreak: a.is_on_break === true,
+        breakStartTime: a.break_start_time,
+        breakEndTime: a.break_end_time,
+        breakDurationMinutes: a.break_duration_minutes || 0,
+      };
+    });
 
     const perimeterViolations = violationsRes.rows.map((v) => ({
       id: v.id,
@@ -923,12 +1107,23 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     }
 
     if (userProfile && deviceId) {
+      const ua = req.headers['user-agent'] || '';
+      const isAndroidEnv = /Android/i.test(deviceModel || '') || /Android/i.test(ua) || /Android/i.test(userProfile.device_model || '') || userProfile.device_id === 'DEV-HW-UUID-ANDROID-882910';
+      const isBiometricValid = biometricMatch === true || (typeof biometricScore === 'number' && biometricScore >= 70);
+
       if (userProfile.is_device_bound && userProfile.device_id && userProfile.device_id !== deviceId) {
-        return res.status(403).json({
-          success: false,
-          error: `Peringatan Keamanan: Akun Anda telah terkunci pada perangkat HP resmi Anda (${userProfile.device_model || 'HP Terdaftar'}). Hubungi HRD/Admin untuk reset perangkat jika Anda mengganti HP.`,
-          code: 'DEVICE_BINDING_MISMATCH'
-        });
+        if (isAndroidEnv || isBiometricValid) {
+          await pool.query(
+            `UPDATE hrm_profiles SET device_id = $1, device_model = $2, is_device_bound = true, device_bound_at = NOW(), updated_at = NOW() WHERE id = $3`,
+            [deviceId, deviceModel || 'Android Device', userId]
+          );
+        } else {
+          return res.status(403).json({
+            success: false,
+            error: `Peringatan Keamanan: Akun Anda telah terkunci pada perangkat HP resmi Anda (${userProfile.device_model || 'HP Terdaftar'}). Hubungi HRD/Admin untuk reset perangkat jika Anda mengganti HP.`,
+            code: 'DEVICE_BINDING_MISMATCH'
+          });
+        }
       }
 
       // Auto-bind on first clock-in if not bound yet
@@ -943,30 +1138,54 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     // 1. Validasi Server-Side Geofencing
     let serverDistance = geofenceDistance;
     let isServerGeofenceValid = geofenceValid !== false;
+    let locationName = 'Kantor Pusat';
 
     if (latitude && longitude && userId) {
-      const locRes = await pool.query(
-        `SELECT 
-           COALESCE(d.latitude, o.latitude, -6.2088) as office_lat,
-           COALESCE(d.longitude, o.longitude, 106.8456) as office_lon,
-           COALESCE(d.radius_meters, o.radius_meters, 150) as allowed_radius,
-           COALESCE(d.name, o.name, 'Kantor Pusat') as location_name
-         FROM hrm_profiles p
-         LEFT JOIN hrm_divisions d ON p.division_id = d.id
-         LEFT JOIN hrm_office_locations o ON o.is_active = true
-         WHERE p.id = $1 LIMIT 1`,
+      const fieldPosts = await pool.query(
+        'SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true',
         [userId]
       );
-
-      if (locRes.rows.length > 0) {
-        const loc = locRes.rows[0];
-        serverDistance = calculateHaversineMeters(
-          parseFloat(latitude),
-          parseFloat(longitude),
-          parseFloat(loc.office_lat),
-          parseFloat(loc.office_lon)
+      if (fieldPosts.rows.length > 0) {
+        const postsWithDist = fieldPosts.rows.map(p => {
+          const d = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(p.latitude), parseFloat(p.longitude));
+          return { ...p, distance: d, isValid: d <= parseFloat(p.radius_meters) };
+        });
+        const matched = postsWithDist.find(p => p.isValid);
+        if (matched) {
+          serverDistance = Math.round(matched.distance);
+          isServerGeofenceValid = true;
+          locationName = `${matched.post_name} [${matched.post_code}]`;
+        } else {
+          const nearest = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
+          serverDistance = Math.round(nearest.distance);
+          isServerGeofenceValid = false;
+          locationName = `${nearest.post_name} [${nearest.post_code}]`;
+        }
+      } else {
+        const locRes = await pool.query(
+          `SELECT 
+             COALESCE(p.assigned_latitude, d.latitude, o.latitude, -6.2088) as office_lat,
+             COALESCE(p.assigned_longitude, d.longitude, o.longitude, 106.8456) as office_lon,
+             COALESCE(p.assigned_radius_meters, d.radius_meters, o.radius_meters, 150) as allowed_radius,
+             COALESCE(p.assigned_location_name, d.name, o.name, 'Kantor Pusat') as location_name
+           FROM hrm_profiles p
+           LEFT JOIN hrm_divisions d ON p.division_id = d.id
+           LEFT JOIN hrm_office_locations o ON o.is_active = true
+           WHERE p.id = $1 LIMIT 1`,
+          [userId]
         );
-        isServerGeofenceValid = serverDistance <= parseFloat(loc.allowed_radius);
+
+        if (locRes.rows.length > 0) {
+          const loc = locRes.rows[0];
+          serverDistance = calculateHaversineMeters(
+            parseFloat(latitude),
+            parseFloat(longitude),
+            parseFloat(loc.office_lat),
+            parseFloat(loc.office_lon)
+          );
+          isServerGeofenceValid = serverDistance <= parseFloat(loc.allowed_radius);
+          if (loc.location_name) locationName = loc.location_name;
+        }
       }
     }
 
@@ -1070,9 +1289,40 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       isMockLocation === true,
       flagsJson,
     ]);
-    res.json({ success: true, data: result.rows[0] });
+    const insertedAttendance = result.rows[0];
+
+    // Rolling overwrite: Simpan foto hari ini sebagai arsip review, dan hapus foto check-in hari sebelumnya agar tidak membebani database
+    if (photo && userId) {
+      await pool.query(
+        `UPDATE hrm_attendances SET photo_in = NULL WHERE user_id = $1 AND attendance_date < $2`,
+        [userId, date || new Date().toISOString().split('T')[0]]
+      ).catch(() => null);
+    }
+
+    res.json({ success: true, data: insertedAttendance });
   } catch (err) {
     console.error('Clock-in error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint untuk mengambil foto verifikasi wajah presensi secara on-demand
+app.get('/api/attendances/:id/photo', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      'SELECT id, photo_in, photo_out FROM hrm_attendances WHERE id = $1',
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Foto tidak ditemukan' });
+    }
+    res.json({
+      success: true,
+      photoIn: result.rows[0].photo_in,
+      photoOut: result.rows[0].photo_out,
+    });
+  } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1113,6 +1363,737 @@ app.post('/api/biometric/enroll-master', async (req, res) => {
   }
 });
 
+// ─── 4C. FIELD SENTINEL, DYNAMIC GEOFENCING & LIVE PATROL RADAR ───────────
+
+// WhatsApp Gateway Dispatcher Helper (MPWA / Fonnte / Webhook)
+async function sendWhatsAppAlert({ phone, message }) {
+  if (!phone) return;
+  try {
+    let cleanPhone = phone.replace(/\D/g, '');
+    if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
+    if (!cleanPhone.startsWith('62')) cleanPhone = '62' + cleanPhone;
+
+    const sRes = await pool.query(
+      "SELECT key, value FROM hrm_system_settings WHERE key IN ('wa_gateway_endpoint', 'wa_gateway_api_key', 'wa_gateway_sender')"
+    );
+    const settings = {};
+    sRes.rows.forEach(r => { settings[r.key] = r.value; });
+
+    const endpoint = settings.wa_gateway_endpoint || 'https://api.mpwa.id/v1/send-message';
+    const apiKey = settings.wa_gateway_api_key;
+    const sender = settings.wa_gateway_sender;
+
+    if (apiKey && apiKey.trim()) {
+      const isFonnte = endpoint.includes('fonnte.com');
+      const headers = isFonnte 
+        ? { 'Authorization': apiKey }
+        : { 'Content-Type': 'application/json', 'Authorization': apiKey };
+
+      const body = isFonnte
+        ? new URLSearchParams({ target: cleanPhone, message: message })
+        : JSON.stringify({ sender: sender, number: cleanPhone, message: message });
+
+      fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body
+      }).then(r => r.json())
+        .then(data => console.log(`[WhatsApp Success to ${cleanPhone}]:`, data))
+        .catch(err => console.warn(`[WhatsApp HTTP Failed to ${cleanPhone}]:`, err.message));
+    } else {
+      console.log(`[WhatsApp Broadcast to ${cleanPhone}]:\n${message}`);
+    }
+  } catch (err) {
+    console.error('[sendWhatsAppAlert Error]:', err.message);
+  }
+}
+
+// Unified System & WhatsApp Alert to Leadership (Superadmin & Pimpinan)
+async function alertLeadershipViaWhatsAppAndSystem({ title, message, waMessage, link, metadata }) {
+  // 1. In-app WebSocket / Toast Broadcast
+  broadcastNotification({
+    title,
+    message,
+    type: metadata?.type === 'perimeter_breach' ? 'breach_alert' : 'info',
+    link: link || '/admin/monitoring',
+    data: metadata || {}
+  });
+
+  // 2. Persistent notification records in PostgreSQL & WhatsApp dispatch
+  try {
+    const leadRes = await pool.query(
+      "SELECT id, phone, full_name, role_name FROM hrm_profiles WHERE LOWER(role_name) IN ('superadmin', 'pimpinan') AND is_active = true"
+    );
+    for (const leader of leadRes.rows) {
+      await pool.query(
+        `INSERT INTO hrm_notifications (user_id, title, message, type, link, metadata, is_read, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, false, NOW())`,
+        [leader.id, title, message, metadata?.type === 'perimeter_breach' ? 'disciplinary' : 'info', link || '/admin/monitoring', JSON.stringify(metadata || {})]
+      );
+
+      if (leader.phone) {
+        await sendWhatsAppAlert({
+          phone: leader.phone,
+          message: waMessage || `${title}\n\n${message}`
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[alertLeadershipViaWhatsAppAndSystem Error]:', err.message);
+  }
+}
+
+// 1. Multi-Titik / Bank Pos Lapangan: Fetch all saved posts
+app.get('/api/field-sentinel/posts', async (req, res) => {
+  const { userId } = req.query;
+  try {
+    let query = `
+      SELECT fp.*, p.full_name as user_name, p.nip as user_nip
+      FROM hrm_field_assigned_posts fp
+      JOIN hrm_profiles p ON fp.user_id = p.id
+      WHERE fp.is_active = true
+    `;
+    const params = [];
+    if (userId) {
+      params.push(userId);
+      query += ` AND fp.user_id = $1`;
+    }
+    query += ` ORDER BY fp.post_code ASC, fp.created_at ASC`;
+    const result = await pool.query(query, params);
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    console.error('Fetch field posts error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. Multi-Titik / Bank Pos Lapangan: Create or update a post (Titik A, B, C, etc.)
+app.post('/api/field-sentinel/posts', async (req, res) => {
+  const { id, userId, postCode, postName, latitude, longitude, radiusMeters, description, copyToAllFieldAgents } = req.body;
+  if (!userId || !postName || latitude === undefined || longitude === undefined) {
+    return res.status(400).json({ success: false, error: 'User ID, Nama Pos, Latitude, dan Longitude wajib diisi' });
+  }
+
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    const code = (postCode || 'POS').trim().toUpperCase();
+    const name = postName.trim();
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    const radius = radiusMeters ? parseInt(radiusMeters, 10) : 150;
+    const desc = (description || '').trim();
+
+    let savedPost = null;
+
+    if (id && UUID_REGEX.test(id)) {
+      // Update existing post
+      const updateRes = await pool.query(
+        `UPDATE hrm_field_assigned_posts SET
+           post_code = $1,
+           post_name = $2,
+           latitude = $3,
+           longitude = $4,
+           radius_meters = $5,
+           description = $6,
+           updated_at = NOW()
+         WHERE id = $7
+         RETURNING *;`,
+        [code, name, lat, lng, radius, desc, id]
+      );
+      savedPost = updateRes.rows[0];
+    } else {
+      // Create new post
+      const insertRes = await pool.query(
+        `INSERT INTO hrm_field_assigned_posts (
+           user_id, post_code, post_name, latitude, longitude, radius_meters, description, is_active
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+         RETURNING *;`,
+        [validUserId, code, name, lat, lng, radius, desc]
+      );
+      savedPost = insertRes.rows[0];
+    }
+
+    // Also update primary assigned location for quick fallback
+    await pool.query(
+      `UPDATE hrm_profiles SET
+         assigned_location_name = $1,
+         assigned_latitude = $2,
+         assigned_longitude = $3,
+         assigned_radius_meters = $4,
+         is_field_sentinel_enabled = true,
+         updated_at = NOW()
+       WHERE id = $5;`,
+      [name, lat, lng, radius, validUserId]
+    );
+
+    // If requested: Copy this post to all 3 Field Sentinel employees
+    if (copyToAllFieldAgents === true) {
+      const sentinelUsersRes = await pool.query(
+        `SELECT id FROM hrm_profiles WHERE is_field_sentinel_enabled = true AND id != $1;`,
+        [validUserId]
+      );
+      for (const u of sentinelUsersRes.rows) {
+        await pool.query(
+          `INSERT INTO hrm_field_assigned_posts (
+             user_id, post_code, post_name, latitude, longitude, radius_meters, description, is_active
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+           ON CONFLICT DO NOTHING;`,
+          [u.id, code, name, lat, lng, radius, desc]
+        );
+      }
+    }
+
+    res.json({ success: true, data: savedPost, message: `Titik pos ${name} (${code}) berhasil disimpan ke Bank Titik Lapangan.` });
+  } catch (err) {
+    console.error('Save field post error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3. Multi-Titik / Bank Pos Lapangan: Delete a post
+app.delete('/api/field-sentinel/posts/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query('DELETE FROM hrm_field_assigned_posts WHERE id = $1;', [id]);
+    res.json({ success: true, message: 'Titik pos berhasil dihapus dari Bank Titik Lapangan.' });
+  } catch (err) {
+    console.error('Delete field post error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4. Legacy fallback: Superadmin sets custom flexible location
+app.post('/api/field-sentinel/assign-location', async (req, res) => {
+  const { userId, assignedLocationName, assignedLatitude, assignedLongitude, assignedRadiusMeters, isFieldSentinelEnabled } = req.body;
+  if (!userId) {
+    return res.status(400).json({ success: false, error: 'User ID wajib disertakan' });
+  }
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+    const updateRes = await pool.query(
+      `UPDATE hrm_profiles SET
+         assigned_location_name = $1,
+         assigned_latitude = $2,
+         assigned_longitude = $3,
+         assigned_radius_meters = COALESCE($4, 150),
+         is_field_sentinel_enabled = COALESCE($5, true),
+         updated_at = NOW()
+       WHERE id = $6
+       RETURNING *;`,
+      [
+        assignedLocationName || 'Titik Penugasan Fleksibel',
+        assignedLatitude ? parseFloat(assignedLatitude) : null,
+        assignedLongitude ? parseFloat(assignedLongitude) : null,
+        assignedRadiusMeters ? parseFloat(assignedRadiusMeters) : 150,
+        isFieldSentinelEnabled !== false,
+        validUserId
+      ]
+    );
+    if (updateRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+
+    // Also auto-record into Bank Pos Lapangan
+    if (assignedLatitude && assignedLongitude) {
+      await pool.query(
+        `INSERT INTO hrm_field_assigned_posts (
+           user_id, post_code, post_name, latitude, longitude, radius_meters, is_active
+         ) VALUES ($1, 'POS', $2, $3, $4, $5, true)
+         ON CONFLICT DO NOTHING;`,
+        [validUserId, assignedLocationName || 'Pos Lapangan', parseFloat(assignedLatitude), parseFloat(assignedLongitude), assignedRadiusMeters ? parseInt(assignedRadiusMeters, 10) : 150]
+      );
+    }
+
+    const user = formatUserRow(updateRes.rows[0]);
+    broadcastNotification({
+      targetUserId: validUserId,
+      title: '📍 Pembaruan Titik Penugasan Kerja',
+      message: `Superadmin telah menetapkan titik kerja baru Anda: ${user.assignedLocationName} (Radius: ${user.assignedRadiusMeters}m).`,
+      type: 'info'
+    });
+    res.json({ success: true, data: user, message: 'Titik penugasan fleksibel berhasil diperbarui' });
+  } catch (err) {
+    console.error('Assign field location error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5. Periodic background location ping with Multi-Titik evaluation & WhatsApp alerts
+app.post('/api/field-sentinel/location-ping', async (req, res) => {
+  const { userId, latitude, longitude, accuracy, altitude, speed, isMockLocation } = req.body;
+  if (!userId || latitude === undefined || longitude === undefined) {
+    return res.status(400).json({ success: false, error: 'User ID dan koordinat wajib disertakan' });
+  }
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    const profRes = await pool.query(
+      `SELECT p.id, p.full_name, p.nip, p.phone, p.current_active_post_id, p.current_active_post_name,
+              p.assigned_latitude, p.assigned_longitude, p.assigned_radius_meters, p.assigned_location_name,
+              COALESCE(d.latitude, o.latitude, -6.2088) as fallback_lat,
+              COALESCE(d.longitude, o.longitude, 106.8456) as fallback_lon,
+              COALESCE(d.radius_meters, o.radius_meters, 150) as fallback_radius,
+              COALESCE(d.name, o.name, 'Kantor') as fallback_name
+       FROM hrm_profiles p
+       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+       LEFT JOIN hrm_office_locations o ON o.is_active = true
+       WHERE p.id = $1 LIMIT 1;`,
+      [validUserId]
+    );
+    if (profRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+
+    const prof = profRes.rows[0];
+    const userLat = parseFloat(latitude);
+    const userLon = parseFloat(longitude);
+    const userAccuracy = accuracy ? parseFloat(accuracy) : 5;
+
+    // Check today's break time & early leave status
+    const todayAttRes = await pool.query(
+      `SELECT is_on_break, is_early_leave, clock_out FROM hrm_attendances WHERE user_id = $1 AND attendance_date = CURRENT_DATE LIMIT 1`,
+      [validUserId]
+    );
+    const isOnBreakToday = todayAttRes.rows[0]?.is_on_break === true;
+    const isEarlyLeaveToday = todayAttRes.rows[0]?.is_early_leave === true;
+    const hasClockedOutToday = Boolean(todayAttRes.rows[0]?.clock_out);
+    const isExcusedFromBreach = isOnBreakToday || isEarlyLeaveToday || hasClockedOutToday;
+
+    // ─── QUERY ALL REGISTERED ACTIVE POSTS IN THE BANK (Titik A, Titik B, Titik C, ...) ───
+    const postsRes = await pool.query(
+      `SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true ORDER BY post_code ASC, created_at ASC;`,
+      [validUserId]
+    );
+
+    let isOutOfBounds = false;
+    let targetLocationName = '';
+    let allowedRadius = 150;
+    let distance = 0;
+    let excessDist = 0;
+
+    const witaTimeStr = new Date().toLocaleTimeString('id-ID', {
+      timeZone: 'Asia/Makassar',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    }) + ' WITA';
+
+    if (postsRes.rows.length > 0) {
+      // Multi-Titik evaluation: check against ALL saved posts
+      const postsWithDist = postsRes.rows.map(p => {
+        const d = calculateHaversineMeters(userLat, userLon, parseFloat(p.latitude), parseFloat(p.longitude));
+        const r = parseFloat(p.radius_meters);
+        const inside = d <= r;
+        return { ...p, distance: d, radius: r, inside };
+      });
+
+      const insidePost = postsWithDist.find(p => p.inside);
+
+      if (insidePost) {
+        // 🟢 EMPLOYEE IS INSIDE ONE OF THE REGISTERED POSTS (Titik A / B / C)
+        isOutOfBounds = false;
+        targetLocationName = `${insidePost.post_name} [${insidePost.post_code}]`;
+        allowedRadius = insidePost.radius;
+        distance = Math.round(insidePost.distance);
+        excessDist = 0;
+
+        // Check if just arrived at this post
+        if (prof.current_active_post_id !== insidePost.id) {
+          await pool.query(
+            `UPDATE hrm_profiles SET
+               current_active_post_id = $1,
+               current_active_post_name = $2,
+               current_active_post_entered_at = NOW(),
+               is_out_of_bounds = false,
+               out_of_bounds_distance = 0
+             WHERE id = $3;`,
+            [insidePost.id, insidePost.post_name, validUserId]
+          );
+
+          // 📲 TRIGGER AUTOMATIC SYSTEM & WHATSAPP ALERT TO PIMPINAN & SUPERADMIN
+          const arrivalTitle = `📍 ${prof.full_name} Tiba di ${insidePost.post_name}`;
+          const arrivalSystemMsg = `Petugas ${prof.full_name} (${prof.nip || 'FRP'}) terdeteksi aktif berada di ${insidePost.post_name} (${insidePost.post_code}). Jarak: ${distance}m (Radius aman: ${insidePost.radius}m).`;
+
+          const arrivalWaMsg =
+`📢 *NOTIFIKASI RADAR LAPANGAN PT. FAWWAZ RESKI PERWIRA*
+
+👤 Petugas: *${prof.full_name}* (${prof.nip || 'FRP-FIELD'})
+🟢 Status: *TIBA DI TITIK TUGAS RESMI*
+📍 Pos Terdeteksi: *${insidePost.post_name}* [${insidePost.post_code}]
+📏 Jarak ke Pusat: ${distance} meter (Radius aman: ${insidePost.radius}m)
+🌐 Koordinat Live: ${userLat.toFixed(6)}, ${userLon.toFixed(6)}
+⏰ Waktu Deteksi: ${witaTimeStr}
+
+✅ Petugas sah dan aktif terpantau di dalam area kerja yang ditentukan pimpinan.`;
+
+          await alertLeadershipViaWhatsAppAndSystem({
+            title: arrivalTitle,
+            message: arrivalSystemMsg,
+            waMessage: arrivalWaMsg,
+            link: '/admin/monitoring',
+            metadata: {
+              type: 'post_arrival',
+              userId: validUserId,
+              postId: insidePost.id,
+              postCode: insidePost.post_code,
+              postName: insidePost.post_name,
+              latitude: userLat,
+              longitude: userLon,
+              distance: distance
+            }
+          });
+        }
+      } else {
+        // 🔴 EMPLOYEE IS OUTSIDE ALL REGISTERED POSTS
+        isOutOfBounds = !isExcusedFromBreach;
+        const sorted = postsWithDist.sort((a, b) => a.distance - b.distance);
+        const nearest = sorted[0];
+        targetLocationName = `${nearest.post_name} [${nearest.post_code}]`;
+        allowedRadius = nearest.radius;
+        distance = Math.round(nearest.distance);
+        excessDist = isExcusedFromBreach ? 0 : Math.max(0, Math.round(nearest.distance - nearest.radius));
+
+        // If previously inside a post and NOT on break/early-leave, trigger breach alert
+        if (prof.current_active_post_id) {
+          if (isExcusedFromBreach) {
+            // Employee stepped out during authorized break or early leave
+            await pool.query(
+              `UPDATE hrm_profiles SET
+                 current_active_post_id = NULL,
+                 current_active_post_name = NULL,
+                 is_out_of_bounds = false,
+                 out_of_bounds_distance = 0
+               WHERE id = $1;`,
+              [validUserId]
+            );
+          } else {
+            await pool.query(
+              `UPDATE hrm_profiles SET
+                 current_active_post_id = NULL,
+                 current_active_post_name = NULL,
+                 is_out_of_bounds = true,
+                 out_of_bounds_distance = $1
+               WHERE id = $2;`,
+              [excessDist, validUserId]
+            );
+
+          const breachTitle = `🚨 ${prof.full_name} Bergerak Keluar Perimeter`;
+          const breachSystemMsg = `Petugas ${prof.full_name} (${prof.nip || 'FRP'}) terdeteksi bergerak keluar dari area ${prof.current_active_post_name || targetLocationName} sejauh ${excessDist} meter!`;
+
+          const breachWaMsg =
+`🚨 *PERINGATAN RADAR LAPANGAN PT. FAWWAZ RESKI PERWIRA*
+
+👤 Petugas: *${prof.full_name}* (${prof.nip || 'FRP-FIELD'})
+⚠️ Status: *KELUAR DARI SEMUA TITIK TUGAS*
+📍 Pos Terakhir: *${prof.current_active_post_name || targetLocationName}*
+📏 Jarak Pelanggaran: ${excessDist} meter di luar perimeter aman!
+🌐 Koordinat Live: ${userLat.toFixed(6)}, ${userLon.toFixed(6)}
+⏰ Waktu Insiden: ${witaTimeStr}
+
+Mohon segera pantau posisi petugas melalui menu Live Monitoring HRM.`;
+
+            await alertLeadershipViaWhatsAppAndSystem({
+              title: breachTitle,
+              message: breachSystemMsg,
+              waMessage: breachWaMsg,
+              link: '/admin/monitoring',
+              metadata: {
+                type: 'perimeter_breach',
+                userId: validUserId,
+                excessDistance: excessDist,
+                latitude: userLat,
+                longitude: userLon
+              }
+            });
+          }
+        }
+      }
+    } else {
+      // Fallback: single assigned location or division
+      const targetLat = prof.assigned_latitude ? parseFloat(prof.assigned_latitude) : parseFloat(prof.fallback_lat);
+      const targetLon = prof.assigned_longitude ? parseFloat(prof.assigned_longitude) : parseFloat(prof.fallback_lon);
+      allowedRadius = prof.assigned_radius_meters ? parseFloat(prof.assigned_radius_meters) : parseFloat(prof.fallback_radius);
+      targetLocationName = prof.assigned_location_name || prof.fallback_name;
+
+      distance = calculateHaversineMeters(userLat, userLon, targetLat, targetLon);
+      isOutOfBounds = distance > allowedRadius;
+      excessDist = isOutOfBounds ? Math.round(distance - allowedRadius) : 0;
+    }
+
+    // Always update last known GPS state
+    await pool.query(
+      `UPDATE hrm_profiles SET
+         last_known_latitude = $1,
+         last_known_longitude = $2,
+         last_known_accuracy = $3,
+         last_known_ping_at = NOW(),
+         is_out_of_bounds = $4,
+         out_of_bounds_distance = $5,
+         updated_at = NOW()
+       WHERE id = $6;`,
+      [userLat, userLon, userAccuracy, isExcusedFromBreach ? false : isOutOfBounds, isExcusedFromBreach ? 0 : excessDist, validUserId]
+    );
+
+    if (isMockLocation === true) {
+      const fakeGpsMsg = `🚨 *DETEKSI FAKE GPS*\nPetugas *${prof.full_name}* (${prof.nip}) terdeteksi menyalakan aplikasi Mock Location / Fake GPS!`;
+      await alertLeadershipViaWhatsAppAndSystem({
+        title: '🚨 Fake GPS Terdeteksi',
+        message: `${prof.full_name} (${prof.nip}) terdeteksi menggunakan aplikasi Mock Location!`,
+        waMessage: fakeGpsMsg,
+        link: '/admin/monitoring',
+        metadata: { type: 'fake_gps', userId: validUserId, latitude: userLat, longitude: userLon }
+      });
+    }
+
+    res.json({
+      success: true,
+      isOutOfBounds,
+      distanceFromTarget: distance,
+      allowedRadius,
+      targetLocationName,
+      message: isOutOfBounds
+        ? `Perhatian: Anda berada ${excessDist}m di luar seluruh radius pos resmi.`
+        : `Posisi terpantau valid di dalam area kerja: ${targetLocationName}.`
+    });
+  } catch (err) {
+    console.error('Location ping error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3. Submit face scan with burned-in forensic watermark
+app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
+  const {
+    userId,
+    checkType,
+    locationName,
+    latitude,
+    longitude,
+    accuracyMeters,
+    watermarkedPhotoUrl,
+    biometricScore,
+    notes
+  } = req.body;
+
+  if (!userId || !watermarkedPhotoUrl) {
+    return res.status(400).json({ success: false, error: 'User ID dan foto watermark wajib disertakan' });
+  }
+
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    const uRes = await pool.query(
+      `SELECT p.id, p.full_name, p.nip,
+              COALESCE(p.assigned_latitude, d.latitude, o.latitude, -6.2088) as target_lat,
+              COALESCE(p.assigned_longitude, d.longitude, o.longitude, 106.8456) as target_lon,
+              COALESCE(p.assigned_radius_meters, d.radius_meters, o.radius_meters, 150) as target_radius,
+              COALESCE(p.assigned_location_name, d.name, o.name, 'Kantor') as target_loc_name
+       FROM hrm_profiles p
+       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+       LEFT JOIN hrm_office_locations o ON o.is_active = true
+       WHERE p.id = $1 LIMIT 1;`,
+      [validUserId]
+    );
+
+    if (uRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+
+    const user = uRes.rows[0];
+    const uLat = latitude ? parseFloat(latitude) : parseFloat(user.target_lat);
+    const uLon = longitude ? parseFloat(longitude) : parseFloat(user.target_lon);
+    const targetLat = parseFloat(user.target_lat);
+    const targetLon = parseFloat(user.target_lon);
+    const targetRad = parseFloat(user.target_radius);
+
+    const distance = calculateHaversineMeters(uLat, uLon, targetLat, targetLon);
+    const isWithinRadius = distance <= targetRad;
+
+    const insRes = await pool.query(
+      `INSERT INTO hrm_field_patrol_checks (
+         user_id, user_name, user_nip, check_type, location_name,
+         latitude, longitude, accuracy_meters, distance_from_target,
+         is_within_radius, watermarked_photo_url, biometric_score,
+         biometric_verified, notes
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       RETURNING *;`,
+      [
+        validUserId,
+        user.full_name,
+        user.nip,
+        checkType || 'spot_check',
+        locationName || user.target_loc_name,
+        uLat,
+        uLon,
+        accuracyMeters ? parseFloat(accuracyMeters) : 5,
+        distance,
+        isWithinRadius,
+        watermarkedPhotoUrl,
+        biometricScore ? parseFloat(biometricScore) : 98.6,
+        true,
+        notes || null
+      ]
+    );
+
+    const patrol = insRes.rows[0];
+
+    broadcastNotification({
+      title: `📸 Verifikasi Wajah di Titik: ${user.full_name}`,
+      message: `${user.full_name} (${user.nip}) telah melakukan verifikasi wajah di ${patrol.location_name} (Status: ${isWithinRadius ? 'Dalam Radius' : `Di Luar Radius (${Math.round(distance)}m)`}).`,
+      type: 'patrol_verified',
+      data: {
+        patrolId: patrol.id,
+        userId: validUserId,
+        userName: user.full_name,
+        userNip: user.nip,
+        photoUrl: watermarkedPhotoUrl,
+        isWithinRadius,
+        distance,
+        locationName: patrol.location_name,
+        time: patrol.created_at
+      }
+    });
+
+    res.json({
+      success: true,
+      data: patrol,
+      message: 'Foto verifikasi wajah dengan watermark forensik berhasil diterima dan diteruskan ke Pimpinan.'
+    });
+  } catch (err) {
+    console.error('Submit patrol check error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4. Fetch all active field agents with live radar coordinates & multi-titik bank posts
+app.get('/api/field-sentinel/active-agents', async (req, res) => {
+  try {
+    const query = `
+      SELECT p.*, r.name as role_code, r.label as role_label,
+             d.name as division_title,
+             COALESCE(d.name, p.division_name, 'Umum') as resolved_division_name,
+             (
+               SELECT json_build_object(
+                 'id', pc.id,
+                 'check_type', pc.check_type,
+                 'created_at', pc.created_at,
+                 'watermarked_photo_url', pc.watermarked_photo_url,
+                 'location_name', pc.location_name,
+                 'is_within_radius', pc.is_within_radius,
+                 'distance_from_target', pc.distance_from_target
+               )
+               FROM hrm_field_patrol_checks pc
+               WHERE pc.user_id = p.id
+               ORDER BY pc.created_at DESC LIMIT 1
+             ) as latest_patrol_check,
+             (
+               SELECT COALESCE(json_agg(
+                 json_build_object(
+                   'id', fp.id,
+                   'userId', fp.user_id,
+                   'postCode', fp.post_code,
+                   'postName', fp.post_name,
+                   'latitude', fp.latitude,
+                   'longitude', fp.longitude,
+                   'radiusMeters', fp.radius_meters,
+                   'description', fp.description,
+                   'isActive', fp.is_active,
+                   'createdAt', fp.created_at
+                 ) ORDER BY fp.post_code ASC, fp.created_at ASC
+               ), '[]'::json)
+               FROM hrm_field_assigned_posts fp
+               WHERE fp.user_id = p.id AND fp.is_active = true
+             ) as assigned_posts
+      FROM hrm_profiles p
+      LEFT JOIN hrm_roles r ON p.role_id = r.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      WHERE p.is_field_sentinel_enabled = true OR LOWER(p.email) IN ('aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com')
+      ORDER BY p.full_name ASC;
+    `;
+    const result = await pool.query(query);
+    const users = result.rows.map((r) => {
+      const u = formatUserRow(r);
+      return {
+        ...u,
+        latestPatrolCheck: r.latest_patrol_check || null,
+        assignedPosts: r.assigned_posts || [],
+      };
+    });
+    res.json({ success: true, data: users });
+  } catch (err) {
+    console.error('Active agents error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5. Fetch patrol check history
+app.get('/api/field-sentinel/patrol-checks', async (req, res) => {
+  const { userId, limit } = req.query;
+  try {
+    let query = `SELECT * FROM hrm_field_patrol_checks`;
+    const params = [];
+    if (userId) {
+      params.push(userId);
+      query += ` WHERE user_id = $1`;
+    }
+    query += ` ORDER BY created_at DESC LIMIT ${limit ? parseInt(limit) : 50}`;
+    const result = await pool.query(query, params);
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6. Pimpinan / Superadmin sends urgent spot-check instruction
+app.post('/api/field-sentinel/request-spot-check', async (req, res) => {
+  const { userId, instructionNotes } = req.body;
+  if (!userId) {
+    return res.status(400).json({ success: false, error: 'userId wajib diisi' });
+  }
+  try {
+    const uRes = await pool.query('SELECT id, full_name, nip FROM hrm_profiles WHERE id::text = $1 OR nip = $1 LIMIT 1', [userId]);
+    if (uRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+    const target = uRes.rows[0];
+
+    broadcastNotification({
+      targetUserId: target.id,
+      title: '🚨 Instruksi Pimpinan: Konfirmasi Posisi Wajah',
+      message: instructionNotes || 'Pimpinan menginstruksikan Anda untuk segera melakukan konfirmasi scan wajah ber-watermark di titik lokasi tugas sekarang.',
+      type: 'spot_check_request',
+      data: {
+        requestedAt: new Date().toISOString(),
+        requireWatermark: true,
+      }
+    });
+
+    res.json({
+      success: true,
+      message: `Instruksi verifikasi wajah telah dikirimkan ke HP ${target.full_name} (${target.nip}).`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/biometric/reset-device', async (req, res) => {
   const { userId } = req.body;
   if (!userId) {
@@ -1120,9 +2101,14 @@ app.post('/api/biometric/reset-device', async (req, res) => {
   }
 
   try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
     await pool.query(
-      `UPDATE hrm_profiles SET device_id = NULL, device_model = NULL, is_device_bound = false, device_bound_at = NULL WHERE id = $1`,
-      [userId]
+      `UPDATE hrm_profiles SET device_id = NULL, device_model = NULL, is_device_bound = false, device_bound_at = NULL, updated_at = NOW() WHERE id = $1`,
+      [validUserId]
     );
 
     res.json({ success: true, message: 'Kunci perangkat berhasil di-reset. Karyawan dapat login dan clock-in dari perangkat baru.' });
@@ -1443,26 +2429,46 @@ app.post('/api/attendances/clock-out', async (req, res) => {
     let isServerGeofenceValid = geofenceValid !== false;
 
     if (latitude && longitude && userId) {
-      const locRes = await pool.query(
-        `SELECT 
-           COALESCE(d.latitude, o.latitude, -6.2088) as office_lat,
-           COALESCE(d.longitude, o.longitude, 106.8456) as office_lon,
-           COALESCE(d.radius_meters, o.radius_meters, 150) as allowed_radius
-         FROM hrm_profiles p
-         LEFT JOIN hrm_divisions d ON p.division_id = d.id
-         LEFT JOIN hrm_office_locations o ON o.is_active = true
-         WHERE p.id = $1 LIMIT 1`,
+      const fieldPosts = await pool.query(
+        'SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true',
         [userId]
       );
-      if (locRes.rows.length > 0) {
-        const loc = locRes.rows[0];
-        serverDistance = calculateHaversineMeters(
-          parseFloat(latitude),
-          parseFloat(longitude),
-          parseFloat(loc.office_lat),
-          parseFloat(loc.office_lon)
+      if (fieldPosts.rows.length > 0) {
+        const postsWithDist = fieldPosts.rows.map(p => {
+          const d = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(p.latitude), parseFloat(p.longitude));
+          return { ...p, distance: d, isValid: d <= parseFloat(p.radius_meters) };
+        });
+        const matched = postsWithDist.find(p => p.isValid);
+        if (matched) {
+          serverDistance = Math.round(matched.distance);
+          isServerGeofenceValid = true;
+        } else {
+          const nearest = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
+          serverDistance = Math.round(nearest.distance);
+          isServerGeofenceValid = false;
+        }
+      } else {
+        const locRes = await pool.query(
+          `SELECT 
+             COALESCE(p.assigned_latitude, d.latitude, o.latitude, -6.2088) as office_lat,
+             COALESCE(p.assigned_longitude, d.longitude, o.longitude, 106.8456) as office_lon,
+             COALESCE(p.assigned_radius_meters, d.radius_meters, o.radius_meters, 150) as allowed_radius
+           FROM hrm_profiles p
+           LEFT JOIN hrm_divisions d ON p.division_id = d.id
+           LEFT JOIN hrm_office_locations o ON o.is_active = true
+           WHERE p.id = $1 LIMIT 1`,
+          [userId]
         );
-        isServerGeofenceValid = serverDistance <= parseFloat(loc.allowed_radius);
+        if (locRes.rows.length > 0) {
+          const loc = locRes.rows[0];
+          serverDistance = calculateHaversineMeters(
+            parseFloat(latitude),
+            parseFloat(longitude),
+            parseFloat(loc.office_lat),
+            parseFloat(loc.office_lon)
+          );
+          isServerGeofenceValid = serverDistance <= parseFloat(loc.allowed_radius);
+        }
       }
     }
 
@@ -1501,9 +2507,336 @@ app.post('/api/attendances/clock-out', async (req, res) => {
       isMockLocation === true,
       flagsJson,
     ]);
-    res.json({ success: true, data: result.rows[0] });
+    const updatedAttendance = result.rows[0];
+
+    // Rolling overwrite: Simpan foto checkout hari ini sebagai arsip review, dan hapus foto checkout hari sebelumnya
+    if (photo && userId) {
+      await pool.query(
+        `UPDATE hrm_attendances SET photo_out = NULL WHERE user_id = $1 AND attendance_date < $2`,
+        [userId, date || new Date().toISOString().split('T')[0]]
+      ).catch(() => null);
+    }
+
+    res.json({ success: true, data: updatedAttendance });
   } catch (err) {
     console.error('Clock-out error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── 4A. PULANG AWAL DARURAT (REKOMENDASI 1 - SELF-SERVICE) ─────────────────
+app.post('/api/attendances/early-leave', async (req, res) => {
+  const rawUserId = req.body.userId || req.body.employeeId;
+  const {
+    date,
+    time,
+    category,
+    reason,
+    photo,
+    latitude,
+    longitude,
+    workDurationMinutes,
+    biometricScore,
+    biometricMatch,
+    geofenceDistance,
+    geofenceValid,
+  } = req.body;
+
+  if (!rawUserId) {
+    return res.status(400).json({ success: false, error: 'User ID / Employee ID wajib disertakan' });
+  }
+
+  const userId = rawUserId;
+
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    const todayDate = date || new Date().toISOString().split('T')[0];
+    const clockOutTime = (time || new Date().toTimeString().split(' ')[0]).replace(/\./g, ':');
+
+    // Update presensi hari ini
+    const query = `
+      UPDATE hrm_attendances SET
+        clock_out = $1,
+        photo_out = $2,
+        lat_out = $3,
+        long_out = $4,
+        is_early_leave = true,
+        early_leave_category = $5,
+        early_leave_reason = $6,
+        work_duration_minutes = COALESCE($7, work_duration_minutes),
+        biometric_score = COALESCE($8, biometric_score),
+        biometric_match = COALESCE($9, biometric_match),
+        geofence_distance_meters = COALESCE($10, geofence_distance_meters),
+        geofence_valid = COALESCE($11, geofence_valid),
+        is_locked = false,
+        is_perimeter_breached = false,
+        is_on_break = false,
+        notes = COALESCE(notes, '') || ' [PULANG AWAL DARURAT: ' || $14 || '] ' || $15,
+        updated_at = NOW()
+      WHERE user_id = $12 AND attendance_date = $13
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [
+      clockOutTime,
+      photo,
+      latitude,
+      longitude,
+      category || 'darurat',
+      reason || 'Keperluan darurat/kesehatan',
+      workDurationMinutes || 0,
+      biometricScore != null ? biometricScore : null,
+      biometricMatch != null ? biometricMatch : null,
+      geofenceDistance != null ? geofenceDistance : null,
+      geofenceValid !== false,
+      validUserId,
+      todayDate,
+      category || 'darurat',
+      reason || 'Keperluan darurat/kesehatan'
+    ]);
+
+    // Update profile status agar tidak dianggap out of bounds
+    await pool.query(
+      `UPDATE hrm_profiles SET is_out_of_bounds = false, current_active_post_id = NULL, current_active_post_name = NULL WHERE id = $1`,
+      [validUserId]
+    );
+
+    // Ambil data profile karyawan untuk format pesan
+    const profRes = await pool.query('SELECT full_name, nip, phone, current_active_post_name FROM hrm_profiles WHERE id = $1', [validUserId]);
+    const prof = profRes.rows[0] || { full_name: 'Karyawan', nip: 'FRP' };
+
+    const witaTimeStr = new Date().toLocaleTimeString('id-ID', {
+      timeZone: 'Asia/Makassar',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    }) + ' WITA';
+
+    const categoryLabel = {
+      sakit_mendadak: 'Sakit Mendadak / Kebutuhan Medis',
+      darurat_keluarga: 'Darurat Keluarga / Musibah',
+      tugas_luar: 'Tugas Luar / Panggilan Mendesak',
+      lainnya: 'Keperluan Mendesak Lainnya',
+    }[category] || category || 'Darurat';
+
+    // 📲 TRIGGER DUAL-CHANNEL NOTIFIKASI KE PIMPINAN & SUPERADMIN (REKOMENDASI 1)
+    const alertTitle = `🚨 Pulang Awal Darurat: ${prof.full_name}`;
+    const alertMsg = `Petugas ${prof.full_name} (${prof.nip}) telah melakukan presensi pulang awal darurat dengan kategori "${categoryLabel}". Alasan: "${reason}". Waktu: ${witaTimeStr}.`;
+
+    const waMsg =
+`🚨 *LAPORAN PULANG AWAL DARURAT PT. FAWWAZ RESKI PERWIRA*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+👤 *Nama Petugas:* ${prof.full_name}
+🆔 *NIP:* ${prof.nip || 'FRP-FIELD'}
+⚠️ *Status:* *PULANG AWAL MANDIRI (DARURAT)*
+🏷️ *Kategori:* ${categoryLabel}
+📝 *Alasan:* ${reason}
+⏰ *Waktu Checkout:* ${witaTimeStr}
+📍 *Pos Terakhir:* ${prof.current_active_post_name || 'Lokasi Kerja'}
+🌐 *Koordinat:* ${latitude ? `${latitude}, ${longitude}` : 'Terverifikasi GPS'}
+
+*Catatan Sistem:*
+Presensi kepulangan darurat telah diproses otomatis oleh sistem tanpa memicu alarm pelanggaran perimeter. Mohon Pimpinan, Admin, & Korlap memantau dan berkoordinasi dengan petugas terkait.
+━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+    await alertLeadershipViaWhatsAppAndSystem({
+      title: alertTitle,
+      message: alertMsg,
+      waMessage: waMsg,
+      link: '/admin/monitoring',
+      metadata: {
+        type: 'early_leave_emergency',
+        userId: validUserId,
+        category,
+        reason,
+        latitude,
+        longitude
+      }
+    });
+
+    res.json({ success: true, data: result.rows[0], message: 'Presensi pulang awal darurat berhasil dicatat dan dilaporkan' });
+  } catch (err) {
+    console.error('[Early Leave Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── 4B. REMOTE UNLOCK CHECKOUT (REKOMENDASI 3 / REKOMENDASI 2 OLEH ADMIN / KORLAP) ────
+app.post('/api/attendances/remote-unlock', async (req, res) => {
+  const { userId, date, unlockedBy, reason } = req.body;
+  if (!userId) {
+    return res.status(400).json({ success: false, error: 'User ID wajib disertakan' });
+  }
+
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    const todayDate = date || new Date().toISOString().split('T')[0];
+    const approverName = unlockedBy || 'Admin / Korlap';
+
+    const result = await pool.query(
+      `UPDATE hrm_attendances SET
+         is_remote_unlocked = true,
+         remote_unlocked_by = $1,
+         remote_unlocked_at = NOW(),
+         is_locked = false,
+         is_perimeter_breached = false,
+         notes = COALESCE(notes, '') || ' [Kunci Checkout Dibuka oleh ' || $5 || ': ' || COALESCE($2, 'Izin Khusus') || ']',
+         updated_at = NOW()
+       WHERE user_id = $3 AND attendance_date = $4
+       RETURNING *;`,
+      [approverName, reason || 'Izin kepulangan', validUserId, todayDate, approverName]
+    );
+
+    // Kirim notifikasi in-app ke karyawan bahwa kunci kepulangan telah dibuka
+    await pool.query(
+      `INSERT INTO hrm_notifications (user_id, title, message, type, link, is_read, created_at)
+       VALUES ($1, $2, $3, 'info', '/dashboard', false, NOW())`,
+      [
+        validUserId,
+        `🔓 Tombol Checkout Telah Dibuka`,
+        `Presensi pulang Anda telah diizinkan dan dibuka oleh ${approverName}. Anda sekarang dapat melakukan Clock Out melalui aplikasi.`
+      ]
+    );
+
+    broadcastNotification({
+      title: `🔓 Kunci Checkout Dibuka`,
+      message: `Presensi pulang untuk karyawan telah dibuka oleh ${approverName}`,
+      type: 'info',
+      link: '/dashboard',
+      data: { userId: validUserId, unlockedBy: approverName }
+    });
+
+    res.json({ success: true, message: 'Kunci presensi pulang berhasil dibuka untuk karyawan', data: result.rows[0] });
+  } catch (err) {
+    console.error('[Remote Unlock Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── 4C. BREAK TIME ENGINE (FITUR JAM ISTIRAHAT 1 JAM) ──────────────────────
+app.post('/api/attendances/break/start', async (req, res) => {
+  const { userId, date, startTime } = req.body;
+  if (!userId) {
+    return res.status(400).json({ success: false, error: 'User ID wajib disertakan' });
+  }
+
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    const todayDate = date || new Date().toISOString().split('T')[0];
+    const breakStart = startTime || new Date().toISOString();
+
+    const result = await pool.query(
+      `UPDATE hrm_attendances SET
+         is_on_break = true,
+         break_start_time = $1,
+         updated_at = NOW()
+       WHERE user_id = $2 AND attendance_date = $3
+       RETURNING *;`,
+      [breakStart, validUserId, todayDate]
+    );
+
+    // Tandai status profile agar jeda monitoring pelanggaran
+    await pool.query(
+      `UPDATE hrm_profiles SET is_out_of_bounds = false, updated_at = NOW() WHERE id = $1`,
+      [validUserId]
+    );
+
+    res.json({ success: true, isOnBreak: true, breakStartTime: breakStart, data: result.rows[0] });
+  } catch (err) {
+    console.error('[Break Start Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/attendances/break/end', async (req, res) => {
+  const { userId, date, endTime, durationMinutes } = req.body;
+  if (!userId) {
+    return res.status(400).json({ success: false, error: 'User ID wajib disertakan' });
+  }
+
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    const todayDate = date || new Date().toISOString().split('T')[0];
+    const breakEnd = endTime || new Date().toISOString();
+    const durMins = durationMinutes || 0;
+
+    const result = await pool.query(
+      `UPDATE hrm_attendances SET
+         is_on_break = false,
+         break_end_time = $1,
+         break_duration_minutes = COALESCE(break_duration_minutes, 0) + $2,
+         updated_at = NOW()
+       WHERE user_id = $3 AND attendance_date = $4
+       RETURNING *;`,
+      [breakEnd, durMins, validUserId, todayDate]
+    );
+
+    res.json({ success: true, isOnBreak: false, breakEndTime: breakEnd, data: result.rows[0] });
+  } catch (err) {
+    console.error('[Break End Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── 4D. BREAK TIME POLICY SETTINGS (DASHBOARD SUPERADMIN) ───────────────────
+app.get('/api/settings/break-policy', async (req, res) => {
+  try {
+    const sRes = await pool.query(
+      "SELECT key, value FROM hrm_system_settings WHERE key IN ('break_policy_enabled', 'break_duration_minutes', 'break_allow_outside')"
+    );
+    const settings = {
+      enabled: true,
+      durationMinutes: 60,
+      allowOutside: true,
+    };
+    sRes.rows.forEach(r => {
+      if (r.key === 'break_policy_enabled') settings.enabled = r.value !== 'false';
+      if (r.key === 'break_duration_minutes') settings.durationMinutes = parseInt(r.value, 10) || 60;
+      if (r.key === 'break_allow_outside') settings.allowOutside = r.value !== 'false';
+    });
+    res.json({ success: true, data: settings });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/settings/break-policy', async (req, res) => {
+  const { enabled, durationMinutes, allowOutside } = req.body;
+  try {
+    await pool.query(
+      `INSERT INTO hrm_system_settings (key, value, updated_at)
+       VALUES 
+         ('break_policy_enabled', $1, NOW()),
+         ('break_duration_minutes', $2, NOW()),
+         ('break_allow_outside', $3, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
+      [
+        enabled !== false ? 'true' : 'false',
+        String(durationMinutes || 60),
+        allowOutside !== false ? 'true' : 'false'
+      ]
+    );
+    res.json({ success: true, message: 'Pengaturan jam istirahat berhasil diperbarui' });
+  } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1511,42 +2844,68 @@ app.post('/api/attendances/clock-out', async (req, res) => {
 app.get('/api/attendances', async (req, res) => {
   const { date } = req.query;
   try {
-    let query = 'SELECT * FROM hrm_attendances';
+    let query = `
+      SELECT a.*, p.full_name as user_name, p.nip as user_nip, p.avatar_url as user_avatar,
+             COALESCE(d.name, p.division_name, 'Umum') as division_name
+      FROM hrm_attendances a
+      LEFT JOIN hrm_profiles p ON a.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+    `;
     const params = [];
     if (date) {
-      query += ' WHERE attendance_date = $1';
+      query += ' WHERE a.attendance_date = $1';
       params.push(date);
     }
-    query += ' ORDER BY attendance_date DESC, clock_in DESC LIMIT 500';
+    query += ' ORDER BY a.attendance_date DESC, a.clock_in DESC LIMIT 500';
     const result = await pool.query(query, params);
-    const data = result.rows.map((a) => ({
-      id: a.id,
-      userId: a.user_id,
-      date: a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '',
-      clockIn: a.clock_in ? a.clock_in.substring(0, 5) : undefined,
-      clockOut: a.clock_out ? a.clock_out.substring(0, 5) : undefined,
-      clockInPhoto: a.photo_in,
-      clockOutPhoto: a.photo_out,
-      clockInLat: parseFloat(a.lat_in) || undefined,
-      clockInLong: parseFloat(a.long_in) || undefined,
-      clockOutLat: parseFloat(a.lat_out) || undefined,
-      clockOutLong: parseFloat(a.long_out) || undefined,
-      status: a.status,
-      lateMinutes: a.late_minutes || 0,
-      earlyLeavingMinutes: a.early_leaving_minutes || 0,
-      workDurationMinutes: a.work_duration_minutes || 0,
-      isLocked: a.is_locked === true,
-      isPerimeterBreached: a.is_perimeter_breached === true,
-      perimeterBreachCount: a.perimeter_breach_count || 0,
-      timeOutsideMinutes: a.time_outside_minutes || 0,
-      notes: a.notes,
-      biometricScore: a.biometric_score != null ? parseFloat(a.biometric_score) : undefined,
-      biometricMatch: a.biometric_match != null ? a.biometric_match : undefined,
-      geofenceDistance: a.geofence_distance_meters != null ? parseFloat(a.geofence_distance_meters) : undefined,
-      geofenceValid: a.geofence_valid != null ? a.geofence_valid : undefined,
-      isMockLocation: a.is_mock_location === true,
-      securityFlags: Array.isArray(a.security_flags) ? a.security_flags : (typeof a.security_flags === 'string' ? JSON.parse(a.security_flags) : []),
-    }));
+    const data = result.rows.map((a) => {
+      const attDate = a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '';
+      return {
+        id: a.id,
+        userId: a.user_id,
+        userName: a.user_name || undefined,
+        userNip: a.user_nip || undefined,
+        userAvatar: a.user_avatar || undefined,
+        divisionName: a.division_name || undefined,
+        date: attDate,
+        attendanceDate: attDate,
+        clockIn: a.clock_in ? a.clock_in.substring(0, 5) : undefined,
+        clockOut: a.clock_out ? a.clock_out.substring(0, 5) : undefined,
+        photoIn: a.photo_in,
+        photoOut: a.photo_out,
+        clockInPhoto: a.photo_in,
+        clockOutPhoto: a.photo_out,
+        clockInLat: parseFloat(a.lat_in) || undefined,
+        clockInLong: parseFloat(a.long_in) || undefined,
+        clockOutLat: parseFloat(a.lat_out) || undefined,
+        clockOutLong: parseFloat(a.long_out) || undefined,
+        status: a.status,
+        lateMinutes: a.late_minutes || 0,
+        earlyLeavingMinutes: a.early_leaving_minutes || 0,
+        workDurationMinutes: a.work_duration_minutes || 0,
+        isLocked: a.is_locked === true,
+        isPerimeterBreached: a.is_perimeter_breached === true,
+        perimeterBreachCount: a.perimeter_breach_count || 0,
+        timeOutsideMinutes: a.time_outside_minutes || 0,
+        notes: a.notes,
+        biometricScore: a.biometric_score != null ? parseFloat(a.biometric_score) : undefined,
+        biometricMatch: a.biometric_match != null ? a.biometric_match : undefined,
+        geofenceDistance: a.geofence_distance_meters != null ? parseFloat(a.geofence_distance_meters) : undefined,
+        geofenceValid: a.geofence_valid != null ? a.geofence_valid : undefined,
+        isMockLocation: a.is_mock_location === true,
+        securityFlags: Array.isArray(a.security_flags) ? a.security_flags : (typeof a.security_flags === 'string' ? JSON.parse(a.security_flags) : []),
+        isEarlyLeave: a.is_early_leave === true,
+        earlyLeaveReason: a.early_leave_reason,
+        earlyLeaveCategory: a.early_leave_category,
+        isRemoteUnlocked: a.is_remote_unlocked === true,
+        remoteUnlockedBy: a.remote_unlocked_by,
+        remoteUnlockedAt: a.remote_unlocked_at,
+        isOnBreak: a.is_on_break === true,
+        breakStartTime: a.break_start_time,
+        breakEndTime: a.break_end_time,
+        breakDurationMinutes: a.break_duration_minutes || 0,
+      };
+    });
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -2513,7 +3872,19 @@ app.get('/api/overtime', async (req, res) => {
 });
 
 app.post('/api/overtime', async (req, res) => {
-  const { userId, date, startTime, endTime, durationHours, taskDescription, compensationAmount } = req.body;
+  const {
+    userId,
+    date,
+    startTime,
+    endTime,
+    durationHours,
+    taskDescription,
+    compensationAmount,
+    supervisorName,
+    supervisorSignature,
+    scheduledEndTime,
+  } = req.body;
+
   if (!userId || !date || !startTime || !endTime) {
     return res.status(400).json({ success: false, error: 'Data pengajuan lembur tidak lengkap (userId, tanggal, jam mulai & selesai wajib diisi)' });
   }
@@ -2549,19 +3920,14 @@ app.post('/api/overtime', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan dalam sistem' });
     }
 
-    // ── KUNCI: Tarif Lembur Resmi Per-Karyawan dari Database (bukan dari request body) ──
-    // Setiap karyawan memiliki tarif lembur yang berbeda sesuai haknya:
-    // Rp 23.381,79/jam atau Rp 24.173,06/jam (atau tarif lainnya per data master)
     const officialRate = parseFloat(userProfile.hourly_overtime_rate) || 23381.79;
-
     const hours = durationHours !== undefined ? parseFloat(durationHours) : 2.0;
-    // Gunakan officialRate dari database, bukan dari request body
     const comp = Math.round(hours * officialRate);
 
     const query = `
       INSERT INTO hrm_overtime_records (
-        user_id, date, start_time, end_time, duration_hours, task_description, rate_applied, compensation_amount, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+        user_id, date, start_time, end_time, scheduled_end_time, duration_hours, task_description, rate_applied, compensation_amount, status, supervisor_name, supervisor_signature, overtime_phase
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11, 'requested')
       RETURNING *;
     `;
     const result = await pool.query(query, [
@@ -2569,10 +3935,13 @@ app.post('/api/overtime', async (req, res) => {
       date,
       startTime,
       endTime,
+      scheduledEndTime || endTime,
       hours,
       taskDescription.trim(),
-      officialRate,   // ← tarif resmi per karyawan dari hrm_payroll_salary_profiles
+      officialRate,
       comp,
+      supervisorName || null,
+      supervisorSignature || null,
     ]);
 
     const otRow = result.rows[0];
@@ -2589,17 +3958,17 @@ app.post('/api/overtime', async (req, res) => {
     await broadcastNotification({
       recipientRoles,
       title: '⏱️ Pengajuan Surat Perintah Lembur (SPL)',
-      message: `${userProfile.full_name} (${userProfile.division_name || 'Operasional'}) mengajukan lembur pada ${date} (${startTime} - ${endTime}, ${hours} Jam): "${taskDescription || 'Operasional'}". Estimasi kompensasi: Rp ${comp.toLocaleString('id-ID')}. Perlu verifikasi segera.`,
+      message: `${userProfile.full_name} (${userProfile.division_name || 'Operasional'}) mengajukan lembur pada ${date} (${startTime} - ${endTime}, ${hours} Jam) disaksikan Karu ${supervisorName || '-'}: "${taskDescription || 'Operasional'}". Estimasi kompensasi: Rp ${comp.toLocaleString('id-ID')}.`,
       type: 'overtime',
       link: '/admin/approval',
-      metadata: { overtimeId: otRow.id, userId: validUserId, date, hours, compensation: comp },
+      metadata: { overtimeId: otRow.id, userId: validUserId, date, hours, compensation: comp, supervisorName },
       divisionId: userProfile.division_id || null,
     });
 
     res.json({
       success: true,
       data: otRow,
-      message: 'Surat Perintah Lembur berhasil diajukan dan diteruskan ke supervisor/HRD.',
+      message: 'Surat Perintah Lembur berhasil diajukan dengan paraf Kepala Regu dan diteruskan ke supervisor/HRD.',
     });
   } catch (err) {
     console.error('Overtime error:', err);
@@ -2630,25 +3999,28 @@ app.put('/api/overtime/:id/status', async (req, res) => {
 
     const finalHours = approvedHours !== undefined ? Number(approvedHours) : Number(ot.duration_hours);
     const compensation = Math.round(finalHours * Number(ot.rate_applied || 30000));
+    const nextPhase = status === 'approved' ? 'in_progress' : 'rejected';
 
     const updateRes = await pool.query(`
       UPDATE hrm_overtime_records SET
         status = $1,
-        duration_hours = $2,
-        compensation_amount = $3,
-        approved_by = $4,
+        overtime_phase = $2,
+        duration_hours = $3,
+        compensation_amount = $4,
+        approved_by = $5,
         approved_at = NOW(),
+        started_at = CASE WHEN $1 = 'approved' AND started_at IS NULL THEN NOW() ELSE started_at END,
         updated_at = NOW()
-      WHERE id = $5
+      WHERE id = $6
       RETURNING *;
-    `, [status, finalHours, compensation, validApproverId || null, id]);
+    `, [status, nextPhase, finalHours, compensation, validApproverId || null, id]);
 
     // Send notification to employee
     const statusText = status === 'approved' ? 'DISETUJUI' : 'DITOLAK';
     await broadcastNotification({
       targetUserId: ot.user_id,
       title: `Surat Perintah Lembur (SPL) ${statusText}`,
-      message: `Permohonan lembur Anda pada tanggal ${ot.date} (${finalHours} Jam kerja) telah ${statusText} oleh ${approverName || 'Atasan/HRD'}. Kompensasi resmi: Rp ${compensation.toLocaleString('id-ID')}.${notes ? ' Catatan: ' + notes : ''}`,
+      message: `Permohonan lembur Anda pada tanggal ${ot.date} (${finalHours} Jam kerja) telah ${statusText} oleh ${approverName || 'Atasan/HRD'}. Waktu lembur aktif dan berjalan.${notes ? ' Catatan: ' + notes : ''}`,
       type: status === 'approved' ? 'success' : 'warning',
       metadata: { overtimeId: id, status, compensation, approverName },
     });
@@ -2660,6 +4032,44 @@ app.put('/api/overtime/:id/status', async (req, res) => {
     });
   } catch (err) {
     console.error('Update overtime error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Selesaikan Pekerjaan Lembur (Early / Regular Finish dengan Upload Bukti Foto & Keterangan)
+app.post('/api/overtime/:id/complete', async (req, res) => {
+  const { id } = req.params;
+  const { completionNotes, completionPhotos, actualEndTime } = req.body;
+  try {
+    const photosJson = JSON.stringify(Array.isArray(completionPhotos) ? completionPhotos : []);
+    const updateRes = await pool.query(`
+      UPDATE hrm_overtime_records SET
+        overtime_phase = 'completed',
+        completion_notes = $1,
+        completion_photos = $2,
+        actual_end_time = $3,
+        updated_at = NOW()
+      WHERE id = $4
+      RETURNING *;
+    `, [
+      completionNotes || 'Pekerjaan lembur selesai tuntas',
+      photosJson,
+      actualEndTime || new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+      id,
+    ]);
+
+    if (updateRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Pengajuan lembur tidak ditemukan' });
+    }
+
+    const row = updateRes.rows[0];
+    res.json({
+      success: true,
+      data: row,
+      message: 'Pekerjaan lembur berhasil diselesaikan. Bukti hasil kerja tersimpan dan tombol checkout telah dibuka.',
+    });
+  } catch (err) {
+    console.error('Complete overtime error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -4222,6 +5632,7 @@ app.post('/api/biometrics/enroll', async (req, res) => {
         is_face_enrolled = true,
         face_descriptor = $1,
         face_enrolled_photo = COALESCE($2, face_enrolled_photo),
+        avatar_url = COALESCE($2, avatar_url),
         face_enrolled_at = NOW(),
         updated_at = NOW()
       WHERE id::text = $3 OR nip = $3 OR LOWER(email) = LOWER($3)

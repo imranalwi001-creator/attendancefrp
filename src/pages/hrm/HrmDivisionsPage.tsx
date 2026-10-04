@@ -901,8 +901,8 @@ export const HrmDivisionsPage: React.FC = () => {
                           className="flex items-center gap-1 bg-muted/40 border border-border px-2 py-1 rounded-lg text-[11px] truncate max-w-[120px]"
                           title={`${emp.fullName} (${emp.nip})`}
                         >
-                          {emp.avatarUrl ? (
-                            <img src={emp.avatarUrl} alt={emp.fullName} className="w-4 h-4 rounded-full object-cover shrink-0" />
+                          {(emp.avatarUrl || emp.faceEnrolledPhoto) ? (
+                            <img src={emp.avatarUrl || emp.faceEnrolledPhoto} alt={emp.fullName} className="w-4 h-4 rounded-full object-cover shrink-0" />
                           ) : (
                             <div className="w-4 h-4 rounded-full bg-primary/20 text-primary font-bold flex items-center justify-center text-[9px] shrink-0">
                               {emp.fullName.charAt(0)}
@@ -1248,9 +1248,9 @@ export const HrmDivisionsPage: React.FC = () => {
                   className="p-3 bg-card border border-border rounded-xl flex items-center justify-between gap-3 hover:border-primary/20 transition-colors"
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    {emp.avatarUrl ? (
+                    {(emp.avatarUrl || emp.faceEnrolledPhoto) ? (
                       <img
-                        src={emp.avatarUrl}
+                        src={emp.avatarUrl || emp.faceEnrolledPhoto}
                         alt={emp.fullName}
                         className="w-10 h-10 rounded-full object-cover border border-primary/20 shrink-0"
                       />
