@@ -57,12 +57,12 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   const normalizeRole = (r?: string) => (r || '').toLowerCase().replace(/[\s_-]/g, '');
   const currentRole = normalizeRole(role);
 
-  // Standalone PWA Mode Detection (Lampiran 2 & 3)
-  const isPwaStandalone = React.useMemo(() => {
+  // Mobile & Standalone PWA Mode Detection (Lampiran 2 & 3)
+  const isMobileOrPwa = React.useMemo(() => {
     if (typeof window === 'undefined') return false;
     if (localStorage.getItem('hrm_force_desktop_mode') === 'true') return false;
     const urlParams = new URLSearchParams(window.location.search);
-    return Boolean(
+    const isPwa = Boolean(
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as any).standalone === true ||
       document.referrer.includes('android-app://') ||
@@ -70,9 +70,11 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       urlParams.get('mode') === 'app' ||
       localStorage.getItem('hrm_pwa_mode') === 'true'
     );
+    const isMobile = window.innerWidth <= 768 || /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+    return isPwa || isMobile;
   }, []);
 
-  if (isPwaStandalone && (location.pathname === '/presensi' || location.pathname === '/dashboard')) {
+  if (isMobileOrPwa && (currentRole === 'karyawan' || currentRole === 'staff' || !['superadmin', 'admin', 'hrd', 'keuangan', 'pimpinan'].includes(currentRole) || location.pathname === '/presensi')) {
     return <div className="min-h-screen bg-[#14532D] text-foreground">{children}</div>;
   }
 

@@ -72,16 +72,16 @@ import { HrmPwaAttendanceView } from '@/components/hrm/HrmPwaAttendanceView';
 export const HrmEmployeeDashboard: React.FC = () => {
   const { user, refreshUser } = useHrmAuth();
 
-  // PWA Standalone Mode Detection (Lampiran 2 & 3)
+  // Mobile & PWA Mode Detection (Lampiran 2 & 3)
   const [forceDesktopMode, setForceDesktopMode] = useState<boolean>(() => {
     return localStorage.getItem('hrm_force_desktop_mode') === 'true';
   });
 
-  const isPwaStandalone = React.useMemo(() => {
+  const isMobileOrPwa = React.useMemo(() => {
     if (forceDesktopMode) return false;
     if (typeof window === 'undefined') return false;
     const urlParams = new URLSearchParams(window.location.search);
-    return Boolean(
+    const isPwa = Boolean(
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as any).standalone === true ||
       document.referrer.includes('android-app://') ||
@@ -89,9 +89,11 @@ export const HrmEmployeeDashboard: React.FC = () => {
       urlParams.get('mode') === 'app' ||
       localStorage.getItem('hrm_pwa_mode') === 'true'
     );
+    const isMobile = window.innerWidth <= 768 || /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+    return isPwa || isMobile;
   }, [forceDesktopMode]);
 
-  if (isPwaStandalone) {
+  if (isMobileOrPwa) {
     return (
       <HrmPwaAttendanceView
         onSwitchToDesktop={() => {
