@@ -100,6 +100,10 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
   // 3. Snap photo and apply forensic watermark
   const handleSnapPhoto = async () => {
     if (!videoRef.current) return;
+    if (videoRef.current.readyState < 2 || videoRef.current.videoWidth === 0) {
+      setErrorMsg('Kamera sedang memuat frame. Harap tunggu 1-2 detik sebelum mengambil foto.');
+      return;
+    }
     setIsProcessing(true);
     setErrorMsg(null);
 
@@ -115,6 +119,7 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
       ctx.translate(snapCanvas.width, 0);
       ctx.scale(-1, 1);
       ctx.drawImage(video, 0, 0, snapCanvas.width, snapCanvas.height);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
 
       const rawPhoto = snapCanvas.toDataURL('image/jpeg', 0.9);
       setCapturedPhoto(rawPhoto);

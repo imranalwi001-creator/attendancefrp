@@ -3040,9 +3040,15 @@ export const hrmService = {
       durationMins = Math.max(0, Math.round((now.getTime() - startMs) / 60000));
     }
 
+    const lateMins = Math.max(0, durationMins - 60);
+
     existing.isOnBreak = false;
     existing.breakEndTime = nowIso;
     existing.breakDurationMinutes = (existing.breakDurationMinutes || 0) + durationMins;
+    existing.breakLateMinutes = lateMins;
+    if (lateMins > 0) {
+      existing.notes = (existing.notes ? existing.notes + ' | ' : '') + `[Terlambat Masuk Istirahat ${lateMins} Menit]`;
+    }
     all[idx] = existing;
 
     hrmService.saveAttendances(all);
@@ -3209,6 +3215,14 @@ export const hrmService = {
     const user = hrmService.getUsers().find((u) => u.id === req.userId);
     if (!user) throw new Error('Pengguna tidak ditemukan');
 
+    if (!req.reason || !req.reason.trim()) {
+      throw new Error('Alasan pengajuan wajib diisi');
+    }
+
+    if (!req.attachmentUrl || !req.attachmentUrl.trim()) {
+      throw new Error('Semua pengajuan cuti, izin, dan izin darurat WAJIB melampirkan foto bukti pendukung');
+    }
+
     const start = new Date(req.startDate);
     const end = new Date(req.endDate);
     const diffTime = Math.abs(end.getTime() - start.getTime());
@@ -3233,14 +3247,28 @@ export const hrmService = {
 
     leaves.unshift(newLeave);
     localStorage.setItem(STORAGE_KEYS.LEAVES, JSON.stringify(leaves));
+    window.dispatchEvent(new Event('hrm_leaves_updated'));
+
+    // Push to backend database asynchronously with WA alert
+    api.post('/leaves', {
+      userId: user.id,
+      leaveType: req.leaveType,
+      startDate: req.startDate,
+      endDate: req.endDate,
+      totalDays,
+      reason: req.reason,
+      attachmentUrl: req.attachmentUrl,
+    }).catch((err) => {
+      console.warn('[HRM] Warning syncing leave request to backend:', err);
+    });
 
     // Dispatch real-time alert with sound & vibration to Korlap, Pimpinan, Admin, Superadmin, Keuangan
     const typeLabel = req.leaveType.replace('_', ' ').toUpperCase();
-    ['korlap', 'pimpinan', 'superadmin', 'admin', 'keuangan'].forEach((role) => {
+    ['korlap', 'admin', 'k3', 'superadmin', 'pimpinan'].forEach((role) => {
       hrmService.addNotification({
         recipientRole: role,
         title: `📋 Pengajuan ${typeLabel} Baru Masuk`,
-        message: `${user.fullName} (${user.nip} • ${user.divisionName || 'Operasional'}) mengajukan ${totalDays} hari (${req.startDate} s/d ${req.endDate}): "${req.reason}". Segera tinjau & tentukan karyawan pengganti.`,
+        message: `${user.fullName} (${user.nip} • ${user.divisionName || 'Operasional'}) mengajukan ${totalDays} hari (${req.startDate} s/d ${req.endDate}): "${req.reason}". Segera tinjau & tentukan persetujuan.`,
         type: 'leave',
         link: '/admin/approval',
       });
@@ -3277,17 +3305,24 @@ export const hrmService = {
     if (substituteName) leaves[idx].substituteName = substituteName;
     if (substituteNip) leaves[idx].substituteNip = substituteNip;
 
-    if (status === 'approved' && leaves[idx].leaveType === 'cuti_tahunan') {
+    if (status === 'approved' && (leaves[idx].leaveType === 'cuti_tahunan' || leaves[idx].leaveType === 'annual_leave')) {
       const users = hrmService.getUsers();
       const uIdx = users.findIndex((u) => u.id === leaves[idx].userId);
       if (uIdx !== -1) {
         users[uIdx].usedLeaveDays = (users[uIdx].usedLeaveDays || 0) + leaves[idx].totalDays;
         localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+
+        const cur = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
+        if (cur && cur.id === leaves[idx].userId) {
+          cur.usedLeaveDays = (cur.usedLeaveDays || 0) + leaves[idx].totalDays;
+          localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(cur));
+        }
       }
     }
 
     localStorage.setItem(STORAGE_KEYS.LEAVES, JSON.stringify(leaves));
     window.dispatchEvent(new Event('hrm_leaves_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
 
     // Notification to applicant
     const statusText = status === 'approved' ? 'Disetujui' : 'Ditolak';

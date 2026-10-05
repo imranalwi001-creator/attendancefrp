@@ -36,6 +36,11 @@ import {
   BellRing,
   VolumeX,
   ShieldAlert,
+  Bell,
+  Upload,
+  Image as ImageIcon,
+  Filter,
+  CheckCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { biometricService, BiometricMatchResult } from '@/services/biometricService';
@@ -84,11 +89,29 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [actionType, setActionType] = useState<'clock_in' | 'clock_out'>('clock_in');
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const [faceDetected, setFaceDetected] = useState<boolean>(true);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Synchronize cameraStreamRef & ensure unmount cleanup
+  useEffect(() => {
+    cameraStreamRef.current = cameraStream;
+  }, [cameraStream]);
+
+  useEffect(() => {
+    return () => {
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach((track) => {
+          track.stop();
+          track.enabled = false;
+        });
+        cameraStreamRef.current = null;
+      }
+    };
+  }, []);
 
   // 1-Hour Break States & Modal Konfirmasi
   const [breakTimer, setBreakTimer] = useState<number>(0);
@@ -109,6 +132,32 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [leaveReason, setLeaveReason] = useState('');
   const [isSubmittingLeave, setIsSubmittingLeave] = useState(false);
   const [userLeaves, setUserLeaves] = useState<LeaveRequest[]>([]);
+  const [leaveProofPhoto, setLeaveProofPhoto] = useState<string>('');
+
+  // Notification Bell Drawer & List
+  const [notificationsDrawerOpen, setNotificationsDrawerOpen] = useState(false);
+  const [userNotifications, setUserNotifications] = useState<import('@/types/hrm').HrmNotification[]>([]);
+
+  // Monthly Shift Schedule Modal
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+
+  // Overtime (SPL) Submission Modal States
+  const [overtimeModalOpen, setOvertimeModalOpen] = useState(false);
+  const [userOvertimeList, setUserOvertimeList] = useState<OvertimeRecord[]>([]);
+  const [otDate, setOtDate] = useState(getTodayDateStr());
+  const [otStartTime, setOtStartTime] = useState('17:00');
+  const [otEndTime, setOtEndTime] = useState('19:00');
+  const [otHours, setOtHours] = useState(2);
+  const [otTaskDescription, setOtTaskDescription] = useState('');
+  const [otProofPhoto, setOtProofPhoto] = useState('');
+  const [isSubmittingOvertime, setIsSubmittingOvertime] = useState(false);
+
+  // History Tab Filters
+  const [historyPeriodFilter, setHistoryPeriodFilter] = useState<'bulan_ini' | '7_hari' | 'semua'>('bulan_ini');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'hadir' | 'terlambat' | 'telat_istirahat' | 'izin'>('all');
+
+  // Aktivitas Sub-Tab (Cuti / Lembur)
+  const [aktivitasSubTab, setAktivitasSubTab] = useState<'cuti' | 'lembur'>('cuti');
 
   // History Detail Preview Modal (Tab Riwayat)
   const [selectedHistoryRecord, setSelectedHistoryRecord] = useState<AttendanceRecord | null>(null);
@@ -324,6 +373,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const myLeaves = hrmService.getUserLeaves(user.id);
       setUserLeaves(myLeaves);
 
+      // 2C. Data Permohonan Lembur Saya
+      const myOts = hrmService.getOvertimeRecords().filter((o) => o.userId === user.id);
+      setUserOvertimeList(myOts);
+
+      // 2D. Notifikasi Realtime Saya
+      const myNotifs = hrmService.getNotifications().filter(
+        (n) => n.userId === user.id || (n.recipientRole && n.recipientRole === (user.roleName || user.role))
+      );
+      setUserNotifications(myNotifs);
+
       // 3. Bank Pos Lapangan (Multi-Titik)
       let currentBankPosts: import('@/types/hrm').FieldAssignedPost[] = [];
       try {
@@ -456,9 +515,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     if (!navigator.geolocation || !user) return;
 
     const isFieldOfficer =
-      user.isFieldSentinelEnabled ||
+      Boolean(user.isFieldSentinelEnabled) ||
+      (Array.isArray(bankPosts) && bankPosts.length > 0) ||
       ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes(
-        user.email.toLowerCase()
+        (user.email || '').toLowerCase()
+      ) ||
+      ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes(
+        (user.nip || '').trim()
       );
 
     const handlePos = (pos: GeolocationPosition) => {
@@ -599,7 +662,121 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     );
   };
 
-  // Real-Time Analytics Calculations from Database Records
+  // Real-Time Analytics & Monthly Calculations from Database Records
+  const currentMonthStr = useMemo(() => getTodayDateStr().substring(0, 7), []);
+
+  const unreadNotificationsCount = useMemo(() => {
+    return userNotifications.filter((n) => !n.isRead).length;
+  }, [userNotifications]);
+
+  // Absen Pulang (Clock-Out) Guard:
+  // Harus tidak aktif sebelum shift endTime, kecuali ada izin darurat yang disetujui!
+  const isBeforeShiftEndTime = useMemo(() => {
+    if (!userShift?.endTime) return false;
+    const now = currentTime;
+    const currentTotalMins = now.getHours() * 60 + now.getMinutes();
+
+    const [endH, endM] = userShift.endTime.split(':').map(Number);
+    const endTotalMins = endH * 60 + (endM || 0);
+
+    const [startH, startM] = (userShift.startTime || '07:30').split(':').map(Number);
+    const startTotalMins = startH * 60 + (startM || 0);
+    const isCrossDay = userShift.isCrossDay || endTotalMins < startTotalMins;
+
+    if (isCrossDay) {
+      if (currentTotalMins >= startTotalMins) return true;
+      if (currentTotalMins < endTotalMins) return true;
+      return false;
+    } else {
+      return currentTotalMins < endTotalMins;
+    }
+  }, [currentTime, userShift]);
+
+  const hasApprovedEmergencyLeave = useMemo(() => {
+    if (todayAttendance?.isEarlyLeave || todayAttendance?.earlyLeaveApproved || todayAttendance?.isRemoteUnlocked) {
+      return true;
+    }
+    const todayStr = getTodayDateStr();
+    return userLeaves.some(
+      (l) =>
+        (l.leaveType === 'emergency_leave' || l.leaveType === 'izin_darurat' || (l as any).type === 'izin_darurat') &&
+        l.status === 'approved' &&
+        (l.startDate === todayStr || l.endDate === todayStr)
+    );
+  }, [todayAttendance, userLeaves]);
+
+  // Status Jam Istirahat Otomatis
+  const isShiftBreakWindow = useMemo(() => {
+    const breakStart = userShift?.breakStartTime || '12:00';
+    const breakEnd = userShift?.breakEndTime || '13:00';
+    const now = currentTime;
+    const curMins = now.getHours() * 60 + now.getMinutes();
+    const [bsh, bsm] = breakStart.split(':').map(Number);
+    const [beh, bem] = breakEnd.split(':').map(Number);
+    const startMins = bsh * 60 + (bsm || 0);
+    const endMins = beh * 60 + (bem || 0);
+    return curMins >= startMins && curMins < endMins;
+  }, [currentTime, userShift]);
+
+  // Kalender Jadwal Shift Bulan Berjalan
+  const currentMonthDays = useMemo(() => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    const daysName = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+
+    const list = [];
+    for (let d = 1; d <= totalDays; d++) {
+      const dateObj = new Date(year, month, d);
+      const dayOfWeek = dateObj.getDay();
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const isToday = dateStr === getTodayDateStr();
+      const isWeekend = dayOfWeek === 0 || (dayOfWeek === 6 && userShift?.workingDays && !userShift.workingDays.includes(6));
+
+      list.push({
+        dateStr,
+        dayNum: d,
+        dayName: daysName[dayOfWeek],
+        shiftName: isWeekend ? 'Libur / Off' : (userShift?.name || 'Day Shift'),
+        shiftHours: isWeekend ? '-' : `${userShift?.startTime || '07:30'} - ${userShift?.endTime || '16:30'} WITA`,
+        isOff: isWeekend,
+        isToday,
+      });
+    }
+    return list;
+  }, [userShift]);
+
+  // Filter Riwayat Absensi
+  const filteredAttendancesHistory = useMemo(() => {
+    return attendancesHistory.filter((att) => {
+      const attDate = att.attendanceDate || att.date || '';
+
+      // Filter Periode
+      if (historyPeriodFilter === 'bulan_ini') {
+        if (!attDate.startsWith(currentMonthStr)) return false;
+      } else if (historyPeriodFilter === '7_hari') {
+        const today = new Date();
+        const attD = new Date(attDate);
+        const diffDays = Math.round((today.getTime() - attD.getTime()) / (1000 * 60 * 60 * 24));
+        if (diffDays > 7 || diffDays < 0) return false;
+      }
+
+      // Filter Status
+      if (historyStatusFilter === 'hadir') {
+        return att.status === 'hadir';
+      } else if (historyStatusFilter === 'terlambat') {
+        return att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0);
+      } else if (historyStatusFilter === 'telat_istirahat') {
+        return att.breakLateMinutes && att.breakLateMinutes > 0;
+      } else if (historyStatusFilter === 'izin') {
+        return att.status === 'izin' || att.isEarlyLeave;
+      }
+
+      return true;
+    });
+  }, [attendancesHistory, historyPeriodFilter, historyStatusFilter, currentMonthStr]);
+
   const analyticsData = useMemo(() => {
     const totalWorkingDays = 26;
     const presentCount = attendancesHistory.filter(
@@ -615,9 +792,45 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
     const attendanceRate = totalWorkingDays > 0 ? Math.min(100, Math.round((presentCount / totalWorkingDays) * 100)) : 100;
 
+    // Monthly Izin & Lembur
+    const monthlyLeaves = userLeaves.filter((l) => (l.startDate || l.createdAt || '').startsWith(currentMonthStr));
+    const monthlyIzinCount = monthlyLeaves.length;
+
+    const monthlyOts = userOvertimeList.filter((o) => (o.date || o.createdAt || '').startsWith(currentMonthStr));
+    const monthlyLemburHours = monthlyOts.reduce((acc, o) => acc + (Number(o.durationHours) || 0), 0);
+
+    // Dynamic Realistic Discipline Score (Base 100)
+    let penalties = 0;
+    attendancesHistory.forEach((att) => {
+      const isThisMonth = (att.attendanceDate || att.date || '').startsWith(currentMonthStr);
+      if (!isThisMonth) return;
+
+      const lm = att.lateMinutes || 0;
+      if (lm > 0 && lm <= 15) penalties += 2;
+      else if (lm > 15) penalties += 5;
+
+      if (att.breakLateMinutes && att.breakLateMinutes > 0) {
+        penalties += 3;
+      }
+
+      if (att.isPerimeterBreached) {
+        penalties += 5;
+      }
+    });
+
+    const disciplineScore = Math.max(20, Math.min(100, 100 - penalties));
+    const disciplineGrade =
+      disciplineScore >= 90
+        ? 'Prima (A)'
+        : disciplineScore >= 80
+        ? 'Sangat Baik (B+)'
+        : disciplineScore >= 70
+        ? 'Cukup (B)'
+        : 'Perlu Evaluasi (C)';
+
     // Weekly 7 Days Streak (Senin - Minggu)
     const daysName = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
-    const todayIndex = (new Date().getDay() + 6) % 7; // 0 = Senin, 6 = Minggu
+    const todayIndex = (new Date().getDay() + 6) % 7;
     const weeklyStreak = daysName.map((day, idx) => {
       if (idx > todayIndex) return { day, status: 'upcoming' };
       if (idx === todayIndex) {
@@ -636,8 +849,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       annualLeaveQuota,
       attendanceRate,
       weeklyStreak,
+      monthlyIzinCount,
+      monthlyLemburHours,
+      disciplineScore,
+      disciplineGrade,
     };
-  }, [attendancesHistory, user, todayAttendance]);
+  }, [attendancesHistory, user, todayAttendance, userLeaves, userOvertimeList, currentMonthStr]);
 
   // Start Camera Stream (Fullscreen View)
   const openLiveCamera = async (type: 'clock_in' | 'clock_out') => {
@@ -820,6 +1037,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   // Capture Photo & Submit to PostgreSQL
   const handleShutterCapture = async () => {
     if (!videoRef.current || !user || isCapturing) return;
+    if (videoRef.current.readyState < 2 || videoRef.current.videoWidth === 0) {
+      toast.warning('Kamera sedang memuat frame, silakan tunggu 1-2 detik...');
+      return;
+    }
     setIsCapturing(true);
 
     try {
@@ -1049,6 +1270,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       toast.error('Harap lengkapi tanggal mulai, tanggal selesai, dan alasan cuti.');
       return;
     }
+    if (!leaveProofPhoto) {
+      toast.error('Foto bukti dokumen / surat keterangan WAJIB dilampirkan!');
+      return;
+    }
     setIsSubmittingLeave(true);
     try {
       hrmService.createLeaveRequest({
@@ -1057,18 +1282,72 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         startDate: leaveStartDate,
         endDate: leaveEndDate,
         reason: leaveReason.trim(),
+        attachmentUrl: leaveProofPhoto,
       });
-      toast.success('Permohonan cuti/izin berhasil diajukan dan diteruskan ke Pimpinan/HRD.');
+      toast.success('Permohonan cuti/izin berhasil diajukan dan diteruskan via WA & sistem.');
       setLeaveModalOpen(false);
       setLeaveReason('');
       setLeaveStartDate('');
       setLeaveEndDate('');
+      setLeaveProofPhoto('');
       await loadRealData();
     } catch (err: any) {
       toast.error('Gagal mengajukan izin: ' + (err.message || 'Error'));
     } finally {
       setIsSubmittingLeave(false);
     }
+  };
+
+  // Submit Pengajuan Lembur (SPL)
+  const handleCreateOvertime = async () => {
+    if (!user) return;
+    if (!otTaskDescription.trim()) {
+      toast.error('Uraian tugas lembur wajib diisi!');
+      return;
+    }
+    if (!otProofPhoto) {
+      toast.error('Foto bukti kegiatan/lokasi lembur WAJIB dilampirkan!');
+      return;
+    }
+    setIsSubmittingOvertime(true);
+    try {
+      await hrmService.requestOvertime({
+        userId: user.id,
+        date: otDate,
+        startTime: otStartTime,
+        endTime: otEndTime,
+        durationHours: otHours,
+        taskDescription: otTaskDescription.trim(),
+        attachmentUrl: otProofPhoto,
+        taskPhotoUrl: otProofPhoto,
+      } as any);
+      toast.success('Pengajuan lembur berhasil dikirim dan diteruskan ke Korlap/Admin via WA & sistem!');
+      setOvertimeModalOpen(false);
+      setOtTaskDescription('');
+      setOtProofPhoto('');
+      await loadRealData();
+    } catch (err: any) {
+      toast.error('Gagal mengajukan lembur: ' + (err.message || 'Error'));
+    } finally {
+      setIsSubmittingOvertime(false);
+    }
+  };
+
+  // Photo File Upload Reader Helper
+  const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>, setter: (url: string) => void) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      toast.error('Ukuran file maksimal 8 MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        setter(event.target.result as string);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   // Password Change
@@ -1102,6 +1381,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   const hasClockedIn = Boolean(todayAttendance?.clockIn);
   const hasClockedOut = Boolean(todayAttendance?.clockOut);
+  const isClockOutAllowed = hasClockedIn && !hasClockedOut && (!isBeforeShiftEndTime || hasApprovedEmergencyLeave);
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 1. TAMPILAN FULLSCREEN LIVE CAMERA (PERSIS LAMPIRAN 3)
@@ -1324,13 +1604,37 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     <div className="min-h-screen bg-[#14532D] text-foreground flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
       {/* ─── GRADIENT HEADER ATAS (PERSIS LAMPIRAN 2) ─── */}
       <header className="bg-gradient-to-r from-[#14532D] via-[#0F766E] to-[#0284C7] text-white pt-[max(0.85rem,env(safe-area-inset-top))] pb-5 px-4 shadow-md">
-        {/* Title Bar: PRESENSI HARI INI + Refresh & Logout Button */}
-        <div className="flex items-center justify-between px-1">
-          <div className="w-8" /> {/* Spacer */}
-          <h1 className="text-base font-bold tracking-wider uppercase text-white drop-shadow-xs">
-            PRESENSI HARI INI
-          </h1>
-          <div className="flex items-center gap-1.5">
+        {/* Title Bar: Logo + PT. FAWWAZ RESKI PERWIRA Branding + Notification Bell + Actions */}
+        <div className="flex items-center justify-between gap-2 px-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm p-0.5 flex items-center justify-center shrink-0 border border-white/30 shadow-xs">
+              <img src={defaultAvatar} alt="Logo FRP" className="w-full h-full object-contain rounded-full" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-xs sm:text-sm font-black tracking-wide uppercase text-white drop-shadow-xs truncate">
+                PT. FAWWAZ RESKI PERWIRA
+              </h1>
+              <p className="text-[9px] text-emerald-200/90 font-medium tracking-tight truncate">
+                Sistem Presensi & Operasional
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Lonceng Notifikasi Realtime Pengajuan */}
+            <button
+              type="button"
+              onClick={() => setNotificationsDrawerOpen(true)}
+              className="relative w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 backdrop-blur-sm flex items-center justify-center text-white transition-all active:scale-90"
+              title="Notifikasi Pengajuan Realtime"
+            >
+              <Bell className="w-3.5 h-3.5" />
+              {unreadNotificationsCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-rose-500 text-white text-[9px] font-black rounded-full flex items-center justify-center border border-white animate-pulse">
+                  {unreadNotificationsCount}
+                </span>
+              )}
+            </button>
             <button
               type="button"
               onClick={async () => {
@@ -1626,41 +1930,113 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </span>
               </button>
 
-              {/* Tombol Absen Pulang */}
+              {/* Tombol Absen Pulang (Terkunci Sebelum Waktunya Kecuali Izin Darurat) */}
               <button
                 type="button"
-                disabled={!hasClockedIn || hasClockedOut}
-                onClick={() => openLiveCamera('clock_out')}
+                disabled={!isClockOutAllowed}
+                onClick={() => {
+                  if (!isClockOutAllowed) {
+                    if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
+                      toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
+                    }
+                    return;
+                  }
+                  openLiveCamera('clock_out');
+                }}
                 className={`py-3 px-3 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold transition-all shadow-sm ${
-                  hasClockedIn && !hasClockedOut
-                    ? 'bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white shadow-emerald-700/20'
-                    : hasClockedOut
+                  hasClockedOut
                     ? 'bg-slate-100 dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-800 opacity-90 cursor-default'
-                    : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-75'
+                    : isClockOutAllowed
+                    ? 'bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white shadow-emerald-700/20'
+                    : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-80'
                 }`}
               >
-                <LogOut className="w-4 h-4 shrink-0" />
+                {isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut ? (
+                  <Lock className="w-4 h-4 shrink-0 text-amber-500" />
+                ) : (
+                  <LogOut className="w-4 h-4 shrink-0" />
+                )}
                 <span className="truncate">
-                  {hasClockedOut ? `PULANG (${todayAttendance?.clockOut?.substring(0, 5) || todayAttendance?.clockOut})` : 'ABSEN PULANG'}
+                  {hasClockedOut
+                    ? `PULANG (${todayAttendance?.clockOut?.substring(0, 5) || todayAttendance?.clockOut})`
+                    : !hasClockedIn
+                    ? 'ABSEN PULANG'
+                    : isBeforeShiftEndTime && !hasApprovedEmergencyLeave
+                    ? `TERKUNCI (${userShift?.endTime?.substring(0, 5) || '16:30'})`
+                    : hasApprovedEmergencyLeave
+                    ? 'PULANG (IZIN DARURAT)'
+                    : 'ABSEN PULANG'}
                 </span>
               </button>
             </div>
 
-            {/* Sub-Actions: Istirahat 1 Jam & Izin Darurat */}
+            {/* Status Kunci Absen Pulang & Jam Istirahat Otomatis */}
+            {isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut && (
+              <div className="bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl p-2.5 flex items-center justify-between gap-2 text-[10.5px] text-amber-800 dark:text-amber-200">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span className="truncate">
+                    Absen Pulang terkunci s/d pk <b>{userShift?.endTime?.substring(0, 5) || '16:30'} WITA</b>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEmergencyModalOpen(true)}
+                  className="px-2 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] shrink-0 active:scale-95"
+                >
+                  Izin Darurat
+                </button>
+              </div>
+            )}
+
+            {hasApprovedEmergencyLeave && !hasClockedOut && hasClockedIn && (
+              <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 rounded-xl p-2.5 flex items-center gap-2 text-[10.5px] text-emerald-800 dark:text-emerald-200">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>Izin Pulang Cepat Darurat aktif & disetujui. Tombol Absen Pulang telah dibuka.</span>
+              </div>
+            )}
+
+            {/* Banner Otomatis Waktu Istirahat Tiba */}
+            {isShiftBreakWindow && !isBreakActive && hasClockedIn && !hasClockedOut && (
+              <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/20 to-amber-500/10 border border-amber-300 dark:border-amber-800 rounded-2xl p-3 flex items-center justify-between gap-2.5 animate-pulse">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+                    <Coffee className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-amber-900 dark:text-amber-100">
+                      Waktu Istirahat ({userShift?.breakStartTime || '12:00'} - {userShift?.breakEndTime || '13:00'} WITA)
+                    </p>
+                    <p className="text-[10px] text-amber-700 dark:text-amber-300 truncate">
+                      Toleransi keluar area kantor 60 menit tanpa alarm perimeter.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={handleConfirmStartBreak}
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shrink-0"
+                >
+                  Mulai
+                </Button>
+              </div>
+            )}
+
+            {/* Sub-Actions: Istirahat 1 Jam, Izin Darurat, dan Jadwal Shift */}
             <div className="flex items-center justify-between gap-2 pt-1 text-xs">
               {/* Tombol Istirahat 1 Jam */}
               <button
                 type="button"
                 onClick={handleToggleBreak}
                 disabled={!hasClockedIn || hasClockedOut}
-                className={`flex-1 py-2 px-3 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-[11px] font-semibold ${
+                className={`flex-1 py-2 px-2.5 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-[11px] font-semibold ${
                   isBreakActive
                     ? 'bg-amber-500 text-white border-amber-600 animate-pulse'
                     : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100'
                 }`}
               >
                 <Coffee className="w-3.5 h-3.5" />
-                <span>
+                <span className="truncate">
                   {isBreakActive
                     ? `Istirahat: ${Math.floor(breakTimer / 60)}m ${breakTimer % 60}s`
                     : 'Istirahat 1 Jam'}
@@ -1672,10 +2048,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 type="button"
                 onClick={() => setEmergencyModalOpen(true)}
                 disabled={!hasClockedIn || hasClockedOut}
-                className="flex-1 py-2 px-3 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 hover:bg-rose-100 flex items-center justify-center gap-1.5 transition-all text-[11px] font-semibold"
+                className="flex-1 py-2 px-2.5 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 hover:bg-rose-100 flex items-center justify-center gap-1.5 transition-all text-[11px] font-semibold"
               >
                 <AlertOctagon className="w-3.5 h-3.5 text-rose-600" />
-                <span>Izin Darurat</span>
+                <span className="truncate">Izin Darurat</span>
+              </button>
+
+              {/* Tombol Jadwal Shift Bulan Berjalan */}
+              <button
+                type="button"
+                onClick={() => setScheduleModalOpen(true)}
+                className="flex-1 py-2 px-2.5 rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 flex items-center justify-center gap-1.5 transition-all text-[11px] font-semibold"
+              >
+                <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
+                <span className="truncate">Jadwal Roster</span>
               </button>
             </div>
 
@@ -1684,40 +2070,54 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                   <TrendingUp className="w-4 h-4 text-emerald-600" />
-                  Progres & Disiplin Kehadiran Saya
+                  Statistik & Disiplin Saya (Bulan Berjalan)
                 </h3>
-                <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full">
-                  Real-time Database
-                </span>
+                <Badge variant="outline" className="text-[10px] font-semibold border-emerald-500/40 text-emerald-600 bg-emerald-50">
+                  {analyticsData.disciplineGrade}
+                </Badge>
               </div>
 
-              {/* Grid 4 Kartu KPI Kehadiran */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {/* Grid Kartu KPI Kehadiran (Termasuk Izin & Lembur Bulan Berjalan) */}
+              <div className="grid grid-cols-3 gap-2">
                 <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800">
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400">Tepat Waktu</p>
-                  <p className="text-base font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                    {analyticsData.onTimeCount} <span className="text-[10px] font-normal text-slate-400">Hari</span>
+                  <p className="text-[9.5px] text-slate-500 dark:text-slate-400">Tepat Waktu</p>
+                  <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                    {analyticsData.onTimeCount} <span className="text-[9.5px] font-normal text-slate-400">Hari</span>
                   </p>
                 </div>
 
                 <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800">
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400">Terlambat</p>
-                  <p className="text-base font-bold text-amber-600 dark:text-amber-400 mt-0.5">
-                    {analyticsData.lateCount} <span className="text-[10px] font-normal text-slate-400">Kali</span>
+                  <p className="text-[9.5px] text-slate-500 dark:text-slate-400">Izin Bulan Ini</p>
+                  <p className="text-sm font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">
+                    {analyticsData.monthlyIzinCount} <span className="text-[9.5px] font-normal text-slate-400">Hari</span>
                   </p>
                 </div>
 
                 <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800">
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400">Sisa Cuti</p>
-                  <p className="text-base font-bold text-blue-600 dark:text-blue-400 mt-0.5">
-                    {analyticsData.remainingLeave} <span className="text-[10px] font-normal text-slate-400">Hari</span>
+                  <p className="text-[9.5px] text-slate-500 dark:text-slate-400">Lembur Bulan Ini</p>
+                  <p className="text-sm font-bold text-purple-600 dark:text-purple-400 mt-0.5">
+                    {analyticsData.monthlyLemburHours} <span className="text-[9.5px] font-normal text-slate-400">Jam</span>
                   </p>
                 </div>
 
                 <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800">
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400">Skor Disiplin</p>
-                  <p className="text-base font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {analyticsData.attendanceRate}%
+                  <p className="text-[9.5px] text-slate-500 dark:text-slate-400">Terlambat</p>
+                  <p className="text-sm font-bold text-amber-600 dark:text-amber-400 mt-0.5">
+                    {analyticsData.lateCount} <span className="text-[9.5px] font-normal text-slate-400">Kali</span>
+                  </p>
+                </div>
+
+                <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                  <p className="text-[9.5px] text-slate-500 dark:text-slate-400">Sisa Hak Cuti</p>
+                  <p className="text-sm font-bold text-blue-600 dark:text-blue-400 mt-0.5">
+                    {analyticsData.remainingLeave} <span className="text-[9.5px] font-normal text-slate-400">Hari</span>
+                  </p>
+                </div>
+
+                <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                  <p className="text-[9.5px] text-slate-500 dark:text-slate-400">Skor Disiplin</p>
+                  <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
+                    {analyticsData.disciplineScore}%
                   </p>
                 </div>
               </div>
@@ -1753,34 +2153,90 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           </div>
         )}
 
-        {/* ─── TAB 2: RIWAYAT KEHADIRAN ─── */}
+        {/* ─── TAB 2: RIWAYAT KEHADIRAN DENGAN FILTER MULTI-DIMENSI ─── */}
         {activeTab === 'riwayat' && (
           <div className="space-y-4 animate-in fade-in duration-200">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">Riwayat Kehadiran Saya</h2>
-                <p className="text-[11px] text-slate-500">Ketuk rekaman presensi untuk melihat rincian & foto watermark</p>
+                <h2 className="text-base font-bold text-slate-900 dark:text-white">Riwayat Kehadiran</h2>
+                <p className="text-[11px] text-slate-500">Filter data presensi dan ketuk rekaman untuk detail foto watermark</p>
               </div>
-              <Badge variant="outline" className="text-xs text-emerald-700 bg-emerald-50 dark:bg-emerald-950/40">
-                {attendancesHistory.length} Catatan
+              <Badge variant="outline" className="text-xs text-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300">
+                {filteredAttendancesHistory.length} Terfilter
               </Badge>
             </div>
 
+            {/* Filter Bar: Periode & Status */}
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 space-y-2.5 shadow-xs">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600 dark:text-slate-400">
+                <Filter className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Filter Periode:</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { id: 'bulan_ini', label: 'Bulan Ini' },
+                  { id: '7_hari', label: '7 Hari Terakhir' },
+                  { id: 'semua', label: 'Semua' },
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setHistoryPeriodFilter(p.id as any)}
+                    className={`py-1.5 px-2 rounded-xl text-xs font-semibold transition-all text-center ${
+                      historyPeriodFilter === p.id
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 border border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1.5 pt-1 text-[11px] font-bold text-slate-600 dark:text-slate-400">
+                <span>Filter Status:</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { id: 'all', label: 'Semua Status' },
+                  { id: 'hadir', label: 'Hadir Tepat' },
+                  { id: 'terlambat', label: 'Terlambat Masuk' },
+                  { id: 'telat_istirahat', label: 'Telat Istirahat' },
+                  { id: 'izin', label: 'Izin / Cuti' },
+                ].map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => setHistoryStatusFilter(s.id as any)}
+                    className={`py-1 px-2.5 rounded-lg text-[11px] font-medium transition-all ${
+                      historyStatusFilter === s.id
+                        ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold shadow-xs'
+                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-100 border border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* List Riwayat */}
             <div className="space-y-2.5">
-              {attendancesHistory.length === 0 ? (
-                <div className="p-8 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
-                  Belum ada riwayat presensi tercatat di sistem.
+              {filteredAttendancesHistory.length === 0 ? (
+                <div className="p-8 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs space-y-1">
+                  <p className="font-semibold">Tidak ada riwayat presensi yang sesuai kriteria.</p>
+                  <p className="text-[10.5px]">Coba ganti filter periode atau status di atas.</p>
                 </div>
               ) : (
-                attendancesHistory.slice(0, 15).map((att) => (
+                filteredAttendancesHistory.map((att) => (
                   <div
                     key={att.id}
                     onClick={() => setSelectedHistoryRecord(att)}
-                    className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between cursor-pointer hover:border-emerald-500/50 hover:bg-emerald-50/20 dark:hover:bg-emerald-950/20 transition-all active:scale-[0.99] group shadow-xs"
+                    className="p-3.5 rounded-2xl bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 flex items-center justify-between cursor-pointer hover:border-emerald-500/50 hover:bg-emerald-50/20 dark:hover:bg-emerald-950/20 transition-all active:scale-[0.99] group shadow-xs"
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       {att.clockInPhoto || att.photoIn ? (
-                        <div className="w-11 h-11 rounded-xl overflow-hidden shrink-0 border border-emerald-500/30 bg-slate-200">
+                        <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-emerald-500/40 bg-slate-200 shadow-inner">
                           <img
                             src={att.clockInPhoto || att.photoIn}
                             alt="Foto Presensi"
@@ -1788,7 +2244,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                           />
                         </div>
                       ) : (
-                        <div className="w-11 h-11 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-400 shrink-0">
+                        <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 shrink-0 border border-slate-200 dark:border-slate-700">
                           <Clock className="w-5 h-5 text-slate-500" />
                         </div>
                       )}
@@ -1802,13 +2258,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                           }) || att.date}
                         </p>
                         <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                          Masuk: <span className="font-mono font-semibold text-slate-700 dark:text-slate-300">{att.clockIn ? att.clockIn.substring(0, 5) : '-'}</span> | Pulang: <span className="font-mono font-semibold text-slate-700 dark:text-slate-300">{att.clockOut ? att.clockOut.substring(0, 5) : '-'}</span>
+                          Masuk: <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">{att.clockIn ? att.clockIn.substring(0, 5) : '-'}</span> • Pulang: <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">{att.clockOut ? att.clockOut.substring(0, 5) : '-'}</span>
                         </p>
-                        {att.lateMinutes && att.lateMinutes > 0 ? (
-                          <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold block">
-                            Terlambat {att.lateMinutes} menit
-                          </span>
-                        ) : null}
+                        
+                        {/* Status Terlambat & Telat Istirahat Badges */}
+                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                          {att.lateMinutes && att.lateMinutes > 0 ? (
+                            <span className="text-[10px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded font-semibold border border-amber-300 dark:border-amber-800">
+                              Telat Masuk {att.lateMinutes}m
+                            </span>
+                          ) : null}
+                          {att.breakLateMinutes && att.breakLateMinutes > 0 ? (
+                            <span className="text-[10px] text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 px-1.5 py-0.5 rounded font-bold border border-rose-300 dark:border-rose-800">
+                              ⚠️ Telat Istirahat {att.breakLateMinutes}m
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
 
@@ -1817,8 +2282,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                         variant="outline"
                         className={
                           att.status === 'hadir'
-                            ? 'border-emerald-500/30 text-emerald-600 bg-emerald-50 text-[10px]'
-                            : 'border-amber-500/30 text-amber-600 bg-amber-50 text-[10px]'
+                            ? 'border-emerald-500/40 text-emerald-700 bg-emerald-50 text-[10px] font-bold'
+                            : 'border-amber-500/40 text-amber-700 bg-amber-50 text-[10px] font-bold'
                         }
                       >
                         {att.status.toUpperCase()}
@@ -1832,97 +2297,189 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           </div>
         )}
 
-        {/* ─── TAB 3: AKTIVITAS / IZIN ─── */}
+        {/* ─── TAB 3: AKTIVITAS, PENGAJUAN CUTI & LEMBUR ─── */}
         {activeTab === 'aktivitas' && (
           <div className="space-y-4 animate-in fade-in duration-200">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">Aktivitas & Permohonan Izin</h2>
-                <p className="text-[11px] text-slate-500">Ajukan cuti resmi dan pantau status persetujuan pimpinan</p>
+                <h2 className="text-base font-bold text-slate-900 dark:text-white">Aktivitas & Permohonan</h2>
+                <p className="text-[11px] text-slate-500">Ajukan cuti, lembur (SPL), izin darurat dengan bukti lampiran foto</p>
               </div>
             </div>
 
-            {/* Quick Action Tiles */}
-            <div className="grid grid-cols-2 gap-3">
+            {/* Quick Action Tiles (3 Opsi) */}
+            <div className="grid grid-cols-3 gap-2">
               <div
                 onClick={() => setLeaveModalOpen(true)}
-                className="p-4 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 text-center space-y-1.5 cursor-pointer hover:border-emerald-500 transition-all active:scale-95 group shadow-xs"
+                className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-center space-y-1 cursor-pointer hover:border-emerald-500 transition-all active:scale-95 group shadow-xs"
               >
-                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
-                  <CalendarCheck2 className="w-5 h-5" />
+                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                  <CalendarCheck2 className="w-4 h-4" />
                 </div>
-                <p className="text-xs font-bold text-slate-900 dark:text-white">Ajukan Cuti/Izin</p>
-                <p className="text-[10.5px] text-slate-500">Sisa Cuti: <span className="font-bold text-emerald-600">{analyticsData.remainingLeave} Hari</span></p>
+                <p className="text-[11px] font-bold text-slate-900 dark:text-white">Cuti / Izin</p>
+                <p className="text-[9.5px] text-emerald-700 font-semibold">{analyticsData.remainingLeave} Hari</p>
+              </div>
+
+              <div
+                onClick={() => setOvertimeModalOpen(true)}
+                className="p-3 rounded-2xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/60 text-center space-y-1 cursor-pointer hover:border-blue-500 transition-all active:scale-95 group shadow-xs"
+              >
+                <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                  <Clock className="w-4 h-4" />
+                </div>
+                <p className="text-[11px] font-bold text-slate-900 dark:text-white">Lembur SPL</p>
+                <p className="text-[9.5px] text-blue-700 font-semibold">Tugas Lapangan</p>
               </div>
 
               <div
                 onClick={() => setEmergencyModalOpen(true)}
-                className="p-4 rounded-2xl bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/60 text-center space-y-1.5 cursor-pointer hover:border-rose-500 transition-all active:scale-95 group shadow-xs"
+                className="p-3 rounded-2xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/60 text-center space-y-1 cursor-pointer hover:border-rose-500 transition-all active:scale-95 group shadow-xs"
               >
-                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
-                  <AlertOctagon className="w-5 h-5" />
+                <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                  <AlertOctagon className="w-4 h-4" />
                 </div>
-                <p className="text-xs font-bold text-slate-900 dark:text-white">Izin Darurat</p>
-                <p className="text-[10.5px] text-rose-600 font-semibold">Self-Service Alert</p>
+                <p className="text-[11px] font-bold text-slate-900 dark:text-white">Izin Darurat</p>
+                <p className="text-[9.5px] text-rose-600 font-semibold">Self-Service</p>
               </div>
             </div>
 
-            {/* Primary Action Button */}
-            <Button
-              onClick={() => setLeaveModalOpen(true)}
-              className="w-full py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-2 shadow-sm"
-            >
-              <Plus className="w-4 h-4" />
-              Buat Pengajuan Cuti / Izin Baru
-            </Button>
+            {/* Sub-tab Switcher: Cuti vs Lembur */}
+            <div className="flex rounded-xl bg-slate-100 dark:bg-slate-800 p-1">
+              <button
+                type="button"
+                onClick={() => setAktivitasSubTab('cuti')}
+                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  aktivitasSubTab === 'cuti'
+                    ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Cuti & Izin ({userLeaves.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setAktivitasSubTab('lembur')}
+                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  aktivitasSubTab === 'lembur'
+                    ? 'bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Lembur / SPL ({userOvertimeList.length})
+              </button>
+            </div>
 
-            {/* Riwayat Pengajuan Cuti */}
-            <div className="pt-2 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-emerald-600" />
-                  Riwayat Pengajuan Saya
-                </h3>
-                <span className="text-[10px] text-slate-400">{userLeaves.length} Pengajuan</span>
-              </div>
-
-              {userLeaves.length === 0 ? (
-                <div className="p-6 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
-                  Belum ada permohonan cuti atau izin yang diajukan.
-                </div>
-              ) : (
-                userLeaves.slice(0, 10).map((l) => (
-                  <div
-                    key={l.id}
-                    className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 space-y-1.5 shadow-xs"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-slate-900 dark:text-white capitalize">
-                        {l.leaveType.replace('_', ' ')}
-                      </span>
-                      <Badge
-                        variant="outline"
-                        className={
-                          l.status === 'approved'
-                            ? 'border-emerald-500/40 text-emerald-600 bg-emerald-50 text-[10px]'
-                            : l.status === 'rejected'
-                            ? 'border-rose-500/40 text-rose-600 bg-rose-50 text-[10px]'
-                            : 'border-amber-500/40 text-amber-600 bg-amber-50 text-[10px]'
-                        }
-                      >
-                        {l.status === 'approved' ? 'Disetujui' : l.status === 'rejected' ? 'Ditolak' : 'Menunggu Approval'}
-                      </Badge>
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                      📅 {l.startDate} s/d {l.endDate} ({l.totalDays || 1} Hari)
-                    </p>
-                    <p className="text-xs text-slate-700 dark:text-slate-300 italic bg-white/70 dark:bg-slate-800/70 p-2 rounded-xl">
-                      "{l.reason}"
-                    </p>
+            {/* Riwayat Pengajuan Cuti / Izin */}
+            {aktivitasSubTab === 'cuti' && (
+              <div className="space-y-2.5">
+                {userLeaves.length === 0 ? (
+                  <div className="p-6 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
+                    Belum ada permohonan cuti atau izin yang diajukan.
                   </div>
-                ))
-              )}
-            </div>
+                ) : (
+                  userLeaves.slice(0, 15).map((l) => (
+                    <div
+                      key={l.id}
+                      className="p-3.5 rounded-2xl bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-2 shadow-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white capitalize">
+                          {l.leaveType.replace('_', ' ')}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className={
+                            l.status === 'approved'
+                              ? 'border-emerald-500/40 text-emerald-700 bg-emerald-50 text-[10px] font-bold'
+                              : l.status === 'rejected'
+                              ? 'border-rose-500/40 text-rose-700 bg-rose-50 text-[10px] font-bold'
+                              : 'border-amber-500/40 text-amber-700 bg-amber-50 text-[10px] font-bold'
+                          }
+                        >
+                          {l.status === 'approved' ? 'Disetujui' : l.status === 'rejected' ? 'Ditolak' : 'Menunggu Approval'}
+                        </Badge>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                        📅 {l.startDate} s/d {l.endDate} ({l.totalDays || 1} Hari)
+                      </p>
+                      <p className="text-xs text-slate-700 dark:text-slate-300 italic bg-slate-50 dark:bg-slate-800/70 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800">
+                        "{l.reason}"
+                      </p>
+                      {l.attachmentUrl && (
+                        <div className="flex items-center gap-2 pt-1">
+                          <span className="text-[10px] text-slate-400 font-semibold">Bukti Dokumen:</span>
+                          <a
+                            href={l.attachmentUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-emerald-600 hover:underline font-semibold"
+                          >
+                            <ImageIcon className="w-3.5 h-3.5" />
+                            <span>Lihat Foto Lampiran</span>
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {/* Riwayat Pengajuan Lembur (SPL) */}
+            {aktivitasSubTab === 'lembur' && (
+              <div className="space-y-2.5">
+                {userOvertimeList.length === 0 ? (
+                  <div className="p-6 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
+                    Belum ada pengajuan surat perintah lembur (SPL).
+                  </div>
+                ) : (
+                  userOvertimeList.slice(0, 15).map((ot) => (
+                    <div
+                      key={ot.id}
+                      className="p-3.5 rounded-2xl bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-2 shadow-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white">
+                          Lembur Tugas ({ot.durationHours} Jam)
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className={
+                            ot.status === 'approved'
+                              ? 'border-emerald-500/40 text-emerald-700 bg-emerald-50 text-[10px] font-bold'
+                              : ot.status === 'rejected'
+                              ? 'border-rose-500/40 text-rose-700 bg-rose-50 text-[10px] font-bold'
+                              : 'border-amber-500/40 text-amber-700 bg-amber-50 text-[10px] font-bold'
+                          }
+                        >
+                          {ot.status === 'approved' ? 'Disetujui' : ot.status === 'rejected' ? 'Ditolak' : 'Menunggu Approval'}
+                        </Badge>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                        📅 {ot.date} • {ot.startTime} - {ot.endTime} WITA
+                      </p>
+                      <p className="text-xs text-slate-700 dark:text-slate-300 italic bg-slate-50 dark:bg-slate-800/70 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800">
+                        "{ot.taskDescription}"
+                      </p>
+                      {(ot.taskPhotoUrl || (ot as any).attachmentUrl) && (
+                        <div className="flex items-center gap-2 pt-1">
+                          <span className="text-[10px] text-slate-400 font-semibold">Bukti Tugas:</span>
+                          <a
+                            href={ot.taskPhotoUrl || (ot as any).attachmentUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:underline font-semibold"
+                          >
+                            <ImageIcon className="w-3.5 h-3.5" />
+                            <span>Lihat Foto Bukti</span>
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -2201,7 +2758,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               Pengajuan Cuti / Izin Karyawan
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Formulir permohonan resmi langsung terhubung ke database dan diteruskan ke Pimpinan/HRD.
+              Formulir resmi otomatis dikirim via WhatsApp ke Korlap, Admin, atau K3 untuk konfirmasi persetujuan.
             </DialogDescription>
           </DialogHeader>
 
@@ -2249,7 +2806,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
             <div>
               <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                Alasan / Keterangan:
+                Alasan / Keterangan <span className="text-rose-500">*Wajib</span>:
               </label>
               <textarea
                 rows={3}
@@ -2259,6 +2816,47 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 className="w-full p-3 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
+
+            {/* Upload Foto Bukti Pendukung (Wajib) */}
+            <div className="space-y-1.5 pt-1">
+              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                <span>Foto Bukti / Surat Keterangan <span className="text-rose-500">*Wajib</span></span>
+                {leaveProofPhoto && <span className="text-[10px] text-emerald-600 font-bold">✓ Terlampir</span>}
+              </label>
+              <div className="flex items-center gap-2">
+                <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:bg-slate-200 transition-colors border border-slate-300 dark:border-slate-700">
+                  <Camera className="w-4 h-4 text-emerald-600" />
+                  <span>Ambil Foto / Dokumen</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={(e) => handlePhotoFileChange(e, setLeaveProofPhoto)}
+                  />
+                </label>
+                {leaveProofPhoto && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setLeaveProofPhoto('')}
+                    className="h-8 px-2 text-rose-500 hover:text-rose-600 text-xs"
+                  >
+                    Hapus Foto
+                  </Button>
+                )}
+              </div>
+              {leaveProofPhoto ? (
+                <div className="relative w-24 h-24 rounded-xl overflow-hidden border-2 border-emerald-500 mt-2 shadow-xs">
+                  <img src={leaveProofPhoto} alt="Bukti Cuti" className="w-full h-full object-cover" />
+                </div>
+              ) : (
+                <p className="text-[10.5px] text-amber-600 dark:text-amber-400 italic">
+                  * Pengajuan tanpa foto bukti tidak dapat diproses oleh sistem.
+                </p>
+              )}
+            </div>
           </div>
 
           <DialogFooter className="flex flex-row gap-2">
@@ -2267,7 +2865,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             </Button>
             <Button
               size="sm"
-              disabled={isSubmittingLeave || !leaveStartDate || !leaveEndDate || !leaveReason.trim()}
+              disabled={isSubmittingLeave || !leaveStartDate || !leaveEndDate || !leaveReason.trim() || !leaveProofPhoto}
               onClick={handleCreateLeave}
               className="rounded-xl flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
             >
@@ -2332,6 +2930,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
               </div>
 
+              {/* Peringatan Keterlambatan Istirahat */}
+              {selectedHistoryRecord.breakLateMinutes && selectedHistoryRecord.breakLateMinutes > 0 ? (
+                <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-[11px] flex items-center justify-between text-rose-700 dark:text-rose-300">
+                  <span className="font-semibold">⚠️ Keterlambatan Istirahat:</span>
+                  <span className="font-mono font-black">{selectedHistoryRecord.breakLateMinutes} Menit</span>
+                </div>
+              ) : null}
+
               {/* Lokasi & Catatan */}
               <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[11px] space-y-1">
                 <p className="text-[10px] text-slate-400">POS / LOKASI PENUGASAN</p>
@@ -2345,6 +2951,306 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           <DialogFooter>
             <Button size="sm" onClick={() => setSelectedHistoryRecord(null)} className="w-full rounded-xl text-xs font-bold">
               Tutup Rincian
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL PENGAJUAN LEMBUR (SPL) DENGAN FOTO BUKTI WAJIB ─── */}
+      <Dialog open={overtimeModalOpen} onOpenChange={setOvertimeModalOpen}>
+        <DialogContent className="max-w-sm rounded-3xl p-5">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-blue-700 dark:text-blue-400 flex items-center gap-2">
+              <Clock className="w-5 h-5" />
+              Pengajuan Lembur (SPL)
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Formulir SPL resmi lapangan. Wajib melampirkan foto bukti pekerjaan / lokasi tugas.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 text-xs">
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Tanggal Lembur:
+              </label>
+              <input
+                type="date"
+                value={otDate}
+                onChange={(e) => setOtDate(e.target.value)}
+                className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                  Jam Mulai:
+                </label>
+                <input
+                  type="time"
+                  value={otStartTime}
+                  onChange={(e) => setOtStartTime(e.target.value)}
+                  className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                  Jam Selesai:
+                </label>
+                <input
+                  type="time"
+                  value={otEndTime}
+                  onChange={(e) => setOtEndTime(e.target.value)}
+                  className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Estimasi Durasi (Jam):
+              </label>
+              <input
+                type="number"
+                min={0.5}
+                step={0.5}
+                value={otHours}
+                onChange={(e) => setOtHours(Number(e.target.value))}
+                className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Uraian Tugas / Alasan Lembur <span className="text-rose-500">*Wajib</span>:
+              </label>
+              <textarea
+                rows={3}
+                value={otTaskDescription}
+                onChange={(e) => setOtTaskDescription(e.target.value)}
+                placeholder="Jelaskan uraian pekerjaan lembur yang dikerjakan..."
+                className="w-full p-3 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div className="space-y-1.5 pt-1">
+              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                <span>Foto Bukti Pekerjaan / Lokasi <span className="text-rose-500">*Wajib</span></span>
+                {otProofPhoto && <span className="text-[10px] text-emerald-600 font-bold">✓ Terlampir</span>}
+              </label>
+              <div className="flex items-center gap-2">
+                <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:bg-slate-200 transition-colors border border-slate-300 dark:border-slate-700">
+                  <Camera className="w-4 h-4 text-blue-600" />
+                  <span>Ambil Foto / Pilih File</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={(e) => handlePhotoFileChange(e, setOtProofPhoto)}
+                  />
+                </label>
+                {otProofPhoto && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setOtProofPhoto('')}
+                    className="h-8 px-2 text-rose-500 hover:text-rose-600 text-xs"
+                  >
+                    Hapus Foto
+                  </Button>
+                )}
+              </div>
+              {otProofPhoto ? (
+                <div className="relative w-24 h-24 rounded-xl overflow-hidden border-2 border-blue-500 mt-2 shadow-xs">
+                  <img src={otProofPhoto} alt="Bukti Lembur" className="w-full h-full object-cover" />
+                </div>
+              ) : (
+                <p className="text-[10.5px] text-amber-600 dark:text-amber-400 italic">
+                  * Pengajuan lembur wajib melampirkan foto pekerjaan di lokasi tugas.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter className="flex flex-row gap-2">
+            <Button variant="outline" size="sm" onClick={() => setOvertimeModalOpen(false)} className="rounded-xl flex-1 text-xs">
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              disabled={isSubmittingOvertime || !otTaskDescription.trim() || !otProofPhoto}
+              onClick={handleCreateOvertime}
+              className="rounded-xl flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
+            >
+              {isSubmittingOvertime ? 'Mengirim...' : 'Kirim SPL'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL JADWAL ROSTER SHIFT BULAN BERJALAN ─── */}
+      <Dialog open={scheduleModalOpen} onOpenChange={setScheduleModalOpen}>
+        <DialogContent className="max-w-md max-h-[85vh] rounded-3xl p-5 flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <CalendarDays className="w-5 h-5 text-emerald-600" />
+              Jadwal Shift Kerja Bulan Ini
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })} • {userShift?.name || 'Shift Reguler Operasional'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Ringkasan Shift */}
+          <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs space-y-1">
+            <div className="flex justify-between items-center">
+              <span className="text-emerald-800 dark:text-emerald-300 font-bold">{userShift?.name || 'Shift Operasional FRP'}</span>
+              <Badge className="bg-emerald-600 text-white text-[10px]">
+                {userShift?.startTime || '07:30'} - {userShift?.endTime || '16:30'} WITA
+              </Badge>
+            </div>
+            <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+              Hari Kerja: {userShift?.workingDays?.map((d: number) => ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'][d]).join(', ') || 'Senin - Sabtu'}
+            </p>
+          </div>
+
+          {/* Daftar Hari dalam Bulan Berjalan */}
+          <div className="overflow-y-auto space-y-2 py-1 pr-1 flex-1 text-xs">
+            {currentMonthDays.map((item) => (
+              <div
+                key={item.dateStr}
+                className={`p-2.5 rounded-xl border flex items-center justify-between transition-all ${
+                  item.isToday
+                    ? 'border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/30 font-bold'
+                    : item.isOff
+                    ? 'border-slate-200 dark:border-slate-800 bg-slate-100/60 dark:bg-slate-900/40 text-slate-400'
+                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-9 h-9 rounded-xl flex flex-col items-center justify-center text-center font-mono ${
+                      item.isToday
+                        ? 'bg-emerald-600 text-white'
+                        : item.isOff
+                        ? 'bg-slate-200 dark:bg-slate-800 text-slate-500'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200'
+                    }`}
+                  >
+                    <span className="text-[9px] uppercase leading-none">{item.dayName.substring(0, 3)}</span>
+                    <span className="text-xs font-bold leading-none mt-0.5">{item.dayNum}</span>
+                  </div>
+                  <div>
+                    <p className={`text-xs ${item.isToday ? 'font-bold text-emerald-700 dark:text-emerald-400' : 'font-medium'}`}>
+                      {item.dayName}, {item.dayNum} {new Date().toLocaleDateString('id-ID', { month: 'short' })}
+                      {item.isToday && <span className="ml-2 text-[10px] text-emerald-600 uppercase font-black tracking-wider">(Hari Ini)</span>}
+                    </p>
+                    <p className="text-[10.5px] text-slate-500 dark:text-slate-400">
+                      {item.shiftName}
+                    </p>
+                  </div>
+                </div>
+
+                <Badge
+                  variant="outline"
+                  className={`text-[10px] ${
+                    item.isOff
+                      ? 'border-slate-300 dark:border-slate-700 text-slate-400 bg-transparent'
+                      : 'border-emerald-500/40 text-emerald-700 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20'
+                  }`}
+                >
+                  {item.shiftHours}
+                </Badge>
+              </div>
+            ))}
+          </div>
+
+          <DialogFooter className="pt-2">
+            <Button size="sm" onClick={() => setScheduleModalOpen(false)} className="w-full rounded-xl text-xs font-bold">
+              Tutup Kalender Roster
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL NOTIFIKASI REALTIME PENGAJUAN & SISTEM ─── */}
+      <Dialog open={notificationsDrawerOpen} onOpenChange={setNotificationsDrawerOpen}>
+        <DialogContent className="max-w-sm max-h-[85vh] rounded-3xl p-5 flex flex-col">
+          <DialogHeader>
+            <div className="flex items-center justify-between">
+              <DialogTitle className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Bell className="w-5 h-5 text-emerald-600" />
+                Pemberitahuan & Alert
+              </DialogTitle>
+              {unreadNotificationsCount > 0 && (
+                <Badge className="bg-rose-500 text-white text-[10px]">
+                  {unreadNotificationsCount} Baru
+                </Badge>
+              )}
+            </div>
+            <DialogDescription className="text-xs">
+              Notifikasi status persetujuan cuti, izin, lembur, serta instruksi pimpinan.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="overflow-y-auto space-y-2 py-2 flex-1 text-xs">
+            {userNotifications.length === 0 ? (
+              <div className="p-8 text-center text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl">
+                <Bell className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2 opacity-50" />
+                <p className="text-xs">Belum ada notifikasi baru untuk Anda.</p>
+              </div>
+            ) : (
+              userNotifications.map((notif) => (
+                <div
+                  key={notif.id}
+                  onClick={() => hrmService.markNotificationAsRead(notif.id)}
+                  className={`p-3 rounded-2xl border transition-all cursor-pointer ${
+                    !notif.isRead
+                      ? 'border-emerald-500/50 bg-emerald-50/40 dark:bg-emerald-950/20'
+                      : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p className={`text-xs ${!notif.isRead ? 'font-bold text-slate-900 dark:text-white' : 'font-semibold text-slate-700 dark:text-slate-300'}`}>
+                      {notif.title}
+                    </p>
+                    {!notif.isRead && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 mt-1" />
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
+                    {notif.message}
+                  </p>
+                  <div className="flex items-center justify-between mt-2 pt-1 border-t border-slate-100 dark:border-slate-800 text-[10px] text-slate-400">
+                    <span>{new Date(notif.createdAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WITA</span>
+                    <span className="capitalize">{notif.type || 'Sistem'}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <DialogFooter className="pt-2 flex flex-row gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                userNotifications.forEach(n => hrmService.markNotificationAsRead(n.id));
+                toast.success('Semua notifikasi ditandai sudah dibaca.');
+              }}
+              className="rounded-xl flex-1 text-xs"
+            >
+              Tandai Semua Dibaca
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => setNotificationsDrawerOpen(false)}
+              className="rounded-xl flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+            >
+              Tutup
             </Button>
           </DialogFooter>
         </DialogContent>

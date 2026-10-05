@@ -462,12 +462,51 @@ export async function initDb() {
         ('wa_gateway_endpoint', 'https://api.mpwa.id/v1/send-message'),
         ('wa_gateway_api_key', ''),
         ('wa_gateway_sender', ''),
-        ('wa_superadmin_phone', '081234567890'),
-        ('wa_pimpinan_phone', '081234567892'),
+        ('wa_superadmin_phone', '081355904897'),
+        ('wa_pimpinan_phone', '082192755755'),
         ('break_policy_enabled', 'true'),
         ('break_duration_minutes', '60'),
         ('break_allow_outside', 'true')
       ON CONFLICT (key) DO NOTHING;
+
+      -- ─── 16. DIVISI K3 & ROLE K3 (KESELAMATAN & KESEHATAN KERJA) ───
+      INSERT INTO hrm_divisions (code, name, description)
+      SELECT 'K3', 'Keselamatan & Kesehatan Kerja (K3 & HSE)', 'Keselamatan, Kesehatan Kerja dan Lingkungan Lapangan'
+      WHERE NOT EXISTS (SELECT 1 FROM hrm_divisions WHERE code = 'K3' OR name ILIKE '%K3%');
+
+      INSERT INTO hrm_roles (name, label, description, is_system, permissions)
+      SELECT 'k3', 'Petugas / Divisi K3', 'Pengawasan Keselamatan Kerja, K3, dan Persetujuan Izin Operasional', false, '["read", "write", "approval"]'::jsonb
+      WHERE NOT EXISTS (SELECT 1 FROM hrm_roles WHERE name = 'k3');
+
+      -- Break late minutes & early leave approved
+      ALTER TABLE hrm_attendances
+      ADD COLUMN IF NOT EXISTS break_late_minutes INTEGER DEFAULT 0;
+
+      ALTER TABLE hrm_attendances
+      ADD COLUMN IF NOT EXISTS early_leave_approved BOOLEAN DEFAULT false;
+
+      -- Leave requests proof photo, substitute, and Pimpinan forwarding
+      ALTER TABLE hrm_leave_requests
+      ADD COLUMN IF NOT EXISTS attachment_url TEXT;
+
+      ALTER TABLE hrm_leave_requests
+      ADD COLUMN IF NOT EXISTS forwarded_to_pimpinan BOOLEAN DEFAULT false;
+
+      ALTER TABLE hrm_leave_requests
+      ADD COLUMN IF NOT EXISTS substitute_id UUID REFERENCES hrm_profiles(id) ON DELETE SET NULL;
+
+      ALTER TABLE hrm_leave_requests
+      ADD COLUMN IF NOT EXISTS substitute_name VARCHAR(150);
+
+      ALTER TABLE hrm_leave_requests
+      ADD COLUMN IF NOT EXISTS substitute_nip VARCHAR(50);
+
+      -- Overtime proof photo and Pimpinan forwarding
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS task_photo_url TEXT;
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS forwarded_to_pimpinan BOOLEAN DEFAULT false;
     `);
 
     console.log('[Database] Schema verification, Biometric, Geofence, Field Sentinel Multi-Posts & Notifications extensions completed.');

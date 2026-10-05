@@ -342,6 +342,8 @@ export interface AttendanceRecord {
   breakStartTime?: string;
   breakEndTime?: string;
   breakDurationMinutes?: number;
+  breakLateMinutes?: number;
+  earlyLeaveApproved?: boolean;
 }
 
 export type ViolationStatus = 'active' | 'resolved' | 'penalized';
@@ -369,7 +371,7 @@ export interface PerimeterViolation {
   createdAt: string;
 }
 
-export type LeaveType = 'cuti_tahunan' | 'sakit' | 'izin' | 'dinas';
+export type LeaveType = 'cuti_tahunan' | 'sakit' | 'izin' | 'dinas' | 'izin_darurat' | 'annual_leave' | 'sick_leave' | 'emergency_leave' | 'unpaid_leave';
 export type LeaveStatus = 'pending' | 'approved' | 'rejected';
 
 export interface LeaveRequest {

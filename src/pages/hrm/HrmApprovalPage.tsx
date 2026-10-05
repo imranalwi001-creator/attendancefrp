@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
@@ -25,6 +25,10 @@ import {
   Sparkles,
   ArrowRight,
   Info,
+  FileSpreadsheet,
+  Layers,
+  Filter,
+  AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,17 +44,26 @@ import { DatePicker } from '@/components/ui/date-picker';
 export const HrmApprovalPage: React.FC = () => {
   const { user } = useHrmAuth();
   const [searchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<'leaves' | 'overtime' | 'swaps'>('leaves');
+  const [activeTab, setActiveTab] = useState<'leaves' | 'overtime' | 'swaps' | 'recap'>('leaves');
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [overtimeList, setOvertimeList] = useState<OvertimeRecord[]>([]);
   const [shiftSwaps, setShiftSwaps] = useState<ShiftSwapRecord[]>([]);
   const [loadingSwaps, setLoadingSwaps] = useState(false);
 
-  // User role checking
+  // User role checking (Korlap, Admin, K3, Danru, Superadmin)
   const userRoleName = (user?.roleName || user?.role || '').toLowerCase();
   const isSuperAdmin = userRoleName.includes('superadmin');
   const isKorlap = isSuperAdmin || userRoleName.includes('korlap') || userRoleName.includes('koordinator');
   const isDanru = isSuperAdmin || userRoleName.includes('danru') || userRoleName.includes('regu') || userRoleName.includes('pengawas');
+  const isK3 = isSuperAdmin || userRoleName.includes('k3') || userRoleName.includes('hse') || userRoleName.includes('keselamatan');
+  const isAdmin = isSuperAdmin || userRoleName.includes('admin') || userRoleName.includes('hrd');
+  const canApprove = isSuperAdmin || isKorlap || isDanru || isK3 || isAdmin;
+
+  // Recap Filter States
+  const [recapTypeFilter, setRecapTypeFilter] = useState<string>('all');
+  const [recapStatusFilter, setRecapStatusFilter] = useState<string>('all');
+  const [recapMonthFilter, setRecapMonthFilter] = useState<'current' | 'all'>('current');
+  const [recapSearch, setRecapSearch] = useState('');
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -60,6 +73,8 @@ export const HrmApprovalPage: React.FC = () => {
       setActiveTab('swaps');
     } else if (tab === 'leaves' || tab === 'cuti' || tab === 'izin') {
       setActiveTab('leaves');
+    } else if (tab === 'recap' || tab === 'rekap') {
+      setActiveTab('recap');
     }
   }, [searchParams]);
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -451,6 +466,104 @@ export const HrmApprovalPage: React.FC = () => {
     return matchStatus && matchSearch;
   });
 
+  // Consolidated Recap Calculation for Korlap, Admin, and K3
+  const consolidatedRecapList = useMemo(() => {
+    const currentMonthPrefix = new Date().toISOString().slice(0, 7);
+
+    const leaveItems = leaves.map((l) => ({
+      id: l.id,
+      kind: 'leave' as const,
+      userId: l.userId,
+      userName: l.userName,
+      userNip: l.userNip,
+      divisionName: l.divisionName,
+      type: l.leaveType,
+      typeLabel:
+        l.leaveType === 'annual_leave'
+          ? 'Cuti Tahunan'
+          : l.leaveType === 'sick_leave'
+          ? 'Izin Sakit'
+          : l.leaveType === 'emergency_leave' || l.leaveType === 'izin_darurat'
+          ? 'Izin Darurat'
+          : 'Dispensasi / Dinas',
+      dateLabel: `${l.startDate} s/d ${l.endDate} (${l.totalDays || 1} Hari)`,
+      rawDate: l.startDate || l.createdAt,
+      reason: l.reason,
+      attachmentUrl: l.attachmentUrl,
+      status: l.status,
+      approvedByName: l.approvedByName,
+      rawItem: l,
+    }));
+
+    const overtimeItems = overtimeList.map((ot) => ({
+      id: ot.id,
+      kind: 'overtime' as const,
+      userId: ot.userId,
+      userName: ot.userName,
+      userNip: ot.userNip,
+      divisionName: ot.divisionName,
+      type: 'overtime',
+      typeLabel: `Lembur SPL (${ot.durationHours} Jam)`,
+      dateLabel: `${ot.date} • ${ot.startTime} - ${ot.endTime} WITA`,
+      rawDate: ot.date || ot.createdAt,
+      reason: ot.taskDescription,
+      attachmentUrl: ot.taskPhotoUrl || (ot as any).attachmentUrl,
+      status: ot.status,
+      approvedByName: (ot as any).approvedByName,
+      rawItem: ot,
+    }));
+
+    let combined = [...leaveItems, ...overtimeItems];
+
+    if (recapMonthFilter === 'current') {
+      combined = combined.filter((item) => (item.rawDate || '').startsWith(currentMonthPrefix));
+    }
+
+    if (recapTypeFilter !== 'all') {
+      if (recapTypeFilter === 'overtime') {
+        combined = combined.filter((i) => i.kind === 'overtime');
+      } else {
+        combined = combined.filter((i) => i.type === recapTypeFilter);
+      }
+    }
+
+    if (recapStatusFilter !== 'all') {
+      combined = combined.filter((i) => i.status === recapStatusFilter);
+    }
+
+    if (recapSearch.trim()) {
+      const q = recapSearch.toLowerCase();
+      combined = combined.filter(
+        (i) =>
+          i.userName?.toLowerCase().includes(q) ||
+          i.userNip?.toLowerCase().includes(q) ||
+          i.reason?.toLowerCase().includes(q) ||
+          i.divisionName?.toLowerCase().includes(q)
+      );
+    }
+
+    return combined.sort((a, b) => (b.rawDate || '').localeCompare(a.rawDate || ''));
+  }, [leaves, overtimeList, recapMonthFilter, recapTypeFilter, recapStatusFilter, recapSearch]);
+
+  const recapSummary = useMemo(() => {
+    const currentMonthPrefix = new Date().toISOString().slice(0, 7);
+    const thisMonthLeaves = leaves.filter((l) => (l.startDate || l.createdAt || '').startsWith(currentMonthPrefix));
+    const thisMonthOts = overtimeList.filter((o) => (o.date || o.createdAt || '').startsWith(currentMonthPrefix));
+
+    return {
+      totalThisMonth: thisMonthLeaves.length + thisMonthOts.length,
+      approvedLeaves: thisMonthLeaves.filter((l) => l.status === 'approved').length,
+      emergencyLeaves: thisMonthLeaves.filter((l) => l.leaveType === 'emergency_leave' || l.leaveType === 'izin_darurat').length,
+      approvedOvertimes: thisMonthOts.filter((o) => o.status === 'approved').length,
+      totalOtHours: thisMonthOts
+        .filter((o) => o.status === 'approved')
+        .reduce((sum, o) => sum + (o.approvedHours || o.durationHours || 0), 0),
+      pendingTotal:
+        thisMonthLeaves.filter((l) => l.status === 'pending').length +
+        thisMonthOts.filter((o) => o.status === 'pending').length,
+    };
+  }, [leaves, overtimeList]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -517,6 +630,24 @@ export const HrmApprovalPage: React.FC = () => {
             {pendingSwapsCount > 0 && (
               <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-600 text-[10px] font-bold">
                 {pendingSwapsCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('recap')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 ${
+              activeTab === 'recap'
+                ? 'bg-card text-foreground shadow-xs border border-border/80'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            <span>Rekap Realtime</span>
+            {recapSummary.pendingTotal > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-rose-500/20 text-rose-600 text-[10px] font-bold">
+                {recapSummary.pendingTotal}
               </span>
             )}
           </button>
@@ -829,7 +960,7 @@ export const HrmApprovalPage: React.FC = () => {
             </table>
           </div>
         </Card>
-      ) : (
+      ) : activeTab === 'swaps' ? (
         /* Shift Swaps / Pengganti Pos Jaga Table */
         <div className="space-y-4">
           {/* Information & Authority Architecture Guide */}
@@ -1036,6 +1167,247 @@ export const HrmApprovalPage: React.FC = () => {
                         </tr>
                       );
                     })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      ) : (
+        /* ─── REKAP REALTIME SELURUH KARYAWAN (CUTI, LEMBUR, IZIN, IZIN DARURAT) ─── */
+        <div className="space-y-4">
+          {/* KPI Summary Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <Card className="p-3.5 bg-card border-border rounded-xl">
+              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wider">Total Rekap Bulan Ini</p>
+              <p className="text-xl font-bold text-foreground mt-1">{recapSummary.totalThisMonth} <span className="text-xs font-normal text-muted-foreground">Pengajuan</span></p>
+              <p className="text-[10.5px] text-amber-600 font-semibold mt-0.5">{recapSummary.pendingTotal} Menunggu Approval</p>
+            </Card>
+
+            <Card className="p-3.5 bg-card border-border rounded-xl">
+              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wider">Cuti & Izin Disetujui</p>
+              <p className="text-xl font-bold text-emerald-600 mt-1">{recapSummary.approvedLeaves} <span className="text-xs font-normal text-muted-foreground">Berkas</span></p>
+              <p className="text-[10.5px] text-muted-foreground mt-0.5">Termasuk Cuti Tahunan & Sakit</p>
+            </Card>
+
+            <Card className="p-3.5 bg-card border-border rounded-xl">
+              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wider">Izin Darurat</p>
+              <p className="text-xl font-bold text-rose-600 mt-1">{recapSummary.emergencyLeaves} <span className="text-xs font-normal text-muted-foreground">Kasus</span></p>
+              <p className="text-[10.5px] text-rose-500 font-semibold mt-0.5">Self-Service Pulang Cepat</p>
+            </Card>
+
+            <Card className="p-3.5 bg-card border-border rounded-xl">
+              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wider">Lembur Disetujui (SPL)</p>
+              <p className="text-xl font-bold text-blue-600 mt-1">{recapSummary.approvedOvertimes} <span className="text-xs font-normal text-muted-foreground">SPL ({recapSummary.totalOtHours} Jam)</span></p>
+              <p className="text-[10.5px] text-muted-foreground mt-0.5">Siap masuk slip payroll</p>
+            </Card>
+          </div>
+
+          {/* Filter Bar */}
+          <Card className="p-3.5 bg-card border-border rounded-xl space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Cari karyawan berdasarkan nama, NIP, atau keterangan..."
+                  value={recapSearch}
+                  onChange={(e) => setRecapSearch(e.target.value)}
+                  className="pl-9 h-9 text-xs rounded-xl"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <Select value={recapTypeFilter} onValueChange={setRecapTypeFilter}>
+                  <SelectTrigger className="h-9 text-xs rounded-xl w-[150px]">
+                    <SelectValue placeholder="Jenis Pengajuan" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Jenis</SelectItem>
+                    <SelectItem value="annual_leave">🏖️ Cuti Tahunan</SelectItem>
+                    <SelectItem value="sick_leave">🏥 Izin Sakit</SelectItem>
+                    <SelectItem value="emergency_leave">🚨 Izin Darurat</SelectItem>
+                    <SelectItem value="unpaid_leave">📋 Izin Khusus/Dinas</SelectItem>
+                    <SelectItem value="overtime">⏱️ Lembur (SPL)</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Select value={recapStatusFilter} onValueChange={setRecapStatusFilter}>
+                  <SelectTrigger className="h-9 text-xs rounded-xl w-[140px]">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Status</SelectItem>
+                    <SelectItem value="pending">⏳ Menunggu</SelectItem>
+                    <SelectItem value="approved">✅ Disetujui</SelectItem>
+                    <SelectItem value="rejected">❌ Ditolak</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <div className="flex rounded-xl bg-muted/60 p-0.5 border border-border">
+                  <button
+                    type="button"
+                    onClick={() => setRecapMonthFilter('current')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+                      recapMonthFilter === 'current' ? 'bg-card text-foreground shadow-xs font-bold' : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Bulan Ini
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRecapMonthFilter('all')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+                      recapMonthFilter === 'all' ? 'bg-card text-foreground shadow-xs font-bold' : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Semua
+                  </button>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {/* Table Data Rekap Realtime */}
+          <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-foreground">
+                <thead className="bg-muted/40 border-b border-border uppercase text-[11px] text-muted-foreground font-medium tracking-wider">
+                  <tr>
+                    <th className="py-3 px-4">Karyawan & Pos</th>
+                    <th className="py-3 px-4">Jenis Pengajuan</th>
+                    <th className="py-3 px-4">Tanggal & Durasi</th>
+                    <th className="py-3 px-4">Uraian / Alasan</th>
+                    <th className="py-3 px-4">Bukti Lampiran</th>
+                    <th className="py-3 px-4">Status & Approval</th>
+                    <th className="py-3 px-4 text-right">Tindakan Cepat</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {consolidatedRecapList.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-muted-foreground">
+                        Tidak ada data rekap pengajuan yang sesuai dengan filter pencarian.
+                      </td>
+                    </tr>
+                  ) : (
+                    consolidatedRecapList.map((item) => (
+                      <tr key={`${item.kind}-${item.id}`} className="hover:bg-muted/30">
+                        <td className="py-3 px-4">
+                          <p className="font-semibold text-foreground">{item.userName}</p>
+                          <p className="text-[11px] text-muted-foreground font-mono">
+                            {item.userNip} • {item.divisionName || 'Operasional'}
+                          </p>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <Badge
+                            variant="outline"
+                            className={`text-[10.5px] font-bold ${
+                              item.kind === 'overtime'
+                                ? 'border-blue-500/30 text-blue-700 bg-blue-50 dark:bg-blue-950/40'
+                                : item.type === 'emergency_leave' || item.type === 'izin_darurat'
+                                ? 'border-rose-500/30 text-rose-700 bg-rose-50 dark:bg-rose-950/40'
+                                : item.type === 'sick_leave'
+                                ? 'border-amber-500/30 text-amber-700 bg-amber-50 dark:bg-amber-950/40'
+                                : 'border-emerald-500/30 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/40'
+                            }`}
+                          >
+                            {item.typeLabel}
+                          </Badge>
+                        </td>
+
+                        <td className="py-3 px-4 font-mono text-[11px]">
+                          <p className="text-foreground font-medium">{item.dateLabel}</p>
+                        </td>
+
+                        <td className="py-3 px-4 max-w-xs">
+                          <p className="line-clamp-2 italic text-muted-foreground text-[11px]">
+                            "{item.reason}"
+                          </p>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          {item.attachmentUrl ? (
+                            <button
+                              type="button"
+                              onClick={() => setPreviewAttachment(item.attachmentUrl!)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 text-[11px] font-semibold transition-colors"
+                            >
+                              <ImageIcon className="w-3.5 h-3.5" />
+                              <span>Lihat Foto</span>
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground italic">Tidak ada foto</span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <div>
+                            <Badge
+                              variant="outline"
+                              className={
+                                item.status === 'approved'
+                                  ? 'border-emerald-500/30 text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-[10px] font-bold'
+                                  : item.status === 'rejected'
+                                  ? 'border-rose-500/30 text-rose-600 bg-rose-50 dark:bg-rose-950/40 text-[10px] font-bold'
+                                  : 'border-amber-500/30 text-amber-600 bg-amber-50 dark:bg-amber-950/40 text-[10px] font-bold'
+                              }
+                            >
+                              {item.status === 'approved' ? 'Disetujui' : item.status === 'rejected' ? 'Ditolak' : 'Menunggu Approval'}
+                            </Badge>
+                            {item.approvedByName && (
+                              <p className="text-[10px] text-muted-foreground mt-0.5">Oleh: {item.approvedByName}</p>
+                            )}
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4 text-right">
+                          {item.status === 'pending' && canApprove ? (
+                            <div className="flex items-center justify-end gap-1.5">
+                              {item.kind === 'leave' ? (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleOpenLeaveDecision(item.rawItem as LeaveRequest, 'approved')}
+                                    className="h-7 px-2 text-[10.5px] rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                                  >
+                                    Setujui
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleOpenLeaveDecision(item.rawItem as LeaveRequest, 'rejected')}
+                                    className="h-7 px-2 text-[10.5px] rounded-lg border-destructive/30 text-destructive hover:bg-destructive/10"
+                                  >
+                                    Tolak
+                                  </Button>
+                                </>
+                              ) : (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleOpenOtProcess(item.rawItem as OvertimeRecord, 'approved')}
+                                    className="h-7 px-2 text-[10.5px] rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold"
+                                  >
+                                    Setujui
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleOpenOtProcess(item.rawItem as OvertimeRecord, 'rejected')}
+                                    className="h-7 px-2 text-[10.5px] rounded-lg border-destructive/30 text-destructive hover:bg-destructive/10"
+                                  >
+                                    Tolak
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
                   )}
                 </tbody>
               </table>

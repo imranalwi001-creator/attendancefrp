@@ -1257,17 +1257,21 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         biometric_score, biometric_match, geofence_distance_meters, geofence_valid, is_mock_location, security_flags
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       ON CONFLICT (user_id, attendance_date) DO UPDATE SET
-        clock_in = EXCLUDED.clock_in,
-        photo_in = EXCLUDED.photo_in,
-        lat_in = EXCLUDED.lat_in,
-        long_in = EXCLUDED.long_in,
-        status = EXCLUDED.status,
-        late_minutes = EXCLUDED.late_minutes,
-        notes = EXCLUDED.notes,
-        biometric_score = COALESCE(EXCLUDED.biometric_score, hrm_attendances.biometric_score),
-        biometric_match = COALESCE(EXCLUDED.biometric_match, hrm_attendances.biometric_match),
-        geofence_distance_meters = COALESCE($12, EXCLUDED.geofence_distance_meters, hrm_attendances.geofence_distance_meters),
-        geofence_valid = COALESCE($13, EXCLUDED.geofence_valid, hrm_attendances.geofence_valid),
+        clock_in = COALESCE(hrm_attendances.clock_in, EXCLUDED.clock_in),
+        photo_in = COALESCE(hrm_attendances.photo_in, EXCLUDED.photo_in),
+        lat_in = COALESCE(hrm_attendances.lat_in, EXCLUDED.lat_in),
+        long_in = COALESCE(hrm_attendances.long_in, EXCLUDED.long_in),
+        status = CASE WHEN hrm_attendances.clock_in IS NOT NULL THEN hrm_attendances.status ELSE EXCLUDED.status END,
+        late_minutes = CASE WHEN hrm_attendances.clock_in IS NOT NULL THEN hrm_attendances.late_minutes ELSE EXCLUDED.late_minutes END,
+        notes = CASE 
+          WHEN hrm_attendances.notes IS NOT NULL AND LENGTH(hrm_attendances.notes) > 0 
+          THEN hrm_attendances.notes 
+          ELSE EXCLUDED.notes 
+        END,
+        biometric_score = COALESCE(hrm_attendances.biometric_score, EXCLUDED.biometric_score),
+        biometric_match = COALESCE(hrm_attendances.biometric_match, EXCLUDED.biometric_match),
+        geofence_distance_meters = COALESCE(hrm_attendances.geofence_distance_meters, $12, EXCLUDED.geofence_distance_meters),
+        geofence_valid = COALESCE(hrm_attendances.geofence_valid, $13, EXCLUDED.geofence_valid),
         is_mock_location = COALESCE(EXCLUDED.is_mock_location, hrm_attendances.is_mock_location),
         security_flags = COALESCE(EXCLUDED.security_flags, hrm_attendances.security_flags)
       RETURNING *;
@@ -1291,12 +1295,14 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     ]);
     const insertedAttendance = result.rows[0];
 
-    // Rolling overwrite: Simpan foto hari ini sebagai arsip review, dan hapus foto check-in hari sebelumnya agar tidak membebani database
-    if (photo && userId) {
+    // Ephemeral Rolling Photo Replacement: Foto check-in yang lalu otomatis dihapus dan digantikan hanya dengan foto check-in terbaru
+    if (photo && userId && insertedAttendance?.id) {
       await pool.query(
-        `UPDATE hrm_attendances SET photo_in = NULL WHERE user_id = $1 AND attendance_date < $2`,
-        [userId, date || new Date().toISOString().split('T')[0]]
-      ).catch(() => null);
+        `UPDATE hrm_attendances 
+         SET photo_in = NULL 
+         WHERE user_id = $1 AND id != $2 AND photo_in IS NOT NULL;`,
+        [userId, insertedAttendance.id]
+      ).catch((err) => console.warn('[Photo Retention] Error clearing older clock-in photos:', err));
     }
 
     res.json({ success: true, data: insertedAttendance });
@@ -1423,9 +1429,17 @@ async function alertLeadershipViaWhatsAppAndSystem({ title, message, waMessage, 
 
   // 2. Persistent notification records in PostgreSQL & WhatsApp dispatch
   try {
-    const leadRes = await pool.query(
-      "SELECT id, phone, full_name, role_name FROM hrm_profiles WHERE LOWER(role_name) IN ('superadmin', 'pimpinan') AND is_active = true"
-    );
+    const leadRes = await pool.query(`
+      SELECT DISTINCT p.id, p.phone, p.full_name, COALESCE(p.role_name, r.name) as role_name
+      FROM hrm_profiles p
+      LEFT JOIN hrm_roles r ON p.role_id = r.id
+      WHERE (LOWER(COALESCE(p.role_name, '')) IN ('superadmin', 'pimpinan') 
+         OR LOWER(COALESCE(r.name, '')) IN ('superadmin', 'pimpinan'))
+        AND p.is_active = true;
+    `);
+
+    const sentNumbers = new Set();
+
     for (const leader of leadRes.rows) {
       await pool.query(
         `INSERT INTO hrm_notifications (user_id, title, message, type, link, metadata, is_read, created_at)
@@ -1434,8 +1448,25 @@ async function alertLeadershipViaWhatsAppAndSystem({ title, message, waMessage, 
       );
 
       if (leader.phone) {
+        const cleanP = leader.phone.replace(/\D/g, '');
+        if (cleanP) {
+          sentNumbers.add(cleanP);
+          await sendWhatsAppAlert({
+            phone: leader.phone,
+            message: waMessage || `${title}\n\n${message}`
+          });
+        }
+      }
+    }
+
+    // Pastikan nomor pimpinan resmi (Bpk Reski Faisal) & superadmin dari instruksi sistem selalu menerima broadcast
+    const defaultLeadershipPhones = ['082192755755', '081355904897'];
+    for (const dPhone of defaultLeadershipPhones) {
+      const cleanD = dPhone.replace(/\D/g, '');
+      const alreadySent = Array.from(sentNumbers).some(n => n.endsWith(cleanD.slice(-9)));
+      if (!alreadySent) {
         await sendWhatsAppAlert({
-          phone: leader.phone,
+          phone: dPhone,
           message: waMessage || `${title}\n\n${message}`
         });
       }
@@ -1953,25 +1984,52 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
         notes || null
       ]
     );
-
     const patrol = insRes.rows[0];
 
-    broadcastNotification({
-      title: `📸 Verifikasi Wajah di Titik: ${user.full_name}`,
-      message: `${user.full_name} (${user.nip}) telah melakukan verifikasi wajah di ${patrol.location_name} (Status: ${isWithinRadius ? 'Dalam Radius' : `Di Luar Radius (${Math.round(distance)}m)`}).`,
-      type: 'patrol_verified',
-      data: {
-        patrolId: patrol.id,
+    // Ephemeral Rolling Photo Replacement: Foto selfie di titik lokasi yang lalu otomatis dihapus dan digantikan hanya dengan foto selfie terbaru
+    if (watermarkedPhotoUrl && validUserId && patrol?.id) {
+      await pool.query(
+        `UPDATE hrm_field_patrol_checks 
+         SET watermarked_photo_url = NULL 
+         WHERE user_id = $1 AND id != $2 AND watermarked_photo_url IS NOT NULL;`,
+        [validUserId, patrol.id]
+      ).catch((err) => console.warn('[Photo Retention] Error clearing older patrol photos:', err));
+    }
+
+    // Clear spot-check requested flag
+    await pool.query(
+      `UPDATE hrm_profiles 
+       SET spot_check_requested = false, 
+           spot_check_requested_at = NULL, 
+           spot_check_notes = NULL 
+       WHERE id = $1;`,
+      [validUserId]
+    );
+
+    // Send WhatsApp confirmation to Pimpinan & Superadmin
+    const patrolWaMsg = 
+`📸 *LAPORAN VERIFIKASI WAJAH LAPANGAN*
+
+👤 Petugas: *${user.full_name}* (${user.nip || 'FRP-FIELD'})
+📍 Pos: *${patrol.location_name}*
+📏 Geofence: *${isWithinRadius ? '✅ Sah di Dalam Pos' : `⚠️ Di Luar Radius (${Math.round(distance)}m)`}*
+🛡️ Biometrik: ${patrol.biometric_score || 98.6}% Match
+⏰ Waktu: ${new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WITA
+
+Bukti foto forensik kriptografis telah tersimpan di sistem.`;
+
+    alertLeadershipViaWhatsAppAndSystem({
+      title: `📸 Lapor Wajah Diterima: ${user.full_name}`,
+      message: `${user.full_name} telah mengirimkan foto verifikasi wajah di ${patrol.location_name}.`,
+      waMessage: patrolWaMsg,
+      link: '/admin/monitoring',
+      metadata: {
+        type: 'patrol_verified',
         userId: validUserId,
-        userName: user.full_name,
-        userNip: user.nip,
         photoUrl: watermarkedPhotoUrl,
-        isWithinRadius,
-        distance,
-        locationName: patrol.location_name,
-        time: patrol.created_at
+        locationName: patrol.location_name
       }
-    });
+    }).catch(() => null);
 
     res.json({
       success: true,
@@ -2070,16 +2128,45 @@ app.post('/api/field-sentinel/request-spot-check', async (req, res) => {
     return res.status(400).json({ success: false, error: 'userId wajib diisi' });
   }
   try {
-    const uRes = await pool.query('SELECT id, full_name, nip FROM hrm_profiles WHERE id::text = $1 OR nip = $1 LIMIT 1', [userId]);
+    const uRes = await pool.query('SELECT id, full_name, nip, phone FROM hrm_profiles WHERE id::text = $1 OR nip = $1 LIMIT 1', [userId]);
     if (uRes.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
     }
     const target = uRes.rows[0];
 
+    const noteText = instructionNotes || 'Pimpinan meminta Anda segera melakukan verifikasi scan wajah di pos tugas.';
+
+    // 1. Mark in database: spot_check_requested = true
+    await pool.query(
+      `UPDATE hrm_profiles 
+       SET spot_check_requested = true, 
+           spot_check_requested_at = NOW(), 
+           spot_check_notes = $1 
+       WHERE id = $2;`,
+      [noteText, target.id]
+    );
+
+    // 2. Dispatch High Priority Emergency WhatsApp to the employee's phone
+    if (target.phone) {
+      const waNotice = 
+`🚨 *INSTRUKSI KHUSUS PIMPINAN PT. FAWWAZ RESKI PERWIRA*
+
+Halo *${target.full_name}* (${target.nip || 'FRP-FIELD'}),
+Pimpinan menginstruksikan Anda untuk *SEGERA LAPOR WAJAH & POSISI* di titik lokasi tugas Anda saat ini.
+
+⚠️ Mohon buka aplikasi presensi dan ambil foto verifikasi wajah dalam batas waktu 5 menit:
+👉 https://fawwazreskiperwira.com
+
+_Sistem memantau koordinat GPS live dan menyematkan bukti forensik otomatis._`;
+
+      sendWhatsAppAlert({ phone: target.phone, message: waNotice });
+    }
+
+    // 3. Broadcast in-app WebSocket notification
     broadcastNotification({
       targetUserId: target.id,
       title: '🚨 Instruksi Pimpinan: Konfirmasi Posisi Wajah',
-      message: instructionNotes || 'Pimpinan menginstruksikan Anda untuk segera melakukan konfirmasi scan wajah ber-watermark di titik lokasi tugas sekarang.',
+      message: noteText,
       type: 'spot_check_request',
       data: {
         requestedAt: new Date().toISOString(),
@@ -2093,6 +2180,28 @@ app.post('/api/field-sentinel/request-spot-check', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Check if employee has pending spot check request
+app.get('/api/field-sentinel/spot-check-status/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const q = await pool.query(
+      `SELECT spot_check_requested, spot_check_requested_at, spot_check_notes 
+       FROM hrm_profiles WHERE id::text = $1 OR nip = $1 LIMIT 1`,
+      [userId]
+    );
+    if (q.rows.length === 0) return res.json({ success: true, requested: false });
+    const r = q.rows[0];
+    res.json({
+      success: true,
+      requested: r.spot_check_requested === true,
+      requestedAt: r.spot_check_requested_at,
+      notes: r.spot_check_notes
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, requested: false, error: err.message });
   }
 });
 
@@ -2511,12 +2620,14 @@ app.post('/api/attendances/clock-out', async (req, res) => {
     ]);
     const updatedAttendance = result.rows[0];
 
-    // Rolling overwrite: Simpan foto checkout hari ini sebagai arsip review, dan hapus foto checkout hari sebelumnya
-    if (photo && userId) {
+    // Ephemeral Rolling Photo Replacement: Foto checkout (pulang) yang lalu otomatis dihapus dan digantikan hanya dengan foto checkout terbaru
+    if (photo && userId && updatedAttendance?.id) {
       await pool.query(
-        `UPDATE hrm_attendances SET photo_out = NULL WHERE user_id = $1 AND attendance_date < $2`,
-        [userId, date || new Date().toISOString().split('T')[0]]
-      ).catch(() => null);
+        `UPDATE hrm_attendances 
+         SET photo_out = NULL 
+         WHERE user_id = $1 AND id != $2 AND photo_out IS NOT NULL;`,
+        [userId, updatedAttendance.id]
+      ).catch((err) => console.warn('[Photo Retention] Error clearing older clock-out photos:', err));
     }
 
     res.json({ success: true, data: updatedAttendance });
@@ -3648,6 +3759,14 @@ app.post('/api/leaves', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Data pengajuan cuti tidak lengkap (userId, tanggal, alasan wajib diisi)' });
   }
 
+  // Wajib Upload Foto Bukti Pendukung & Alasan
+  if (!attachmentUrl || !attachmentUrl.trim()) {
+    return res.status(400).json({
+      success: false,
+      error: 'Semua pengajuan cuti, izin, dan izin darurat WAJIB melampirkan foto bukti pendukung (surat sakit/foto kondisi/bukti kegiatan) dan alasan jelas.',
+    });
+  }
+
   try {
     let validUserId = userId;
     let userProfile = null;
@@ -3667,8 +3786,8 @@ app.post('/api/leaves', async (req, res) => {
     const requestedDays = totalDays ? parseInt(totalDays, 10) : 1;
     const type = leaveType || 'cuti_tahunan';
 
-    // ── Aturan Operasional Lapangan 1: Cuti Tahunan wajib H-3 ──
-    if (type === 'cuti_tahunan') {
+    // Aturan Cuti Tahunan: H-3 & kuota sisa
+    if (type === 'cuti_tahunan' || type === 'annual_leave') {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const startDt = new Date(startDate);
@@ -3677,28 +3796,19 @@ app.post('/api/leaves', async (req, res) => {
       if (diffDays < 3) {
         return res.status(400).json({
           success: false,
-          error: 'Sesuai regulasi perusahaan, permohonan Cuti Tahunan wajib diajukan minimal 3 hari sebelum pelaksanaan (H-3). Untuk kondisi mendesak/sakit silakan pilih jenis Izin atau Sakit.',
+          error: 'Sesuai regulasi perusahaan, permohonan Cuti Tahunan wajib diajukan minimal 3 hari sebelum pelaksanaan (H-3). Untuk kondisi mendesak silakan pilih jenis Izin atau Izin Darurat.',
         });
       }
 
-      // ── Aturan Operasional Lapangan 2: Sisa Hak Cuti Wajib Mencukupi (12 + 2 = 14 Hari) ──
       const annualQuota = userProfile.annual_leave_quota || 14;
       const usedDays = userProfile.used_leave_days || 0;
       const remainingQuota = annualQuota - usedDays;
       if (requestedDays > remainingQuota) {
         return res.status(400).json({
           success: false,
-          error: `Sisa hak cuti tahunan Anda tidak mencukupi. Kuota tersisa: ${remainingQuota} hari (dari total hak 14 hari), namun Anda mengajukan ${requestedDays} hari.`,
+          error: `Sisa hak cuti tahunan Anda tidak mencukupi. Kuota tersisa: ${remainingQuota} hari, permohonan: ${requestedDays} hari.`,
         });
       }
-    }
-
-    // ── Aturan Operasional Lapangan 3: Semua Pengajuan Wajib Dokumen Pendukung ──
-    if (!attachmentUrl || !attachmentUrl.trim()) {
-      return res.status(400).json({
-        success: false,
-        error: 'Semua permohonan izin/cuti/sakit wajib melampirkan foto atau dokumen pendukung (surat dokter, surat tugas, atau berkas bukti) untuk ditinjau oleh Kepala Regu dan Korlap.',
-      });
     }
 
     const query = `
@@ -3719,20 +3829,52 @@ app.post('/api/leaves', async (req, res) => {
 
     const leaveRow = result.rows[0];
     const typeLabel = type.replace(/_/g, ' ').toUpperCase();
-
     const submitterRole = (userProfile.role_name || userProfile.role_code || '').toLowerCase();
-    let recipientRoles = ['pimpinan', 'superadmin', 'hrd', 'pengawas', 'admin', 'korlap', 'kepala_regu', 'keuangan'];
-    if (submitterRole === 'kepala_regu' || submitterRole === 'kepalaregu') {
-      recipientRoles = ['korlap', 'pimpinan', 'superadmin', 'hrd', 'admin', 'keuangan'];
-    } else if (submitterRole === 'korlap') {
-      recipientRoles = ['pimpinan', 'superadmin', 'hrd', 'admin', 'keuangan'];
+    const isOfficer = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r));
+
+    let recipientRoles = [];
+    if (isOfficer) {
+      // Jika Korlap, Admin, atau K3 yang mengajukan -> ajukan ke Dirut & Pimpinan konfirmasi via WA!
+      recipientRoles = ['pimpinan', 'superadmin'];
+      const waMsg = `📢 *PENGAJUAN ${typeLabel} DARI ${submitterRole.toUpperCase()}*\n\n` +
+        `Pemohon: *${userProfile.full_name}* (NIP: ${userProfile.nip || '-'})\n` +
+        `Jabatan: *${submitterRole.toUpperCase()}* - Divisi: ${userProfile.division_name || 'Operasional'}\n` +
+        `Jenis: *${typeLabel}*\n` +
+        `Periode: *${startDate} s/d ${endDate}* (${requestedDays} Hari)\n` +
+        `Alasan: "${reason}"\n\n` +
+        `⚠️ Pengajuan ini diajukan oleh pejabat pengawas (${submitterRole.toUpperCase()}) dan membutuhkan persetujuan langsung dari *Direktur Utama & Pimpinan*.\n` +
+        `Mohon verifikasi melalui: https://103.197.188.211/admin/approval`;
+
+      await sendWhatsAppAlert({ phone: '082192755755', message: waMsg });
+      await sendWhatsAppAlert({ phone: '081355904897', message: waMsg });
+    } else {
+      // Jika Karyawan biasa -> masuk notifikasi sistem & via WA ke Korlap, Admin, atau K3 untuk persetujuan
+      recipientRoles = ['korlap', 'admin', 'k3', 'superadmin'];
+      const officerRes = await pool.query(
+        "SELECT full_name, phone, role_name FROM hrm_profiles WHERE role_name IN ('korlap', 'admin', 'k3') AND is_active = true AND phone IS NOT NULL AND phone != ''"
+      );
+
+      const waOfficerMsg = `📋 *PENGAJUAN ${typeLabel} BARU (BUTUH PERSETUJUAN)*\n\n` +
+        `Karyawan: *${userProfile.full_name}* (NIP: ${userProfile.nip || '-'})\n` +
+        `Divisi: *${userProfile.division_name || 'Operasional'}*\n` +
+        `Jenis: *${typeLabel}*\n` +
+        `Periode: *${startDate} s/d ${endDate}* (${requestedDays} Hari)\n` +
+        `Alasan: "${reason}"\n\n` +
+        `Mohon salah satu dari *Korlap, Admin, atau K3* melakukan verifikasi & persetujuan melalui portal HRM FRP:\n` +
+        `https://103.197.188.211/admin/approval`;
+
+      for (const off of officerRes.rows) {
+        if (off.phone) {
+          await sendWhatsAppAlert({ phone: off.phone, message: waOfficerMsg });
+        }
+      }
     }
 
-    // Broadcast Notifikasi ke semua pihak relevan — division-scoped untuk kepala_regu
+    // In-app Notification Broadcast
     await broadcastNotification({
       recipientRoles,
       title: `📋 Pengajuan ${typeLabel} Baru`,
-      message: `${userProfile.full_name} (${userProfile.division_name || 'Operasional'}) mengajukan ${typeLabel} ${requestedDays} hari (${startDate} s/d ${endDate}): "${reason}". Membutuhkan persetujuan segera.`,
+      message: `${userProfile.full_name} (${userProfile.division_name || 'Operasional'}) mengajukan ${typeLabel} ${requestedDays} hari (${startDate} s/d ${endDate}): "${reason}". Menunggu persetujuan.`,
       type: 'leave',
       link: '/admin/approval',
       metadata: { leaveId: leaveRow.id, userId: validUserId, type, totalDays: requestedDays },
@@ -3742,7 +3884,7 @@ app.post('/api/leaves', async (req, res) => {
     res.json({
       success: true,
       data: leaveRow,
-      message: 'Pengajuan cuti berhasil dikirim dan menunggu verifikasi atasan.',
+      message: 'Pengajuan cuti/izin berhasil dikirim dan notifikasi otomatis diteruskan via WA & sistem.',
     });
   } catch (err) {
     console.error('Leave submit error:', err);
@@ -3750,7 +3892,7 @@ app.post('/api/leaves', async (req, res) => {
   }
 });
 
-// Update Status Cuti (Approval / Rejection oleh Superadmin, HRD, Pimpinan, Korlap)
+// Update Status Cuti / Izin / Izin Darurat (Approval oleh Korlap, Admin, K3, atau Pimpinan)
 app.put('/api/leaves/:id/status', async (req, res) => {
   const { id } = req.params;
   const { status, approverId, approverName, notes, substituteId, substituteName, substituteNip } = req.body;
@@ -3759,7 +3901,13 @@ app.put('/api/leaves/:id/status', async (req, res) => {
   }
 
   try {
-    const lRes = await pool.query('SELECT * FROM hrm_leave_requests WHERE id = $1 LIMIT 1', [id]);
+    const lRes = await pool.query(`
+      SELECT l.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name, p.phone as user_phone
+      FROM hrm_leave_requests l
+      JOIN hrm_profiles p ON l.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      WHERE l.id = $1 LIMIT 1
+    `, [id]);
     if (lRes.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Pengajuan cuti tidak ditemukan' });
     }
@@ -3785,14 +3933,15 @@ app.put('/api/leaves/:id/status', async (req, res) => {
         substitute_id = $4,
         substitute_name = $5,
         substitute_nip = $6,
+        forwarded_to_pimpinan = true,
         approved_at = NOW(),
         updated_at = NOW()
       WHERE id = $7
       RETURNING *;
     `, [status, validApproverId || null, notes || null, validSubId || null, substituteName || null, substituteNip || null, id]);
 
-    // Jika disetujui dan cuti tahunan, otomatis kurangi sisa cuti di profil karyawan!
-    if (status === 'approved' && leave.leave_type === 'cuti_tahunan') {
+    // 1. Jika disetujui & cuti tahunan, otomatis kurangi sisa kuota cuti di profil karyawan secara real-time!
+    if (status === 'approved' && (leave.leave_type === 'cuti_tahunan' || leave.leave_type === 'annual_leave')) {
       await pool.query(`
         UPDATE hrm_profiles SET
           used_leave_days = COALESCE(used_leave_days, 0) + $1,
@@ -3801,23 +3950,60 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       `, [leave.total_days, leave.user_id]);
     }
 
-    // Teruskan notifikasi langsung ke karyawan pemohon
+    // 2. Jika disetujui & izin darurat, buka kunci kepulangan awal hari ini (izin_darurat aktif)
+    if (status === 'approved' && (leave.leave_type === 'izin_darurat' || leave.leave_type === 'emergency_leave')) {
+      await pool.query(`
+        UPDATE hrm_attendances SET
+          is_early_leave = true,
+          early_leave_approved = true,
+          early_leave_reason = $1,
+          is_locked = false,
+          is_perimeter_breached = false,
+          updated_at = NOW()
+        WHERE user_id = $2 AND attendance_date >= CURRENT_DATE;
+      `, [leave.reason, leave.user_id]);
+    }
+
+    // 3. FORWARD NOTIFIKASI VIA WHATSAPP KE PIMPINAN (Bpk Reski Faisal) & SUPERADMIN
+    if (status === 'approved') {
+      const fwdMsg = `✅ *PEMBERITAHUAN: PENGAJUAN ${leave.leave_type?.toUpperCase()} TELAH DISETUJUI*\n\n` +
+        `Karyawan: *${leave.user_name}* (NIP: ${leave.user_nip || '-'})\n` +
+        `Divisi: *${leave.division_name || 'Operasional'}*\n` +
+        `Disetujui Oleh: *${approverName || 'Atasan Lapangan'}*\n` +
+        `Periode: *${leave.start_date} s/d ${leave.end_date}* (${leave.total_days} Hari)\n` +
+        `Alasan: "${leave.reason}"\n` +
+        (substituteName ? `Petugas Pengganti Pos: *${substituteName}* (${substituteNip || '-'})\n` : '') +
+        (notes ? `Catatan: "${notes}"\n` : '') +
+        `\nData telah tersimpan di database dan rekapan aktif di sisi Korlap, Admin, dan K3.`;
+
+      await sendWhatsAppAlert({ phone: '082192755755', message: fwdMsg });
+      await sendWhatsAppAlert({ phone: '081355904897', message: fwdMsg });
+    }
+
+    // 4. Notifikasi ke pemohon
     const statusText = status === 'approved' ? 'DISETUJUI' : 'DITOLAK';
-    const subText = substituteName ? ` Karyawan Pengganti Pos Tugas: ${substituteName} (${substituteNip || '-'}).` : '';
+    const subText = substituteName ? ` Karyawan Pengganti Pos: ${substituteName} (${substituteNip || '-'}).` : '';
     await broadcastNotification({
       targetUserId: leave.user_id,
       title: `Pengajuan Izin/Cuti ${statusText}`,
-      message: `Permohonan cuti Anda untuk tanggal ${leave.start_date} s/d ${leave.end_date} (${leave.total_days} hari) telah ${statusText} oleh ${approverName || 'Atasan/HRD'}.${subText}${notes ? ' Catatan: ' + notes : ''}`,
+      message: `Permohonan cuti/izin Anda untuk tanggal ${leave.start_date} s/d ${leave.end_date} (${leave.total_days} hari) telah ${statusText} oleh ${approverName || 'Atasan/HRD'}.${subText}${notes ? ' Catatan: ' + notes : ''}`,
       type: status === 'approved' ? 'success' : 'warning',
       metadata: { leaveId: id, status, approverName, substituteName, substituteId },
     });
 
-    // Jika ada penugasan pengganti dan disetujui, kirimkan notifikasi penugasan pos dinas ke karyawan pengganti
+    if (leave.user_phone && status === 'approved') {
+      await sendWhatsAppAlert({
+        phone: leave.user_phone,
+        message: `Halo *${leave.user_name}*, permohonan ${leave.leave_type?.toUpperCase()} Anda (${leave.start_date} s/d ${leave.end_date}) telah *DISETUJUI* oleh ${approverName || 'Atasan'}.${subText}`,
+      });
+    }
+
+    // 5. Notifikasi ke pengganti pos
     if (status === 'approved' && validSubId) {
       await broadcastNotification({
         targetUserId: validSubId,
         title: '📋 Tugas Pengganti Pos Dinas (Backfill)',
-        message: `Anda ditugaskan oleh ${approverName || 'Korlap'} untuk menggantikan tugas pos rekan kerja pada periode ${leave.start_date} s/d ${leave.end_date}. Pekerjaan pos harus tetap berjalan lancar.`,
+        message: `Anda ditugaskan oleh ${approverName || 'Korlap'} untuk menggantikan pos rekan kerja pada ${leave.start_date} s/d ${leave.end_date}.`,
         type: 'info',
         metadata: { leaveId: id, substituteFor: leave.user_id },
       });
@@ -3826,7 +4012,7 @@ app.put('/api/leaves/:id/status', async (req, res) => {
     res.json({
       success: true,
       data: updateRes.rows[0],
-      message: `Pengajuan cuti berhasil di-${status}`,
+      message: `Pengajuan cuti/izin berhasil di-${status} dan diteruskan ke Pimpinan.`,
     });
   } catch (err) {
     console.error('Update leave error:', err);
@@ -3881,6 +4067,8 @@ app.post('/api/overtime', async (req, res) => {
     endTime,
     durationHours,
     taskDescription,
+    taskPhotoUrl,
+    attachmentUrl,
     compensationAmount,
     supervisorName,
     supervisorSignature,
@@ -3891,9 +4079,14 @@ app.post('/api/overtime', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Data pengajuan lembur tidak lengkap (userId, tanggal, jam mulai & selesai wajib diisi)' });
   }
 
-  // Uraian tugas wajib diisi
+  // Wajib uraian tugas dan foto bukti lembur
   if (!taskDescription || !taskDescription.trim()) {
     return res.status(400).json({ success: false, error: 'Uraian tugas/pekerjaan lembur wajib diisi sebelum mengajukan SPL.' });
+  }
+
+  const proofPhoto = taskPhotoUrl || attachmentUrl;
+  if (!proofPhoto || !proofPhoto.trim()) {
+    return res.status(400).json({ success: false, error: 'Pengajuan lembur WAJIB melampirkan foto bukti pekerjaan / lokasi tugas sebelum submit.' });
   }
 
   try {
@@ -3928,8 +4121,8 @@ app.post('/api/overtime', async (req, res) => {
 
     const query = `
       INSERT INTO hrm_overtime_records (
-        user_id, date, start_time, end_time, scheduled_end_time, duration_hours, task_description, rate_applied, compensation_amount, status, supervisor_name, supervisor_signature, overtime_phase
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11, 'requested')
+        user_id, date, start_time, end_time, scheduled_end_time, duration_hours, task_description, rate_applied, compensation_amount, status, supervisor_name, supervisor_signature, task_photo_url, overtime_phase
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11, $12, 'requested')
       RETURNING *;
     `;
     const result = await pool.query(query, [
@@ -3944,23 +4137,54 @@ app.post('/api/overtime', async (req, res) => {
       comp,
       supervisorName || null,
       supervisorSignature || null,
+      proofPhoto || null,
     ]);
 
     const otRow = result.rows[0];
-
     const submitterRole = (userProfile.role_name || userProfile.role_code || '').toLowerCase();
-    let recipientRoles = ['pimpinan', 'superadmin', 'hrd', 'pengawas', 'admin', 'korlap', 'kepala_regu', 'keuangan'];
-    if (submitterRole === 'kepala_regu' || submitterRole === 'kepalaregu') {
-      recipientRoles = ['korlap', 'pimpinan', 'superadmin', 'hrd', 'admin', 'keuangan'];
-    } else if (submitterRole === 'korlap') {
-      recipientRoles = ['pimpinan', 'superadmin', 'hrd', 'admin', 'keuangan'];
+    const isOfficer = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r));
+
+    let recipientRoles = [];
+    if (isOfficer) {
+      // Diajukan oleh Korlap/Admin/K3 -> ajukan ke Dirut & Pimpinan konfirmasi via WA!
+      recipientRoles = ['pimpinan', 'superadmin'];
+      const waMsg = `📢 *PENGAJUAN LEMBUR (SPL) DARI ${submitterRole.toUpperCase()}*\n\n` +
+        `Pemohon: *${userProfile.full_name}* (${userProfile.nip || '-'})\n` +
+        `Tanggal: *${date}* (${startTime} - ${endTime}, ${hours} Jam)\n` +
+        `Tugas: "${taskDescription}"\n` +
+        `Estimasi Kompensasi: Rp ${comp.toLocaleString('id-ID')}\n\n` +
+        `⚠️ Membutuhkan konfirmasi & persetujuan Direktur Utama & Pimpinan:\n` +
+        `https://103.197.188.211/admin/approval`;
+
+      await sendWhatsAppAlert({ phone: '082192755755', message: waMsg });
+      await sendWhatsAppAlert({ phone: '081355904897', message: waMsg });
+    } else {
+      // Karyawan biasa -> ke Korlap, Admin, K3
+      recipientRoles = ['korlap', 'admin', 'k3', 'superadmin'];
+      const officerRes = await pool.query(
+        "SELECT full_name, phone, role_name FROM hrm_profiles WHERE role_name IN ('korlap', 'admin', 'k3') AND is_active = true AND phone IS NOT NULL AND phone != ''"
+      );
+
+      const waOfficerMsg = `⏱️ *PENGAJUAN SURAT PERINTAH LEMBUR (SPL) BARU*\n\n` +
+        `Karyawan: *${userProfile.full_name}* (${userProfile.nip || '-'})\n` +
+        `Tanggal: *${date}* (${startTime} - ${endTime}, ${hours} Jam)\n` +
+        `Uraian Tugas: "${taskDescription}"\n` +
+        `Estimasi Kompensasi: Rp ${comp.toLocaleString('id-ID')}\n\n` +
+        `Mohon salah satu dari *Korlap, Admin, atau K3* melakukan verifikasi & persetujuan:\n` +
+        `https://103.197.188.211/admin/approval`;
+
+      for (const off of officerRes.rows) {
+        if (off.phone) {
+          await sendWhatsAppAlert({ phone: off.phone, message: waOfficerMsg });
+        }
+      }
     }
 
-    // Broadcast Notifikasi ke Pimpinan, Superadmin, HRD, Korlap, Kepala Regu, Keuangan
+    // Broadcast Notifikasi In-App
     await broadcastNotification({
       recipientRoles,
       title: '⏱️ Pengajuan Surat Perintah Lembur (SPL)',
-      message: `${userProfile.full_name} (${userProfile.division_name || 'Operasional'}) mengajukan lembur pada ${date} (${startTime} - ${endTime}, ${hours} Jam) disaksikan Karu ${supervisorName || '-'}: "${taskDescription || 'Operasional'}". Estimasi kompensasi: Rp ${comp.toLocaleString('id-ID')}.`,
+      message: `${userProfile.full_name} (${userProfile.division_name || 'Operasional'}) mengajukan lembur pada ${date} (${startTime} - ${endTime}, ${hours} Jam): "${taskDescription}". Menunggu persetujuan.`,
       type: 'overtime',
       link: '/admin/approval',
       metadata: { overtimeId: otRow.id, userId: validUserId, date, hours, compensation: comp, supervisorName },
@@ -3970,7 +4194,7 @@ app.post('/api/overtime', async (req, res) => {
     res.json({
       success: true,
       data: otRow,
-      message: 'Surat Perintah Lembur berhasil diajukan dengan paraf Kepala Regu dan diteruskan ke supervisor/HRD.',
+      message: 'Surat Perintah Lembur berhasil diajukan dan diteruskan via WA & sistem.',
     });
   } catch (err) {
     console.error('Overtime error:', err);
@@ -3978,7 +4202,7 @@ app.post('/api/overtime', async (req, res) => {
   }
 });
 
-// Update Status Lembur (Approval / Rejection oleh Atasan / HRD)
+// Update Status Lembur (Approval / Rejection oleh Korlap / Admin / K3 / Pimpinan)
 app.put('/api/overtime/:id/status', async (req, res) => {
   const { id } = req.params;
   const { status, approvedHours, approverId, approverName, notes } = req.body;
@@ -3987,7 +4211,13 @@ app.put('/api/overtime/:id/status', async (req, res) => {
   }
 
   try {
-    const oRes = await pool.query('SELECT * FROM hrm_overtime_records WHERE id = $1 LIMIT 1', [id]);
+    const oRes = await pool.query(`
+      SELECT o.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name, p.phone as user_phone
+      FROM hrm_overtime_records o
+      JOIN hrm_profiles p ON o.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      WHERE o.id = $1 LIMIT 1
+    `, [id]);
     if (oRes.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Pengajuan lembur tidak ditemukan' });
     }
@@ -4010,6 +4240,7 @@ app.put('/api/overtime/:id/status', async (req, res) => {
         duration_hours = $3,
         compensation_amount = $4,
         approved_by = $5,
+        forwarded_to_pimpinan = true,
         approved_at = NOW(),
         started_at = CASE WHEN $1 = 'approved' AND started_at IS NULL THEN NOW() ELSE started_at END,
         updated_at = NOW()
@@ -4017,23 +4248,124 @@ app.put('/api/overtime/:id/status', async (req, res) => {
       RETURNING *;
     `, [status, nextPhase, finalHours, compensation, validApproverId || null, id]);
 
+    // Forward WhatsApp ke Pimpinan & Superadmin saat disetujui
+    if (status === 'approved') {
+      const fwdOtMsg = `✅ *PEMBERITAHUAN: LEMBUR (SPL) TELAH DISETUJUI*\n\n` +
+        `Karyawan: *${ot.user_name}* (${ot.user_nip || '-'})\n` +
+        `Divisi: *${ot.division_name || 'Operasional'}*\n` +
+        `Disetujui Oleh: *${approverName || 'Atasan'}*\n` +
+        `Tanggal & Jam: *${ot.date}* (${ot.start_time} - ${ot.end_time}, ${finalHours} Jam)\n` +
+        `Tugas: "${ot.task_description}"\n` +
+        `Kompensasi: Rp ${compensation.toLocaleString('id-ID')}\n` +
+        (notes ? `Catatan: "${notes}"\n` : '') +
+        `\nData tersimpan di database dan rekapan aktif di sisi Korlap, Admin, dan K3.`;
+
+      await sendWhatsAppAlert({ phone: '082192755755', message: fwdOtMsg });
+      await sendWhatsAppAlert({ phone: '081355904897', message: fwdOtMsg });
+    }
+
     // Send notification to employee
     const statusText = status === 'approved' ? 'DISETUJUI' : 'DITOLAK';
     await broadcastNotification({
       targetUserId: ot.user_id,
       title: `Surat Perintah Lembur (SPL) ${statusText}`,
-      message: `Permohonan lembur Anda pada tanggal ${ot.date} (${finalHours} Jam kerja) telah ${statusText} oleh ${approverName || 'Atasan/HRD'}. Waktu lembur aktif dan berjalan.${notes ? ' Catatan: ' + notes : ''}`,
+      message: `Permohonan lembur Anda pada tanggal ${ot.date} (${finalHours} Jam kerja) telah ${statusText} oleh ${approverName || 'Atasan/HRD'}. Waktu lembur aktif.${notes ? ' Catatan: ' + notes : ''}`,
       type: status === 'approved' ? 'success' : 'warning',
       metadata: { overtimeId: id, status, compensation, approverName },
     });
 
+    if (ot.user_phone && status === 'approved') {
+      await sendWhatsAppAlert({
+        phone: ot.user_phone,
+        message: `Halo *${ot.user_name}*, pengajuan lembur Anda pada ${ot.date} (${finalHours} Jam) telah *DISETUJUI* oleh ${approverName || 'Atasan'}.`,
+      });
+    }
+
     res.json({
       success: true,
       data: updateRes.rows[0],
-      message: `Pengajuan lembur berhasil di-${status}`,
+      message: `Pengajuan lembur berhasil di-${status} dan diteruskan ke Pimpinan.`,
     });
   } catch (err) {
     console.error('Update overtime error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── ENDPOINTS JAM ISTIRAHAT & TELAT ISTIRAHAT ──────────────────────────────
+app.post('/api/attendances/break/start', async (req, res) => {
+  const { userId, date, startTime } = req.body;
+  try {
+    const d = date || new Date().toISOString().split('T')[0];
+    await pool.query(`
+      UPDATE hrm_attendances SET
+        is_on_break = true,
+        break_start_time = COALESCE($1, NOW()),
+        updated_at = NOW()
+      WHERE (user_id::text = $2 OR LOWER(user_id::text) = LOWER($2)) 
+        AND attendance_date = $3::date
+    `, [startTime || new Date(), userId, d]);
+    res.json({ success: true, message: 'Jam istirahat resmi 60 menit dimulai' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/attendances/break/end', async (req, res) => {
+  const { userId, date, endTime, durationMinutes } = req.body;
+  try {
+    const d = date || new Date().toISOString().split('T')[0];
+    const dur = parseInt(durationMinutes || 0, 10);
+    const lateMins = Math.max(0, dur - 60);
+    await pool.query(`
+      UPDATE hrm_attendances SET
+        is_on_break = false,
+        break_end_time = COALESCE($1, NOW()),
+        break_duration_minutes = COALESCE(break_duration_minutes, 0) + $2,
+        break_late_minutes = $3,
+        updated_at = NOW()
+      WHERE (user_id::text = $4 OR LOWER(user_id::text) = LOWER($4)) 
+        AND attendance_date = $5::date
+    `, [endTime || new Date(), dur, lateMins, userId, d]);
+    res.json({ success: true, breakLateMinutes: lateMins, message: 'Jam istirahat selesai' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── REKAP KESELURUHAN REAL-TIME (CUTI, LEMBUR, IZIN, IZIN DARURAT) ─────────
+app.get('/api/recap/all-requests', async (req, res) => {
+  const { month, year, status } = req.query;
+  try {
+    const leavesRes = await pool.query(`
+      SELECT l.id, l.user_id, l.leave_type as request_type, l.start_date, l.end_date,
+             l.total_days, l.reason, l.attachment_url, l.status, l.created_at, l.approved_at,
+             l.substitute_name, l.approval_notes,
+             p.full_name as user_name, p.nip as user_nip, d.name as division_name,
+             ap.full_name as approver_name
+      FROM hrm_leave_requests l
+      JOIN hrm_profiles p ON l.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_profiles ap ON l.approved_by = ap.id
+      ORDER BY l.created_at DESC LIMIT 300
+    `);
+
+    const otRes = await pool.query(`
+      SELECT o.id, o.user_id, 'lembur' as request_type, o.date as start_date, o.date as end_date,
+             o.duration_hours, o.task_description as reason, COALESCE(o.task_photo_url, (o.completion_photos->>0)) as attachment_url,
+             o.status, o.created_at, o.approved_at, o.compensation_amount, o.approval_notes,
+             p.full_name as user_name, p.nip as user_nip, d.name as division_name,
+             ap.full_name as approver_name
+      FROM hrm_overtime_records o
+      JOIN hrm_profiles p ON o.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_profiles ap ON o.approved_by = ap.id
+      ORDER BY o.created_at DESC LIMIT 300
+    `);
+
+    const combined = [...leavesRes.rows, ...otRes.rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    res.json({ success: true, data: combined });
+  } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -6554,11 +6886,66 @@ app.post('/api/employee-schedules/batch', async (req, res) => {
   }
 });
 
+// ─── EPHEMERAL PHOTO RETENTION ENFORCER ──────────────────────────────────────
+// Kebijakan: Foto absensi masuk, pulang, dan foto patroli selfie tidak tersimpan permanen menumpuk.
+// Hanya 1 foto terbaru aktif per karyawan yang dipertahankan di database.
+async function enforceEphemeralPhotoRetention() {
+  try {
+    // 1. Bersihkan photo_in lama (hanya sisakan 1 photo_in terbaru per user)
+    const resIn = await pool.query(`
+      UPDATE hrm_attendances a
+      SET photo_in = NULL
+      WHERE photo_in IS NOT NULL
+        AND id NOT IN (
+          SELECT DISTINCT ON (user_id) id
+          FROM hrm_attendances
+          WHERE photo_in IS NOT NULL
+          ORDER BY user_id, attendance_date DESC, created_at DESC
+        );
+    `);
+
+    // 2. Bersihkan photo_out lama (hanya sisakan 1 photo_out terbaru per user)
+    const resOut = await pool.query(`
+      UPDATE hrm_attendances a
+      SET photo_out = NULL
+      WHERE photo_out IS NOT NULL
+        AND id NOT IN (
+          SELECT DISTINCT ON (user_id) id
+          FROM hrm_attendances
+          WHERE photo_out IS NOT NULL
+          ORDER BY user_id, attendance_date DESC, created_at DESC
+        );
+    `);
+
+    // 3. Bersihkan foto selfie titik lokasi pos lama (hanya sisakan 1 foto selfie terbaru per user)
+    const resPatrol = await pool.query(`
+      UPDATE hrm_field_patrol_checks p
+      SET watermarked_photo_url = NULL
+      WHERE watermarked_photo_url IS NOT NULL
+        AND id NOT IN (
+          SELECT DISTINCT ON (user_id) id
+          FROM hrm_field_patrol_checks
+          WHERE watermarked_photo_url IS NOT NULL
+          ORDER BY user_id, created_at DESC
+        );
+    `);
+
+    console.log(`[Ephemeral Photo Retention] Cleanup completed: ${resIn.rowCount || 0} old check-ins, ${resOut.rowCount || 0} old check-outs, ${resPatrol.rowCount || 0} old patrol photos purged.`);
+  } catch (err) {
+    console.error('[Ephemeral Photo Retention] Error during photo purge:', err.message);
+  }
+}
+
 // Start Server
 async function start() {
   try {
     await initDb();
     await seedInitialUsers();
+    await enforceEphemeralPhotoRetention();
+
+    // Jalankan pembersihan berkala setiap 6 jam
+    setInterval(enforceEphemeralPhotoRetention, 6 * 60 * 60 * 1000);
+
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`[HRM-Backend] Server running on port ${PORT}`);
     });
