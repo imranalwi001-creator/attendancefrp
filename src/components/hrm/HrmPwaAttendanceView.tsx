@@ -285,13 +285,26 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       // Pos Penugasan Default / Kantor Divisi
       let officeLoc: OfficeLocation | null = null;
-      if (user.assignedLatitude && user.assignedLongitude) {
+      if (currentBankPosts.length > 0) {
+        // Prioritize matched assigned location or first bank post
+        const matchedPost = currentBankPosts.find(p => p.postName === user.assignedLocationName || p.postCode === user.assignedLocationName) || currentBankPosts[0];
+        officeLoc = {
+          id: matchedPost.id,
+          name: matchedPost.postName,
+          latitude: matchedPost.latitude,
+          longitude: matchedPost.longitude,
+          radiusMeters: matchedPost.radiusMeters || 250,
+          locationName: matchedPost.postName,
+          address: matchedPost.description || `Area Pos Lapangan ${matchedPost.postName}`,
+        };
+        setAssignedPostName(`${matchedPost.postName} [${matchedPost.postCode}]`);
+      } else if (user.assignedLatitude && user.assignedLongitude) {
         officeLoc = {
           id: 'assigned-post',
           name: user.assignedLocationName || 'Pos Lapangan Terdaftar',
           latitude: user.assignedLatitude,
           longitude: user.assignedLongitude,
-          radiusMeters: user.assignedRadiusMeters || 100,
+          radiusMeters: user.assignedRadiusMeters || 250,
           locationName: user.assignedLocationName || 'Pos Lapangan Terdaftar',
           address: user.assignedLocationName || 'Pos Lapangan Terdaftar',
         };
@@ -329,10 +342,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     setCoordsAccuracy(accuracy);
 
     if (activePosts && activePosts.length > 0) {
+      // Dynamic GPS Accuracy buffer (up to 100m tolerance when mobile GPS is wide indoors)
+      const accuracyBuffer = Math.min(Math.max(0, (accuracy - 30) * 0.5), 100);
+
       // Multi-Titik Bank Pos evaluation (Titik A, B, C, ...)
       const postsWithDist = activePosts.map((p) => {
         const d = geofenceService.calculateDistance(coords, { latitude: p.latitude, longitude: p.longitude });
-        const r = p.radiusMeters || 100;
+        const r = (p.radiusMeters || 250) + accuracyBuffer;
         return { ...p, distance: d, radius: r, isInside: d <= r };
       });
 
@@ -471,7 +487,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           setLocationStatus('inside');
         }
       },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
   };
 
@@ -1195,7 +1211,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <span className="text-slate-700 dark:text-slate-200">{user?.divisionName || 'Operasional'}</span>
                 </p>
                 <p className="text-[10px] text-slate-400 dark:text-slate-500">
-                  Shift: {userShift?.name || 'Reguler'} ({userShift?.startTime || '08:00'} - {userShift?.endTime || '17:00'} WITA)
+                  {userShift?.name?.includes('(')
+                    ? `Shift: ${userShift.name}`
+                    : `Shift: ${userShift?.name || 'Reguler'} (${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA)`}
                 </p>
               </div>
 
