@@ -2555,6 +2555,22 @@ export const hrmService = {
     if (memIdx !== -1) inMemoryAttendances[memIdx] = memRec;
     else inMemoryAttendances.unshift(memRec);
 
+    // Ephemeral Rolling Photo Replacement: Hapus foto check-in lama dari record sebelumnya milik karyawan ini
+    if (data.photoUrl) {
+      all.forEach((rec) => {
+        if (rec.userId === user.id && rec.id !== newRecord.id) {
+          rec.photoIn = undefined;
+          (rec as any).clockInPhoto = undefined;
+        }
+      });
+      inMemoryAttendances.forEach((rec) => {
+        if (rec.userId === user.id && rec.id !== newRecord.id) {
+          rec.photoIn = undefined;
+          (rec as any).clockInPhoto = undefined;
+        }
+      });
+    }
+
     hrmService.saveAttendances(all);
     window.dispatchEvent(new Event('hrm_attendance_updated'));
     window.dispatchEvent(new Event('hrm_data_updated'));
@@ -2674,6 +2690,22 @@ export const hrmService = {
     const memIdx = inMemoryAttendances.findIndex((m) => m.id === existing.id);
     if (memIdx !== -1) inMemoryAttendances[memIdx] = memRec;
     else inMemoryAttendances.unshift(memRec);
+
+    // Ephemeral Rolling Photo Replacement: Hapus foto check-out lama dari record sebelumnya milik karyawan ini
+    if (data.photoUrl) {
+      all.forEach((rec) => {
+        if (rec.userId === data.userId && rec.id !== existing.id) {
+          rec.photoOut = undefined;
+          (rec as any).clockOutPhoto = undefined;
+        }
+      });
+      inMemoryAttendances.forEach((rec) => {
+        if (rec.userId === data.userId && rec.id !== existing.id) {
+          rec.photoOut = undefined;
+          (rec as any).clockOutPhoto = undefined;
+        }
+      });
+    }
 
     hrmService.saveAttendances(all);
     window.dispatchEvent(new Event('hrm_attendance_updated'));

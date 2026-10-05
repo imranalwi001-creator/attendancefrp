@@ -67,6 +67,8 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const isCapturingRef = useRef(false);
+  const lastMsgTimeRef = useRef(0);
+  const lastMsgRef = useRef('');
 
   // Dynamic Enrollment URL for mobile handoff (always use official domain on mobile APK/Capacitor/localhost)
   const getEnrollBaseUrl = () => {
@@ -256,11 +258,22 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
 
         if (!detail) {
           setIsQualityGood(false);
-          setQualityMsg('Posisikan wajah Anda pas di dalam lingkaran');
+          const now = Date.now();
+          if (lastMsgRef.current !== 'Posisikan wajah Anda pas di dalam lingkaran' && now - lastMsgTimeRef.current > 350) {
+            lastMsgRef.current = 'Posisikan wajah Anda pas di dalam lingkaran';
+            lastMsgTimeRef.current = now;
+            setQualityMsg('Posisikan wajah Anda pas di dalam lingkaran');
+          }
         } else {
           const quality = biometricService.checkImageQuality(detail, canvas.width, canvas.height);
           setIsQualityGood(quality.passed);
-          setQualityMsg(quality.message);
+
+          const now = Date.now();
+          if (lastMsgRef.current !== quality.message && (now - lastMsgTimeRef.current > 350 || quality.passed)) {
+            lastMsgRef.current = quality.message;
+            lastMsgTimeRef.current = now;
+            setQualityMsg(quality.message);
+          }
 
           if (quality.passed && detail.descriptor && !isCapturingRef.current && samples.length < 3) {
             isCapturingRef.current = true;

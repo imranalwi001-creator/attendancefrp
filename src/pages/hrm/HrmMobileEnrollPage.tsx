@@ -26,7 +26,7 @@ import { api } from '@/services/apiClient';
 import { playNotificationChime, triggerDeviceVibration } from '@/services/soundVibrationService';
 
 export interface EnrollPoseStep {
-  id: 'center_close' | 'turn_right' | 'turn_left' | 'blink' | 'smile' | 'distance';
+  id: 'center_neutral' | 'slight_tilt' | 'smile_confirm';
   title: string;
   instruction: string;
   icon: React.ReactNode;
@@ -35,46 +35,25 @@ export interface EnrollPoseStep {
 
 const ENROLL_STEPS: EnrollPoseStep[] = [
   {
-    id: 'center_close',
-    title: 'Hadap Lurus & Dekatkan',
-    instruction: 'Posisikan wajah di tengah lingkaran dan dekatkan kamera',
+    id: 'center_neutral',
+    title: 'Sampel 1: Hadap Lurus',
+    instruction: 'Posisikan wajah di tengah lingkaran & tatap lurus kamera',
     icon: <Maximize2 className="w-5 h-5 text-emerald-400" />,
-    hint: 'Tatap lurus ke kamera dengan posisi tegak',
+    hint: 'Tatap kamera lurus dengan wajah rileks dan tegak',
   },
   {
-    id: 'turn_right',
-    title: 'Menoleh ke Kanan',
-    instruction: 'Tolehkan kepala sedikit ke arah kanan Anda',
+    id: 'slight_tilt',
+    title: 'Sampel 2: Miringkan Sedikit',
+    instruction: 'Miringkan atau tolehkan kepala sedikit ke samping (~15°)',
     icon: <ArrowRight className="w-5 h-5 text-cyan-400" />,
-    hint: 'Putar kepala sekitar 15-20 derajat ke kanan',
+    hint: 'Tolehkan sedikit untuk merekam kontur 3D wajah',
   },
   {
-    id: 'turn_left',
-    title: 'Menoleh ke Kiri',
-    instruction: 'Tolehkan kepala sedikit ke arah kiri Anda',
-    icon: <ArrowLeft className="w-5 h-5 text-cyan-400" />,
-    hint: 'Putar kepala sekitar 15-20 derajat ke kiri',
-  },
-  {
-    id: 'blink',
-    title: 'Berkedip Santai',
-    instruction: 'Kedipkan kedua mata Anda secara rileks',
-    icon: <Eye className="w-5 h-5 text-amber-400" />,
-    hint: 'Tutup mata sejenak lalu buka kembali secara alami',
-  },
-  {
-    id: 'smile',
-    title: 'Tersenyum',
-    instruction: 'Tersenyumlah ke kamera hingga terdeteksi',
+    id: 'smile_confirm',
+    title: 'Sampel 3: Senyum & Konfirmasi',
+    instruction: 'Tersenyumlah santai ke kamera untuk konfirmasi akhir',
     icon: <Smile className="w-5 h-5 text-amber-300" />,
-    hint: 'Tunjukkan senyuman ramah Anda',
-  },
-  {
-    id: 'distance',
-    title: 'Jauhkan Kamera',
-    instruction: 'Jauhkan smartphone sedikit ke belakang',
-    icon: <Minimize2 className="w-5 h-5 text-indigo-400" />,
-    hint: 'Mundur atau jauhkan HP sekitar 10-15 cm',
+    hint: 'Tunjukkan senyuman alami Anda',
   },
 ];
 
@@ -108,6 +87,12 @@ export const HrmMobileEnrollPage: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [modelStatus, setModelStatus] = useState('Memuat model biometrik AI...');
+
+  // Anti-flicker & steady hold progress refs
+  const lastMsgRef = useRef<string>('');
+  const lastMsgTimeRef = useRef<number>(0);
+  const poseHoldStartTimeRef = useRef<number | null>(null);
+  const [poseHoldProgress, setPoseHoldProgress] = useState<number>(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -273,194 +258,186 @@ export const HrmMobileEnrollPage: React.FC = () => {
     }
   };
 
-  // Continuous Tracking & Intelligent Pose Verification Loop
+  // Helper to update feedback without flickering text
+  const setStableFeedback = (msg: string, isPassing: boolean) => {
+    const now = Date.now();
+    setIsPosePassing(isPassing);
+
+    // Only update instruction message if changed and after 350ms buffer (eliminates flickering)
+    if (msg !== lastMsgRef.current && (now - lastMsgTimeRef.current > 350 || isPassing)) {
+      lastMsgRef.current = msg;
+      lastMsgTimeRef.current = now;
+      setQualityMsg(msg);
+    }
+  };
+
+  // Continuous Tracking & Intelligent Pose Verification Loop (Smooth 120ms Interval)
   useEffect(() => {
-    let animId: number;
+    if (step !== 'scan' || isModelLoading) return;
 
-    const trackPose = async () => {
-      if (
-        step !== 'scan' ||
-        isModelLoading ||
-        !videoRef.current ||
-        videoRef.current.readyState < 2 ||
-        !overlayCanvasRef.current
-      ) {
-        animId = requestAnimationFrame(trackPose);
-        return;
-      }
+    let isMounted = true;
+    let isProcessing = false;
 
-      const video = videoRef.current;
-      const canvas = overlayCanvasRef.current;
+    const interval = setInterval(async () => {
+      if (!isMounted || !videoRef.current || videoRef.current.readyState < 2 || isProcessing) return;
+      if (poseCompletedRef.current) return;
 
-      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-      }
-
+      isProcessing = true;
       try {
+        const video = videoRef.current;
+        const canvas = overlayCanvasRef.current;
+        if (canvas && (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight)) {
+          canvas.width = video.videoWidth || 640;
+          canvas.height = video.videoHeight || 480;
+        }
+
         const detail = await biometricService.detectFace(video, {
           withLandmarks: true,
           withExpressions: true,
           withDescriptor: true,
         });
 
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          if (detail && detail.box && detail.box.width > 0) {
-            // Draw clean subtle face bounding bracket
-            ctx.save();
-            ctx.strokeStyle = isPosePassing ? '#10b981' : '#38bdf8';
-            ctx.lineWidth = 2.5;
-            const b = detail.box;
-            const len = Math.min(b.width, b.height) * 0.2;
+        if (!isMounted) return;
 
-            // Top-left
-            ctx.beginPath();
-            ctx.moveTo(b.x, b.y + len);
-            ctx.lineTo(b.x, b.y);
-            ctx.lineTo(b.x + len, b.y);
-            ctx.stroke();
+        // Draw clean HUD overlay on overlay canvas
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (detail && detail.box && detail.box.width > 0) {
+              const b = detail.box;
+              const len = Math.min(b.width, b.height) * 0.2;
+              ctx.save();
+              ctx.strokeStyle = isPosePassing ? '#10b981' : '#38bdf8';
+              ctx.lineWidth = 2.5;
 
-            // Top-right
-            ctx.beginPath();
-            ctx.moveTo(b.x + b.width - len, b.y);
-            ctx.lineTo(b.x + b.width, b.y);
-            ctx.lineTo(b.x + b.width, b.y + len);
-            ctx.stroke();
+              // Top-left
+              ctx.beginPath();
+              ctx.moveTo(b.x, b.y + len);
+              ctx.lineTo(b.x, b.y);
+              ctx.lineTo(b.x + len, b.y);
+              ctx.stroke();
 
-            // Bottom-left
-            ctx.beginPath();
-            ctx.moveTo(b.x, b.y + b.height - len);
-            ctx.lineTo(b.x, b.y + b.height);
-            ctx.lineTo(b.x + len, b.y + b.height);
-            ctx.stroke();
+              // Top-right
+              ctx.beginPath();
+              ctx.moveTo(b.x + b.width - len, b.y);
+              ctx.lineTo(b.x + b.width, b.y);
+              ctx.lineTo(b.x + b.width, b.y + len);
+              ctx.stroke();
 
-            // Bottom-right
-            ctx.beginPath();
-            ctx.moveTo(b.x + b.width - len, b.y + b.height);
-            ctx.lineTo(b.x + b.width, b.y + b.height);
-            ctx.lineTo(b.x + b.width, b.y + b.height - len);
-            ctx.stroke();
+              // Bottom-left
+              ctx.beginPath();
+              ctx.moveTo(b.x, b.y + b.height - len);
+              ctx.lineTo(b.x, b.y + b.height);
+              ctx.lineTo(b.x + len, b.y + b.height);
+              ctx.stroke();
 
-            ctx.restore();
+              // Bottom-right
+              ctx.beginPath();
+              ctx.moveTo(b.x + b.width - len, b.y + b.height);
+              ctx.lineTo(b.x + b.width, b.y + b.height);
+              ctx.lineTo(b.x + b.width, b.y + b.height - len);
+              ctx.stroke();
+
+              ctx.restore();
+            }
           }
         }
+
+        const currentTarget = ENROLL_STEPS[currentPoseIndex];
+        const cw = canvas?.width || 640;
 
         if (!detail || !detail.box || detail.box.width < 40) {
-          setIsPosePassing(false);
-          setQualityMsg('Posisikan wajah Anda tepat di dalam lingkaran');
-        } else {
-          const currentTarget = ENROLL_STEPS[currentPoseIndex];
-          const scaleRatio = detail.box.width / (canvas.width || 640);
-          const yaw = detail.headYawRatio ?? 0.5;
-          const ear = detail.ear ?? 0.3;
-          const happy = detail.expressions?.happy ?? 0;
+          poseHoldStartTimeRef.current = null;
+          setPoseHoldProgress(0);
+          setStableFeedback('Posisikan wajah Anda tepat di dalam lingkaran', false);
+          return;
+        }
 
-          let poseMatched = false;
-          let feedback = currentTarget.instruction;
+        const scaleRatio = detail.box.width / cw;
+        const yaw = detail.headYawRatio ?? 0.5;
+        const happy = detail.expressions?.happy ?? 0;
+        const isCentered = Math.abs(detail.box.x + detail.box.width / 2 - cw / 2) < cw * 0.28;
 
-          // ─── POSE MATCHING EVALUATION ───
-          switch (currentTarget.id) {
-            case 'center_close': {
-              const isCentered = Math.abs(detail.box.x + detail.box.width / 2 - canvas.width / 2) < canvas.width * 0.25;
-              const isGoodScale = scaleRatio >= 0.24 && scaleRatio <= 0.85;
-              const isLookingForward = yaw >= 0.44 && yaw <= 0.56;
+        let matched = false;
+        let msg = currentTarget.instruction;
 
-              if (!isGoodScale && scaleRatio < 0.24) {
-                feedback = 'Dekatkan wajah sedikit ke kamera';
-              } else if (!isLookingForward) {
-                feedback = 'Arahkan wajah lurus ke depan';
-              } else if (!isCentered) {
-                feedback = 'Posisikan wajah tepat di tengah';
-              } else {
-                poseMatched = true;
-                feedback = '✓ Posisi Center Sempurna! Tahan...';
-              }
-              break;
+        switch (currentTarget.id) {
+          case 'center_neutral': {
+            const isLookingForward = yaw >= 0.38 && yaw <= 0.62;
+            const isGoodScale = scaleRatio >= 0.18 && scaleRatio <= 0.88;
+
+            if (!isGoodScale && scaleRatio < 0.18) {
+              msg = 'Dekatkan wajah sedikit ke kamera';
+            } else if (!isCentered) {
+              msg = 'Posisikan wajah tepat di tengah lingkaran';
+            } else if (!isLookingForward) {
+              msg = 'Tatap lurus menghadap kamera';
+            } else {
+              matched = true;
+              msg = '✓ Posisi Hadap Lurus Pas! Tahan sejenak...';
             }
-
-            case 'turn_right': {
-              // Note: Mirroring handling for user facing
-              if (yaw > 0.56 || (facingMode === 'user' && yaw > 0.55)) {
-                poseMatched = true;
-                feedback = '✓ Sudut Kanan Terverifikasi!';
-              } else {
-                feedback = 'Tolehkan kepala sedikit ke kanan Anda...';
-              }
-              break;
-            }
-
-            case 'turn_left': {
-              if (yaw < 0.44 || (facingMode === 'user' && yaw < 0.45)) {
-                poseMatched = true;
-                feedback = '✓ Sudut Kiri Terverifikasi!';
-              } else {
-                feedback = 'Tolehkan kepala sedikit ke kiri Anda...';
-              }
-              break;
-            }
-
-            case 'blink': {
-              if (ear < 0.22) {
-                poseMatched = true;
-                feedback = '✓ Kedipan Mata Terverifikasi!';
-              } else {
-                feedback = 'Kedipkan kedua mata secara rileks...';
-              }
-              break;
-            }
-
-            case 'smile': {
-              if (happy > 0.38) {
-                poseMatched = true;
-                feedback = '✓ Senyuman Manis Terdeteksi!';
-              } else {
-                feedback = 'Tersenyumlah sedikit ke arah kamera...';
-              }
-              break;
-            }
-
-            case 'distance': {
-              if (scaleRatio < 0.25) {
-                poseMatched = true;
-                feedback = '✓ Jarak Kedalaman Terverifikasi!';
-              } else {
-                feedback = 'Jauhkan smartphone sedikit ke belakang...';
-              }
-              break;
-            }
+            break;
           }
 
-          setIsPosePassing(poseMatched);
-          setQualityMsg(feedback);
+          case 'slight_tilt': {
+            const isTurned = yaw < 0.44 || yaw > 0.56;
+            if (!isCentered && Math.abs(detail.box.x + detail.box.width / 2 - cw / 2) > cw * 0.38) {
+              msg = 'Posisikan wajah tetap di dalam lingkaran';
+            } else if (isTurned) {
+              matched = true;
+              msg = '✓ Sudut Wajah Terdeteksi! Tahan sejenak...';
+            } else {
+              msg = 'Tolehkan kepala sedikit ke samping (~15°)...';
+            }
+            break;
+          }
 
-          // If pose matches and has descriptor, auto-advance with short buffer
-          if (poseMatched && detail.descriptor && !poseCompletedRef.current) {
-            if (!poseHoldTimerRef.current) {
-              poseHoldTimerRef.current = window.setTimeout(() => {
-                advancePose(Array.from(detail.descriptor!));
-                poseHoldTimerRef.current = null;
-              }, 450);
+          case 'smile_confirm': {
+            if (happy > 0.22) {
+              matched = true;
+              msg = '✓ Senyuman Terdeteksi! Tahan sejenak...';
+            } else if (isCentered && scaleRatio >= 0.20) {
+              matched = true;
+              msg = '✓ Senyum santai ke kamera... Tahan sejenak...';
+            } else {
+              msg = 'Tersenyumlah santai ke kamera...';
             }
-          } else {
-            if (poseHoldTimerRef.current) {
-              clearTimeout(poseHoldTimerRef.current);
-              poseHoldTimerRef.current = null;
-            }
+            break;
           }
         }
+
+        setStableFeedback(msg, matched);
+
+        // Hold timer: Hold for 500ms before auto-advancing
+        if (matched && detail.descriptor && !poseCompletedRef.current) {
+          const now = Date.now();
+          if (!poseHoldStartTimeRef.current) {
+            poseHoldStartTimeRef.current = now;
+          }
+          const holdElapsed = now - poseHoldStartTimeRef.current;
+          const prog = Math.min(100, Math.round((holdElapsed / 500) * 100));
+          setPoseHoldProgress(prog);
+
+          if (holdElapsed >= 500) {
+            poseHoldStartTimeRef.current = null;
+            setPoseHoldProgress(100);
+            advancePose(Array.from(detail.descriptor));
+          }
+        } else {
+          poseHoldStartTimeRef.current = null;
+          setPoseHoldProgress(0);
+        }
       } catch (err) {
-        // Ignored frame glitch
+        // Frame glitch catch
+      } finally {
+        isProcessing = false;
       }
+    }, 120);
 
-      animId = requestAnimationFrame(trackPose);
-    };
-
-    animId = requestAnimationFrame(trackPose);
     return () => {
-      cancelAnimationFrame(animId);
-      if (poseHoldTimerRef.current) clearTimeout(poseHoldTimerRef.current);
+      isMounted = false;
+      clearInterval(interval);
     };
   }, [step, isModelLoading, facingMode, currentPoseIndex]);
 
@@ -616,18 +593,18 @@ export const HrmMobileEnrollPage: React.FC = () => {
                 />
               </svg>
 
-              {/* Center Guidance Badge */}
-              <div className="absolute bottom-5 inset-x-4 text-center z-20 pointer-events-none">
-                <span
-                  className={`inline-flex items-center gap-1.5 text-xs font-semibold px-4 py-2 rounded-full backdrop-blur-md border shadow-lg transition-all duration-300 ${
+              {/* Center Guidance Badge: Steady, non-flickering */}
+              <div className="absolute bottom-5 inset-x-3 text-center z-20 pointer-events-none flex flex-col items-center">
+                <div
+                  className={`inline-flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2.5 rounded-full backdrop-blur-md border shadow-lg transition-colors duration-200 min-h-[42px] max-w-[95%] ${
                     isPosePassing
-                      ? 'bg-emerald-600/90 text-white border-emerald-400 shadow-emerald-950/50 scale-102'
-                      : 'bg-slate-900/85 text-slate-200 border-slate-700/80'
+                      ? 'bg-emerald-600/95 text-white border-emerald-400 shadow-[0_0_16px_rgba(52,211,153,0.4)]'
+                      : 'bg-slate-900/90 text-slate-200 border-slate-700/80 shadow-md'
                   }`}
                 >
-                  {isPosePassing ? <Check className="w-3.5 h-3.5 text-white" /> : null}
-                  <span>{qualityMsg}</span>
-                </span>
+                  {isPosePassing ? <Check className="w-4 h-4 text-white shrink-0" /> : null}
+                  <span className="text-center">{qualityMsg}</span>
+                </div>
               </div>
             </div>
 
@@ -641,45 +618,55 @@ export const HrmMobileEnrollPage: React.FC = () => {
               <RefreshCw className="w-4 h-4" />
             </button>
 
-            {/* Model Loading Non-Blocking Overlay */}
+            {/* Model Loading Overlay */}
             {isModelLoading && (
-              <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center gap-2 text-center p-6 text-slate-300 z-40">
-                <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
-                <p className="text-xs font-medium">{modelStatus}</p>
+              <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col items-center justify-center gap-3 text-center p-6 text-slate-200 z-40">
+                <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-emerald-400" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-bold text-white tracking-wide">{modelStatus}</p>
+                  <p className="text-[11px] text-slate-400">Menyiapkan AI biometrik untuk pendaftaran 3 sampel wajah...</p>
+                </div>
               </div>
             )}
           </div>
 
-          {/* Pose Checklist Mini Badges */}
-          <div className="grid grid-cols-6 gap-1 bg-slate-900/60 p-2 rounded-2xl border border-slate-800">
+          {/* Pose Checklist Mini Badges: 3 Sampel Wajah */}
+          <div className="grid grid-cols-3 gap-2 bg-slate-900/70 p-2.5 rounded-2xl border border-slate-800">
             {ENROLL_STEPS.map((s, idx) => {
-              const isDone = idx < currentPoseIndex || (idx === currentPoseIndex && isPosePassing);
+              const isDone = idx < currentPoseIndex;
               const isCurrent = idx === currentPoseIndex;
 
               return (
                 <div
                   key={s.id}
-                  className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+                  className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl transition-all ${
                     isDone
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
                       : isCurrent
-                      ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40 ring-1 ring-sky-500/30'
+                      ? isPosePassing
+                        ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-400 ring-2 ring-emerald-400/40'
+                        : 'bg-sky-500/20 text-sky-400 border border-sky-500/40 ring-1 ring-sky-500/30'
                       : 'bg-slate-800/40 text-slate-500 border border-slate-800'
                   }`}
                   title={s.title}
                 >
-                  <span className="text-[10px] font-bold font-mono">{idx + 1}</span>
-                  {isDone ? (
-                    <Check className="w-3 h-3 mt-0.5" />
-                  ) : (
-                    <span className="w-1.5 h-1.5 rounded-full bg-current mt-1" />
-                  )}
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] font-bold font-mono">Sampel {idx + 1}</span>
+                    {isDone ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : null}
+                  </div>
+                  <span className="text-[10px] text-slate-300 truncate max-w-[95px] mt-0.5">
+                    {idx === 0 ? 'Hadap Lurus' : idx === 1 ? 'Miring Sedikit' : 'Senyum'}
+                  </span>
                 </div>
               );
             })}
           </div>
 
-          {/* Action Row: Skip step & Quick snapshot */}
+          {/* Action Row: Manual capture & skip */}
           <div className="flex items-center gap-2 pt-1">
             <Button
               type="button"
@@ -687,7 +674,7 @@ export const HrmMobileEnrollPage: React.FC = () => {
               onClick={handleManualSkip}
               className="flex-1 h-10 border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs gap-1.5"
             >
-              <span>Lewati Pose Ini</span>
+              <span>Lewati Sampel</span>
               <ChevronRight className="w-3.5 h-3.5" />
             </Button>
             <Button
@@ -695,13 +682,12 @@ export const HrmMobileEnrollPage: React.FC = () => {
               onClick={() => {
                 const photo = captureCurrentFrameAsPhoto();
                 if (photo) setCapturedPhoto(photo);
-                stopCamera();
-                setStep('review');
+                advancePose();
               }}
-              className="h-10 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold gap-1.5"
+              className="h-10 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold gap-1.5 shadow-md"
             >
               <Camera className="w-4 h-4" />
-              <span>Ambil Instan</span>
+              <span>Simpan Sampel Ini</span>
             </Button>
           </div>
         </div>

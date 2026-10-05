@@ -33,12 +33,16 @@ import {
   Calendar,
   Sparkles,
   AlertTriangle,
+  BellRing,
+  VolumeX,
+  ShieldAlert,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { biometricService, BiometricMatchResult } from '@/services/biometricService';
 import { livenessEngine } from '@/services/livenessEngine';
 import { geofenceService, GeofenceEvaluation } from '@/services/geofenceService';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
+import { emergencyAlertService } from '@/services/emergencyAlertAudioService';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -118,6 +122,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isChangingPassword, setIsChangingPassword] = useState(false);
 
+  // Urgent Spot-Check Alert State (Instruksi Darurat Pimpinan)
+  const [spotCheckModalOpen, setSpotCheckModalOpen] = useState(false);
+  const [spotCheckData, setSpotCheckData] = useState<{ requestedAt?: string; notes?: string } | null>(null);
+  const [isSpotCheckAction, setIsSpotCheckAction] = useState(false);
+  const [spotCheckSecondsLeft, setSpotCheckSecondsLeft] = useState<number>(300);
+
   // Master Face Enrollment Modal
   const [enrollModalOpen, setEnrollModalOpen] = useState(false);
 
@@ -147,28 +157,37 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
   }, []);
 
-  // Real-time Live Face Detection & Match State
+  // Real-time Live Face Detection & Match State (Fast Tracking & Indikator Hijau)
   const [liveFaceStatus, setLiveFaceStatus] = useState<{
     detected: boolean;
-    isMatch: boolean | null;
+    isGreen: boolean;
     confidence: number;
     message: string;
   }>({
     detected: false,
-    isMatch: null,
+    isGreen: false,
     confidence: 0,
     message: 'Arahkan wajah Anda ke dalam bingkai',
   });
 
-  // Active Real-time Face Detection Loop on Camera Stream
+  // Auto-capture progress (0 - 100%) when indicator is green
+  const [autoCaptureProgress, setAutoCaptureProgress] = useState<number>(0);
+  const greenSinceRef = useRef<number | null>(null);
+  const isTriggeringAutoRef = useRef<boolean>(false);
+  const handleShutterCaptureRef = useRef<() => void>();
+
+  // Active Real-time Face Detection Loop on Camera Stream (Ultra Fast & Smooth)
   useEffect(() => {
     if (!isCameraActive || !cameraStream) {
       setLiveFaceStatus({
         detected: false,
-        isMatch: null,
+        isGreen: false,
         confidence: 0,
         message: 'Arahkan wajah Anda ke dalam bingkai',
       });
+      setAutoCaptureProgress(0);
+      greenSinceRef.current = null;
+      isTriggeringAutoRef.current = false;
       return;
     }
 
@@ -181,40 +200,76 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       isProcessing = true;
       try {
-        const detail = await biometricService.detectFace(videoRef.current, {
-          withLandmarks: true,
-          withDescriptor: true,
-          withExpressions: false,
-        });
+        // Fast face presence & position detection (< 25ms, no ResNet loop bottleneck)
+        const detail = await biometricService.detectFaceFast(videoRef.current);
 
         if (!isMounted) return;
 
         if (!detail || !detail.box || detail.box.width === 0) {
+          greenSinceRef.current = null;
+          isTriggeringAutoRef.current = false;
+          setAutoCaptureProgress(0);
           setLiveFaceStatus({
             detected: false,
-            isMatch: null,
+            isGreen: false,
             confidence: 0,
             message: 'Posisikan wajah Anda tepat di dalam bingkai',
           });
         } else {
-          if (masterDescriptor && masterDescriptor.length === 128 && detail.descriptor) {
-            const liveDesc = Array.from(detail.descriptor);
-            const match = biometricService.evaluateBiometricMatch(liveDesc, masterDescriptor);
+          const vw = videoRef.current.videoWidth || 640;
+          const boxCenterX = detail.box.x + detail.box.width / 2;
+          const isCentered = Math.abs(boxCenterX - vw / 2) < vw * 0.30;
+          const scaleRatio = detail.box.width / vw;
+          const isGoodScale = scaleRatio >= 0.18 && scaleRatio <= 0.85;
+
+          if (!isGoodScale && scaleRatio < 0.18) {
+            greenSinceRef.current = null;
+            isTriggeringAutoRef.current = false;
+            setAutoCaptureProgress(0);
             setLiveFaceStatus({
               detected: true,
-              isMatch: match.isMatch,
-              confidence: match.confidence,
-              message: match.isMatch
-                ? `✓ Wajah Cocok (${match.confidence}% Sesuai Database)`
-                : `⚠️ Wajah Tidak Cocok (${match.confidence}% Sesuai Database)`,
+              isGreen: false,
+              confidence: 50,
+              message: 'Dekatkan wajah sedikit ke kamera',
+            });
+          } else if (!isCentered) {
+            greenSinceRef.current = null;
+            isTriggeringAutoRef.current = false;
+            setAutoCaptureProgress(0);
+            setLiveFaceStatus({
+              detected: true,
+              isGreen: false,
+              confidence: 60,
+              message: 'Posisikan wajah tepat di tengah bingkai',
             });
           } else {
+            // Wajah terdeteksi tepat di tengah & ukuran pas! INDIKATOR HIJAU AKTIF!
+            const now = Date.now();
+            if (!greenSinceRef.current) {
+              greenSinceRef.current = now;
+            }
+            const elapsed = now - greenSinceRef.current;
+            const progress = Math.min(100, Math.round((elapsed / 800) * 100));
+            setAutoCaptureProgress(progress);
+
             setLiveFaceStatus({
               detected: true,
-              isMatch: null,
-              confidence: 95,
-              message: user?.isFaceEnrolled ? 'Wajah Terdeteksi • Mengevaluasi...' : 'Wajah Terdeteksi • Master Belum Terdaftar',
+              isGreen: true,
+              confidence: 96,
+              message: progress >= 100
+                ? '✓ Mengambil foto otomatis...'
+                : '✓ Posisi Optimal (Klik tombol hijau atau tahan sejenak)',
             });
+
+            // Auto-capture otomatis setelah bertahan 800ms
+            if (elapsed >= 800 && !isCapturing && !isTriggeringAutoRef.current) {
+              isTriggeringAutoRef.current = true;
+              greenSinceRef.current = null;
+              setAutoCaptureProgress(100);
+              if (handleShutterCaptureRef.current) {
+                handleShutterCaptureRef.current();
+              }
+            }
           }
         }
       } catch (e) {
@@ -222,13 +277,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       } finally {
         isProcessing = false;
       }
-    }, 200);
+    }, 120);
 
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [isCameraActive, cameraStream, masterDescriptor, user?.isFaceEnrolled]);
+  }, [isCameraActive, cameraStream, isCapturing]);
 
   // Load Real Data from PostgreSQL & hrmService
   const loadRealData = async () => {
@@ -462,6 +517,59 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return () => clearInterval(interval);
   }, [isBreakActive, breakTimer]);
 
+  // Spot-Check Countdown Timer (5 Minutes / 300s window)
+  useEffect(() => {
+    if (!spotCheckModalOpen) return;
+    const timer = setInterval(() => {
+      setSpotCheckSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [spotCheckModalOpen]);
+
+  // Urgent Spot-Check Poller (Every 7 seconds - Listens for Pimpinan's Minta Lapor Wajah)
+  useEffect(() => {
+    if (!user?.id) return;
+
+    let poller: any = null;
+    const checkSpotCheckStatus = async () => {
+      try {
+        const res = await fieldSentinelService.getSpotCheckStatus(user.id);
+        if (res && res.requested) {
+          setSpotCheckData({
+            requestedAt: res.requestedAt,
+            notes: res.notes || 'Pimpinan meminta Anda segera melakukan verifikasi scan wajah di pos tugas.',
+          });
+          setSpotCheckModalOpen(true);
+
+          // Trigger Web Audio Siren + Continuous Mobile Vibration + OS Notification Banner
+          if (!emergencyAlertService.isAlertActive()) {
+            emergencyAlertService.startEmergencyAlert(
+              '🚨 INSTRUKSI PIMPINAN: SEGERA LAPOR WAJAH!',
+              res.notes || 'Pimpinan meminta Anda segera melakukan verifikasi scan wajah di pos tugas.'
+            );
+          }
+        } else if (res && !res.requested) {
+          // If request was completed or cleared
+          if (spotCheckModalOpen && !isCameraActive) {
+            setSpotCheckModalOpen(false);
+            setSpotCheckData(null);
+            emergencyAlertService.stopEmergencyAlert();
+          }
+        }
+      } catch (err) {
+        // silent catch
+      }
+    };
+
+    // Initial check
+    checkSpotCheckStatus();
+    poller = setInterval(checkSpotCheckStatus, 7000);
+
+    return () => {
+      if (poller) clearInterval(poller);
+    };
+  }, [user?.id, spotCheckModalOpen, isCameraActive]);
+
   // Real GPS Geofencing Evaluation
   const evaluateRealLocation = () => {
     if (!navigator.geolocation) {
@@ -592,6 +700,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
     setIsCameraActive(false);
     setIsCapturing(false);
+    greenSinceRef.current = null;
+    isTriggeringAutoRef.current = false;
+    setAutoCaptureProgress(0);
   };
 
   const toggleFacingMode = async () => {
@@ -614,19 +725,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
   };
 
-  // Watermark Stamping pada Canvas (Forensic Pixel Stamping)
-  // Watermark Stamping pada Canvas (Forensic Pixel Stamping - High Contrast & Large Scale)
+  // Watermark Stamping pada Canvas (Forensic Pixel Stamping - Ukuran Sedang & Jelas Terbaca)
   const applyWatermark = (canvas: HTMLCanvasElement, matchScore?: number) => {
     const ctx = canvas.getContext('2d');
     if (!ctx || !user) return;
     const w = canvas.width;
     const h = canvas.height;
 
-    // Responsive scaling based on canvas width (normalized to ~720px portrait width)
-    const scale = Math.max(w / 720, 1.0);
+    // Normalisasi skala ukuran sedang (medium) agar pas di berbagai resolusi layar HP & kamera
+    const scale = Math.min(Math.max(w / 800, 0.9), 1.25);
 
-    // Dark Gradient Bar at bottom
-    const barHeight = Math.round(250 * scale);
+    // Dark Gradient Bar di bagian bawah (tinggi proporsional ~180px * scale)
+    const barHeight = Math.round(180 * scale);
     const grad = ctx.createLinearGradient(0, h - barHeight, 0, h);
     grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
     grad.addColorStop(0.18, 'rgba(15, 23, 42, 0.92)');
@@ -636,51 +746,51 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
     // Top Status Accent Line
     ctx.fillStyle = '#10b981';
-    ctx.fillRect(0, h - barHeight + Math.round(35 * scale), w, Math.max(3 * scale, 3));
+    ctx.fillRect(0, h - barHeight + Math.round(20 * scale), w, Math.max(3 * scale, 3));
 
     // Header badge (Top Left)
-    const badgeW = Math.min(w - 24, Math.round(540 * scale));
-    const badgeH = Math.round(44 * scale);
+    const badgeW = Math.min(w - 24, Math.round(440 * scale));
+    const badgeH = Math.round(34 * scale);
     ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
     ctx.fillRect(16, 16, badgeW, badgeH);
     ctx.strokeStyle = '#10b981';
     ctx.lineWidth = Math.max(2 * scale, 2);
     ctx.strokeRect(16, 16, badgeW, badgeH);
 
-    ctx.font = `bold ${Math.round(17 * scale)}px system-ui, sans-serif`;
+    ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
     ctx.fillStyle = '#10b981';
     ctx.fillText(
       `🛡️ PT FRP • ${actionType === 'clock_in' ? 'CLOCK-IN (MASUK)' : 'CLOCK-OUT (PULANG)'} • 1:1 SCORE: ${matchScore || 98}%`,
-      26,
-      16 + Math.round(29 * scale)
+      24,
+      16 + Math.round(22 * scale)
     );
 
-    // Text rows in bottom banner (scaled, bold, and high contrast)
-    const paddingX = Math.round(22 * scale);
-    let startY = h - barHeight + Math.round(72 * scale);
-    const lineGap = Math.round(42 * scale);
+    // Text rows in bottom banner - UKURAN SEDANG, TAJAM, KONTRAS TINGGI
+    const paddingX = Math.round(18 * scale);
+    let startY = h - barHeight + Math.round(50 * scale);
+    const lineGap = Math.round(32 * scale);
 
-    // Line 1: Employee Name & NIP & Division
-    ctx.font = `bold ${Math.round(22 * scale)}px system-ui, sans-serif`;
+    // Line 1: Employee Name & NIP & Division (Ukuran Sedang: 16px * scale)
+    ctx.font = `bold ${Math.round(16 * scale)}px system-ui, sans-serif`;
     ctx.fillStyle = '#ffffff';
     ctx.shadowColor = 'rgba(0,0,0,0.85)';
-    ctx.shadowBlur = 4;
+    ctx.shadowBlur = 3;
     ctx.fillText(
       `👤 ${user.fullName} (${user.nip || 'ID: ' + user.id.slice(0, 8)}) • ${user.divisionName || 'Operasional'}`,
       paddingX,
       startY
     );
 
-    // Line 2: Shift Berapa
+    // Line 2: Shift Berapa (Ukuran Sedang: 14px * scale)
     startY += lineGap;
     const cleanShiftName = userShift?.name || 'Shift Reguler';
     const shiftHoursStr = `${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA`;
     const shiftText = cleanShiftName.includes('(') ? `⏰ Shift: ${cleanShiftName}` : `⏰ Shift: ${cleanShiftName} (${shiftHoursStr})`;
-    ctx.font = `bold ${Math.round(18 * scale)}px system-ui, sans-serif`;
+    ctx.font = `bold ${Math.round(14 * scale)}px system-ui, sans-serif`;
     ctx.fillStyle = '#fbbf24'; // Amber / Gold
     ctx.fillText(shiftText, paddingX, startY);
 
-    // Line 3: Tanggal dan Waktu WITA
+    // Line 3: Tanggal dan Waktu WITA (Ukuran Sedang: 14px * scale)
     startY += lineGap;
     const now = new Date();
     const dateFormatted = now.toLocaleDateString('id-ID', {
@@ -690,16 +800,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       year: 'numeric',
     });
     const timeFormatted = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\./g, ':');
-    ctx.font = `bold ${Math.round(18 * scale)}px ui-monospace, SFMono-Regular, monospace`;
+    ctx.font = `bold ${Math.round(14 * scale)}px ui-monospace, SFMono-Regular, monospace`;
     ctx.fillStyle = '#cbd5e1'; // Slate light
     ctx.fillText(`🕒 ${dateFormatted} • ${timeFormatted} WITA`, paddingX, startY);
 
-    // Line 4: Titik Lokasi GPS & Nama Pos
+    // Line 4: Titik Lokasi GPS & Nama Pos (Ukuran Sedang: 14px * scale)
     startY += lineGap;
     const coordsStr = currentCoords
       ? `📍 Pos: ${assignedPostName || 'Kantor FRP'} • GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 10}m)`
       : `📍 Pos: ${assignedPostName || 'Kantor FRP'}`;
-    ctx.font = `bold ${Math.round(18 * scale)}px system-ui, sans-serif`;
+    ctx.font = `bold ${Math.round(14 * scale)}px system-ui, sans-serif`;
     ctx.fillStyle = '#34d399'; // Emerald
     ctx.fillText(coordsStr, paddingX, startY);
 
@@ -738,6 +848,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         if (!liveDesc) {
           toast.error('Wajah tidak terdeteksi jelas pada foto. Posisikan wajah Anda tepat di tengah kamera.');
           setIsCapturing(false);
+          isTriggeringAutoRef.current = false;
           return;
         }
 
@@ -746,6 +857,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         if (!match.isMatch) {
           toast.error(`Presensi Ditolak! Wajah tidak sesuai dengan data biometrik master di database (${match.confidence}% < 75%).`);
           setIsCapturing(false);
+          isTriggeringAutoRef.current = false;
           return;
         }
 
@@ -756,6 +868,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         if (!faceCheck || !faceCheck.box || faceCheck.box.width === 0) {
           toast.error('Wajah tidak terdeteksi pada foto. Silakan posisikan wajah Anda ke kamera.');
           setIsCapturing(false);
+          isTriggeringAutoRef.current = false;
           return;
         }
         verifiedConfidence = 88;
@@ -812,6 +925,30 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         try { navigator.vibrate([100, 50, 100]); } catch (e) {}
       }
 
+      // Kirim bukti forensik spot-check jika ada instruksi khusus dari pimpinan
+      if (isSpotCheckAction || spotCheckModalOpen || spotCheckData) {
+        try {
+          await fieldSentinelService.submitPatrolCheck({
+            userId: user.id,
+            checkType: 'spot_check',
+            locationName: assignedPostName || 'Pos Lapangan Terdaftar',
+            latitude: currentCoords?.lat || 0,
+            longitude: currentCoords?.lng || 0,
+            accuracyMeters: coordsAccuracy || 10,
+            watermarkedPhotoUrl: photoData,
+            biometricScore: verifiedConfidence,
+            notes: spotCheckData?.notes || 'Verifikasi Laporan Wajah atas Instruksi Pimpinan',
+          });
+          toast.success('Bukti Forensik Laporan Wajah terkirim langsung ke Pimpinan & Superadmin!');
+        } catch (patrolErr) {
+          console.warn('[Patrol Check Submit Error]', patrolErr);
+        }
+        setIsSpotCheckAction(false);
+        setSpotCheckModalOpen(false);
+        setSpotCheckData(null);
+        emergencyAlertService.stopEmergencyAlert();
+      }
+
       toast.success(
         actionType === 'clock_in'
           ? `Absen Masuk Berhasil! (${timeStr} WITA)`
@@ -824,8 +961,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       toast.error('Gagal mencatat presensi: ' + (err.message || 'Koneksi error'));
     } finally {
       setIsCapturing(false);
+      isTriggeringAutoRef.current = false;
     }
   };
+
+  // Keep ref synchronized
+  handleShutterCaptureRef.current = handleShutterCapture;
 
   // Toggle 1-Hour Break (Buka dialog konfirmasi atau akhiri)
   const handleToggleBreak = () => {
@@ -1009,23 +1150,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             {/* Dashed Outline */}
             <div
               className={`absolute inset-0 rounded-[28px] border-2 border-dashed transition-colors duration-300 ${
-                liveFaceStatus.isMatch === true
-                  ? 'border-emerald-400/80 shadow-[0_0_20px_rgba(52,211,153,0.3)]'
-                  : liveFaceStatus.isMatch === false
-                  ? 'border-rose-500/80 shadow-[0_0_20px_rgba(244,63,94,0.3)]'
+                liveFaceStatus.isGreen
+                  ? 'border-emerald-400/90 shadow-[0_0_24px_rgba(52,211,153,0.45)]'
                   : liveFaceStatus.detected
                   ? 'border-cyan-400/70 shadow-[0_0_15px_rgba(34,211,238,0.25)]'
                   : 'border-white/50 shadow-[0_0_12px_rgba(255,255,255,0.15)]'
               }`}
             />
 
-            {/* Glowing Corner Accents (Sudut Dinamis Berdasarkan Pencocokan Database) */}
+            {/* Glowing Corner Accents */}
             <div
               className={`absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 rounded-tl-2xl transition-all duration-300 ${
-                liveFaceStatus.isMatch === true
-                  ? 'border-emerald-400 shadow-[0_0_14px_#34d399]'
-                  : liveFaceStatus.isMatch === false
-                  ? 'border-rose-500 shadow-[0_0_14px_#f43f5e]'
+                liveFaceStatus.isGreen
+                  ? 'border-emerald-400 shadow-[0_0_16px_#34d399]'
                   : liveFaceStatus.detected
                   ? 'border-cyan-400 shadow-[0_0_10px_#22d3ee]'
                   : 'border-white/70 shadow-[0_0_8px_rgba(255,255,255,0.3)]'
@@ -1033,10 +1170,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             />
             <div
               className={`absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 rounded-tr-2xl transition-all duration-300 ${
-                liveFaceStatus.isMatch === true
-                  ? 'border-emerald-400 shadow-[0_0_14px_#34d399]'
-                  : liveFaceStatus.isMatch === false
-                  ? 'border-rose-500 shadow-[0_0_14px_#f43f5e]'
+                liveFaceStatus.isGreen
+                  ? 'border-emerald-400 shadow-[0_0_16px_#34d399]'
                   : liveFaceStatus.detected
                   ? 'border-cyan-400 shadow-[0_0_10px_#22d3ee]'
                   : 'border-white/70 shadow-[0_0_8px_rgba(255,255,255,0.3)]'
@@ -1044,10 +1179,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             />
             <div
               className={`absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 rounded-bl-2xl transition-all duration-300 ${
-                liveFaceStatus.isMatch === true
-                  ? 'border-emerald-400 shadow-[0_0_14px_#34d399]'
-                  : liveFaceStatus.isMatch === false
-                  ? 'border-rose-500 shadow-[0_0_14px_#f43f5e]'
+                liveFaceStatus.isGreen
+                  ? 'border-emerald-400 shadow-[0_0_16px_#34d399]'
                   : liveFaceStatus.detected
                   ? 'border-cyan-400 shadow-[0_0_10px_#22d3ee]'
                   : 'border-white/70 shadow-[0_0_8px_rgba(255,255,255,0.3)]'
@@ -1055,10 +1188,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             />
             <div
               className={`absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 rounded-br-2xl transition-all duration-300 ${
-                liveFaceStatus.isMatch === true
-                  ? 'border-emerald-400 shadow-[0_0_14px_#34d399]'
-                  : liveFaceStatus.isMatch === false
-                  ? 'border-rose-500 shadow-[0_0_14px_#f43f5e]'
+                liveFaceStatus.isGreen
+                  ? 'border-emerald-400 shadow-[0_0_16px_#34d399]'
                   : liveFaceStatus.detected
                   ? 'border-cyan-400 shadow-[0_0_10px_#22d3ee]'
                   : 'border-white/70 shadow-[0_0_8px_rgba(255,255,255,0.3)]'
@@ -1068,10 +1199,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             {/* Subtly glowing scan line */}
             <div
               className={`w-full h-0.5 bg-gradient-to-r from-transparent to-transparent animate-pulse ${
-                liveFaceStatus.isMatch === true
+                liveFaceStatus.isGreen
                   ? 'via-emerald-400'
-                  : liveFaceStatus.isMatch === false
-                  ? 'via-rose-500'
                   : 'via-cyan-400'
               }`}
             />
@@ -1079,32 +1208,42 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         </div>
 
         {/* Bottom Control Controls & Shutter Button */}
-        <div className="relative pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-4 px-6 flex flex-col items-center bg-gradient-to-t from-black/90 via-black/70 to-transparent z-20 space-y-4">
-          {/* Pill Status Presisi: Wajah Terdeteksi & Pencocokan Database */}
+        <div className="relative pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3 px-6 flex flex-col items-center bg-gradient-to-t from-black/95 via-black/75 to-transparent z-20 space-y-3">
+          {/* Pill Status Presisi: Wajah Terdeteksi & Posisi */}
           <div
             className={`px-4 py-1.5 rounded-full backdrop-blur-md border shadow-lg flex items-center gap-2 text-xs font-semibold transition-all duration-300 ${
-              liveFaceStatus.isMatch === true
-                ? 'bg-emerald-950/85 border-emerald-500/80 text-emerald-300 shadow-[0_0_16px_rgba(52,211,153,0.3)]'
-                : liveFaceStatus.isMatch === false
-                ? 'bg-rose-950/85 border-rose-500/80 text-rose-300 animate-pulse shadow-[0_0_16px_rgba(244,63,94,0.3)]'
+              liveFaceStatus.isGreen
+                ? 'bg-emerald-950/90 border-emerald-500/80 text-emerald-300 shadow-[0_0_18px_rgba(52,211,153,0.35)]'
                 : liveFaceStatus.detected
                 ? 'bg-slate-900/85 border-cyan-500/60 text-cyan-200'
                 : 'bg-slate-900/85 border-slate-700/60 text-slate-300'
             }`}
           >
             <span>{liveFaceStatus.message}</span>
-            {liveFaceStatus.isMatch === true && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
-            {liveFaceStatus.isMatch === false && <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
-            {liveFaceStatus.isMatch === null && liveFaceStatus.detected && (
+            {liveFaceStatus.isGreen ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : liveFaceStatus.detected ? (
               <Loader2 className="w-4 h-4 text-cyan-400 animate-spin shrink-0" />
-            )}
+            ) : null}
           </div>
 
-          {/* Teks Instruksi */}
-          <p className="text-xs font-bold tracking-widest uppercase text-white/90">
-            {liveFaceStatus.isMatch === false
-              ? 'WAJAH TIDAK COCOK DENGAN DATABASE'
-              : 'AMBIL FOTO UNTUK ABSEN'}
+          {/* Progress auto-capture bar ketika indikator hijau */}
+          {liveFaceStatus.isGreen && (
+            <div className="w-52 bg-slate-800/80 h-1.5 rounded-full overflow-hidden border border-emerald-500/30">
+              <div
+                className="bg-emerald-400 h-full transition-all duration-100 ease-linear rounded-full"
+                style={{ width: `${autoCaptureProgress}%` }}
+              />
+            </div>
+          )}
+
+          {/* Teks Instruksi Karyawan */}
+          <p className="text-[11px] font-bold tracking-wider uppercase text-white/90">
+            {liveFaceStatus.isGreen
+              ? autoCaptureProgress >= 90
+                ? '✓ OTOMATIS MENJEPRET FOTO...'
+                : 'KLIK TOMBOL HIJAU ATAU TAHAN 1 DETIK'
+              : 'POSISIKAN WAJAH HINGGA INDIKATOR HIJAU'}
           </p>
 
           {/* Shutter Button Row */}
@@ -1112,30 +1251,56 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             {/* Left placeholder for balance */}
             <div className="w-11" />
 
-            {/* Big Shutter Button */}
-            <button
-              type="button"
-              disabled={isCapturing}
-              onClick={handleShutterCapture}
-              className={`w-18 h-18 rounded-full border-4 p-1 flex items-center justify-center transition-all active:scale-90 ${
-                liveFaceStatus.isMatch === true
-                  ? 'border-emerald-400 hover:border-emerald-300 shadow-[0_0_24px_rgba(52,211,153,0.6)]'
-                  : liveFaceStatus.isMatch === false
-                  ? 'border-rose-500/80 hover:border-rose-400 shadow-[0_0_18px_rgba(244,63,94,0.5)]'
-                  : 'border-white/80 hover:border-white shadow-[0_0_20px_rgba(255,255,255,0.4)]'
-              }`}
-              title="Ambil Foto Presensi"
-            >
-              <div
-                className={`w-full h-full rounded-full transition-colors ${
-                  liveFaceStatus.isMatch === true
-                    ? 'bg-emerald-400'
-                    : liveFaceStatus.isMatch === false
-                    ? 'bg-rose-500'
-                    : 'bg-white active:bg-slate-200'
+            {/* Shutter Button Container: HARUS SETELAH INDIKATOR HIJAU */}
+            <div className="relative flex items-center justify-center">
+              {/* Outer circular auto-capture countdown ring */}
+              {liveFaceStatus.isGreen && (
+                <svg className="absolute -inset-2.5 w-[92px] h-[92px] -rotate-90 pointer-events-none z-10" viewBox="0 0 100 100">
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="46"
+                    className="stroke-emerald-400/25"
+                    strokeWidth="4"
+                    fill="none"
+                  />
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="46"
+                    className="stroke-emerald-400 drop-shadow-[0_0_10px_rgba(52,211,153,0.85)] transition-all duration-100"
+                    strokeWidth="5"
+                    strokeDasharray="289"
+                    strokeDashoffset={289 - (289 * autoCaptureProgress) / 100}
+                    strokeLinecap="round"
+                    fill="none"
+                  />
+                </svg>
+              )}
+
+              {/* Tombol Ambil Gambar: Aktif hanya saat indikator hijau */}
+              <button
+                type="button"
+                disabled={!liveFaceStatus.isGreen || isCapturing}
+                onClick={handleShutterCapture}
+                className={`w-18 h-18 rounded-full border-4 p-1 flex items-center justify-center transition-all ${
+                  liveFaceStatus.isGreen && !isCapturing
+                    ? 'border-emerald-400 hover:border-emerald-300 shadow-[0_0_26px_rgba(52,211,153,0.65)] cursor-pointer active:scale-90 animate-pulse'
+                    : 'border-slate-700/60 bg-slate-900/60 opacity-35 cursor-not-allowed'
                 }`}
-              />
-            </button>
+                title={liveFaceStatus.isGreen ? 'Ambil Foto Presensi Sekarang' : 'Posisikan wajah hingga indikator hijau'}
+              >
+                <div
+                  className={`w-full h-full rounded-full flex items-center justify-center transition-colors ${
+                    liveFaceStatus.isGreen
+                      ? 'bg-emerald-500 hover:bg-emerald-400 text-white shadow-inner'
+                      : 'bg-slate-800 text-slate-500'
+                  }`}
+                >
+                  <Camera className="w-6 h-6" />
+                </div>
+              </button>
+            </div>
 
             {/* Right: Switch Camera Button */}
             <button
@@ -2251,6 +2416,111 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               Ya, Keluar
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL PERINGATAN DARURAT: INSTRUKSI LAPOR WAJAH PIMPINAN ─── */}
+      <Dialog
+        open={spotCheckModalOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            // Pengguna menutup modal: matikan sirene
+            emergencyAlertService.stopEmergencyAlert();
+            setSpotCheckModalOpen(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm rounded-[28px] p-0 overflow-hidden border-2 border-rose-500 shadow-[0_0_50px_rgba(244,63,94,0.45)] bg-slate-950 text-white animate-in zoom-in-95 duration-200">
+          {/* Header Bar Berkedip Merah Darurat */}
+          <div className="bg-gradient-to-r from-rose-600 via-red-600 to-amber-600 p-4 text-white relative">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0 animate-bounce">
+                <BellRing className="w-5 h-5 text-white" />
+              </div>
+              <div className="min-w-0">
+                <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/30 text-[10px] font-black tracking-wider uppercase">
+                  <span className="w-2 h-2 rounded-full bg-amber-300 animate-ping" />
+                  Instruksi Khusus Pimpinan
+                </div>
+                <h3 className="text-sm font-black tracking-tight uppercase leading-tight mt-0.5">
+                  Wajib Lapor Wajah Segera!
+                </h3>
+              </div>
+            </div>
+          </div>
+
+          {/* Body Konten Peringatan */}
+          <div className="p-5 space-y-4">
+            {/* Box Catatan Pimpinan */}
+            <div className="p-3.5 rounded-2xl bg-rose-950/60 border border-rose-500/40 text-rose-100 space-y-1">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-rose-300 flex items-center gap-1">
+                <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+                Pesan Pimpinan PT. FRP:
+              </p>
+              <p className="text-xs font-semibold leading-relaxed text-white">
+                "{spotCheckData?.notes || 'Pimpinan meminta Anda segera melakukan verifikasi scan wajah di pos tugas.'}"
+              </p>
+            </div>
+
+            {/* Status Lokasi & Waktu Berjalan */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-0.5">
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Pos Tugas Aktif</span>
+                <span className="font-bold text-emerald-400 truncate block">
+                  {assignedPostName || 'Pos Lapangan Terdaftar'}
+                </span>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-0.5">
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Batas Waktu Respon</span>
+                <span className="font-mono font-black text-amber-400 text-sm block">
+                  {Math.floor(spotCheckSecondsLeft / 60)}:{String(spotCheckSecondsLeft % 60).padStart(2, '0')} Menit
+                </span>
+              </div>
+            </div>
+
+            {/* GPS Koordinat & Akurasi Hardware */}
+            <div className="px-3 py-2 rounded-xl bg-slate-900/80 border border-slate-800/80 text-[11px] text-slate-400 flex items-center justify-between">
+              <span>📡 Status GPS HP:</span>
+              <span className="font-mono text-slate-200">
+                {currentCoords ? `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)}` : 'Mendeteksi...'}
+                {coordsAccuracy ? ` (±${Math.round(coordsAccuracy)}m)` : ''}
+              </span>
+            </div>
+
+            <p className="text-[11px] text-center text-slate-400 leading-normal">
+              Foto wajah akan dibubuhi <b>watermark forensik</b> (koordinat, waktu WITA, dan skor biometrik) dan langsung terverifikasi di radar pimpinan.
+            </p>
+
+            {/* Tombol Aksi Utama */}
+            <div className="space-y-2 pt-1">
+              <Button
+                type="button"
+                onClick={() => {
+                  emergencyAlertService.stopEmergencyAlert();
+                  setSpotCheckModalOpen(false);
+                  setIsSpotCheckAction(true);
+                  openLiveCamera('clock_in');
+                }}
+                className="w-full h-13 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-extrabold text-sm shadow-[0_0_25px_rgba(16,185,129,0.4)] flex items-center justify-center gap-2 active:scale-98 transition-all"
+              >
+                <Camera className="w-5 h-5 animate-pulse" />
+                <span>📸 BUKA KAMERA & LAPOR SEKARANG</span>
+              </Button>
+
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  emergencyAlertService.stopEmergencyAlert();
+                  toast.info('Alarm suara & getar diheningkan. Silakan tetap segera ambil foto lapor wajah.');
+                }}
+                className="w-full text-xs text-slate-400 hover:text-white hover:bg-slate-900 rounded-xl h-9 flex items-center justify-center gap-1.5"
+              >
+                <VolumeX className="w-3.5 h-3.5" />
+                <span>Heningkan Suara / Getar Sementara</span>
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

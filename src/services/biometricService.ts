@@ -44,11 +44,16 @@ export class BiometricService {
   private loadingPromise: Promise<boolean> | null = null;
   private modelPath = '/models';
   private detectorOptions: faceapi.TinyFaceDetectorOptions;
+  private fastDetectorOptions: faceapi.TinyFaceDetectorOptions;
 
   constructor() {
     this.detectorOptions = new faceapi.TinyFaceDetectorOptions({
       inputSize: 320,
       scoreThreshold: 0.5,
+    });
+    this.fastDetectorOptions = new faceapi.TinyFaceDetectorOptions({
+      inputSize: 224,
+      scoreThreshold: 0.45,
     });
   }
 
@@ -80,8 +85,18 @@ export class BiometricService {
         onProgress?.('Memuat model ekspresi & liveness...');
         await faceapi.nets.faceExpressionNet.loadFromUri(this.modelPath);
 
+        // Warm up WebGL shader compilation with a tiny offscreen canvas (Zero Cold Start)
+        try {
+          const warmCanvas = document.createElement('canvas');
+          warmCanvas.width = 160;
+          warmCanvas.height = 160;
+          await faceapi.detectSingleFace(warmCanvas, this.fastDetectorOptions);
+        } catch {
+          // Non-critical warm-up catch
+        }
+
         this.modelsLoaded = true;
-        console.info('[BiometricService] Face-API neural network models loaded successfully.');
+        console.info('[BiometricService] Face-API neural network models loaded & warmed up successfully.');
         onProgress?.('Model biometrik siap digunakan.');
         return true;
       } catch (err) {
@@ -92,6 +107,57 @@ export class BiometricService {
     })();
 
     return this.loadingPromise;
+  }
+
+  /**
+   * Ultra-fast face presence and bounding box detection (< 25ms) for smooth 60fps tracking
+   */
+  public async detectFaceFast(
+    input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement
+  ): Promise<FaceDetectionDetail | null> {
+    if (!this.modelsLoaded) {
+      await this.loadModels();
+      if (!this.modelsLoaded) return null;
+    }
+
+    try {
+      const res: any = await faceapi.detectSingleFace(input, this.fastDetectorOptions);
+      if (!res || !res.box) return null;
+
+      const box = {
+        x: Math.round(res.box.x),
+        y: Math.round(res.box.y),
+        width: Math.round(res.box.width),
+        height: Math.round(res.box.height),
+      };
+
+      return {
+        box,
+        score: Number((res.score ?? 1).toFixed(3)),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Compatibility alias for detectFace
+   */
+  public async detectFaceDetail(
+    input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement
+  ): Promise<FaceDetectionDetail | null> {
+    return this.detectFace(input, { withLandmarks: true, withExpressions: true, withDescriptor: true });
+  }
+
+  /**
+   * Compatibility alias for drawTacticalHUD
+   */
+  public drawFaceHUD(
+    canvas: HTMLCanvasElement,
+    detail: FaceDetectionDetail | null,
+    options?: { isMatch?: boolean | null; label?: string }
+  ): void {
+    this.drawTacticalHUD(canvas, detail, options?.isMatch, options?.label);
   }
 
   /**

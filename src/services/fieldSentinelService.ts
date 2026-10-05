@@ -149,4 +149,23 @@ export const fieldSentinelService = {
     const res = await api.delete<{ success: boolean; message?: string }>(`/field-sentinel/posts/${id}`);
     return res?.success === true;
   },
+
+  // 10. Check if there is an active spot check requested for this employee
+  getSpotCheckStatus: async (userId: string): Promise<{ requested: boolean; requestedAt?: string; notes?: string }> => {
+    try {
+      const res = await api.get<{ success: boolean; requested: boolean; requestedAt?: string; notes?: string }>(
+        `/field-sentinel/spot-check-status/${encodeURIComponent(userId)}`
+      );
+      if (res && res.success) {
+        return {
+          requested: res.requested === true,
+          requestedAt: res.requestedAt,
+          notes: res.notes,
+        };
+      }
+      return { requested: false };
+    } catch {
+      return { requested: false };
+    }
+  },
 };
