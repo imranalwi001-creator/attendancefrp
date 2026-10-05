@@ -103,10 +103,23 @@ export const fieldSentinelService = {
   // 7. Multi-Titik / Bank Pos Lapangan: Fetch all saved posts for an employee
   getFieldPosts: async (userId?: string): Promise<import('@/types/hrm').FieldAssignedPost[]> => {
     const query = userId ? `?userId=${encodeURIComponent(userId)}` : '';
-    const res = await api.get<{ success: boolean; data: import('@/types/hrm').FieldAssignedPost[] }>(
+    const res = await api.get<{ success: boolean; data: any[] }>(
       `/field-sentinel/posts${query}`
     );
-    return res?.data || [];
+    const rawData = res?.data || [];
+    return rawData.map((p: any) => ({
+      id: p.id,
+      userId: p.userId || p.user_id,
+      postCode: p.postCode || p.post_code,
+      postName: p.postName || p.post_name,
+      latitude: parseFloat(p.latitude),
+      longitude: parseFloat(p.longitude),
+      radiusMeters: parseFloat(p.radiusMeters || p.radius_meters || 100),
+      description: p.description || p.notes || '',
+      isActive: p.isActive !== false && p.is_active !== false,
+      createdAt: p.createdAt || p.created_at,
+      updatedAt: p.updatedAt || p.updated_at,
+    }));
   },
 
   // 8. Multi-Titik / Bank Pos Lapangan: Create or update a post in the bank

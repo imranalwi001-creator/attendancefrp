@@ -828,6 +828,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {(fieldAgents.length > 0 ? fieldAgents : users.filter((u) => u.isFieldSentinelEnabled)).map((agent: any) => {
               const isBreached = agent.isOutOfBounds;
+              const pingTime = agent.lastKnownPingAt ? new Date(agent.lastKnownPingAt).getTime() : null;
+              const pingAgeMinutes = pingTime ? Math.floor((Date.now() - pingTime) / 60000) : null;
+              const isLiveNow = pingAgeMinutes !== null && pingAgeMinutes <= 15;
+              const isStale = pingAgeMinutes !== null && pingAgeMinutes > 15;
               const hasPing = Boolean(agent.lastKnownPingAt);
               const latestCheck = agent.latestPatrolCheck;
 
@@ -837,8 +841,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   className={`rounded-2xl border transition-all overflow-hidden shadow-xs flex flex-col justify-between ${
                     isBreached
                       ? 'border-rose-500/60 bg-rose-500/5 ring-1 ring-rose-500/30'
-                      : hasPing
-                      ? 'border-indigo-500/40 bg-card hover:border-indigo-500/60'
+                      : isLiveNow
+                      ? 'border-emerald-500/40 bg-card hover:border-emerald-500/60'
+                      : isStale
+                      ? 'border-amber-500/30 bg-card'
                       : 'border-border bg-card'
                   }`}
                 >
@@ -859,7 +865,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                             </div>
                           )}
                           <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-card ${
-                            isBreached ? 'bg-rose-500 animate-ping' : hasPing ? 'bg-emerald-500' : 'bg-slate-400'
+                            isBreached ? 'bg-rose-500 animate-ping' : isLiveNow ? 'bg-emerald-500 animate-pulse' : isStale ? 'bg-amber-500' : 'bg-slate-400'
                           }`} />
                         </div>
                         <div>
@@ -880,9 +886,13 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         <Badge className="bg-rose-600 text-white text-[10px] font-bold gap-1 animate-pulse">
                           <AlertTriangle size={11} /> KELUAR ({Math.round(agent.outOfBoundsDistance || 0)}m)
                         </Badge>
-                      ) : hasPing ? (
+                      ) : isLiveNow ? (
                         <Badge className="bg-emerald-600 text-white text-[10px] font-semibold gap-1">
                           <CheckCircle2 size={11} /> DI PERIMETER
+                        </Badge>
+                      ) : isStale ? (
+                        <Badge className="bg-amber-600/90 text-white text-[10px] font-medium gap-1">
+                          <Clock size={11} /> OFFLINE ({pingAgeMinutes < 60 ? `${pingAgeMinutes}m lalu` : `${Math.floor(pingAgeMinutes / 60)}j lalu`})
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="text-muted-foreground text-[10px] font-mono">
@@ -945,13 +955,17 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     <div className="p-3 rounded-xl border border-indigo-500/20 bg-indigo-50/30 dark:bg-indigo-950/20 space-y-1.5 text-xs">
                       <div className="flex items-center justify-between">
                         <span className="text-indigo-700 dark:text-indigo-300 font-semibold flex items-center gap-1">
-                          <Radio size={12} className={hasPing ? 'animate-pulse text-emerald-500' : 'text-slate-400'} />
+                          <Radio size={12} className={isLiveNow ? 'animate-pulse text-emerald-500' : isStale ? 'text-amber-500' : 'text-slate-400'} />
                           Live Sinyal GPS:
                         </span>
                         <span className="text-[11px] font-mono text-muted-foreground">
-                          {agent.lastKnownPingAt
-                            ? new Date(agent.lastKnownPingAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA'
-                            : 'Belum terdeteksi'}
+                          {agent.lastKnownPingAt ? (
+                            <>
+                              {new Date(agent.lastKnownPingAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WITA
+                              {isLiveNow && <span className="text-emerald-500 font-semibold ml-1">(Live)</span>}
+                              {isStale && <span className="text-amber-600 dark:text-amber-400 font-medium ml-1">({pingAgeMinutes < 60 ? `${pingAgeMinutes}m lalu` : `${Math.floor(pingAgeMinutes / 60)}j lalu`})</span>}
+                            </>
+                          ) : 'Belum terdeteksi'}
                         </span>
                       </div>
                       {agent.lastKnownLatitude ? (

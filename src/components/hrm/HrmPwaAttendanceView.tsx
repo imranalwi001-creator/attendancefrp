@@ -69,6 +69,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [locationStatus, setLocationStatus] = useState<'checking' | 'inside' | 'outside' | 'error'>('checking');
   const [assignedOffice, setAssignedOffice] = useState<OfficeLocation | null>(null);
   const [assignedPostName, setAssignedPostName] = useState<string>('');
+  const [bankPosts, setBankPosts] = useState<import('@/types/hrm').FieldAssignedPost[]>([]);
 
   // Attendance & Shift State
   const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord | undefined>(undefined);
@@ -268,7 +269,21 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const myLeaves = hrmService.getUserLeaves(user.id);
       setUserLeaves(myLeaves);
 
-      // 3. Pos Penugasan / Kantor Divisi
+      // 3. Bank Pos Lapangan (Multi-Titik)
+      let currentBankPosts: import('@/types/hrm').FieldAssignedPost[] = [];
+      try {
+        const posts = await fieldSentinelService.getFieldPosts(user.id);
+        if (Array.isArray(posts) && posts.length > 0) {
+          currentBankPosts = posts;
+          setBankPosts(posts);
+        } else {
+          setBankPosts([]);
+        }
+      } catch (err) {
+        console.warn('[PWA] Error fetching field posts:', err);
+      }
+
+      // Pos Penugasan Default / Kantor Divisi
       let officeLoc: OfficeLocation | null = null;
       if (user.assignedLatitude && user.assignedLongitude) {
         officeLoc = {
@@ -276,7 +291,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           name: user.assignedLocationName || 'Pos Lapangan Terdaftar',
           latitude: user.assignedLatitude,
           longitude: user.assignedLongitude,
-          radiusMeters: user.assignedRadiusMeters || 150,
+          radiusMeters: user.assignedRadiusMeters || 100,
           locationName: user.assignedLocationName || 'Pos Lapangan Terdaftar',
           address: user.assignedLocationName || 'Pos Lapangan Terdaftar',
         };
@@ -293,8 +308,60 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         }
       }
       setAssignedOffice(officeLoc);
+
+      // Re-evaluate location with fresh bank posts
+      if (currentCoords) {
+        evaluateLocationCoords(currentCoords, coordsAccuracy || 10, currentBankPosts, officeLoc);
+      }
     } catch (err) {
       console.error('[PWA] Error loading real data:', err);
+    }
+  };
+
+  // Evaluate location coordinates against Bank Pos (Multi-Titik) or Fallback Office
+  const evaluateLocationCoords = (
+    coords: { lat: number; lng: number },
+    accuracy: number = 10,
+    activePosts: import('@/types/hrm').FieldAssignedPost[] = bankPosts,
+    fallbackOffice: OfficeLocation | null = assignedOffice
+  ) => {
+    setCurrentCoords(coords);
+    setCoordsAccuracy(accuracy);
+
+    if (activePosts && activePosts.length > 0) {
+      // Multi-Titik Bank Pos evaluation (Titik A, B, C, ...)
+      const postsWithDist = activePosts.map((p) => {
+        const d = geofenceService.calculateDistance(coords, { latitude: p.latitude, longitude: p.longitude });
+        const r = p.radiusMeters || 100;
+        return { ...p, distance: d, radius: r, isInside: d <= r };
+      });
+
+      const insidePost = postsWithDist.find((p) => p.isInside);
+      if (insidePost) {
+        setDistanceToOffice(Math.round(insidePost.distance));
+        setLocationStatus('inside');
+        setAssignedPostName(`${insidePost.postName} [${insidePost.postCode}]`);
+        return;
+      }
+
+      // Outside all registered bank posts: find nearest
+      const sorted = postsWithDist.sort((a, b) => a.distance - b.distance);
+      const nearest = sorted[0];
+      if (nearest) {
+        setDistanceToOffice(Math.round(nearest.distance));
+        setLocationStatus('outside');
+        setAssignedPostName(`${nearest.postName} [${nearest.postCode}]`);
+      }
+      return;
+    }
+
+    // Fallback: single assigned office
+    if (fallbackOffice) {
+      const evalResult = geofenceService.evaluateGeofence(coords, fallbackOffice);
+      setDistanceToOffice(evalResult.distanceMeters);
+      setLocationStatus(evalResult.isInside ? 'inside' : 'outside');
+    } else {
+      setLocationStatus('inside');
     }
   };
 
@@ -311,6 +378,58 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       window.removeEventListener('hrm_settings_updated', handleUpdate);
     };
   }, [user]);
+
+  // Continuous Background GPS Watcher & Heartbeat Ping for Field Officers
+  const lastPingTimeRef = useRef<number>(0);
+  useEffect(() => {
+    if (!navigator.geolocation || !user) return;
+
+    const isFieldOfficer =
+      user.isFieldSentinelEnabled ||
+      ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes(
+        user.email.toLowerCase()
+      );
+
+    const handlePos = (pos: GeolocationPosition) => {
+      const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      evaluateLocationCoords(coords, pos.coords.accuracy || 10);
+
+      const now = Date.now();
+      // Send location ping every 45-60s or on position change
+      if (isFieldOfficer && now - lastPingTimeRef.current >= 45000) {
+        lastPingTimeRef.current = now;
+        fieldSentinelService.sendLocationPing({
+          userId: user.id,
+          latitude: coords.lat,
+          longitude: coords.lng,
+          accuracy: pos.coords.accuracy || 10,
+          altitude: pos.coords.altitude,
+          speed: pos.coords.speed,
+          isMockLocation: Boolean((pos.coords as any).isMock),
+        }).catch(() => null);
+      }
+    };
+
+    const watchId = navigator.geolocation.watchPosition(
+      handlePos,
+      (err) => console.warn('[PWA Geolocation Watcher]', err),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+    );
+
+    // Heartbeat every 60 seconds
+    const heartbeat = setInterval(() => {
+      navigator.geolocation.getCurrentPosition(
+        handlePos,
+        () => null,
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+      );
+    }, 60000);
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+      clearInterval(heartbeat);
+    };
+  }, [user?.id, bankPosts, assignedOffice]);
 
   // Break Countdown Timer
   useEffect(() => {
@@ -338,16 +457,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setCurrentCoords(coords);
-        setCoordsAccuracy(pos.coords.accuracy || 10);
-
-        if (assignedOffice) {
-          const evalResult = geofenceService.evaluateGeofence(coords, assignedOffice);
-          setDistanceToOffice(evalResult.distanceMeters);
-          setLocationStatus(evalResult.isInside ? 'inside' : 'outside');
-        } else {
-          setLocationStatus('inside');
-        }
+        evaluateLocationCoords(coords, pos.coords.accuracy || 10);
       },
       (err) => {
         console.warn('[PWA GPS] Fallback check:', err);
@@ -1250,10 +1360,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               {/* Location Description */}
               <div className="space-y-0.5 flex-1 min-w-0">
                 <h3 className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                  {assignedPostName || 'PT. FAWWAZ RESKI PERWIRA'}
+                  {assignedPostName || (bankPosts.length > 0 ? `${bankPosts.length} Pos Lapangan Terdaftar` : 'PT. FAWWAZ RESKI PERWIRA')}
                 </h3>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                  {assignedOffice?.address || 'Jl. Perwira No. 01, Area Pos Penugasan'}
+                  {bankPosts.length > 0
+                    ? `${bankPosts.length} Pos Terdaftar • Sah Absen di Seluruh Pos`
+                    : assignedOffice?.address || 'Jl. Perwira No. 01, Area Pos Penugasan'}
                 </p>
 
                 {/* Status Badge */}
@@ -1261,7 +1373,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   {locationStatus === 'inside' ? (
                     <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-emerald-600 dark:text-emerald-400">
                       <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                      LOKASI: SESUAI KANTOR
+                      LOKASI: SESUAI POS KERJA
                     </span>
                   ) : locationStatus === 'outside' ? (
                     <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-rose-600 dark:text-rose-400">
