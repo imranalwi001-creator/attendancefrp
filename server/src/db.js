@@ -449,7 +449,9 @@ export async function initDb() {
       ALTER TABLE hrm_profiles
       ADD COLUMN IF NOT EXISTS current_active_post_id UUID,
       ADD COLUMN IF NOT EXISTS current_active_post_name VARCHAR(255),
-      ADD COLUMN IF NOT EXISTS current_active_post_entered_at TIMESTAMPTZ;
+      ADD COLUMN IF NOT EXISTS current_active_post_entered_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS custom_start_time VARCHAR(10) DEFAULT '07:30',
+      ADD COLUMN IF NOT EXISTS custom_end_time VARCHAR(10) DEFAULT '16:30';
 
       CREATE TABLE IF NOT EXISTS hrm_system_settings (
         key VARCHAR(100) PRIMARY KEY,
@@ -466,7 +468,9 @@ export async function initDb() {
         ('wa_pimpinan_phone', '082192755755'),
         ('break_policy_enabled', 'true'),
         ('break_duration_minutes', '60'),
-        ('break_allow_outside', 'true')
+        ('break_allow_outside', 'true'),
+        ('field_officer_start_time', '07:30'),
+        ('field_officer_end_time', '16:30')
       ON CONFLICT (key) DO NOTHING;
 
       -- ─── 16. DIVISI K3 & ROLE K3 (KESELAMATAN & KESEHATAN KERJA) ───

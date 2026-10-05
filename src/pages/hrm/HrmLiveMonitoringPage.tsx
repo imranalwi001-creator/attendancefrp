@@ -928,6 +928,16 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         </span>
                       </div>
 
+                      {/* Jadwal Jam Kerja Khusus */}
+                      <div className="flex items-center justify-between font-mono text-[11px] pt-1 border-t border-border/50">
+                        <span className="text-muted-foreground flex items-center gap-1">
+                          <Clock size={11} className="text-indigo-600" /> Jam Kerja Petugas:
+                        </span>
+                        <Badge variant="outline" className="text-[10px] font-mono py-0 px-1.5 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800">
+                          {agent.customStartTime || agent.shiftStartTime || '07:30'} - {agent.customEndTime || agent.shiftEndTime || '16:30'} WITA
+                        </Badge>
+                      </div>
+
                       {/* Bank Pos Badges */}
                       {agent.assignedPosts && agent.assignedPosts.length > 0 ? (
                         <div className="space-y-1 pt-1 border-t border-border/60">

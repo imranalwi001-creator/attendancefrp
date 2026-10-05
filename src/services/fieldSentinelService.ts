@@ -168,4 +168,21 @@ export const fieldSentinelService = {
       return { requested: false };
     }
   },
+
+  // 11. Superadmin sets custom work hours (Jam Masuk & Jam Pulang) for Field Sentinel Officers
+  setWorkHours: async (payload: {
+    userId?: string;
+    startTime: string;
+    endTime: string;
+    applyToAllThree?: boolean;
+  }): Promise<{ success: boolean; message: string; data?: any }> => {
+    const res = await api.post<{ success: boolean; message: string; data?: any }>(
+      '/field-sentinel/set-work-hours',
+      payload
+    );
+    if (!res || !res.success) {
+      throw new Error(res?.message || 'Gagal menyimpan jam kerja khusus.');
+    }
+    return res;
+  },
 };

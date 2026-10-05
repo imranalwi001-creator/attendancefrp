@@ -317,11 +317,12 @@ function formatUserRow(r) {
     employeeSequenceNo: r.employee_sequence_no || 0,
     hourlyOvertimeRate: r.hourly_overtime_rate ? parseFloat(r.hourly_overtime_rate) : 23381.79,
     baseSalary: r.base_salary ? parseFloat(r.base_salary) : 4045050,
-    severanceScheme: r.severance_scheme || 'tabungan',
     shiftId: r.shift_id,
     shiftName: r.shift_name || '',
-    shiftStartTime: r.shift_start_time ? r.shift_start_time.substring(0, 5) : '08:00',
-    shiftEndTime: r.shift_end_time ? r.shift_end_time.substring(0, 5) : '17:00',
+    shiftStartTime: r.custom_start_time ? r.custom_start_time.substring(0, 5) : (r.shift_start_time ? r.shift_start_time.substring(0, 5) : '08:00'),
+    shiftEndTime: r.custom_end_time ? r.custom_end_time.substring(0, 5) : (r.shift_end_time ? r.shift_end_time.substring(0, 5) : '17:00'),
+    customStartTime: r.custom_start_time ? r.custom_start_time.substring(0, 5) : null,
+    customEndTime: r.custom_end_time ? r.custom_end_time.substring(0, 5) : null,
     avatarUrl: r.avatar_url || r.face_photo_url || r.face_enrolled_photo || null,
     gender: r.gender,
     birthPlace: r.birth_place,
@@ -2099,6 +2100,78 @@ app.get('/api/field-sentinel/active-agents', async (req, res) => {
     res.json({ success: true, data: users });
   } catch (err) {
     console.error('Active agents error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+// 4b. Set custom work hours (Jam Masuk & Jam Pulang) for Field Sentinel Officers
+app.post('/api/field-sentinel/set-work-hours', async (req, res) => {
+  const { userId, startTime, endTime, applyToAllThree } = req.body;
+  if (!startTime || !endTime) {
+    return res.status(400).json({ success: false, error: 'Jam Masuk dan Jam Pulang wajib diisi' });
+  }
+
+  const cleanStart = startTime.trim().substring(0, 5);
+  const cleanEnd = endTime.trim().substring(0, 5);
+
+  try {
+    if (applyToAllThree) {
+      // 3 Karyawan Khusus (Petugas Lapangan) sesuai AGENTS.md
+      const targetEmails = ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'];
+      const targetNips = ['FRP 07065', 'FR.07.066', 'FRP.07.046'];
+      const targetUuids = [
+        'ebf10b16-ab2f-4b53-ab22-b3ffc00694db',
+        '2ce41a19-0c65-45d3-913e-a68a02203fe2',
+        '0a49f92e-5733-4b72-947c-7361f9490632'
+      ];
+
+      await pool.query(
+        `UPDATE hrm_profiles 
+         SET custom_start_time = $1, custom_end_time = $2, updated_at = NOW()
+         WHERE id = ANY($3::uuid[])
+            OR LOWER(email) = ANY($4::text[])
+            OR TRIM(nip) = ANY($5::text[])
+            OR is_field_sentinel_enabled = true;`,
+        [cleanStart, cleanEnd, targetUuids, targetEmails, targetNips]
+      );
+
+      // Simpan juga di hrm_system_settings
+      await pool.query(
+        `INSERT INTO hrm_system_settings (key, value, updated_at) 
+         VALUES ('field_officer_start_time', $1, NOW()), ('field_officer_end_time', $2, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
+        [cleanStart, cleanEnd]
+      );
+
+      return res.json({
+        success: true,
+        message: `Jam kerja berhasil disetel untuk seluruh 3 Petugas Lapangan Khusus (${cleanStart} - ${cleanEnd} WITA).`,
+        data: { startTime: cleanStart, endTime: cleanEnd, appliedCount: 3 }
+      });
+    }
+
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'User ID wajib disertakan jika tidak diterapkan ke semua' });
+    }
+
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    await pool.query(
+      `UPDATE hrm_profiles 
+       SET custom_start_time = $1, custom_end_time = $2, updated_at = NOW()
+       WHERE id = $3;`,
+      [cleanStart, cleanEnd, validUserId]
+    );
+
+    res.json({
+      success: true,
+      message: `Jam kerja khusus berhasil disetel (${cleanStart} - ${cleanEnd} WITA).`,
+      data: { userId: validUserId, startTime: cleanStart, endTime: cleanEnd }
+    });
+  } catch (err) {
+    console.error('Set work hours error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });

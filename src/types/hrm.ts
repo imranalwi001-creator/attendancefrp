@@ -251,6 +251,8 @@ export interface UserProfile {
   currentActivePostName?: string;
   currentActivePostEnteredAt?: string;
   assignedPosts?: FieldAssignedPost[];
+  customStartTime?: string;      // e.g. '07:30'
+  customEndTime?: string;        // e.g. '16:30'
 
   // ─── Documents ──────────────────────────────────────────
   employeeDocuments?: EmployeeDocument[];

@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { MapPin, Navigation, Crosshair, CheckCircle2, Radio, Loader2, Trash2, Plus, Building2, BellRing, Smartphone } from 'lucide-react';
+import { MapPin, Navigation, Crosshair, CheckCircle2, Radio, Loader2, Trash2, Plus, Building2, BellRing, Smartphone, Clock } from 'lucide-react';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
 
 interface HrmAssignFieldLocationModalProps {
@@ -44,6 +44,13 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+  // Custom work hours states
+  const [workStartTime, setWorkStartTime] = useState('07:30');
+  const [workEndTime, setWorkEndTime] = useState('16:30');
+  const [applyHoursToAllThree, setApplyHoursToAllThree] = useState(true);
+  const [isSavingHours, setIsSavingHours] = useState(false);
+  const [hoursSuccessMsg, setHoursSuccessMsg] = useState<string | null>(null);
+
   // 1. Fetch saved posts when modal opens
   const loadPosts = async () => {
     if (!user) return;
@@ -69,10 +76,13 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
     if (user && open) {
       setErrorMsg(null);
       setSuccessMsg(null);
+      setHoursSuccessMsg(null);
       setPostName('');
       setLatitude('');
       setLongitude('');
       setRadiusMeters(150);
+      setWorkStartTime(user.customStartTime || (user as any).shiftStartTime || '07:30');
+      setWorkEndTime(user.customEndTime || (user as any).shiftEndTime || '16:30');
       loadPosts();
     }
   }, [user, open]);
@@ -97,6 +107,32 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
       },
       { enableHighAccuracy: true, timeout: 8000 }
     );
+  };
+
+  // 2b. Save Custom Work Hours
+  const handleSaveWorkHours = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setIsSavingHours(true);
+    setErrorMsg(null);
+    setHoursSuccessMsg(null);
+
+    try {
+      const res = await fieldSentinelService.setWorkHours({
+        userId: user.id,
+        startTime: workStartTime,
+        endTime: workEndTime,
+        applyToAllThree: applyHoursToAllThree,
+      });
+
+      setHoursSuccessMsg(res.message || 'Jam kerja berhasil disimpan!');
+      if (typeof onSuccess === 'function') onSuccess();
+      if (typeof onSaved === 'function') onSaved();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Gagal menyimpan jam kerja khusus.');
+    } finally {
+      setIsSavingHours(false);
+    }
   };
 
   // 3. Save new post to Bank Pos Lapangan
@@ -207,6 +243,91 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
         )}
 
         <div className="space-y-5 pt-3">
+          {/* ─── SECTION 0: JADWAL KHUSUS JAM MASUK & PULANG PETUGAS LAPANGAN ─── */}
+          <div className="p-4 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800/40 rounded-2xl space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-indigo-600 text-white">
+                  <Clock size={14} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-xs text-foreground">
+                    Jadwal Jam Masuk &amp; Jam Pulang Khusus
+                  </h4>
+                  <p className="text-[11px] text-muted-foreground">
+                    Menentukan target kehadiran dan batas checkout resmi petugas lapangan di pos tugas.
+                  </p>
+                </div>
+              </div>
+              <Badge variant="outline" className="text-[10px] font-mono border-indigo-500/30 text-indigo-700 dark:text-indigo-300">
+                WITA (UTC+8)
+              </Badge>
+            </div>
+
+            {hoursSuccessMsg && (
+              <div className="p-2.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400 text-xs rounded-xl flex items-center gap-2">
+                <CheckCircle2 size={13} />
+                <span>{hoursSuccessMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveWorkHours} className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-[11px] font-medium text-foreground">
+                    Jam Masuk (Clock-In Target):
+                  </Label>
+                  <Input
+                    type="time"
+                    value={workStartTime}
+                    onChange={(e) => setWorkStartTime(e.target.value)}
+                    required
+                    className="h-8 text-xs font-mono rounded-lg"
+                  />
+                  <p className="text-[10px] text-muted-foreground">Presensi lewat dari jam ini dihitung terlambat.</p>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px] font-medium text-foreground">
+                    Jam Pulang (Clock-Out Target):
+                  </Label>
+                  <Input
+                    type="time"
+                    value={workEndTime}
+                    onChange={(e) => setWorkEndTime(e.target.value)}
+                    required
+                    className="h-8 text-xs font-mono rounded-lg"
+                  />
+                  <p className="text-[10px] text-muted-foreground">Presensi pulang diizinkan setelah jam ini.</p>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-indigo-100 dark:border-indigo-900/40">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="apply-all-three"
+                    checked={applyHoursToAllThree}
+                    onCheckedChange={(checked) => setApplyHoursToAllThree(Boolean(checked))}
+                  />
+                  <label
+                    htmlFor="apply-all-three"
+                    className="text-[11px] font-medium text-muted-foreground cursor-pointer select-none"
+                  >
+                    Terapkan jam ini ke 3 Petugas Lapangan Khusus (Muh Aslam Faisal, LA UNGA SAMSI, TAKDIR)
+                  </label>
+                </div>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={isSavingHours}
+                  className="h-7 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg gap-1 shrink-0 font-semibold"
+                >
+                  {isSavingHours ? <Loader2 size={12} className="animate-spin" /> : <Clock size={12} />}
+                  <span>{isSavingHours ? 'Menyimpan...' : 'Simpan Jam Kerja'}</span>
+                </Button>
+              </div>
+            </form>
+          </div>
+
           {/* ─── SECTION 1: DAFTAR POS YANG SUDAH TERSIMPAN ─── */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">

@@ -342,8 +342,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       // 1. Shift
       const shifts = hrmService.getShifts();
-      const matchedShift = shifts.find((s) => s.id === user.shiftId) || shifts[0] || null;
-      setUserShift(matchedShift);
+      const baseShift = shifts.find((s) => s.id === user.shiftId) || shifts[0] || null;
+      let effectiveShift = baseShift ? { ...baseShift } : null;
+      if (effectiveShift && (user.customStartTime || user.customEndTime)) {
+        if (user.customStartTime) effectiveShift.startTime = user.customStartTime;
+        if (user.customEndTime) effectiveShift.endTime = user.customEndTime;
+        effectiveShift.name = `Shift Khusus (${effectiveShift.startTime} - ${effectiveShift.endTime} WITA)`;
+      }
+      setUserShift(effectiveShift);
 
       // 2. Attendance Hari Ini
       const todayStr = getTodayDateStr();
