@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord } from '@/types/hrm';
+import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest } from '@/types/hrm';
 import {
   Clock,
   MapPin,
@@ -26,6 +26,13 @@ import {
   CalendarCheck2,
   Globe,
   ScanFace,
+  FileText,
+  Plus,
+  Eye,
+  Info,
+  Calendar,
+  Sparkles,
+  AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { biometricService, BiometricMatchResult } from '@/services/biometricService';
@@ -78,14 +85,28 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // 1-Hour Break States
+  // 1-Hour Break States & Modal Konfirmasi
   const [breakTimer, setBreakTimer] = useState<number>(0);
   const [isBreakActive, setIsBreakActive] = useState<boolean>(false);
+  const [breakConfirmModalOpen, setBreakConfirmModalOpen] = useState(false);
 
   // Emergency Leave Modal
   const [emergencyModalOpen, setEmergencyModalOpen] = useState(false);
+  const [emergencyCategory, setEmergencyCategory] = useState<'sakit_mendadak' | 'darurat_keluarga' | 'tugas_luar' | 'lainnya'>('sakit_mendadak');
   const [emergencyReason, setEmergencyReason] = useState('');
   const [isSubmittingEmergency, setIsSubmittingEmergency] = useState(false);
+
+  // Leave / Cuti Management States (Tab Aktivitas)
+  const [leaveModalOpen, setLeaveModalOpen] = useState(false);
+  const [leaveType, setLeaveType] = useState<LeaveRequest['leaveType']>('annual_leave');
+  const [leaveStartDate, setLeaveStartDate] = useState('');
+  const [leaveEndDate, setLeaveEndDate] = useState('');
+  const [leaveReason, setLeaveReason] = useState('');
+  const [isSubmittingLeave, setIsSubmittingLeave] = useState(false);
+  const [userLeaves, setUserLeaves] = useState<LeaveRequest[]>([]);
+
+  // History Detail Preview Modal (Tab Riwayat)
+  const [selectedHistoryRecord, setSelectedHistoryRecord] = useState<AttendanceRecord | null>(null);
 
   // Logout Confirmation Dialog
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
@@ -224,20 +245,28 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const userAtts = hrmService.getAttendances().filter((a) => a.userId === user.id);
       setAttendancesHistory(userAtts);
 
-      const todayAtt = userAtts.find((a) => a.date === todayStr);
+      const todayAtt = userAtts.find((a) => a.date === todayStr || a.attendanceDate === todayStr);
       setTodayAttendance(todayAtt);
 
       if (todayAtt?.isOnBreak && todayAtt.breakStartTime) {
         setIsBreakActive(true);
-        const [h, m, s] = todayAtt.breakStartTime.split(':').map(Number);
-        const breakDate = new Date();
-        breakDate.setHours(h, m, s || 0, 0);
-        const elapsedSec = Math.floor((Date.now() - breakDate.getTime()) / 1000);
+        let breakMs = new Date(todayAtt.breakStartTime).getTime();
+        if (isNaN(breakMs)) {
+          const [h, m, s] = todayAtt.breakStartTime.split(':').map(Number);
+          const breakDate = new Date();
+          breakDate.setHours(h, m, s || 0, 0);
+          breakMs = breakDate.getTime();
+        }
+        const elapsedSec = Math.floor((Date.now() - breakMs) / 1000);
         setBreakTimer(Math.max(0, 3600 - elapsedSec));
       } else {
         setIsBreakActive(false);
         setBreakTimer(0);
       }
+
+      // 2B. Data Permohonan Cuti/Izin Saya
+      const myLeaves = hrmService.getUserLeaves(user.id);
+      setUserLeaves(myLeaves);
 
       // 3. Pos Penugasan / Kantor Divisi
       let officeLoc: OfficeLocation | null = null;
@@ -459,7 +488,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
   };
 
-  // Watermark Stamping pada Canvas
+  // Watermark Stamping pada Canvas (Forensic Pixel Stamping)
   const applyWatermark = (canvas: HTMLCanvasElement, matchScore?: number) => {
     const ctx = canvas.getContext('2d');
     if (!ctx || !user) return;
@@ -467,39 +496,63 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const h = canvas.height;
 
     // Dark Gradient Bar at bottom
-    const grad = ctx.createLinearGradient(0, h - 110, 0, h);
+    const barHeight = 135;
+    const grad = ctx.createLinearGradient(0, h - barHeight, 0, h);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
-    grad.addColorStop(0.3, 'rgba(15, 23, 42, 0.85)');
+    grad.addColorStop(0.25, 'rgba(15, 23, 42, 0.90)');
     grad.addColorStop(1, 'rgba(15, 23, 42, 0.98)');
     ctx.fillStyle = grad;
-    ctx.fillRect(0, h - 110, w, 110);
+    ctx.fillRect(0, h - barHeight, w, barHeight);
 
-    // Header badge
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-    ctx.fillRect(12, 12, 380, 28);
+    // Header badge (Top Left)
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+    ctx.fillRect(12, 12, 430, 32);
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(12, 12, 430, 32);
+
     ctx.font = 'bold 11px monospace';
     ctx.fillStyle = '#10b981';
     ctx.fillText(
-      `🛡️ PT FRP • ${actionType === 'clock_in' ? 'CLOCK-IN' : 'CLOCK-OUT'} • MATCH: ${matchScore || 98}%`,
-      20,
-      30
+      `🛡️ PT FRP • ${actionType === 'clock_in' ? 'CLOCK-IN (MASUK)' : 'CLOCK-OUT (PULANG)'} • 1:1 BIOMETRIC: ${matchScore || 98}%`,
+      22,
+      32
     );
 
-    // Employee Name & NIP
+    // Line 1: Employee Name & NIP & Division
     ctx.font = 'bold 15px sans-serif';
     ctx.fillStyle = '#ffffff';
-    ctx.fillText(`${user.fullName} (${user.nip}) • ${user.divisionName || 'Operasional'}`, 16, h - 65);
+    ctx.fillText(
+      `👤 ${user.fullName} (${user.nip || 'ID: ' + user.id.slice(0, 8)}) • ${user.divisionName || 'Operasional'}`,
+      16,
+      h - 88
+    );
 
-    // Atomic Date & Time WITA
-    const timeStr = new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'medium' });
+    // Line 2: Shift Berapa
+    const shiftNameStr = userShift?.name || 'Shift Reguler';
+    const shiftHoursStr = `${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA`;
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillStyle = '#f59e0b';
+    ctx.fillText(`⏰ Shift: ${shiftNameStr} (${shiftHoursStr})`, 16, h - 65);
+
+    // Line 3: Tanggal dan Waktu WITA
+    const now = new Date();
+    const dateFormatted = now.toLocaleDateString('id-ID', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+    const timeFormatted = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\./g, ':');
     ctx.font = '12px monospace';
     ctx.fillStyle = '#cbd5e1';
-    ctx.fillText(`🕒 ${timeStr} WITA`, 16, h - 42);
+    ctx.fillText(`🕒 ${dateFormatted} • ${timeFormatted} WITA`, 16, h - 43);
 
-    // Location Coordinates
+    // Line 4: Titik Lokasi GPS & Nama Pos
     const coordsStr = currentCoords
-      ? `📍 GPS: ${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)} (${assignedPostName || 'Area Terverifikasi'})`
+      ? `📍 Pos: ${assignedPostName || 'Kantor PT FRP'} • GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 5}m)`
       : `📍 Pos: ${assignedPostName || 'Kantor PT FRP'}`;
+    ctx.font = '12px sans-serif';
     ctx.fillStyle = '#34d399';
     ctx.fillText(coordsStr, 16, h - 20);
   };
@@ -530,7 +583,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       let isVerifiedBiometric = false;
 
       if (masterDescriptor && masterDescriptor.length === 128) {
-        // Extract 128D descriptor from current canvas
         const liveDesc = await biometricService.extractFaceDescriptor(canvas).catch(() => null);
 
         if (!liveDesc) {
@@ -541,7 +593,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
         const match = biometricService.evaluateBiometricMatch(liveDesc, masterDescriptor);
 
-        // Reject if biometric match fails
         if (!match.isMatch) {
           toast.error(`Presensi Ditolak! Wajah tidak sesuai dengan data biometrik master di database (${match.confidence}% < 75%).`);
           setIsCapturing(false);
@@ -551,7 +602,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         verifiedConfidence = match.confidence;
         isVerifiedBiometric = true;
       } else {
-        // Fallback jika karyawan belum mendaftarkan master face di Tab Akun
         const faceCheck = await biometricService.detectFace(canvas).catch(() => null);
         if (!faceCheck || !faceCheck.box || faceCheck.box.width === 0) {
           toast.error('Wajah tidak terdeteksi pada foto. Silakan posisikan wajah Anda ke kamera.');
@@ -570,14 +620,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       // Submit Attendance to Database
       const todayStr = getTodayDateStr();
-      const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const timeStr = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
       // Determine late minutes
       let lateMinutes = 0;
       let status: 'hadir' | 'terlambat' = 'hadir';
       if (actionType === 'clock_in' && userShift?.startTime) {
         const [sH, sM] = userShift.startTime.split(':').map(Number);
-        const [cH, cM] = timeStr.split(':').map(Number);
+        const [cH, cM] = [now.getHours(), now.getMinutes()];
         const diff = (cH * 60 + cM) - (sH * 60 + sM);
         if (diff > 0) {
           lateMinutes = diff;
@@ -585,7 +637,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         }
       }
 
-      await hrmService.recordAttendance({
+      const savedAttendance = await hrmService.recordAttendance({
         userId: user.id,
         date: todayStr,
         clockIn: actionType === 'clock_in' ? timeStr : todayAttendance?.clockIn || timeStr,
@@ -600,6 +652,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         biometricConfidence: verifiedConfidence,
         isVerifiedBiometric: isVerifiedBiometric,
       });
+
+      if (savedAttendance) {
+        setTodayAttendance(savedAttendance);
+      }
 
       // Haptic feedback
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -621,28 +677,47 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
   };
 
-  // Toggle 1-Hour Break
-  const handleToggleBreak = async () => {
+  // Toggle 1-Hour Break (Buka dialog konfirmasi atau akhiri)
+  const handleToggleBreak = () => {
     if (!todayAttendance?.clockIn || todayAttendance.clockOut) {
       toast.error('Anda harus absen masuk terlebih dahulu sebelum mengambil jam istirahat.');
       return;
     }
 
-    const nextState = !isBreakActive;
+    if (isBreakActive) {
+      handleEndBreak();
+    } else {
+      setBreakConfirmModalOpen(true);
+    }
+  };
+
+  // Konfirmasi Mulai Istirahat 1 Jam
+  const handleConfirmStartBreak = async () => {
+    if (!user || !todayAttendance) return;
     try {
-      const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      await hrmService.setEmployeeBreakStatus(user!.id, todayAttendance.id, nextState, nextState ? nowStr : undefined);
-      setIsBreakActive(nextState);
-      if (nextState) {
-        setBreakTimer(3600);
-        toast.success('Mode Istirahat 1 Jam Aktif. Anda dapat meninggalkan area kantor.');
-      } else {
-        setBreakTimer(0);
-        toast.info('Waktu istirahat selesai. Selamat kembali bertugas!');
-      }
-      loadRealData();
-    } catch (err) {
-      toast.error('Gagal memperbarui status istirahat');
+      const nowIso = new Date().toISOString();
+      await hrmService.setEmployeeBreakStatus(user.id, todayAttendance.id, true, nowIso);
+      setIsBreakActive(true);
+      setBreakTimer(3600);
+      setBreakConfirmModalOpen(false);
+      toast.success('Mode Istirahat 1 Jam Aktif. Anda dapat meninggalkan area kantor tanpa alarm.');
+      await loadRealData();
+    } catch (err: any) {
+      toast.error('Gagal memulai waktu istirahat: ' + (err.message || 'Error'));
+    }
+  };
+
+  // Akhiri Istirahat 1 Jam
+  const handleEndBreak = async () => {
+    if (!user || !todayAttendance) return;
+    try {
+      await hrmService.setEmployeeBreakStatus(user.id, todayAttendance.id, false);
+      setIsBreakActive(false);
+      setBreakTimer(0);
+      toast.info('Waktu istirahat selesai. Selamat kembali bertugas!');
+      await loadRealData();
+    } catch (err: any) {
+      toast.error('Gagal menyelesaikan waktu istirahat: ' + (err.message || 'Error'));
     }
   };
 
@@ -651,21 +726,57 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     if (!emergencyReason.trim() || !user || !todayAttendance) return;
     setIsSubmittingEmergency(true);
     try {
-      const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const nowStr = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
       await hrmService.recordEarlyLeaveEmergency({
         userId: user.id,
         attendanceId: todayAttendance.id,
         reason: emergencyReason.trim(),
         clockOutTime: nowStr,
+        category: emergencyCategory || 'darurat_keluarga',
+        latitude: currentCoords?.lat,
+        longitude: currentCoords?.lng,
       });
+
       toast.success('Izin Pulang Darurat Berhasil dicatat. Notifikasi terkirim ke Pimpinan.');
       setEmergencyModalOpen(false);
       setEmergencyReason('');
-      loadRealData();
+      await loadRealData();
     } catch (err: any) {
-      toast.error('Gagal memproses izin darurat: ' + err.message);
+      toast.error('Gagal memproses izin darurat: ' + (err.message || 'Error'));
     } finally {
       setIsSubmittingEmergency(false);
+    }
+  };
+
+  // Submit Pengajuan Cuti / Izin dari Tab Aktivitas
+  const handleCreateLeave = async () => {
+    if (!user) return;
+    if (!leaveStartDate || !leaveEndDate || !leaveReason.trim()) {
+      toast.error('Harap lengkapi tanggal mulai, tanggal selesai, dan alasan cuti.');
+      return;
+    }
+    setIsSubmittingLeave(true);
+    try {
+      hrmService.createLeaveRequest({
+        userId: user.id,
+        leaveType,
+        startDate: leaveStartDate,
+        endDate: leaveEndDate,
+        reason: leaveReason.trim(),
+      });
+      toast.success('Permohonan cuti/izin berhasil diajukan dan diteruskan ke Pimpinan/HRD.');
+      setLeaveModalOpen(false);
+      setLeaveReason('');
+      setLeaveStartDate('');
+      setLeaveEndDate('');
+      await loadRealData();
+    } catch (err: any) {
+      toast.error('Gagal mengajukan izin: ' + (err.message || 'Error'));
+    } finally {
+      setIsSubmittingLeave(false);
     }
   };
 
@@ -1045,11 +1156,85 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
                   {/* Status Overlay jika sudah absen */}
                   {hasClockedIn && (
-                    <div className="absolute bottom-2 bg-emerald-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1">
+                    <div className="absolute bottom-2 bg-emerald-600 text-white text-[9.5px] font-bold px-2.5 py-0.5 rounded-full shadow-md flex items-center gap-1">
                       <Check className="w-3 h-3" />
-                      {hasClockedOut ? 'Selesai' : 'Masuk'}
+                      <span>{hasClockedOut ? `Pulang: ${todayAttendance?.clockOut?.substring(0, 5)}` : `Masuk: ${todayAttendance?.clockIn?.substring(0, 5)}`}</span>
                     </div>
                   )}
+                </div>
+              </div>
+            </div>
+
+            {/* ─── BANNER MODE ISTIRAHAT AKTIF ─── */}
+            {isBreakActive && (
+              <div className="bg-amber-500/10 border-2 border-amber-500/40 rounded-2xl p-3 flex items-center justify-between gap-3 animate-pulse">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                    <Coffee className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-amber-900 dark:text-amber-200">Mode Istirahat 1 Jam Aktif</p>
+                    <p className="text-[11px] font-mono text-amber-700 dark:text-amber-300">
+                      Sisa: <span className="font-bold text-xs">{Math.floor(breakTimer / 60)}m {breakTimer % 60}s</span> (Perimeter Bebas)
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleEndBreak}
+                  className="rounded-xl text-[11px] h-8 px-3 border-amber-500 text-amber-800 dark:text-amber-200 hover:bg-amber-500 hover:text-white font-bold"
+                >
+                  Selesai Istirahat
+                </Button>
+              </div>
+            )}
+
+            {/* ─── KARTU RINGKASAN WAKTU PRESENSI HARI INI (REALTIME DATABASE STATUS) ─── */}
+            <div className={`rounded-2xl p-3.5 border transition-all ${
+              hasClockedIn
+                ? 'bg-gradient-to-r from-emerald-50/80 via-teal-50/40 to-emerald-50/80 dark:from-emerald-950/30 dark:via-teal-950/20 dark:to-emerald-950/30 border-emerald-200 dark:border-emerald-800/60 shadow-xs'
+                : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800'
+            }`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                    hasClockedIn ? 'bg-emerald-600 text-white shadow-xs' : 'bg-slate-200 dark:bg-slate-800 text-slate-500'
+                  }`}>
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Status Kehadiran Hari Ini</p>
+                    <p className="text-xs font-bold text-slate-900 dark:text-white">
+                      {hasClockedOut ? (
+                        <span className="text-slate-800 dark:text-slate-200">Presensi Selesai (Sudah Pulang)</span>
+                      ) : hasClockedIn ? (
+                        <span className="text-emerald-700 dark:text-emerald-400 font-extrabold">Aktif Bertugas (Sudah Absen Masuk)</span>
+                      ) : (
+                        <span className="text-amber-600 dark:text-amber-400">Belum Melakukan Absen Masuk</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                {hasClockedIn && (
+                  <Badge className={todayAttendance?.status === 'terlambat' ? 'bg-amber-500 text-white text-[10px]' : 'bg-emerald-600 text-white text-[10px]'}>
+                    {todayAttendance?.status === 'terlambat' ? `Terlambat ${todayAttendance.lateMinutes}m` : 'Tepat Waktu'}
+                  </Badge>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 mt-2.5 pt-2.5 border-t border-slate-200/60 dark:border-slate-800/80 text-[11px]">
+                <div className="bg-white/80 dark:bg-slate-900/80 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800">
+                  <p className="text-[9.5px] text-slate-400 font-medium">JAM ABSEN MASUK</p>
+                  <p className="font-mono font-bold text-xs text-slate-900 dark:text-slate-100 mt-0.5">
+                    {todayAttendance?.clockIn ? `${todayAttendance.clockIn.substring(0, 5)} WITA` : '-'}
+                  </p>
+                </div>
+                <div className="bg-white/80 dark:bg-slate-900/80 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800">
+                  <p className="text-[9.5px] text-slate-400 font-medium">JAM ABSEN PULANG</p>
+                  <p className="font-mono font-bold text-xs text-slate-900 dark:text-slate-100 mt-0.5">
+                    {todayAttendance?.clockOut ? `${todayAttendance.clockOut.substring(0, 5)} WITA` : (hasClockedIn ? 'Sedang Bertugas' : '-')}
+                  </p>
                 </div>
               </div>
             </div>
@@ -1118,7 +1303,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               >
                 <Clock className="w-4 h-4 shrink-0" />
                 <span className="truncate">
-                  {hasClockedIn ? `MASUK (${todayAttendance?.clockIn})` : `ABSEN MASUK (${userShift?.startTime || '08:00'})`}
+                  {hasClockedIn ? `MASUK (${todayAttendance?.clockIn?.substring(0, 5) || todayAttendance?.clockIn})` : `ABSEN MASUK (${userShift?.startTime || '08:00'})`}
                 </span>
               </button>
 
@@ -1137,7 +1322,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               >
                 <LogOut className="w-4 h-4 shrink-0" />
                 <span className="truncate">
-                  {hasClockedOut ? `PULANG (${todayAttendance?.clockOut})` : 'ABSEN PULANG'}
+                  {hasClockedOut ? `PULANG (${todayAttendance?.clockOut?.substring(0, 5) || todayAttendance?.clockOut})` : 'ABSEN PULANG'}
                 </span>
               </button>
             </div>
@@ -1253,38 +1438,74 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         {activeTab === 'riwayat' && (
           <div className="space-y-4 animate-in fade-in duration-200">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-bold text-slate-900 dark:text-white">Riwayat Kehadiran Saya</h2>
-              <span className="text-xs text-slate-500">{attendancesHistory.length} Catatan</span>
+              <div>
+                <h2 className="text-base font-bold text-slate-900 dark:text-white">Riwayat Kehadiran Saya</h2>
+                <p className="text-[11px] text-slate-500">Ketuk rekaman presensi untuk melihat rincian & foto watermark</p>
+              </div>
+              <Badge variant="outline" className="text-xs text-emerald-700 bg-emerald-50 dark:bg-emerald-950/40">
+                {attendancesHistory.length} Catatan
+              </Badge>
             </div>
 
             <div className="space-y-2.5">
               {attendancesHistory.length === 0 ? (
-                <div className="p-8 text-center text-slate-400 text-xs">Belum ada riwayat presensi tercatat.</div>
+                <div className="p-8 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
+                  Belum ada riwayat presensi tercatat di sistem.
+                </div>
               ) : (
-                attendancesHistory.slice(0, 10).map((att) => (
+                attendancesHistory.slice(0, 15).map((att) => (
                   <div
                     key={att.id}
-                    className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between"
+                    onClick={() => setSelectedHistoryRecord(att)}
+                    className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between cursor-pointer hover:border-emerald-500/50 hover:bg-emerald-50/20 dark:hover:bg-emerald-950/20 transition-all active:scale-[0.99] group shadow-xs"
                   >
-                    <div className="space-y-0.5">
-                      <p className="text-xs font-bold text-slate-900 dark:text-white">{att.date}</p>
-                      <p className="text-[11px] text-slate-500">
-                        Masuk: {att.clockIn || '-'} | Pulang: {att.clockOut || '-'}
-                      </p>
-                      {att.lateMinutes && att.lateMinutes > 0 ? (
-                        <span className="text-[10px] text-amber-600 font-semibold">Terlambat {att.lateMinutes} menit</span>
-                      ) : null}
+                    <div className="flex items-center gap-3 min-w-0">
+                      {att.clockInPhoto || att.photoIn ? (
+                        <div className="w-11 h-11 rounded-xl overflow-hidden shrink-0 border border-emerald-500/30 bg-slate-200">
+                          <img
+                            src={att.clockInPhoto || att.photoIn}
+                            alt="Foto Presensi"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      ) : (
+                        <div className="w-11 h-11 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-400 shrink-0">
+                          <Clock className="w-5 h-5 text-slate-500" />
+                        </div>
+                      )}
+                      <div className="space-y-0.5 min-w-0">
+                        <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                          {new Date(att.date || att.attendanceDate || '').toLocaleDateString('id-ID', {
+                            weekday: 'short',
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                          }) || att.date}
+                        </p>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Masuk: <span className="font-mono font-semibold text-slate-700 dark:text-slate-300">{att.clockIn ? att.clockIn.substring(0, 5) : '-'}</span> | Pulang: <span className="font-mono font-semibold text-slate-700 dark:text-slate-300">{att.clockOut ? att.clockOut.substring(0, 5) : '-'}</span>
+                        </p>
+                        {att.lateMinutes && att.lateMinutes > 0 ? (
+                          <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold block">
+                            Terlambat {att.lateMinutes} menit
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
-                    <Badge
-                      variant="outline"
-                      className={
-                        att.status === 'hadir'
-                          ? 'border-emerald-500/30 text-emerald-600 bg-emerald-50 text-[10px]'
-                          : 'border-amber-500/30 text-amber-600 bg-amber-50 text-[10px]'
-                      }
-                    >
-                      {att.status.toUpperCase()}
-                    </Badge>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Badge
+                        variant="outline"
+                        className={
+                          att.status === 'hadir'
+                            ? 'border-emerald-500/30 text-emerald-600 bg-emerald-50 text-[10px]'
+                            : 'border-amber-500/30 text-amber-600 bg-amber-50 text-[10px]'
+                        }
+                      >
+                        {att.status.toUpperCase()}
+                      </Badge>
+                      <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-600 transition-colors" />
+                    </div>
                   </div>
                 ))
               )}
@@ -1295,22 +1516,94 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         {/* ─── TAB 3: AKTIVITAS / IZIN ─── */}
         {activeTab === 'aktivitas' && (
           <div className="space-y-4 animate-in fade-in duration-200">
-            <h2 className="text-base font-bold text-slate-900 dark:text-white">Aktivitas & Permohonan Izin</h2>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-1">
-                <CalendarCheck2 className="w-6 h-6 text-emerald-600 mx-auto" />
-                <p className="text-xs font-bold text-slate-800 dark:text-white">Cuti Tahunan</p>
-                <p className="text-[11px] text-slate-500">Tersedia: {analyticsData.remainingLeave} Hari</p>
-              </div>
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-1">
-                <AlertOctagon className="w-6 h-6 text-rose-600 mx-auto" />
-                <p className="text-xs font-bold text-slate-800 dark:text-white">Izin Darurat</p>
-                <p className="text-[11px] text-slate-500">Self-Service Alert</p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-slate-900 dark:text-white">Aktivitas & Permohonan Izin</h2>
+                <p className="text-[11px] text-slate-500">Ajukan cuti resmi dan pantau status persetujuan pimpinan</p>
               </div>
             </div>
-            <p className="text-[11px] text-slate-400 text-center">
-              Untuk pengajuan formulir lengkap cuti/sakit resmi, Anda dapat mengakses via menu web portal.
-            </p>
+
+            {/* Quick Action Tiles */}
+            <div className="grid grid-cols-2 gap-3">
+              <div
+                onClick={() => setLeaveModalOpen(true)}
+                className="p-4 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 text-center space-y-1.5 cursor-pointer hover:border-emerald-500 transition-all active:scale-95 group shadow-xs"
+              >
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                  <CalendarCheck2 className="w-5 h-5" />
+                </div>
+                <p className="text-xs font-bold text-slate-900 dark:text-white">Ajukan Cuti/Izin</p>
+                <p className="text-[10.5px] text-slate-500">Sisa Cuti: <span className="font-bold text-emerald-600">{analyticsData.remainingLeave} Hari</span></p>
+              </div>
+
+              <div
+                onClick={() => setEmergencyModalOpen(true)}
+                className="p-4 rounded-2xl bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/60 text-center space-y-1.5 cursor-pointer hover:border-rose-500 transition-all active:scale-95 group shadow-xs"
+              >
+                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                  <AlertOctagon className="w-5 h-5" />
+                </div>
+                <p className="text-xs font-bold text-slate-900 dark:text-white">Izin Darurat</p>
+                <p className="text-[10.5px] text-rose-600 font-semibold">Self-Service Alert</p>
+              </div>
+            </div>
+
+            {/* Primary Action Button */}
+            <Button
+              onClick={() => setLeaveModalOpen(true)}
+              className="w-full py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-2 shadow-sm"
+            >
+              <Plus className="w-4 h-4" />
+              Buat Pengajuan Cuti / Izin Baru
+            </Button>
+
+            {/* Riwayat Pengajuan Cuti */}
+            <div className="pt-2 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                  <FileText className="w-4 h-4 text-emerald-600" />
+                  Riwayat Pengajuan Saya
+                </h3>
+                <span className="text-[10px] text-slate-400">{userLeaves.length} Pengajuan</span>
+              </div>
+
+              {userLeaves.length === 0 ? (
+                <div className="p-6 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
+                  Belum ada permohonan cuti atau izin yang diajukan.
+                </div>
+              ) : (
+                userLeaves.slice(0, 10).map((l) => (
+                  <div
+                    key={l.id}
+                    className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 space-y-1.5 shadow-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white capitalize">
+                        {l.leaveType.replace('_', ' ')}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className={
+                          l.status === 'approved'
+                            ? 'border-emerald-500/40 text-emerald-600 bg-emerald-50 text-[10px]'
+                            : l.status === 'rejected'
+                            ? 'border-rose-500/40 text-rose-600 bg-rose-50 text-[10px]'
+                            : 'border-amber-500/40 text-amber-600 bg-amber-50 text-[10px]'
+                        }
+                      >
+                        {l.status === 'approved' ? 'Disetujui' : l.status === 'rejected' ? 'Ditolak' : 'Menunggu Approval'}
+                      </Badge>
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                      📅 {l.startDate} s/d {l.endDate} ({l.totalDays || 1} Hari)
+                    </p>
+                    <p className="text-xs text-slate-700 dark:text-slate-300 italic bg-white/70 dark:bg-slate-800/70 p-2 rounded-xl">
+                      "{l.reason}"
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         )}
 
@@ -1320,17 +1613,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             <h2 className="text-base font-bold text-slate-900 dark:text-white">Profil & Keamanan Akun</h2>
             <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-3">
               <div>
-                <p className="text-[10px] text-slate-400 uppercase">Nama Lengkap</p>
+                <p className="text-[10px] text-slate-400 uppercase font-semibold">Nama Lengkap</p>
                 <p className="text-xs font-bold text-slate-800 dark:text-white">{user?.fullName}</p>
               </div>
               <div>
-                <p className="text-[10px] text-slate-400 uppercase">Email Terdaftar</p>
+                <p className="text-[10px] text-slate-400 uppercase font-semibold">Email Terdaftar</p>
                 <p className="text-xs font-bold text-slate-800 dark:text-white">{user?.email}</p>
               </div>
               <div>
-                <p className="text-[10px] text-slate-400 uppercase">NIP / ID Karyawan</p>
-                <p className="text-xs font-mono font-bold text-slate-800 dark:text-white">{user?.nip}</p>
+                <p className="text-[10px] text-slate-400 uppercase font-semibold">NIP / ID Karyawan</p>
+                <p className="text-xs font-mono font-bold text-slate-800 dark:text-white">{user?.nip || user?.id}</p>
               </div>
+              <div>
+                <p className="text-[10px] text-slate-400 uppercase font-semibold">Divisi & Peran</p>
+                <p className="text-xs font-bold text-slate-800 dark:text-white">{user?.divisionName || 'Operasional Lapangan'} • {user?.roleName || user?.role || 'Karyawan'}</p>
+              </div>
+
               {/* Master Face Biometric Card */}
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
                 <div className="flex items-center justify-between">
@@ -1365,6 +1663,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </Button>
               </div>
 
+              {/* Perangkat Terdaftar Binding */}
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-1">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-slate-800 dark:text-white">Perangkat Terdaftar (HP Binding)</p>
+                  <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-600 bg-emerald-50">
+                    Terkunci Aman
+                  </Badge>
+                </div>
+                <p className="text-[11px] text-slate-500 font-mono">
+                  Model: {user?.deviceModel || 'HP Resmi Karyawan'} • ID: {user?.registeredDeviceId ? user.registeredDeviceId.slice(0, 16) + '...' : 'Terkunci Otomatis'}
+                </p>
+              </div>
+
               <div className="pt-2">
                 <Button
                   size="sm"
@@ -1374,6 +1685,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 >
                   <Lock className="w-3.5 h-3.5" />
                   Ganti Kata Sandi
+                </Button>
+              </div>
+
+              <div className="pt-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setLogoutDialogOpen(true)}
+                  className="w-full rounded-xl text-xs gap-1.5 text-rose-600 border-rose-200 hover:bg-rose-50"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Keluar dari Akun (Logout)
                 </Button>
               </div>
             </div>
@@ -1447,7 +1770,45 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         </button>
       </nav>
 
-      {/* ─── MODAL IZIN PULANG DARURAT ─── */}
+      {/* ─── MODAL KONFIRMASI MULAI ISTIRAHAT 1 JAM ─── */}
+      <Dialog open={breakConfirmModalOpen} onOpenChange={setBreakConfirmModalOpen}>
+        <DialogContent className="max-w-sm rounded-3xl p-5">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-amber-600 flex items-center gap-2">
+              <Coffee className="w-5 h-5" />
+              Mulai Jam Istirahat 1 Jam?
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Sistem akan mengaktifkan mode istirahat 60 menit. Selama jam istirahat berlangsung, pengawasan perimeter / geofence dijeda dan alarm pelanggaran area tidak akan berbunyi.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-2xl border border-amber-200 dark:border-amber-800 text-xs space-y-1 text-amber-900 dark:text-amber-200">
+            <p className="font-bold flex items-center gap-1.5">
+              <Clock className="w-4 h-4 text-amber-600" />
+              Durasi: 60 Menit Resmi
+            </p>
+            <p className="text-[11px] text-slate-600 dark:text-slate-400">
+              Anda bebas keluar area kantor. Notifikasi pengingat akan muncul otomatis saat waktu istirahat habis.
+            </p>
+          </div>
+
+          <DialogFooter className="flex flex-row gap-2">
+            <Button variant="outline" size="sm" onClick={() => setBreakConfirmModalOpen(false)} className="rounded-xl flex-1 text-xs">
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleConfirmStartBreak}
+              className="rounded-xl flex-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold"
+            >
+              Mulai Istirahat
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL IZIN PULANG DARURAT (SELF-SERVICE ALERT) ─── */}
       <Dialog open={emergencyModalOpen} onOpenChange={setEmergencyModalOpen}>
         <DialogContent className="max-w-sm rounded-3xl p-5">
           <DialogHeader>
@@ -1456,18 +1817,44 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               Izin Pulang Darurat
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Pilihan khusus darurat/sakit. Sistem otomatis memproses checkout dan mengirim notifikasi instan WhatsApp ke Pimpinan.
+              Pilihan khusus kondisi mendadak/sakit. Sistem otomatis mencatat presensi pulang saat ini dan mengirim notifikasi darurat instan ke Pimpinan.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3 py-2">
-            <textarea
-              rows={3}
-              value={emergencyReason}
-              onChange={(e) => setEmergencyReason(e.target.value)}
-              placeholder="Jelaskan alasan darurat (misal: demam tinggi butuh pengobatan segera)..."
-              className="w-full p-3 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-rose-500"
-            />
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Kategori Kondisi Darurat:
+              </label>
+              <select
+                value={emergencyCategory}
+                onChange={(e) => setEmergencyCategory(e.target.value as any)}
+                className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200"
+              >
+                <option value="sakit_mendadak">🤒 Sakit Mendadak (Butuh Pengobatan/Istirahat)</option>
+                <option value="darurat_keluarga">👨‍👩‍👧 Keperluan Darurat Keluarga</option>
+                <option value="tugas_luar">🚗 Tugas Lapangan / Dinas Mendadak</option>
+                <option value="lainnya">⚠️ Kondisi Force Majeure / Lainnya</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Penjelasan / Alasan Lengkap:
+              </label>
+              <textarea
+                rows={3}
+                value={emergencyReason}
+                onChange={(e) => setEmergencyReason(e.target.value)}
+                placeholder="Tuliskan keterangan mendesak secara jelas..."
+                className="w-full p-3 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/60 text-[10.5px] text-rose-700 dark:text-rose-300 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+              <span>Presensi pulang Anda akan langsung terverifikasi dengan waktu saat ini.</span>
+            </div>
           </div>
 
           <DialogFooter className="flex flex-row gap-2">
@@ -1480,7 +1867,165 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               onClick={handleConfirmEmergency}
               className="rounded-xl flex-1 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold"
             >
-              {isSubmittingEmergency ? 'Memproses...' : 'Kirim Laporan'}
+              {isSubmittingEmergency ? 'Memproses...' : 'Kirim Izin Darurat'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL PENGAJUAN CUTI / IZIN BARU (TAB AKTIVITAS) ─── */}
+      <Dialog open={leaveModalOpen} onOpenChange={setLeaveModalOpen}>
+        <DialogContent className="max-w-sm rounded-3xl p-5">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-2">
+              <CalendarCheck2 className="w-5 h-5" />
+              Pengajuan Cuti / Izin Karyawan
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Formulir permohonan resmi langsung terhubung ke database dan diteruskan ke Pimpinan/HRD.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 text-xs">
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Jenis Permohonan:
+              </label>
+              <select
+                value={leaveType}
+                onChange={(e) => setLeaveType(e.target.value as any)}
+                className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200"
+              >
+                <option value="annual_leave">🏖️ Cuti Tahunan (Sisa: {analyticsData.remainingLeave} Hari)</option>
+                <option value="sick_leave">🏥 Izin Sakit (Disertai Surat Dokter)</option>
+                <option value="emergency_leave">🚨 Izin Kepentingan Darurat</option>
+                <option value="unpaid_leave">📋 Izin Khusus / Dispensasi Dinas</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                  Mulai Tanggal:
+                </label>
+                <input
+                  type="date"
+                  value={leaveStartDate}
+                  onChange={(e) => setLeaveStartDate(e.target.value)}
+                  className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                  Sampai Tanggal:
+                </label>
+                <input
+                  type="date"
+                  value={leaveEndDate}
+                  onChange={(e) => setLeaveEndDate(e.target.value)}
+                  className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Alasan / Keterangan:
+              </label>
+              <textarea
+                rows={3}
+                value={leaveReason}
+                onChange={(e) => setLeaveReason(e.target.value)}
+                placeholder="Tuliskan alasan pengajuan cuti secara rinci..."
+                className="w-full p-3 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="flex flex-row gap-2">
+            <Button variant="outline" size="sm" onClick={() => setLeaveModalOpen(false)} className="rounded-xl flex-1 text-xs">
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              disabled={isSubmittingLeave || !leaveStartDate || !leaveEndDate || !leaveReason.trim()}
+              onClick={handleCreateLeave}
+              className="rounded-xl flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+            >
+              {isSubmittingLeave ? 'Mengirim...' : 'Kirim Pengajuan'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL DETAIL PRATINJAU PRESENSI DENGAN FOTO WATERMARK (TAB RIWAYAT) ─── */}
+      <Dialog open={Boolean(selectedHistoryRecord)} onOpenChange={(open) => !open && setSelectedHistoryRecord(null)}>
+        <DialogContent className="max-w-sm rounded-3xl p-5">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center justify-between">
+              <span>Detail Presensi</span>
+              {selectedHistoryRecord && (
+                <Badge className={selectedHistoryRecord.status === 'hadir' ? 'bg-emerald-600 text-white text-[10px]' : 'bg-amber-500 text-white text-[10px]'}>
+                  {selectedHistoryRecord.status.toUpperCase()}
+                </Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {selectedHistoryRecord ? `Tanggal: ${selectedHistoryRecord.date || selectedHistoryRecord.attendanceDate}` : ''}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedHistoryRecord && (
+            <div className="space-y-3 py-1 text-xs">
+              {/* Foto Presensi dengan Watermark */}
+              {selectedHistoryRecord.clockInPhoto || selectedHistoryRecord.photoIn ? (
+                <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-inner bg-slate-900">
+                  <img
+                    src={selectedHistoryRecord.clockInPhoto || selectedHistoryRecord.photoIn}
+                    alt="Foto Presensi Watermark"
+                    className="w-full h-52 object-cover"
+                  />
+                  <div className="p-2 bg-slate-950 text-white text-[10px] flex items-center justify-between">
+                    <span className="text-emerald-400 font-mono">🛡️ Watermark Forensik Terverifikasi</span>
+                    <span className="text-slate-400">1:1 Biometrik</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="h-28 rounded-2xl bg-slate-100 dark:bg-slate-900 flex flex-col items-center justify-center text-slate-400 gap-1 border border-dashed border-slate-300 dark:border-slate-800">
+                  <Camera className="w-6 h-6 text-slate-400" />
+                  <span className="text-[11px]">Foto check-in tidak tersimpan</span>
+                </div>
+              )}
+
+              {/* Rincian Jam */}
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                  <p className="text-[10px] text-slate-400">JAM MASUK</p>
+                  <p className="font-mono font-bold text-xs text-slate-900 dark:text-slate-100 mt-0.5">
+                    {selectedHistoryRecord.clockIn ? `${selectedHistoryRecord.clockIn.substring(0, 5)} WITA` : '-'}
+                  </p>
+                </div>
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                  <p className="text-[10px] text-slate-400">JAM PULANG</p>
+                  <p className="font-mono font-bold text-xs text-slate-900 dark:text-slate-100 mt-0.5">
+                    {selectedHistoryRecord.clockOut ? `${selectedHistoryRecord.clockOut.substring(0, 5)} WITA` : '-'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Lokasi & Catatan */}
+              <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[11px] space-y-1">
+                <p className="text-[10px] text-slate-400">POS / LOKASI PENUGASAN</p>
+                <p className="font-semibold text-slate-800 dark:text-slate-200">
+                  {selectedHistoryRecord.notes || assignedPostName || 'Pos Lapangan Terdaftar'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button size="sm" onClick={() => setSelectedHistoryRecord(null)} className="w-full rounded-xl text-xs font-bold">
+              Tutup Rincian
             </Button>
           </DialogFooter>
         </DialogContent>

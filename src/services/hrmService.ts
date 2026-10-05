@@ -2585,7 +2585,7 @@ export const hrmService = {
       hrmService.enqueueOfflineSync('clock-in', clockInPayload);
     });
 
-    return newRecord;
+    return memRec;
   },
 
   recordClockOut: (data: {
@@ -2704,7 +2704,132 @@ export const hrmService = {
       hrmService.enqueueOfflineSync('clock-out', clockOutPayload);
     });
 
-    return existing;
+    return memRec;
+  },
+
+  // ─── PWA & FIELD SENTINEL REAL-TIME ATTENDANCE ENGINE ───
+  recordAttendance: async (data: {
+    userId: string;
+    date?: string;
+    clockIn?: string;
+    clockOut?: string;
+    status?: AttendanceStatus;
+    lateMinutes?: number;
+    clockInPhoto?: string;
+    clockOutPhoto?: string;
+    latitude?: number;
+    longitude?: number;
+    locationName?: string;
+    biometricConfidence?: number;
+    isVerifiedBiometric?: boolean;
+    notes?: string;
+  }): Promise<AttendanceRecord> => {
+    const today = data.date || getTodayDateStr();
+    const existing = hrmService.getUserTodayAttendance(data.userId);
+
+    // Deteksi aksi Clock-Out: jika ada foto pulang, atau jika user sudah clockIn dan ada permintaan clockOut
+    const isClockOut = Boolean(
+      data.clockOutPhoto ||
+      (existing?.clockIn && !existing?.clockOut && data.clockOut && data.clockOut !== existing.clockIn)
+    );
+
+    if (isClockOut) {
+      if (existing && !existing.clockOut) {
+        return hrmService.recordClockOut({
+          userId: data.userId,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          photoUrl: data.clockOutPhoto,
+          notes: data.notes || (data.locationName ? `[Pos: ${data.locationName}]` : undefined),
+          biometricScore: data.biometricConfidence,
+          biometricMatch: data.isVerifiedBiometric,
+          geofenceValid: true,
+        });
+      }
+    }
+
+    if (existing && existing.clockIn && !data.clockOutPhoto) {
+      if (data.clockInPhoto) {
+        existing.clockInPhoto = data.clockInPhoto as any;
+        existing.photoIn = data.clockInPhoto;
+        const all = hrmService.getAttendances();
+        const idx = all.findIndex((a) => a.id === existing.id);
+        if (idx !== -1) all[idx] = existing;
+        const memIdx = inMemoryAttendances.findIndex((m) => m.id === existing.id);
+        if (memIdx !== -1) inMemoryAttendances[memIdx] = existing;
+        else inMemoryAttendances.unshift(existing);
+        hrmService.saveAttendances(all);
+        window.dispatchEvent(new Event('hrm_attendance_updated'));
+      }
+      return existing;
+    }
+
+    return hrmService.recordClockIn({
+      userId: data.userId,
+      latitude: data.latitude,
+      longitude: data.longitude,
+      photoUrl: data.clockInPhoto,
+      notes: data.notes || (data.locationName ? `[Pos: ${data.locationName}]` : undefined),
+      biometricScore: data.biometricConfidence,
+      biometricMatch: data.isVerifiedBiometric,
+      geofenceValid: true,
+    });
+  },
+
+  // ─── PWA BREAK STATUS TOGGLE ───
+  setEmployeeBreakStatus: async (
+    userId: string,
+    attendanceId?: string,
+    nextState: boolean = true,
+    startTimeStr?: string
+  ): Promise<AttendanceRecord> => {
+    if (nextState) {
+      return hrmService.startBreakTime(userId);
+    } else {
+      return hrmService.endBreakTime(userId);
+    }
+  },
+
+  // ─── PWA EMERGENCY LEAVE SUBMISSION ───
+  recordEarlyLeaveEmergency: async (data: {
+    userId: string;
+    attendanceId?: string;
+    reason: string;
+    clockOutTime?: string;
+    category?: string;
+    photoUrl?: string;
+    latitude?: number;
+    longitude?: number;
+  }): Promise<AttendanceRecord> => {
+    return hrmService.recordEarlyLeave({
+      userId: data.userId,
+      category: (data.category as any) || 'darurat_keluarga',
+      reason: data.reason,
+      photoUrl: data.photoUrl,
+      latitude: data.latitude,
+      longitude: data.longitude,
+    });
+  },
+
+  // ─── USER PASSWORD UPDATE ───
+  updateUserPassword: async (userId: string, newPassword: string): Promise<boolean> => {
+    try {
+      await api.post('/auth/change-password', { userId, newPassword });
+    } catch (err) {
+      console.warn('[Change Password API Warning]', err);
+    }
+    const users = hrmService.getUsers();
+    const idx = users.findIndex((u) => u.id === userId);
+    if (idx !== -1) {
+      users[idx].password = newPassword;
+      safeSetJson(STORAGE_KEYS.USERS, users);
+    }
+    const cur = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
+    if (cur && cur.id === userId) {
+      cur.password = newPassword;
+      safeSetJson(STORAGE_KEYS.CURRENT_USER, cur);
+    }
+    return true;
   },
 
   // ─── REKOMENDASI 1: Self-Service Pulang Awal Darurat (Mandiri Tanpa Approval) ───
