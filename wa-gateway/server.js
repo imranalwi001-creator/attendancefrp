@@ -89,6 +89,15 @@ app.get('/status', (req, res) => {
   });
 });
 
+app.get('/wa-status', (req, res) => {
+  res.json({
+    status: connectionStatus,
+    phone: connectedPhone,
+    hasQr: Boolean(qrCodeDataUrl),
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Send Message Handler
 async function handleSendMessage(req, res) {
   const target = req.body.number || req.body.phone || req.body.target;
@@ -158,7 +167,7 @@ function renderQrHtml() {
   <script>
     setInterval(async () => {
       try {
-        const res = await fetch('/status');
+        const res = await fetch('/wa-status');
         const data = await res.json();
         if (data.status === 'connected') {
           document.getElementById('status-badge').className = 'badge badge-connected';
