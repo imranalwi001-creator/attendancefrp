@@ -615,53 +615,73 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   };
 
   // Watermark Stamping pada Canvas (Forensic Pixel Stamping)
+  // Watermark Stamping pada Canvas (Forensic Pixel Stamping - High Contrast & Large Scale)
   const applyWatermark = (canvas: HTMLCanvasElement, matchScore?: number) => {
     const ctx = canvas.getContext('2d');
     if (!ctx || !user) return;
     const w = canvas.width;
     const h = canvas.height;
 
+    // Responsive scaling based on canvas width (normalized to ~720px portrait width)
+    const scale = Math.max(w / 720, 1.0);
+
     // Dark Gradient Bar at bottom
-    const barHeight = 135;
+    const barHeight = Math.round(250 * scale);
     const grad = ctx.createLinearGradient(0, h - barHeight, 0, h);
-    grad.addColorStop(0, 'rgba(0,0,0,0)');
-    grad.addColorStop(0.25, 'rgba(15, 23, 42, 0.90)');
+    grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    grad.addColorStop(0.18, 'rgba(15, 23, 42, 0.92)');
     grad.addColorStop(1, 'rgba(15, 23, 42, 0.98)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, h - barHeight, w, barHeight);
 
-    // Header badge (Top Left)
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
-    ctx.fillRect(12, 12, 430, 32);
-    ctx.strokeStyle = '#10b981';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(12, 12, 430, 32);
+    // Top Status Accent Line
+    ctx.fillStyle = '#10b981';
+    ctx.fillRect(0, h - barHeight + Math.round(35 * scale), w, Math.max(3 * scale, 3));
 
-    ctx.font = 'bold 11px monospace';
+    // Header badge (Top Left)
+    const badgeW = Math.min(w - 24, Math.round(540 * scale));
+    const badgeH = Math.round(44 * scale);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+    ctx.fillRect(16, 16, badgeW, badgeH);
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = Math.max(2 * scale, 2);
+    ctx.strokeRect(16, 16, badgeW, badgeH);
+
+    ctx.font = `bold ${Math.round(17 * scale)}px system-ui, sans-serif`;
     ctx.fillStyle = '#10b981';
     ctx.fillText(
-      `🛡️ PT FRP • ${actionType === 'clock_in' ? 'CLOCK-IN (MASUK)' : 'CLOCK-OUT (PULANG)'} • 1:1 BIOMETRIC: ${matchScore || 98}%`,
-      22,
-      32
+      `🛡️ PT FRP • ${actionType === 'clock_in' ? 'CLOCK-IN (MASUK)' : 'CLOCK-OUT (PULANG)'} • 1:1 SCORE: ${matchScore || 98}%`,
+      26,
+      16 + Math.round(29 * scale)
     );
 
+    // Text rows in bottom banner (scaled, bold, and high contrast)
+    const paddingX = Math.round(22 * scale);
+    let startY = h - barHeight + Math.round(72 * scale);
+    const lineGap = Math.round(42 * scale);
+
     // Line 1: Employee Name & NIP & Division
-    ctx.font = 'bold 15px sans-serif';
+    ctx.font = `bold ${Math.round(22 * scale)}px system-ui, sans-serif`;
     ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = 'rgba(0,0,0,0.85)';
+    ctx.shadowBlur = 4;
     ctx.fillText(
       `👤 ${user.fullName} (${user.nip || 'ID: ' + user.id.slice(0, 8)}) • ${user.divisionName || 'Operasional'}`,
-      16,
-      h - 88
+      paddingX,
+      startY
     );
 
     // Line 2: Shift Berapa
-    const shiftNameStr = userShift?.name || 'Shift Reguler';
+    startY += lineGap;
+    const cleanShiftName = userShift?.name || 'Shift Reguler';
     const shiftHoursStr = `${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA`;
-    ctx.font = 'bold 12px sans-serif';
-    ctx.fillStyle = '#f59e0b';
-    ctx.fillText(`⏰ Shift: ${shiftNameStr} (${shiftHoursStr})`, 16, h - 65);
+    const shiftText = cleanShiftName.includes('(') ? `⏰ Shift: ${cleanShiftName}` : `⏰ Shift: ${cleanShiftName} (${shiftHoursStr})`;
+    ctx.font = `bold ${Math.round(18 * scale)}px system-ui, sans-serif`;
+    ctx.fillStyle = '#fbbf24'; // Amber / Gold
+    ctx.fillText(shiftText, paddingX, startY);
 
     // Line 3: Tanggal dan Waktu WITA
+    startY += lineGap;
     const now = new Date();
     const dateFormatted = now.toLocaleDateString('id-ID', {
       weekday: 'long',
@@ -670,17 +690,21 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       year: 'numeric',
     });
     const timeFormatted = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\./g, ':');
-    ctx.font = '12px monospace';
-    ctx.fillStyle = '#cbd5e1';
-    ctx.fillText(`🕒 ${dateFormatted} • ${timeFormatted} WITA`, 16, h - 43);
+    ctx.font = `bold ${Math.round(18 * scale)}px ui-monospace, SFMono-Regular, monospace`;
+    ctx.fillStyle = '#cbd5e1'; // Slate light
+    ctx.fillText(`🕒 ${dateFormatted} • ${timeFormatted} WITA`, paddingX, startY);
 
     // Line 4: Titik Lokasi GPS & Nama Pos
+    startY += lineGap;
     const coordsStr = currentCoords
-      ? `📍 Pos: ${assignedPostName || 'Kantor PT FRP'} • GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 5}m)`
-      : `📍 Pos: ${assignedPostName || 'Kantor PT FRP'}`;
-    ctx.font = '12px sans-serif';
-    ctx.fillStyle = '#34d399';
-    ctx.fillText(coordsStr, 16, h - 20);
+      ? `📍 Pos: ${assignedPostName || 'Kantor FRP'} • GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 10}m)`
+      : `📍 Pos: ${assignedPostName || 'Kantor FRP'}`;
+    ctx.font = `bold ${Math.round(18 * scale)}px system-ui, sans-serif`;
+    ctx.fillStyle = '#34d399'; // Emerald
+    ctx.fillText(coordsStr, paddingX, startY);
+
+    // Reset shadow
+    ctx.shadowBlur = 0;
   };
 
   // Capture Photo & Submit to PostgreSQL

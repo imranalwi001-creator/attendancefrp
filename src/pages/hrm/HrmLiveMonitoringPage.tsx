@@ -1628,14 +1628,38 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border bg-card">
               {/* Left Column: Forensic Selfie Photo */}
               <div className="p-4 bg-slate-950 flex flex-col items-center justify-center">
-                <img
-                  src={previewForensic.url}
-                  alt="Forensic Watermark"
-                  className="max-h-[50vh] w-full rounded-xl object-contain shadow-lg"
-                />
-                <p className="text-[10px] text-slate-400 mt-2 text-center">
-                  Foto snapshot otentik dengan stempel cryptographic watermark ISO/IEC 19794-5
-                </p>
+                <div className="relative group w-full flex items-center justify-center">
+                  <img
+                    src={previewForensic.url}
+                    alt="Forensic Watermark"
+                    className="max-h-[50vh] w-full rounded-xl object-contain shadow-lg cursor-zoom-in group-hover:opacity-95 transition-opacity"
+                    onClick={() => {
+                      const win = window.open();
+                      if (win) {
+                        win.document.write(`<body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-center;min-height:100vh;"><img src="${previewForensic.url}" style="max-width:100%;height:auto;box-shadow:0 10px 25px rgba(0,0,0,0.5);"/></body>`);
+                      }
+                    }}
+                    title="Klik untuk melihat foto dalam resolusi asli penuh"
+                  />
+                </div>
+                <div className="flex items-center justify-between w-full mt-2.5 px-1">
+                  <p className="text-[10px] text-slate-400 truncate">
+                    Cryptographic forensic watermark
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 text-[10px] bg-white/10 hover:bg-white/20 text-white border-white/20 px-2 rounded-lg gap-1 shrink-0"
+                    onClick={() => {
+                      const win = window.open();
+                      if (win) {
+                        win.document.write(`<body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-content:center;min-height:100vh;"><img src="${previewForensic.url}" style="max-width:100%;height:auto;box-shadow:0 10px 25px rgba(0,0,0,0.5);"/></body>`);
+                      }
+                    }}
+                  >
+                    <ExternalLink size={10} /> Perbesar Foto Penuh
+                  </Button>
+                </div>
               </div>
 
               {/* Right Column: Synchronized Database Verification Audit */}
