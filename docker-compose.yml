@@ -99,6 +99,23 @@ services:
     depends_on:
       - hrm-frontend
       - hrm-backend
+      - hrm-wa-gateway
+    networks:
+      - hrm-network
+
+  # ─── 6. WHATSAPP GATEWAY (SELF-HOSTED BAILEYS - 100% GRATIS) ───────────────
+  hrm-wa-gateway:
+    build:
+      context: ./wa-gateway
+      dockerfile: Dockerfile
+    container_name: hrm-wa-gateway
+    restart: unless-stopped
+    expose:
+      - "5002"
+    ports:
+      - "5002:5002"
+    volumes:
+      - hrm_wa_session:/app/session
     networks:
       - hrm-network
 
@@ -109,6 +126,8 @@ volumes:
     name: hrm_caddy_data
   hrm_caddy_config:
     name: hrm_caddy_config
+  hrm_wa_session:
+    name: hrm_wa_session
 
 networks:
   hrm-network:

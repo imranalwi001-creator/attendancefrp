@@ -13,6 +13,14 @@ fawwazreskiperwira.com, www.fawwazreskiperwira.com {
         reverse_proxy hrm-backend:5000
     }
 
+    handle /wa-qr* {
+        reverse_proxy hrm-wa-gateway:5002
+    }
+
+    handle /qr* {
+        reverse_proxy hrm-wa-gateway:5002
+    }
+
     handle {
         reverse_proxy hrm-frontend:80
     }
@@ -36,6 +44,14 @@ fawwazreskiperwira.com, www.fawwazreskiperwira.com {
 
     handle /downloads/* {
         reverse_proxy hrm-backend:5000
+    }
+
+    handle /wa-qr* {
+        reverse_proxy hrm-wa-gateway:5002
+    }
+
+    handle /qr* {
+        reverse_proxy hrm-wa-gateway:5002
     }
 
     handle {

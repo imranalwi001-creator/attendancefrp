@@ -1379,15 +1379,17 @@ async function sendWhatsAppAlert({ phone, message }) {
     const settings = {};
     sRes.rows.forEach(r => { settings[r.key] = r.value; });
 
-    const endpoint = settings.wa_gateway_endpoint || 'https://api.mpwa.id/v1/send-message';
+    const endpoint = settings.wa_gateway_endpoint || 'http://hrm-wa-gateway:5002/send-message';
     const apiKey = settings.wa_gateway_api_key;
-    const sender = settings.wa_gateway_sender;
+    const sender = settings.wa_gateway_sender || '087812379189';
 
-    if (apiKey && apiKey.trim()) {
+    const isSelfHosted = endpoint.includes('hrm-wa-gateway') || endpoint.includes('5002') || endpoint.includes('localhost:5002');
+
+    if (isSelfHosted || (apiKey && apiKey.trim())) {
       const isFonnte = endpoint.includes('fonnte.com');
       const headers = isFonnte 
         ? { 'Authorization': apiKey }
-        : { 'Content-Type': 'application/json', 'Authorization': apiKey };
+        : { 'Content-Type': 'application/json', ...(apiKey ? { 'Authorization': apiKey } : {}) };
 
       const body = isFonnte
         ? new URLSearchParams({ target: cleanPhone, message: message })

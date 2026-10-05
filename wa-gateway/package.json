@@ -1,0 +1,16 @@
+{
+  "name": "hrm-wa-gateway",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Self-hosted WhatsApp Gateway Microservice for PT FRP HRM",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.12",
+    "express": "^4.19.2",
+    "pino": "^9.2.0",
+    "qrcode": "^1.5.3"
+  }
+}
