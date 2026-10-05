@@ -2478,18 +2478,20 @@ export const hrmService = {
     const shifts = hrmService.getShifts();
     const userShift = shifts.find((s) => s.id === user.shiftId) || shifts[0];
 
-    // Priority 1: Check dynamic employee schedule from database roster for today
+    // Priority 1: Check dynamic employee schedule from database roster for today, overridden by custom work hours if assigned
     const dailySchedule = hrmService.getEmployeeTodaySchedule(user.id, today);
-    const activeStartTime = dailySchedule ? dailySchedule.startTime : userShift.startTime;
+    const activeStartTime = user.customStartTime || (dailySchedule ? dailySchedule.startTime : userShift.startTime);
     const activeShiftCode = dailySchedule ? dailySchedule.shiftCode : (userShift.code || 'REG');
-    const activeShiftName = dailySchedule ? dailySchedule.shiftName : userShift.name;
+    const activeShiftName = user.customStartTime
+      ? `Shift Khusus (${user.customStartTime} - ${user.customEndTime || '16:30'} WITA)`
+      : (dailySchedule ? dailySchedule.shiftName : userShift.name);
 
     const now = new Date();
     const clockInStr = now.toTimeString().split(' ')[0];
 
     const [shiftHour, shiftMinute] = activeStartTime.split(':').map(Number);
     const shiftStartTotalMinutes = shiftHour * 60 + shiftMinute;
-    const tolerance = userShift.lateToleranceMinutes || 15;
+    const tolerance = user.lateToleranceMinutes !== undefined ? user.lateToleranceMinutes : (userShift.lateToleranceMinutes || 15);
     const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
 
     let status: AttendanceStatus = 'hadir';

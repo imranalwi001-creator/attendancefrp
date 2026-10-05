@@ -74,6 +74,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [fieldAgents, setFieldAgents] = useState<any[]>([]);
   const [assignLocationUser, setAssignLocationUser] = useState<UserProfile | null>(null);
   const [assignLocationModalOpen, setAssignLocationModalOpen] = useState(false);
+  const [assignLocationTab, setAssignLocationTab] = useState<'schedule' | 'posts'>('schedule');
   const [previewWatermarkData, setPreviewWatermarkData] = useState<FieldPatrolCheck | null>(null);
   const [previewWatermarkModalOpen, setPreviewWatermarkModalOpen] = useState(false);
   const [requestingAgentId, setRequestingAgentId] = useState<string | null>(null);
@@ -931,10 +932,19 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                       {/* Jadwal Jam Kerja Khusus */}
                       <div className="flex items-center justify-between font-mono text-[11px] pt-1 border-t border-border/50">
                         <span className="text-muted-foreground flex items-center gap-1">
-                          <Clock size={11} className="text-indigo-600" /> Jam Kerja Petugas:
+                          <Clock size={11} className="text-emerald-600" /> Jam Kerja &amp; Toleransi:
                         </span>
-                        <Badge variant="outline" className="text-[10px] font-mono py-0 px-1.5 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800">
-                          {agent.customStartTime || agent.shiftStartTime || '07:30'} - {agent.customEndTime || agent.shiftEndTime || '16:30'} WITA
+                        <Badge
+                          variant="outline"
+                          onClick={() => {
+                            setAssignLocationUser(agent);
+                            setAssignLocationTab('schedule');
+                            setAssignLocationModalOpen(true);
+                          }}
+                          className="text-[10px] font-mono py-0.5 px-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 cursor-pointer transition-colors"
+                          title="Klik untuk mengubah Jam Masuk, Jam Pulang & Toleransi Keterlambatan"
+                        >
+                          ⏰ {agent.customStartTime || agent.shiftStartTime || '07:30'} - {agent.customEndTime || agent.shiftEndTime || '16:30'} WITA (Tol: {agent.lateToleranceMinutes ?? 15}m)
                         </Badge>
                       </div>
 
@@ -1084,6 +1094,21 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                       variant="outline"
                       onClick={() => {
                         setAssignLocationUser(agent);
+                        setAssignLocationTab('schedule');
+                        setAssignLocationModalOpen(true);
+                      }}
+                      className="rounded-xl text-xs h-8 gap-1 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 font-medium"
+                      title="Atur Jam Masuk, Jam Pulang & Toleransi Keterlambatan"
+                    >
+                      <Clock size={13} /> Jam Kerja
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setAssignLocationUser(agent);
+                        setAssignLocationTab('posts');
                         setAssignLocationModalOpen(true);
                       }}
                       className="rounded-xl text-xs h-8 gap-1 border-indigo-500/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/10"
@@ -1869,6 +1894,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       {/* Field Sentinel Dynamic Geofence Assignment Modal */}
       <HrmAssignFieldLocationModal
         open={assignLocationModalOpen}
+        initialTab={assignLocationTab}
         onClose={() => setAssignLocationModalOpen(false)}
         user={assignLocationUser}
         onSaved={() => {

@@ -323,6 +323,7 @@ function formatUserRow(r) {
     shiftEndTime: r.custom_end_time ? r.custom_end_time.substring(0, 5) : (r.shift_end_time ? r.shift_end_time.substring(0, 5) : '17:00'),
     customStartTime: r.custom_start_time ? r.custom_start_time.substring(0, 5) : null,
     customEndTime: r.custom_end_time ? r.custom_end_time.substring(0, 5) : null,
+    lateToleranceMinutes: r.late_tolerance_minutes != null ? parseInt(r.late_tolerance_minutes) : 15,
     avatarUrl: r.avatar_url || r.face_photo_url || r.face_enrolled_photo || null,
     gender: r.gender,
     birthPlace: r.birth_place,
@@ -2102,15 +2103,18 @@ app.get('/api/field-sentinel/active-agents', async (req, res) => {
     console.error('Active agents error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
-// 4b. Set custom work hours (Jam Masuk & Jam Pulang) for Field Sentinel Officers
+});
+
+// 4b. Set custom work hours & late tolerance for Field Sentinel Officers
 app.post('/api/field-sentinel/set-work-hours', async (req, res) => {
-  const { userId, startTime, endTime, applyToAllThree } = req.body;
+  const { userId, startTime, endTime, lateToleranceMinutes, applyToAllThree } = req.body;
   if (!startTime || !endTime) {
     return res.status(400).json({ success: false, error: 'Jam Masuk dan Jam Pulang wajib diisi' });
   }
 
   const cleanStart = startTime.trim().substring(0, 5);
   const cleanEnd = endTime.trim().substring(0, 5);
+  const cleanTol = Math.max(0, parseInt(lateToleranceMinutes) || 15);
 
   try {
     if (applyToAllThree) {
@@ -2125,26 +2129,26 @@ app.post('/api/field-sentinel/set-work-hours', async (req, res) => {
 
       await pool.query(
         `UPDATE hrm_profiles 
-         SET custom_start_time = $1, custom_end_time = $2, updated_at = NOW()
-         WHERE id = ANY($3::uuid[])
-            OR LOWER(email) = ANY($4::text[])
-            OR TRIM(nip) = ANY($5::text[])
+         SET custom_start_time = $1, custom_end_time = $2, late_tolerance_minutes = $3, updated_at = NOW()
+         WHERE id = ANY($4::uuid[])
+            OR LOWER(email) = ANY($5::text[])
+            OR TRIM(nip) = ANY($6::text[])
             OR is_field_sentinel_enabled = true;`,
-        [cleanStart, cleanEnd, targetUuids, targetEmails, targetNips]
+        [cleanStart, cleanEnd, cleanTol, targetUuids, targetEmails, targetNips]
       );
 
       // Simpan juga di hrm_system_settings
       await pool.query(
         `INSERT INTO hrm_system_settings (key, value, updated_at) 
-         VALUES ('field_officer_start_time', $1, NOW()), ('field_officer_end_time', $2, NOW())
+         VALUES ('field_officer_start_time', $1, NOW()), ('field_officer_end_time', $2, NOW()), ('field_officer_late_tolerance', $3, NOW())
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
-        [cleanStart, cleanEnd]
+        [cleanStart, cleanEnd, String(cleanTol)]
       );
 
       return res.json({
         success: true,
-        message: `Jam kerja berhasil disetel untuk seluruh 3 Petugas Lapangan Khusus (${cleanStart} - ${cleanEnd} WITA).`,
-        data: { startTime: cleanStart, endTime: cleanEnd, appliedCount: 3 }
+        message: `Jam kerja berhasil disetel (${cleanStart} - ${cleanEnd} WITA, Toleransi: ${cleanTol} menit) untuk seluruh 3 Petugas Lapangan Khusus.`,
+        data: { startTime: cleanStart, endTime: cleanEnd, lateToleranceMinutes: cleanTol, appliedCount: 3 }
       });
     }
 
@@ -2160,15 +2164,15 @@ app.post('/api/field-sentinel/set-work-hours', async (req, res) => {
 
     await pool.query(
       `UPDATE hrm_profiles 
-       SET custom_start_time = $1, custom_end_time = $2, updated_at = NOW()
-       WHERE id = $3;`,
-      [cleanStart, cleanEnd, validUserId]
+       SET custom_start_time = $1, custom_end_time = $2, late_tolerance_minutes = $3, updated_at = NOW()
+       WHERE id = $4;`,
+      [cleanStart, cleanEnd, cleanTol, validUserId]
     );
 
     res.json({
       success: true,
-      message: `Jam kerja khusus berhasil disetel (${cleanStart} - ${cleanEnd} WITA).`,
-      data: { userId: validUserId, startTime: cleanStart, endTime: cleanEnd }
+      message: `Jam kerja khusus berhasil disetel (${cleanStart} - ${cleanEnd} WITA, Toleransi: ${cleanTol} menit).`,
+      data: { userId: validUserId, startTime: cleanStart, endTime: cleanEnd, lateToleranceMinutes: cleanTol }
     });
   } catch (err) {
     console.error('Set work hours error:', err);

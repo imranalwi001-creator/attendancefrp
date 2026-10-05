@@ -13,6 +13,7 @@ interface HrmAssignFieldLocationModalProps {
   open: boolean;
   user: UserProfile | null;
   divisions?: Division[];
+  initialTab?: 'schedule' | 'posts';
   onClose: () => void;
   onSuccess?: (updatedUser?: UserProfile) => void;
   onSaved?: (updatedUser?: UserProfile) => void;
@@ -22,6 +23,7 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
   open,
   user,
   divisions = [],
+  initialTab = 'schedule',
   onClose,
   onSuccess,
   onSaved,
@@ -44,9 +46,11 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Custom work hours states
+  // Custom work hours states & tab
+  const [activeTab, setActiveTab] = useState<'schedule' | 'posts'>('schedule');
   const [workStartTime, setWorkStartTime] = useState('07:30');
   const [workEndTime, setWorkEndTime] = useState('16:30');
+  const [lateToleranceMinutes, setLateToleranceMinutes] = useState(15);
   const [applyHoursToAllThree, setApplyHoursToAllThree] = useState(true);
   const [isSavingHours, setIsSavingHours] = useState(false);
   const [hoursSuccessMsg, setHoursSuccessMsg] = useState<string | null>(null);
@@ -74,6 +78,9 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
 
   useEffect(() => {
     if (user && open) {
+      if (initialTab) {
+        setActiveTab(initialTab);
+      }
       setErrorMsg(null);
       setSuccessMsg(null);
       setHoursSuccessMsg(null);
@@ -83,9 +90,10 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
       setRadiusMeters(150);
       setWorkStartTime(user.customStartTime || (user as any).shiftStartTime || '07:30');
       setWorkEndTime(user.customEndTime || (user as any).shiftEndTime || '16:30');
+      setLateToleranceMinutes(user.lateToleranceMinutes ?? (user as any).late_tolerance_minutes ?? 15);
       loadPosts();
     }
-  }, [user, open]);
+  }, [user, open, initialTab]);
 
   // 2. Read live device GPS
   const handleUseCurrentGps = () => {
@@ -122,10 +130,11 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
         userId: user.id,
         startTime: workStartTime,
         endTime: workEndTime,
+        lateToleranceMinutes: lateToleranceMinutes,
         applyToAllThree: applyHoursToAllThree,
       });
 
-      setHoursSuccessMsg(res.message || 'Jam kerja berhasil disimpan!');
+      setHoursSuccessMsg(res.message || 'Jam kerja & toleransi berhasil disimpan!');
       if (typeof onSuccess === 'function') onSuccess();
       if (typeof onSaved === 'function') onSaved();
     } catch (err: any) {
@@ -242,91 +251,168 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
           </div>
         )}
 
-        <div className="space-y-5 pt-3">
-          {/* ─── SECTION 0: JADWAL KHUSUS JAM MASUK & PULANG PETUGAS LAPANGAN ─── */}
-          <div className="p-4 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800/40 rounded-2xl space-y-3">
-            <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 border-b border-border/80 pb-3 pt-1">
+          <Button
+            type="button"
+            variant={activeTab === 'schedule' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setActiveTab('schedule')}
+            className={`rounded-xl text-xs gap-1.5 font-bold h-9 transition-all ${
+              activeTab === 'schedule'
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Clock size={14} />
+            <span>⏰ Jam Masuk, Pulang &amp; Toleransi</span>
+          </Button>
+
+          <Button
+            type="button"
+            variant={activeTab === 'posts' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setActiveTab('posts')}
+            className={`rounded-xl text-xs gap-1.5 font-bold h-9 transition-all ${
+              activeTab === 'posts'
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <MapPin size={14} />
+            <span>📍 Bank Pos Lapangan ({savedPosts.length})</span>
+          </Button>
+        </div>
+
+        {activeTab === 'schedule' ? (
+          /* ─── TAB 1: JADWAL KHUSUS JAM MASUK, PULANG & TOLERANSI ─── */
+          <div className="p-4 bg-emerald-500/5 dark:bg-emerald-950/20 border border-emerald-500/20 rounded-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-emerald-500/15 pb-2.5">
               <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-indigo-600 text-white">
-                  <Clock size={14} />
+                <div className="p-2 rounded-xl bg-emerald-600 text-white shadow-xs">
+                  <Clock size={16} />
                 </div>
                 <div>
-                  <h4 className="font-bold text-xs text-foreground">
-                    Jadwal Jam Masuk &amp; Jam Pulang Khusus
+                  <h4 className="font-bold text-sm text-foreground">
+                    Atur Jam Masuk, Jam Pulang &amp; Toleransi
                   </h4>
                   <p className="text-[11px] text-muted-foreground">
-                    Menentukan target kehadiran dan batas checkout resmi petugas lapangan di pos tugas.
+                    Berlaku khusus untuk petugas lapangan yang dipantau pimpinan.
                   </p>
                 </div>
               </div>
-              <Badge variant="outline" className="text-[10px] font-mono border-indigo-500/30 text-indigo-700 dark:text-indigo-300">
+              <Badge variant="outline" className="text-xs font-mono border-emerald-500/30 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10">
                 WITA (UTC+8)
               </Badge>
             </div>
 
             {hoursSuccessMsg && (
-              <div className="p-2.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400 text-xs rounded-xl flex items-center gap-2">
-                <CheckCircle2 size={13} />
+              <div className="p-3 bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400 text-xs rounded-xl flex items-center gap-2 font-medium">
+                <CheckCircle2 size={15} />
                 <span>{hoursSuccessMsg}</span>
               </div>
             )}
 
-            <form onSubmit={handleSaveWorkHours} className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-[11px] font-medium text-foreground">
-                    Jam Masuk (Clock-In Target):
+            <form onSubmit={handleSaveWorkHours} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    Jam Masuk (Target Clock-In):
                   </Label>
                   <Input
                     type="time"
                     value={workStartTime}
                     onChange={(e) => setWorkStartTime(e.target.value)}
                     required
-                    className="h-8 text-xs font-mono rounded-lg"
+                    className="h-10 text-sm font-mono rounded-xl bg-background border-border"
                   />
-                  <p className="text-[10px] text-muted-foreground">Presensi lewat dari jam ini dihitung terlambat.</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    Petugas wajib melakukan absen masuk sebelum jam ini.
+                  </p>
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-[11px] font-medium text-foreground">
-                    Jam Pulang (Clock-Out Target):
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-indigo-500" />
+                    Jam Pulang (Target Clock-Out):
                   </Label>
                   <Input
                     type="time"
                     value={workEndTime}
                     onChange={(e) => setWorkEndTime(e.target.value)}
                     required
-                    className="h-8 text-xs font-mono rounded-lg"
+                    className="h-10 text-sm font-mono rounded-xl bg-background border-border"
                   />
-                  <p className="text-[10px] text-muted-foreground">Presensi pulang diizinkan setelah jam ini.</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    Tombol presensi pulang baru terbuka setelah jam ini.
+                  </p>
                 </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-indigo-100 dark:border-indigo-900/40">
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="apply-all-three"
-                    checked={applyHoursToAllThree}
-                    onCheckedChange={(checked) => setApplyHoursToAllThree(Boolean(checked))}
-                  />
-                  <label
-                    htmlFor="apply-all-three"
-                    className="text-[11px] font-medium text-muted-foreground cursor-pointer select-none"
-                  >
-                    Terapkan jam ini ke 3 Petugas Lapangan Khusus (Muh Aslam Faisal, LA UNGA SAMSI, TAKDIR)
-                  </label>
+              {/* Toleransi Keterlambatan Pill Selector */}
+              <div className="space-y-2 pt-1 border-t border-border/60">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-foreground">
+                    Toleransi Keterlambatan:
+                  </Label>
+                  <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                    {lateToleranceMinutes} Menit
+                  </span>
                 </div>
+                <div className="grid grid-cols-6 gap-1.5">
+                  {[0, 5, 10, 15, 30, 60].map((mins) => (
+                    <Button
+                      key={mins}
+                      type="button"
+                      variant={lateToleranceMinutes === mins ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setLateToleranceMinutes(mins)}
+                      className={`text-xs h-8 rounded-xl font-mono ${
+                        lateToleranceMinutes === mins
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white font-bold'
+                          : 'hover:bg-muted'
+                      }`}
+                    >
+                      {mins}m
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Jika karyawan check-in melewati jam masuk tapi masih dalam batas toleransi, status kehadiran tetap dihitung <strong>Hadir (Tepat Waktu)</strong>.
+                </p>
+              </div>
+
+              <div className="p-3 bg-muted/40 rounded-xl border border-border/80 flex items-start gap-2.5">
+                <Checkbox
+                  id="apply-all-three-hours"
+                  checked={applyHoursToAllThree}
+                  onCheckedChange={(checked) => setApplyHoursToAllThree(Boolean(checked))}
+                  className="mt-0.5"
+                />
+                <label
+                  htmlFor="apply-all-three-hours"
+                  className="text-xs font-medium text-foreground cursor-pointer select-none leading-relaxed"
+                >
+                  Terapkan jam kerja &amp; toleransi ini serentak ke <strong>seluruh 3 Petugas Lapangan Khusus</strong> (Muh Aslam Faisal, LA UNGA SAMSI, TAKDIR).
+                </label>
+              </div>
+
+              <div className="flex justify-end pt-1">
                 <Button
                   type="submit"
                   size="sm"
                   disabled={isSavingHours}
-                  className="h-7 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg gap-1 shrink-0 font-semibold"
+                  className="h-9 px-5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl gap-2 font-bold shadow-xs"
                 >
-                  {isSavingHours ? <Loader2 size={12} className="animate-spin" /> : <Clock size={12} />}
-                  <span>{isSavingHours ? 'Menyimpan...' : 'Simpan Jam Kerja'}</span>
+                  {isSavingHours ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                  <span>{isSavingHours ? 'Menyimpan...' : 'Simpan Jam Kerja & Toleransi'}</span>
                 </Button>
               </div>
             </form>
           </div>
+        ) : (
+          /* ─── TAB 2: BANK POS LAPANGAN (MULTI-TITIK) ─── */
+          <div className="space-y-5">
 
           {/* ─── SECTION 1: DAFTAR POS YANG SUDAH TERSIMPAN ─── */}
           <div className="space-y-2">
@@ -541,6 +627,7 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
             </p>
           </div>
         </div>
+      )}
 
         <div className="flex items-center justify-end pt-3 border-t border-border">
           <Button

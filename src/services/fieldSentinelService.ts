@@ -169,11 +169,12 @@ export const fieldSentinelService = {
     }
   },
 
-  // 11. Superadmin sets custom work hours (Jam Masuk & Jam Pulang) for Field Sentinel Officers
+  // 11. Superadmin sets custom work hours (Jam Masuk, Jam Pulang, Toleransi) for Field Sentinel Officers
   setWorkHours: async (payload: {
     userId?: string;
     startTime: string;
     endTime: string;
+    lateToleranceMinutes?: number;
     applyToAllThree?: boolean;
   }): Promise<{ success: boolean; message: string; data?: any }> => {
     const res = await api.post<{ success: boolean; message: string; data?: any }>(

@@ -451,7 +451,8 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS current_active_post_name VARCHAR(255),
       ADD COLUMN IF NOT EXISTS current_active_post_entered_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS custom_start_time VARCHAR(10) DEFAULT '07:30',
-      ADD COLUMN IF NOT EXISTS custom_end_time VARCHAR(10) DEFAULT '16:30';
+      ADD COLUMN IF NOT EXISTS custom_end_time VARCHAR(10) DEFAULT '16:30',
+      ADD COLUMN IF NOT EXISTS late_tolerance_minutes INTEGER DEFAULT 15;
 
       CREATE TABLE IF NOT EXISTS hrm_system_settings (
         key VARCHAR(100) PRIMARY KEY,
@@ -470,7 +471,8 @@ export async function initDb() {
         ('break_duration_minutes', '60'),
         ('break_allow_outside', 'true'),
         ('field_officer_start_time', '07:30'),
-        ('field_officer_end_time', '16:30')
+        ('field_officer_end_time', '16:30'),
+        ('field_officer_late_tolerance', '15')
       ON CONFLICT (key) DO NOTHING;
 
       -- ─── 16. DIVISI K3 & ROLE K3 (KESELAMATAN & KESEHATAN KERJA) ───

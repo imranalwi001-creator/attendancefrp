@@ -344,9 +344,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const shifts = hrmService.getShifts();
       const baseShift = shifts.find((s) => s.id === user.shiftId) || shifts[0] || null;
       let effectiveShift = baseShift ? { ...baseShift } : null;
-      if (effectiveShift && (user.customStartTime || user.customEndTime)) {
+      if (effectiveShift && (user.customStartTime || user.customEndTime || user.lateToleranceMinutes !== undefined)) {
         if (user.customStartTime) effectiveShift.startTime = user.customStartTime;
         if (user.customEndTime) effectiveShift.endTime = user.customEndTime;
+        if (user.lateToleranceMinutes !== undefined) effectiveShift.lateToleranceMinutes = user.lateToleranceMinutes;
         effectiveShift.name = `Shift Khusus (${effectiveShift.startTime} - ${effectiveShift.endTime} WITA)`;
       }
       setUserShift(effectiveShift);
