@@ -18,7 +18,7 @@ Pimpinan PT FRP memberikan instruksi ketat untuk pengawasan **3 Karyawan Khusus 
   - Setiap penambahan titik baru **TIDAK MENIMPA / MENGHAPUS** titik yang sudah ada sebelumnya. Semua titik tersimpan sekaligus sebagai daftar pos aktif.
   - Karyawan bebas melakukan **Clock-In dan Clock-Out** di titik radius pos manapun yang terdaftar di bank pos mereka.
 - **Deteksi Otomatis & Notifikasi Dual-Channel (In-App + WhatsApp)**:
-  - Begitu karyawan berada di radius Pos A -> Kirim notifikasi sistem dan WhatsApp instan dari nomor sistem (`087812379189`) ke nomor Superadmin (`081355904897`) dan Pimpinan (`082192755755` - Drs. Hendra Gunawan).
+  - Begitu karyawan berada di radius Pos A -> Kirim notifikasi sistem dan WhatsApp instan dari nomor sistem (`087812379189`) ke nomor Superadmin (`081355904897`) dan Pimpinan (`082192755755` - Bpk Reski Faisal).
   - Begitu karyawan bergeser dan berada di radius Pos B -> Otomatis perbarui status dan kirim WhatsApp instan bahwa karyawan telah berada di Pos B.
   - Jika karyawan keluar dari seluruh pos (Perimeter Breach) -> Sistem dan WhatsApp memicu alarm pelanggaran area tugas.
 - **Forensic Watermarking & Spot-Check Biometrik**:
