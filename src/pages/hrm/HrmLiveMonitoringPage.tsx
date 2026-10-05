@@ -907,13 +907,23 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         <span className="text-muted-foreground flex items-center gap-1 font-medium">
                           <MapPin size={12} className="text-indigo-600" /> Pos Aktif Terdeteksi:
                         </span>
-                        <span className="font-bold text-foreground truncate max-w-[180px]" title={agent.currentActivePostName || agent.assignedLocationName || 'Pos Default'}>
-                          {agent.currentActivePostName ? (
+                        <span className="font-bold text-foreground truncate max-w-[190px]">
+                          {isLiveNow && agent.currentActivePostName ? (
                             <span className="text-emerald-600 dark:text-emerald-400 font-bold">
-                              🟢 {agent.currentActivePostName}
+                              🟢 {agent.currentActivePostName} (Live)
+                            </span>
+                          ) : isBreached ? (
+                            <span className="text-rose-600 dark:text-rose-400 font-bold">
+                              🔴 Di Luar Radius Pos
+                            </span>
+                          ) : agent.currentActivePostName && isStale ? (
+                            <span className="text-amber-600 dark:text-amber-400 font-medium">
+                              🟠 Terakhir: {agent.currentActivePostName}
                             </span>
                           ) : (
-                            agent.assignedLocationName || 'Menunggu Verifikasi Pos'
+                            <span className="text-slate-400 dark:text-slate-500 font-normal italic">
+                              Menunggu Sinyal GPS
+                            </span>
                           )}
                         </span>
                       </div>
@@ -930,7 +940,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                 key={p.id}
                                 variant="outline"
                                 className={`text-[9px] font-mono py-0 px-1.5 ${
-                                  agent.currentActivePostName === p.postName
+                                  isLiveNow && agent.currentActivePostName === p.postName
                                     ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-bold'
                                     : 'bg-muted/40 border-border text-muted-foreground'
                                 }`}
@@ -968,9 +978,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           ) : 'Belum terdeteksi'}
                         </span>
                       </div>
-                      {agent.lastKnownLatitude ? (
+                      {agent.lastKnownLatitude && agent.lastKnownPingAt ? (
                         <div className="flex items-center justify-between text-[11px] font-mono">
-                          <span className="text-muted-foreground">Posisi Live:</span>
+                          <span className="text-muted-foreground">{isLiveNow ? 'Posisi Live:' : 'Posisi Terakhir:'}</span>
                           <span className="font-bold text-foreground">
                             {agent.lastKnownLatitude.toFixed(6)}, {agent.lastKnownLongitude?.toFixed(6)}
                           </span>
@@ -980,7 +990,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           Aplikasi ponsel petugas belum mengirim sinyal GPS aktif.
                         </p>
                       )}
-                      {agent.lastKnownAccuracy && (
+                      {agent.lastKnownAccuracy && agent.lastKnownPingAt && (
                         <div className="flex items-center justify-between text-[10px] text-muted-foreground">
                           <span>Akurasi Hardware:</span>
                           <span className="font-mono">±{Math.round(agent.lastKnownAccuracy)} Meter</span>
@@ -994,7 +1004,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         <span className="font-medium text-foreground flex items-center gap-1">
                           <FileImage size={12} className="text-primary" /> Bukti Spot-Check Forensik:
                         </span>
-                        {latestCheck && (
+                        {latestCheck && latestCheck.photoUrl && (
                           <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-500/30 bg-emerald-500/10 font-mono">
                             {Math.round(latestCheck.faceMatchScore ? latestCheck.faceMatchScore * 100 : 100)}% Wajah Cocok
                           </Badge>
