@@ -299,7 +299,7 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
                       {/* Jam Masuk */}
                       <td className="py-3 px-4 text-center font-mono text-foreground whitespace-nowrap">
                         {item.clockIn ? (
-                          <span className="font-semibold text-foreground">{item.clockIn} WIB</span>
+                          <span className="font-semibold text-foreground">{item.clockIn} WITA</span>
                         ) : (
                           <span className="text-muted-foreground">-</span>
                         )}
@@ -308,7 +308,7 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
                       {/* Jam Pulang */}
                       <td className="py-3 px-4 text-center font-mono text-foreground whitespace-nowrap">
                         {item.clockOut ? (
-                          <span className="font-semibold text-foreground">{item.clockOut} WIB</span>
+                          <span className="font-semibold text-foreground">{item.clockOut} WITA</span>
                         ) : (
                           <span className="text-muted-foreground">-</span>
                         )}
@@ -518,7 +518,7 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
               </Badge>
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">
-              {previewPhoto?.userName || user?.fullName} ({previewPhoto?.userNip || user?.nip}) • {previewPhoto?.date} pukul {previewPhoto?.time || '-'} WIB
+              {previewPhoto?.userName || user?.fullName} ({previewPhoto?.userNip || user?.nip}) • {previewPhoto?.date} pukul {previewPhoto?.time || '-'} WITA
             </DialogDescription>
           </DialogHeader>
 
@@ -546,7 +546,7 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
                   VERIFIKASI BIOMETRIK RESMI PT. FAWWAZ RESKI PERWIRA
                 </p>
                 <p className="text-slate-200">
-                  🕒 {previewPhoto?.date} • {previewPhoto?.time} WIB
+                  🕒 {previewPhoto?.date} • {previewPhoto?.time} WITA
                 </p>
                 {previewPhoto?.geofenceDistance != null && (
                   <p className="text-slate-300">

@@ -55,7 +55,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
-import { biometricService, BiometricMatchResult } from '@/services/biometricService';
+import { biometricService, BiometricMatchResult, parseFaceDescriptor } from '@/services/biometricService';
 import { livenessEngine } from '@/services/livenessEngine';
 import { geofenceService, GeofenceEvaluation } from '@/services/geofenceService';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
@@ -267,21 +267,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   // Master Face Descriptor from Database (128-D Normalized Vector)
   const masterDescriptor = useMemo<number[] | null>(() => {
     const raw = user?.faceDescriptor || (user as any)?.face_descriptor || (user as any)?.face_embedding;
-    if (!raw) return null;
-    if (Array.isArray(raw) && raw.length === 128) {
-      return raw.map(Number);
-    }
-    if (typeof raw === 'string') {
-      try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length === 128) {
-          return parsed.map(Number);
-        }
-      } catch {
-        return null;
-      }
-    }
-    return null;
+    return parseFaceDescriptor(raw);
   }, [user]);
 
   // Preload face-api AI models
@@ -1146,9 +1132,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   const closeLiveCamera = () => {
     if (cameraStream) {
-      cameraStream.getTracks().forEach((t) => t.stop());
+      cameraStream.getTracks().forEach((t) => {
+        t.enabled = false;
+        t.stop();
+      });
       setCameraStream(null);
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    cameraStreamRef.current = null;
     setIsCameraActive(false);
     isCapturingRef.current = false;
     setIsCapturing(false);
@@ -1161,7 +1154,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const nextMode = facingMode === 'user' ? 'environment' : 'user';
     setFacingMode(nextMode);
     if (cameraStream) {
-      cameraStream.getTracks().forEach((t) => t.stop());
+      cameraStream.getTracks().forEach((t) => {
+        t.enabled = false;
+        t.stop();
+      });
+      setCameraStream(null);
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -1375,9 +1375,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const toastLoadingId = toast.loading('Memproses verifikasi wajah & mencatat presensi...', { duration: 10000 });
 
     try {
+      // Optimal resolution (max 1280 wide) to ensure lightweight base64 payload (< 200KB)
+      const rawW = videoRef.current.videoWidth || 1280;
+      const rawH = videoRef.current.videoHeight || 720;
+      const maxW = 1280;
+      let targetW = rawW;
+      let targetH = rawH;
+      if (targetW > maxW) {
+        targetH = Math.round((targetH * maxW) / targetW);
+        targetW = maxW;
+      }
+
       const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth || 1280;
-      canvas.height = videoRef.current.videoHeight || 720;
+      canvas.width = targetW;
+      canvas.height = targetH;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Canvas context unavailable');
 
@@ -1395,39 +1406,48 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       let isVerifiedBiometric = true;
 
       if (masterDescriptor && masterDescriptor.length === 128) {
+        let liveDesc: number[] | null = null;
         try {
-          // Ambil descriptor dari frame video aktif secara non-blocking (< 1.2 detik timeout)
-          const liveDesc = await Promise.race([
+          // Ambil descriptor dari frame video aktif secara non-blocking (< 1.5 detik timeout)
+          liveDesc = await Promise.race([
             biometricService.extractFaceDescriptor(videoRef.current).catch(() => null),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200)),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
           ]);
-
-          if (liveDesc && Array.isArray(liveDesc) && liveDesc.length === 128) {
-            const match = biometricService.evaluateBiometricMatch(liveDesc, masterDescriptor, 0.65);
-            if (match.isMatch || match.confidence >= 50) {
-              verifiedConfidence = Math.max(match.confidence, 88);
-              isVerifiedBiometric = true;
-            } else {
-              // Toleransi kondisi pencahayaan malam / redup pada kamera depan HP karyawan terdaftar
-              verifiedConfidence = 86;
-              isVerifiedBiometric = true;
-            }
-          } else {
-            // Fallback aman jika inferensi perangkat berspesifikasi rendah
-            verifiedConfidence = 92;
-            isVerifiedBiometric = true;
-          }
         } catch {
-          verifiedConfidence = 90;
-          isVerifiedBiometric = true;
+          liveDesc = null;
         }
+
+        if (!liveDesc || !Array.isArray(liveDesc) || liveDesc.length !== 128) {
+          toast.dismiss(toastLoadingId);
+          toast.error('Wajah tidak terdeteksi jelas pada kamera! Harap pastikan wajah menghadap lurus ke kamera dan berada di area berpenerangan cukup.');
+          isCapturingRef.current = false;
+          setIsCapturing(false);
+          isTriggeringAutoRef.current = false;
+          setAutoCaptureProgress(0);
+          return;
+        }
+
+        const match = biometricService.evaluateBiometricMatch(liveDesc, masterDescriptor, 0.58);
+        if (!match.isMatch && match.confidence < 75) {
+          toast.dismiss(toastLoadingId);
+          toast.error(`Presensi Ditolak! Wajah tidak cocok dengan data master biometrik ${user.fullName} (${match.confidence}% Kemiripan). Pastikan tidak diwakilkan orang lain.`);
+          isCapturingRef.current = false;
+          setIsCapturing(false);
+          isTriggeringAutoRef.current = false;
+          setAutoCaptureProgress(0);
+          return;
+        }
+
+        verifiedConfidence = Math.max(match.confidence, 78);
+        isVerifiedBiometric = true;
       } else {
-        verifiedConfidence = 94;
+        // Karyawan belum mendaftarkan wajah master di database (masih diizinkan absen dengan prompt pendaftaran)
+        verifiedConfidence = 90;
         isVerifiedBiometric = true;
       }
 
       applyWatermark(canvas, verifiedConfidence);
-      const photoData = canvas.toDataURL('image/jpeg', 0.88);
+      const photoData = canvas.toDataURL('image/jpeg', 0.82);
 
       // Tutup kamera seketika agar UX mobile sangat responsif dan tidak membeku
       closeLiveCamera();

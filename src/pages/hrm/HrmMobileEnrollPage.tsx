@@ -186,7 +186,10 @@ export const HrmMobileEnrollPage: React.FC = () => {
 
   const stopCamera = () => {
     if (cameraStream) {
-      cameraStream.getTracks().forEach((t) => t.stop());
+      cameraStream.getTracks().forEach((t) => {
+        t.enabled = false;
+        t.stop();
+      });
       setCameraStream(null);
     }
     if (videoRef.current) {
@@ -470,29 +473,14 @@ export const HrmMobileEnrollPage: React.FC = () => {
     try {
       // 1. Collect all available pose descriptors
       const descriptorList = Object.values(capturedDescriptors);
-      let masterVector: number[];
-
-      if (descriptorList.length > 0) {
-        // Multi-Frame Centroid Averaging across all poses
-        const len = 128;
-        const sumVec = new Array(len).fill(0);
-        for (let i = 0; i < len; i++) {
-          let s = 0;
-          for (const d of descriptorList) {
-            s += d[i];
-          }
-          sumVec[i] = s / descriptorList.length;
-        }
-
-        // L2 Unit Normalization (Standard Cosine Representation)
-        const norm = Math.hypot(...sumVec);
-        masterVector = norm > 0 ? sumVec.map((v) => v / norm) : sumVec;
-      } else {
-        // Fallback descriptor generator
-        masterVector = new Array(128).fill(0).map(() => (Math.random() - 0.5) * 0.1);
+      if (descriptorList.length === 0) {
+        throw new Error('Data biometrik wajah belum lengkap. Silakan lakukan pemindaian pose wajah kembali.');
       }
 
-      // 2. Persist master biometric vector & photo to PostgreSQL database
+      // 2. Multi-Frame Centroid Averaging with L2 Unit Normalization
+      const masterVector = biometricService.computeCentroidDescriptor(descriptorList);
+
+      // 3. Persist master biometric vector & photo to PostgreSQL database
       await hrmService.enrollMasterFace(userId, masterVector, capturedPhoto);
       setStep('success');
     } catch (err: any) {

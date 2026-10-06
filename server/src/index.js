@@ -294,8 +294,59 @@ app.post('/api/users/:id/bind-device', async (req, res) => {
   }
 });
 
+// Helper: Safely parse 128-D face descriptor from any format (JSON string, array, or serialized indexed object)
+function parseDescriptorRow(raw) {
+  if (!raw) return null;
+  let parsed = raw;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    if (parsed[0] !== undefined || parsed['0'] !== undefined) {
+      const arr = [];
+      for (let i = 0; i < 128; i++) {
+        const val = parsed[i] !== undefined ? parsed[i] : parsed[String(i)];
+        if (typeof val === 'number' && Number.isFinite(val)) {
+          arr.push(val);
+        } else if (typeof val === 'string' && !isNaN(Number(val))) {
+          arr.push(Number(val));
+        } else {
+          break;
+        }
+      }
+      if (arr.length === 128) {
+        parsed = arr;
+      } else {
+        const values = Object.values(parsed).map(Number).filter(Number.isFinite);
+        if (values.length === 128) {
+          parsed = values;
+        }
+      }
+    }
+  }
+  if (Array.isArray(parsed) && parsed.length === 128) {
+    const cleanNumbers = parsed.map(Number);
+    if (cleanNumbers.every(Number.isFinite)) {
+      return cleanNumbers;
+    }
+  }
+  return null;
+}
+
 // Helper: Format PostgreSQL row to match TypeScript UserProfile
 function formatUserRow(r) {
+  const descriptor = parseDescriptorRow(r.face_descriptor) || parseDescriptorRow(r.face_embedding);
   return {
     id: r.id,
     nip: r.nip,
@@ -351,21 +402,8 @@ function formatUserRow(r) {
     annualLeaveQuota: r.annual_leave_quota || 14,
     usedLeaveDays: r.used_leave_days || 0,
     isActive: r.is_active !== false,
-    isFaceEnrolled: r.is_face_enrolled === true || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
-    faceDescriptor: (() => {
-      if (r.face_descriptor) {
-        if (typeof r.face_descriptor === 'object') return r.face_descriptor;
-        try {
-          return JSON.parse(r.face_descriptor);
-        } catch {
-          return null;
-        }
-      }
-      if (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) {
-        return r.face_embedding;
-      }
-      return null;
-    })(),
+    isFaceEnrolled: r.is_face_enrolled === true || !!descriptor || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
+    faceDescriptor: descriptor,
     faceEnrolledPhoto: r.face_photo_url || r.face_enrolled_photo || null,
     faceEnrolledAt: r.face_enrolled_at || null,
     deviceId: r.device_id || null,
@@ -3810,7 +3848,11 @@ app.post('/api/biometrics/enroll', async (req, res) => {
     return res.status(400).json({ success: false, error: 'User ID dan data biometrik wajah wajib disertakan' });
   }
   try {
-    const descriptorStr = Array.isArray(faceDescriptor) ? JSON.stringify(faceDescriptor) : String(faceDescriptor);
+    const validDescriptor = parseDescriptorRow(faceDescriptor);
+    if (!validDescriptor || validDescriptor.length !== 128) {
+      return res.status(400).json({ success: false, error: 'Format data biometrik wajah tidak valid (harus vektor 128 dimensi)' });
+    }
+    const descriptorStr = JSON.stringify(validDescriptor);
     const query = `
       UPDATE hrm_profiles SET
         is_face_enrolled = true,
@@ -6755,61 +6797,7 @@ app.get('/api/payroll/slip/:userId/print', async (req, res) => {
   }
 });
 
-// ─── 11. BIOMETRIC FACE ENROLLMENT & HANDOFF ────────────────────────────────
-app.post('/api/biometrics/enroll', async (req, res) => {
-  const { userId, faceDescriptor, enrolledPhoto } = req.body;
-  if (!userId || !faceDescriptor) {
-    return res.status(400).json({ success: false, error: 'User ID dan vektor biometrik wajah wajib diisi' });
-  }
-
-  try {
-    const descriptorJson = typeof faceDescriptor === 'string' ? faceDescriptor : JSON.stringify(faceDescriptor);
-    const query = `
-      UPDATE hrm_profiles SET
-        is_face_enrolled = true,
-        face_descriptor = $1,
-        face_enrolled_photo = COALESCE($2, face_enrolled_photo),
-        avatar_url = COALESCE($2, avatar_url),
-        face_enrolled_at = NOW(),
-        updated_at = NOW()
-      WHERE id::text = $3 OR nip = $3 OR LOWER(email) = LOWER($3)
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [descriptorJson, enrolledPhoto || null, userId]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
-    }
-    const user = formatUserRow(result.rows[0]);
-    res.json({ success: true, data: user, message: 'Wajah master biometrik berhasil didaftarkan' });
-  } catch (err) {
-    console.error('Biometric enroll error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/biometrics/reset/:userId', async (req, res) => {
-  const { userId } = req.params;
-  try {
-    const query = `
-      UPDATE hrm_profiles SET
-        is_face_enrolled = false,
-        face_descriptor = NULL,
-        face_enrolled_photo = NULL,
-        face_enrolled_at = NULL,
-        updated_at = NOW()
-      WHERE id::text = $1 OR nip = $1 OR LOWER(email) = LOWER($1)
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [userId]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
-    }
-    res.json({ success: true, message: 'Master wajah biometrik berhasil direset oleh HRD' });
-  } catch (err) {
-    console.error('Biometric reset error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
+// ─── 11. BIOMETRIC FACE STATUS & HANDOFF ────────────────────────────────
 
 app.get('/api/biometrics/status/:userId', async (req, res) => {
   const { userId } = req.params;

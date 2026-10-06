@@ -212,8 +212,14 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
 
   const handleStopCamera = () => {
     if (cameraStream) {
-      cameraStream.getTracks().forEach((track) => track.stop());
+      cameraStream.getTracks().forEach((track) => {
+        track.enabled = false;
+        track.stop();
+      });
       setCameraStream(null);
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
     }
   };
 
@@ -336,15 +342,7 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
     setIsSaving(true);
     setErrorMsg(null);
     try {
-      const vectorLength = samples[0].length;
-      const averageDescriptor = new Array(vectorLength).fill(0);
-      for (let i = 0; i < vectorLength; i++) {
-        let sum = 0;
-        for (let s = 0; s < samples.length; s++) {
-          sum += samples[s][i];
-        }
-        averageDescriptor[i] = sum / samples.length;
-      }
+      const averageDescriptor = biometricService.computeCentroidDescriptor(samples);
 
       const updated = await hrmService.enrollMasterFace(user.id, averageDescriptor, capturedPhoto);
       if (onSuccess) onSuccess(updated);

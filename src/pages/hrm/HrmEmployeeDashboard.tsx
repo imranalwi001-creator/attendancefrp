@@ -53,7 +53,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { livenessEngine, LivenessPhase } from '@/services/livenessEngine';
-import { biometricService, BiometricMatchResult } from '@/services/biometricService';
+import { biometricService, BiometricMatchResult, parseFaceDescriptor } from '@/services/biometricService';
 import { geofenceService, GeofenceEvaluation, AntiSpoofResult } from '@/services/geofenceService';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
 import { HrmSpotCheckModal } from '@/components/hrm/HrmSpotCheckModal';
@@ -953,8 +953,14 @@ export const HrmEmployeeDashboard: React.FC = () => {
   // Stop and close camera stream
   const handleCloseCameraModal = () => {
     if (cameraStream) {
-      cameraStream.getTracks().forEach((track) => track.stop());
+      cameraStream.getTracks().forEach((track) => {
+        track.enabled = false;
+        track.stop();
+      });
       setCameraStream(null);
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
     }
     livenessEngine.reset();
     setLivenessPhase('idle');
@@ -966,9 +972,19 @@ export const HrmEmployeeDashboard: React.FC = () => {
   // Capture snapshot with 1:1 Biometric Verification, Forensic Watermark & Direct Auto-Submit
   const takeSnapshot = async () => {
     if (videoRef.current && user) {
+      const rawW = videoRef.current.videoWidth || 1280;
+      const rawH = videoRef.current.videoHeight || 720;
+      const maxW = 1280;
+      let targetW = rawW;
+      let targetH = rawH;
+      if (targetW > maxW) {
+        targetH = Math.round((targetH * maxW) / targetW);
+        targetW = maxW;
+      }
+
       const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth || 1280;
-      canvas.height = videoRef.current.videoHeight || 720;
+      canvas.width = targetW;
+      canvas.height = targetH;
       const ctx = canvas.getContext('2d');
       if (ctx) {
         // Mirror if front camera
@@ -983,22 +999,29 @@ export const HrmEmployeeDashboard: React.FC = () => {
 
         // 1:1 Biometric Evaluation against Master Template
         let matchResult: BiometricMatchResult | null = null;
-        if (user.isFaceEnrolled && user.faceDescriptor && Array.isArray(user.faceDescriptor) && user.faceDescriptor.length === 128) {
+        const parsedDescriptor = parseFaceDescriptor(user.faceDescriptor || (user as any).face_descriptor);
+        if (user.isFaceEnrolled && parsedDescriptor) {
           const liveDesc = await biometricService.extractFaceDescriptor(canvas);
           if (liveDesc) {
-            matchResult = biometricService.evaluateBiometricMatch(liveDesc, user.faceDescriptor);
+            matchResult = biometricService.evaluateBiometricMatch(liveDesc, parsedDescriptor, 0.58);
             setBiometricResult(matchResult);
           }
         }
 
         applyForensicWatermark(canvas, matchResult?.confidence);
-        const capturedPhoto = canvas.toDataURL('image/jpeg', 0.9);
+        const capturedPhoto = canvas.toDataURL('image/jpeg', 0.82);
         setPhotoDataUrl(capturedPhoto);
 
         // Stop camera stream once captured
         if (cameraStream) {
-          cameraStream.getTracks().forEach((track) => track.stop());
+          cameraStream.getTracks().forEach((track) => {
+            track.enabled = false;
+            track.stop();
+          });
           setCameraStream(null);
+        }
+        if (videoRef.current) {
+          videoRef.current.srcObject = null;
         }
 
         // Instant Submit: If biometric match is valid (or user not enrolled) and location is valid, auto-submit directly!

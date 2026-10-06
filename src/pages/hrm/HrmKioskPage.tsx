@@ -25,8 +25,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Link } from 'react-router-dom';
 import defaultLogo from '@/assets/logo.png';
-import { ThemeToggle } from '@/components/theme/ThemeToggle';
-import { biometricService, BiometricMatchResult } from '@/services/biometricService';
+import { biometricService, BiometricMatchResult, parseFaceDescriptor } from '@/services/biometricService';
 
 export const HrmKioskPage: React.FC = () => {
   const [divisions, setDivisions] = useState<Division[]>([]);
@@ -145,10 +144,11 @@ export const HrmKioskPage: React.FC = () => {
 
         // 1:1 Biometric Evaluation with face-api.js if enrolled
         let matchResult: BiometricMatchResult | null = null;
-        if (selectedUser.isFaceEnrolled && selectedUser.faceDescriptor && Array.isArray(selectedUser.faceDescriptor)) {
+        const parsedDesc = parseFaceDescriptor(selectedUser.faceDescriptor || (selectedUser as any).face_descriptor);
+        if (selectedUser.isFaceEnrolled && parsedDesc) {
           const liveDesc = await biometricService.extractFaceDescriptor(canvas);
           if (liveDesc) {
-            matchResult = biometricService.evaluateBiometricMatch(liveDesc, selectedUser.faceDescriptor);
+            matchResult = biometricService.evaluateBiometricMatch(liveDesc, parsedDesc, 0.58);
             setBiometricResult(matchResult);
           }
         }
@@ -235,10 +235,11 @@ export const HrmKioskPage: React.FC = () => {
 
           // 1:1 Biometric Evaluation with face-api.js if enrolled
           let matchResult: BiometricMatchResult | null = null;
-          if (selectedUser.isFaceEnrolled && selectedUser.faceDescriptor && Array.isArray(selectedUser.faceDescriptor)) {
+          const parsedDesc = parseFaceDescriptor(selectedUser.faceDescriptor || (selectedUser as any).face_descriptor);
+          if (selectedUser.isFaceEnrolled && parsedDesc) {
             const liveDesc = await biometricService.extractFaceDescriptor(canvas);
             if (liveDesc) {
-              matchResult = biometricService.evaluateBiometricMatch(liveDesc, selectedUser.faceDescriptor);
+              matchResult = biometricService.evaluateBiometricMatch(liveDesc, parsedDesc, 0.58);
               setBiometricResult(matchResult);
             }
           }

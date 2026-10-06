@@ -39,6 +39,71 @@ export interface FaceDetectionDetail {
   headYawRatio?: number; // Nose-to-jaw relative ratio (0.5 is center)
 }
 
+/**
+ * Robustly parses and normalizes a 128-dimensional facial biometric descriptor from any format
+ * (Array, Float32Array, JSON string, or serialized indexed Object)
+ */
+export function parseFaceDescriptor(raw: any, expectedDim: number = 128): number[] | null {
+  if (!raw) return null;
+  let parsed = raw;
+
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  // Handle nested stringification
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  if (parsed instanceof Float32Array || parsed instanceof Float64Array) {
+    parsed = Array.from(parsed);
+  }
+
+  // Handle serialized object format: { "0": 0.12, "1": -0.05, ... }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    if (parsed[0] !== undefined || parsed['0'] !== undefined) {
+      const arr: number[] = [];
+      for (let i = 0; i < expectedDim; i++) {
+        const val = parsed[i] !== undefined ? parsed[i] : parsed[String(i)];
+        if (typeof val === 'number' && Number.isFinite(val)) {
+          arr.push(val);
+        } else if (typeof val === 'string' && !isNaN(Number(val))) {
+          arr.push(Number(val));
+        } else {
+          break;
+        }
+      }
+      if (arr.length === expectedDim) {
+        parsed = arr;
+      } else {
+        const values = Object.values(parsed).map(Number).filter(Number.isFinite);
+        if (values.length === expectedDim) {
+          parsed = values;
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(parsed) && parsed.length === expectedDim) {
+    const cleanNumbers = parsed.map(Number);
+    const allValid = cleanNumbers.every((n) => Number.isFinite(n));
+    if (allValid) {
+      return cleanNumbers;
+    }
+  }
+
+  return null;
+}
+
 export class BiometricService {
   private modelsLoaded = false;
   private loadingPromise: Promise<boolean> | null = null;
@@ -55,6 +120,13 @@ export class BiometricService {
       inputSize: 224,
       scoreThreshold: 0.45,
     });
+  }
+
+  /**
+   * Helper alias for parseFaceDescriptor
+   */
+  public parseDescriptor(raw: any, expectedDim: number = 128): number[] | null {
+    return parseFaceDescriptor(raw, expectedDim);
   }
 
   /**
