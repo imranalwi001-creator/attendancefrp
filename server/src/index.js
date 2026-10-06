@@ -353,13 +353,18 @@ function formatUserRow(r) {
     isActive: r.is_active !== false,
     isFaceEnrolled: r.is_face_enrolled === true || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
     faceDescriptor: (() => {
-      if (!r.face_descriptor) return null;
-      if (typeof r.face_descriptor === 'object') return r.face_descriptor;
-      try {
-        return JSON.parse(r.face_descriptor);
-      } catch {
-        return null;
+      if (r.face_descriptor) {
+        if (typeof r.face_descriptor === 'object') return r.face_descriptor;
+        try {
+          return JSON.parse(r.face_descriptor);
+        } catch {
+          return null;
+        }
       }
+      if (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) {
+        return r.face_embedding;
+      }
+      return null;
     })(),
     faceEnrolledPhoto: r.face_photo_url || r.face_enrolled_photo || null,
     faceEnrolledAt: r.face_enrolled_at || null,

@@ -328,6 +328,39 @@ All colors MUST be HSL.
     }
   }
 
+  /* Biometric Scanner Cyber-Aperture Keyframes */
+  @keyframes biometric-scan {
+    0% {
+      top: 4%;
+      opacity: 0.2;
+    }
+    50% {
+      top: 92%;
+      opacity: 0.9;
+    }
+    100% {
+      top: 4%;
+      opacity: 0.2;
+    }
+  }
+
+  .animate-biometric-scan {
+    animation: biometric-scan 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  @keyframes biometric-radar-sweep {
+    0% {
+      transform: rotate(0deg);
+    }
+    100% {
+      transform: rotate(360deg);
+    }
+  }
+
+  .animate-radar-sweep {
+    animation: biometric-radar-sweep 5s linear infinite;
+  }
+
   /* Professional Document Print Layout */
   @media print {
     body * {
