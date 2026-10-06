@@ -107,9 +107,18 @@ export async function initDb() {
       ALTER TABLE hrm_attendances 
       ADD COLUMN IF NOT EXISTS security_flags JSONB DEFAULT '[]'::jsonb;
 
-      -- Division Polygon Coordinates for Arbitrary Geofencing
+      -- Division Polygon Coordinates & Allowed Post Points for Arbitrary Geofencing
       ALTER TABLE hrm_divisions 
       ADD COLUMN IF NOT EXISTS polygon_coords JSONB;
+
+      ALTER TABLE hrm_divisions 
+      ADD COLUMN IF NOT EXISTS allowed_posts JSONB DEFAULT '[]'::jsonb;
+
+      ALTER TABLE hrm_profiles 
+      ADD COLUMN IF NOT EXISTS allowed_posts JSONB DEFAULT '[]'::jsonb;
+
+      ALTER TABLE hrm_profiles 
+      ADD COLUMN IF NOT EXISTS allow_ogs_clock_out BOOLEAN DEFAULT true;
 
       -- Attendance Perimeter Breach Columns
       ALTER TABLE hrm_attendances 

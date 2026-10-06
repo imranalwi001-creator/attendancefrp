@@ -1093,6 +1093,7 @@ export const hrmService = {
           latitude: typeof saved.latitude === 'number' ? saved.latitude : parseFloat(saved.latitude),
           longitude: typeof saved.longitude === 'number' ? saved.longitude : parseFloat(saved.longitude),
           radiusMeters: saved.radiusMeters || saved.radius_meters || 150,
+          allowedPosts: saved.allowedPosts || saved.allowed_posts || div.allowedPosts || [],
         };
         const currentDivs = hrmService.getDivisions().filter((d) => d.id !== tempId);
         currentDivs.push(mapped);
@@ -1135,6 +1136,7 @@ export const hrmService = {
           latitude: typeof saved.latitude === 'number' ? saved.latitude : parseFloat(saved.latitude),
           longitude: typeof saved.longitude === 'number' ? saved.longitude : parseFloat(saved.longitude),
           radiusMeters: saved.radiusMeters || saved.radius_meters || 150,
+          allowedPosts: saved.allowedPosts || saved.allowed_posts || updates.allowedPosts || (idx !== -1 ? divisions[idx]?.allowedPosts : []) || [],
         };
         const currentDivs = hrmService.getDivisions();
         const curIdx = currentDivs.findIndex((d) => d.id === id || d.id === saved.id || d.code === saved.code);
@@ -1170,11 +1172,12 @@ export const hrmService = {
     latitude: number;
     longitude: number;
     radiusMeters: number;
+    allowedPosts?: import('@/types/hrm').DivisionAssignedPost[];
   } => {
     hrmService.init();
     const office = hrmService.getOfficeLocation();
     if (!divisionId) {
-      return office;
+      return { ...office, allowedPosts: [] };
     }
     const divisions = hrmService.getDivisions();
     const div = divisions.find((d) => d.id === divisionId);
@@ -1185,9 +1188,10 @@ export const hrmService = {
         latitude: div.latitude,
         longitude: div.longitude,
         radiusMeters: div.radiusMeters || 150,
+        allowedPosts: div.allowedPosts || [],
       };
     }
-    return office;
+    return { ...office, allowedPosts: [] };
   },
 
   getDivisionEmployees: (divisionId: string): UserProfile[] => {
@@ -2466,6 +2470,25 @@ export const hrmService = {
       flags.push(`GEOFENCE_VERIFIED_${Math.round(data.geofenceDistance || 0)}M`);
     } else if (data.geofenceValid === false) {
       flags.push(`GEOFENCE_BREACH_${Math.round(data.geofenceDistance || 0)}M`);
+    }
+
+    // Pengecualian 3 Petugas Lapangan Khusus (Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI)
+    const isExemptFieldOfficer = [
+      'aslamfaisal10okt@gmail.com',
+      'abangelsamsi@gmail.com',
+      'mtakdir46@gmail.com'
+    ].includes((user.email || '').toLowerCase()) ||
+    ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes((user.nip || '').trim());
+
+    // Validasi Pos OGS (Khusus Ceklok Pulang bagi karyawan biasa / divisi yang ditentukan)
+    if (!isExemptFieldOfficer && typeof data.latitude === 'number' && typeof data.longitude === 'number') {
+      const dOgs = geofenceService.calculateDistance(
+        { lat: data.latitude, lng: data.longitude },
+        { latitude: -4.787904, longitude: 119.613399 }
+      );
+      if (dOgs <= 250) {
+        throw new Error('Presensi Masuk Ditolak: Titik Pos OGS hanya diizinkan untuk Ceklok Pulang (Presensi Keluar). Silakan lakukan presensi masuk di titik kantor divisi Anda.');
+      }
     }
 
     // Evaluate Security Score

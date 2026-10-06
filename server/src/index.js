@@ -384,6 +384,8 @@ function formatUserRow(r) {
     currentActivePostId: r.current_active_post_id || null,
     currentActivePostName: r.current_active_post_name || null,
     currentActivePostEnteredAt: r.current_active_post_entered_at || null,
+    allowedPosts: r.allowed_posts ? (typeof r.allowed_posts === 'string' ? JSON.parse(r.allowed_posts) : r.allowed_posts) : [],
+    allowOgsClockOut: r.allow_ogs_clock_out !== false,
     createdAt: r.created_at,
   };
 }
@@ -1077,6 +1079,25 @@ function calculateHaversineMeters(lat1, lon1, lat2, lon2) {
   return Math.round(R * c * 10) / 10;
 }
 
+// Helper: 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) yang 100% Bebas Aturan Divisi & Pos OGS
+function isExemptFieldOfficer(user) {
+  if (!user) return false;
+  const email = (user.email || '').toLowerCase().trim();
+  const rawNip = (user.nip || '').trim().toUpperCase();
+  const cleanNip = rawNip.replace(/[\s.]/g, '');
+  const id = (user.id || user.userId || '').toString().toLowerCase();
+
+  const exemptEmails = ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'];
+  const exemptNips = ['FRP07065', 'FR07066', 'FRP07046', 'FR07065', 'FR07046'];
+  const exemptIds = [
+    'ebf10b16-ab2f-4b53-ab22-b3ffc00694db',
+    '2ce41a19-0c65-45d3-913e-a68a02203fe2',
+    '0a49f92e-5733-4b72-947c-7361f9490632'
+  ];
+
+  return exemptEmails.includes(email) || exemptNips.includes(cleanNip) || exemptIds.includes(id);
+}
+
 app.post('/api/attendances/clock-in', async (req, res) => {
   const {
     userId,
@@ -1101,11 +1122,26 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     // 0. Profile & Device Binding Check (1 Karyawan = 1 HP Terdaftar)
     let userProfile = null;
     const userRes = await pool.query(
-      `SELECT id, full_name, device_id, device_model, is_device_bound, face_embedding FROM hrm_profiles WHERE id = $1`,
+      `SELECT id, full_name, email, nip, division_id, device_id, device_model, is_device_bound, face_embedding, allowed_posts, allow_ogs_clock_out FROM hrm_profiles WHERE id = $1`,
       [userId]
     );
     if (userRes.rows.length > 0) {
       userProfile = userRes.rows[0];
+    }
+
+    const isExempt = isExemptFieldOfficer(userProfile);
+
+    // Validasi Khusus Pos OGS: Titik Pos OGS (-4.787904, 119.613399) HANYA untuk Ceklok Pulang bagi divisi/karyawan biasa
+    // Kecuali 3 Petugas Lapangan Khusus yang 100% dikecualikan (Aslam, Samsi, Takdir)
+    if (!isExempt && latitude && longitude) {
+      const distToOgs = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), -4.787904, 119.613399);
+      if (distToOgs <= 250) {
+        return res.status(403).json({
+          success: false,
+          error: 'Presensi Masuk Ditolak: Titik Pos OGS hanya diizinkan untuk Ceklok Pulang (Presensi Keluar) bagi divisi dan karyawan yang ditentukan.',
+          code: 'OGS_CLOCKOUT_ONLY'
+        });
+      }
     }
 
     if (userProfile && deviceId) {
@@ -1166,10 +1202,11 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       } else {
         const locRes = await pool.query(
           `SELECT 
-             COALESCE(p.assigned_latitude, d.latitude, o.latitude, -6.2088) as office_lat,
-             COALESCE(p.assigned_longitude, d.longitude, o.longitude, 106.8456) as office_lon,
-             COALESCE(p.assigned_radius_meters, d.radius_meters, o.radius_meters, 150) as allowed_radius,
-             COALESCE(p.assigned_location_name, d.name, o.name, 'Kantor Pusat') as location_name
+             p.assigned_latitude, p.assigned_longitude, p.assigned_radius_meters, p.assigned_location_name,
+             p.allowed_posts as user_allowed_posts,
+             d.latitude as div_lat, d.longitude as div_lon, d.radius_meters as div_radius, d.name as div_name,
+             d.allowed_posts as div_allowed_posts,
+             o.latitude as office_lat, o.longitude as office_lon, o.radius_meters as office_radius, o.name as office_name
            FROM hrm_profiles p
            LEFT JOIN hrm_divisions d ON p.division_id = d.id
            LEFT JOIN hrm_office_locations o ON o.is_active = true
@@ -1179,14 +1216,76 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
         if (locRes.rows.length > 0) {
           const loc = locRes.rows[0];
-          serverDistance = calculateHaversineMeters(
-            parseFloat(latitude),
-            parseFloat(longitude),
-            parseFloat(loc.office_lat),
-            parseFloat(loc.office_lon)
-          );
-          isServerGeofenceValid = serverDistance <= parseFloat(loc.allowed_radius);
-          if (loc.location_name) locationName = loc.location_name;
+
+          // Parsing allowed posts dari divisi atau user
+          let allowedPostsList = [];
+          try {
+            if (loc.div_allowed_posts) {
+              const parsed = typeof loc.div_allowed_posts === 'string' ? JSON.parse(loc.div_allowed_posts) : loc.div_allowed_posts;
+              if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
+            }
+            if (loc.user_allowed_posts) {
+              const parsed = typeof loc.user_allowed_posts === 'string' ? JSON.parse(loc.user_allowed_posts) : loc.user_allowed_posts;
+              if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
+            }
+          } catch (e) {
+            console.warn('[ClockIn] Error parsing allowed posts JSON:', e.message);
+          }
+
+          // Filter untuk clock-in: hanya post yang mengizinkan clock-in (allowClockIn !== false && !isClockOutOnly)
+          const validClockInPosts = allowedPostsList.filter(p => p.allowClockIn !== false && !p.isClockOutOnly);
+
+          if (validClockInPosts.length > 0) {
+            const postsWithDist = validClockInPosts.map(p => {
+              const dist = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(p.latitude), parseFloat(p.longitude));
+              const rad = parseFloat(p.radiusMeters || p.radius_meters || 250);
+              return { ...p, distance: dist, isValid: dist <= rad };
+            });
+
+            const matchedPost = postsWithDist.find(p => p.isValid);
+            if (matchedPost) {
+              serverDistance = Math.round(matchedPost.distance);
+              isServerGeofenceValid = true;
+              locationName = matchedPost.name || matchedPost.code || 'Pos Divisi';
+            } else {
+              // Cek koordinat default divisi / kantor
+              const defaultLat = loc.assigned_latitude || loc.div_lat || loc.office_lat || -6.2088;
+              const defaultLon = loc.assigned_longitude || loc.div_lon || loc.office_lon || 106.8456;
+              const defaultRad = parseFloat(loc.assigned_radius_meters || loc.div_radius || loc.office_radius || 150);
+              const defaultDist = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(defaultLat), parseFloat(defaultLon));
+
+              if (defaultDist <= defaultRad) {
+                serverDistance = Math.round(defaultDist);
+                isServerGeofenceValid = true;
+                locationName = loc.assigned_location_name || loc.div_name || loc.office_name || 'Kantor Pusat';
+              } else {
+                const nearestPost = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
+                if (nearestPost && nearestPost.distance < defaultDist) {
+                  serverDistance = Math.round(nearestPost.distance);
+                  locationName = nearestPost.name || nearestPost.code || 'Pos Divisi';
+                } else {
+                  serverDistance = Math.round(defaultDist);
+                  locationName = loc.assigned_location_name || loc.div_name || loc.office_name || 'Kantor Pusat';
+                }
+                isServerGeofenceValid = false;
+              }
+            }
+          } else {
+            const officeLat = loc.assigned_latitude || loc.div_lat || loc.office_lat || -6.2088;
+            const officeLon = loc.assigned_longitude || loc.div_lon || loc.office_lon || 106.8456;
+            const allowedRadius = parseFloat(loc.assigned_radius_meters || loc.div_radius || loc.office_radius || 150);
+
+            serverDistance = calculateHaversineMeters(
+              parseFloat(latitude),
+              parseFloat(longitude),
+              parseFloat(officeLat),
+              parseFloat(officeLon)
+            );
+            isServerGeofenceValid = serverDistance <= allowedRadius;
+            if (loc.assigned_location_name || loc.div_name || loc.office_name) {
+              locationName = loc.assigned_location_name || loc.div_name || loc.office_name;
+            }
+          }
         }
       }
     }
@@ -2616,6 +2715,16 @@ app.post('/api/attendances/clock-out', async (req, res) => {
     let serverDistance = geofenceDistance;
     let isServerGeofenceValid = geofenceValid !== false;
 
+    // Ambil info profil karyawan
+    let userProfile = null;
+    const userRes = await pool.query(
+      `SELECT id, full_name, email, nip, division_id, allowed_posts, allow_ogs_clock_out FROM hrm_profiles WHERE id = $1`,
+      [userId]
+    );
+    if (userRes.rows.length > 0) {
+      userProfile = userRes.rows[0];
+    }
+
     if (latitude && longitude && userId) {
       const fieldPosts = await pool.query(
         'SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true',
@@ -2636,26 +2745,97 @@ app.post('/api/attendances/clock-out', async (req, res) => {
           isServerGeofenceValid = false;
         }
       } else {
+        const ogsLat = -4.787904;
+        const ogsLon = 119.613399;
+        const distToOgs = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), ogsLat, ogsLon);
+        const isAtOgs = distToOgs <= 250;
+
         const locRes = await pool.query(
           `SELECT 
-             COALESCE(p.assigned_latitude, d.latitude, o.latitude, -6.2088) as office_lat,
-             COALESCE(p.assigned_longitude, d.longitude, o.longitude, 106.8456) as office_lon,
-             COALESCE(p.assigned_radius_meters, d.radius_meters, o.radius_meters, 150) as allowed_radius
+             p.assigned_latitude, p.assigned_longitude, p.assigned_radius_meters,
+             p.allowed_posts as user_allowed_posts,
+             p.allow_ogs_clock_out,
+             d.latitude as div_lat, d.longitude as div_lon, d.radius_meters as div_radius,
+             d.allowed_posts as div_allowed_posts,
+             o.latitude as office_lat, o.longitude as office_lon, o.radius_meters as office_radius
            FROM hrm_profiles p
            LEFT JOIN hrm_divisions d ON p.division_id = d.id
            LEFT JOIN hrm_office_locations o ON o.is_active = true
            WHERE p.id = $1 LIMIT 1`,
           [userId]
         );
+
         if (locRes.rows.length > 0) {
           const loc = locRes.rows[0];
-          serverDistance = calculateHaversineMeters(
-            parseFloat(latitude),
-            parseFloat(longitude),
-            parseFloat(loc.office_lat),
-            parseFloat(loc.office_lon)
-          );
-          isServerGeofenceValid = serverDistance <= parseFloat(loc.allowed_radius);
+
+          let allowedPostsList = [];
+          try {
+            if (loc.div_allowed_posts) {
+              const parsed = typeof loc.div_allowed_posts === 'string' ? JSON.parse(loc.div_allowed_posts) : loc.div_allowed_posts;
+              if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
+            }
+            if (loc.user_allowed_posts) {
+              const parsed = typeof loc.user_allowed_posts === 'string' ? JSON.parse(loc.user_allowed_posts) : loc.user_allowed_posts;
+              if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
+            }
+          } catch (e) {
+            console.warn('[ClockOut] Error parsing allowed posts JSON:', e.message);
+          }
+
+          // Cek apakah Pos OGS diizinkan untuk ceklok pulang
+          const allowOgs = loc.allow_ogs_clock_out !== false;
+          const ogsPostConfig = allowedPostsList.find(p => p.code === 'PINTU OGS' || (p.name && p.name.toUpperCase().includes('OGS')));
+          const isOgsAllowedInPosts = ogsPostConfig ? (ogsPostConfig.allowClockOut !== false) : true;
+
+          if (isAtOgs && allowOgs && isOgsAllowedInPosts) {
+            // Pos OGS sah untuk ceklok pulang karyawan & divisi yang ditentukan
+            serverDistance = Math.round(distToOgs);
+            isServerGeofenceValid = true;
+          } else {
+            // Filter allowed posts yang mengizinkan clock-out
+            const validClockOutPosts = allowedPostsList.filter(p => p.allowClockOut !== false);
+
+            if (validClockOutPosts.length > 0) {
+              const postsWithDist = validClockOutPosts.map(p => {
+                const dist = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(p.latitude), parseFloat(p.longitude));
+                const rad = parseFloat(p.radiusMeters || p.radius_meters || 250);
+                return { ...p, distance: dist, isValid: dist <= rad };
+              });
+
+              const matchedPost = postsWithDist.find(p => p.isValid);
+              if (matchedPost) {
+                serverDistance = Math.round(matchedPost.distance);
+                isServerGeofenceValid = true;
+              } else {
+                // Cek koordinat default divisi / kantor
+                const defaultLat = loc.assigned_latitude || loc.div_lat || loc.office_lat || -6.2088;
+                const defaultLon = loc.assigned_longitude || loc.div_lon || loc.office_lon || 106.8456;
+                const defaultRad = parseFloat(loc.assigned_radius_meters || loc.div_radius || loc.office_radius || 150);
+                const defaultDist = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(defaultLat), parseFloat(defaultLon));
+
+                if (defaultDist <= defaultRad) {
+                  serverDistance = Math.round(defaultDist);
+                  isServerGeofenceValid = true;
+                } else {
+                  const nearestPost = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
+                  serverDistance = Math.round(Math.min(nearestPost ? nearestPost.distance : defaultDist, defaultDist));
+                  isServerGeofenceValid = false;
+                }
+              }
+            } else {
+              const officeLat = loc.assigned_latitude || loc.div_lat || loc.office_lat || -6.2088;
+              const officeLon = loc.assigned_longitude || loc.div_lon || loc.office_lon || 106.8456;
+              const allowedRadius = parseFloat(loc.assigned_radius_meters || loc.div_radius || loc.office_radius || 150);
+
+              serverDistance = calculateHaversineMeters(
+                parseFloat(latitude),
+                parseFloat(longitude),
+                parseFloat(officeLat),
+                parseFloat(officeLon)
+              );
+              isServerGeofenceValid = serverDistance <= allowedRadius;
+            }
+          }
         }
       }
     }
@@ -3401,6 +3581,12 @@ app.post('/api/biometrics/reset/:userId', async (req, res) => {
 // ─── 5. DIVISIONS (CRUD POSTGRESQL & COORDINATE SYNC) ───────────────────────────
 function formatDivisionRow(d) {
   if (!d) return null;
+  let allowedPosts = [];
+  try {
+    allowedPosts = d.allowed_posts ? (typeof d.allowed_posts === 'string' ? JSON.parse(d.allowed_posts) : d.allowed_posts) : [];
+  } catch (e) {
+    allowedPosts = [];
+  }
   return {
     id: d.id,
     code: d.code,
@@ -3412,6 +3598,7 @@ function formatDivisionRow(d) {
     longitude: d.longitude !== null && d.longitude !== undefined ? parseFloat(d.longitude) : 106.8456,
     radiusMeters: d.radius_meters || 150,
     polygonCoords: d.polygon_coords ? (typeof d.polygon_coords === 'string' ? JSON.parse(d.polygon_coords) : d.polygon_coords) : null,
+    allowedPosts,
     bssidWhitelist: d.bssid_whitelist || '',
     wifiSsid: d.wifi_ssid || '',
   };
@@ -3430,10 +3617,14 @@ app.post('/api/divisions', async (req, res) => {
   const d = req.body;
   try {
     const polygonJson = d.polygonCoords ? (typeof d.polygonCoords === 'string' ? d.polygonCoords : JSON.stringify(d.polygonCoords)) : null;
+    const allowedPostsJson = d.allowedPosts !== undefined
+      ? (typeof d.allowedPosts === 'string' ? d.allowedPosts : JSON.stringify(d.allowedPosts))
+      : (d.allowed_posts !== undefined ? (typeof d.allowed_posts === 'string' ? d.allowed_posts : JSON.stringify(d.allowed_posts)) : '[]');
+
     const query = `
       INSERT INTO hrm_divisions (
-        code, name, description, location_name, address, latitude, longitude, radius_meters, polygon_coords, bssid_whitelist, wifi_ssid
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        code, name, description, location_name, address, latitude, longitude, radius_meters, polygon_coords, bssid_whitelist, wifi_ssid, allowed_posts
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
       ON CONFLICT (code) DO UPDATE SET
         name = EXCLUDED.name,
         description = EXCLUDED.description,
@@ -3445,6 +3636,7 @@ app.post('/api/divisions', async (req, res) => {
         polygon_coords = COALESCE(EXCLUDED.polygon_coords, hrm_divisions.polygon_coords),
         bssid_whitelist = COALESCE(EXCLUDED.bssid_whitelist, hrm_divisions.bssid_whitelist),
         wifi_ssid = COALESCE(EXCLUDED.wifi_ssid, hrm_divisions.wifi_ssid),
+        allowed_posts = COALESCE(EXCLUDED.allowed_posts, hrm_divisions.allowed_posts),
         updated_at = NOW()
       RETURNING *;
     `;
@@ -3460,6 +3652,7 @@ app.post('/api/divisions', async (req, res) => {
       polygonJson,
       d.bssidWhitelist || null,
       d.wifiSsid || null,
+      allowedPostsJson,
     ]);
     res.json({ success: true, data: formatDivisionRow(result.rows[0]) });
   } catch (err) {
@@ -3473,6 +3666,10 @@ app.put('/api/divisions/:id', async (req, res) => {
   const d = req.body;
   try {
     const polygonJson = d.polygonCoords !== undefined ? (d.polygonCoords ? (typeof d.polygonCoords === 'string' ? d.polygonCoords : JSON.stringify(d.polygonCoords)) : null) : undefined;
+    const allowedPostsJson = d.allowedPosts !== undefined
+      ? (typeof d.allowedPosts === 'string' ? d.allowedPosts : JSON.stringify(d.allowedPosts))
+      : (d.allowed_posts !== undefined ? (typeof d.allowed_posts === 'string' ? d.allowed_posts : JSON.stringify(d.allowed_posts)) : undefined);
+
     const query = `
       UPDATE hrm_divisions SET
         code = COALESCE($1, code),
@@ -3484,8 +3681,9 @@ app.put('/api/divisions/:id', async (req, res) => {
         longitude = COALESCE($7, longitude),
         radius_meters = COALESCE($8, radius_meters),
         polygon_coords = COALESCE($9, polygon_coords),
+        allowed_posts = COALESCE($10::jsonb, allowed_posts),
         updated_at = NOW()
-      WHERE id::text = $10 OR code = $10
+      WHERE id::text = $11 OR code = $11
       RETURNING *;
     `;
     const result = await pool.query(query, [
@@ -3498,14 +3696,15 @@ app.put('/api/divisions/:id', async (req, res) => {
       d.longitude !== undefined ? Number(d.longitude) : null,
       d.radiusMeters !== undefined ? Number(d.radiusMeters) : (d.radius_meters !== undefined ? Number(d.radius_meters) : null),
       polygonJson !== undefined ? polygonJson : null,
+      allowedPostsJson !== undefined ? allowedPostsJson : null,
       id,
     ]);
     if (result.rows.length === 0) {
       // If not found by ID or code, try upserting
       const insQuery = `
         INSERT INTO hrm_divisions (
-          code, name, description, location_name, address, latitude, longitude, radius_meters, polygon_coords
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          code, name, description, location_name, address, latitude, longitude, radius_meters, polygon_coords, allowed_posts
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
         RETURNING *;
       `;
       const insRes = await pool.query(insQuery, [
@@ -3518,6 +3717,7 @@ app.put('/api/divisions/:id', async (req, res) => {
         d.longitude !== undefined ? Number(d.longitude) : 106.8456,
         d.radiusMeters || d.radius_meters || 150,
         polygonJson || null,
+        allowedPostsJson || '[]',
       ]);
       return res.json({ success: true, data: formatDivisionRow(insRes.rows[0]) });
     }

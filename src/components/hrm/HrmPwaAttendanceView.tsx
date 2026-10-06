@@ -1048,6 +1048,25 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       toast.warning('Kamera sedang memuat frame, silakan tunggu 1-2 detik...');
       return;
     }
+
+    // Pengecualian 3 Petugas Lapangan Khusus (Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI)
+    const isExemptOfficer = [
+      'aslamfaisal10okt@gmail.com',
+      'abangelsamsi@gmail.com',
+      'mtakdir46@gmail.com'
+    ].includes((user.email || '').toLowerCase()) ||
+    ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes((user.nip || '').trim());
+
+    const distToOgs = currentCoords
+      ? geofenceService.calculateDistance(currentCoords, { latitude: -4.787904, longitude: 119.613399 })
+      : 9999;
+    const isAtOgs = distToOgs <= 250;
+
+    if (!isExemptOfficer && isAtOgs && actionType === 'clock_in') {
+      toast.error('Presensi Masuk Ditolak! Titik Pos OGS khusus disetel hanya untuk Ceklok Pulang (Presensi Keluar). Silakan lakukan presensi masuk di titik kantor divisi Anda.');
+      return;
+    }
+
     setIsCapturing(true);
 
     try {

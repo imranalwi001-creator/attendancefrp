@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { hrmService } from '@/services/hrmService';
-import { Division, UserProfile } from '@/types/hrm';
+import { Division, UserProfile, DivisionAssignedPost, FIELD_SENTINEL_6_POST_PRESETS } from '@/types/hrm';
 import {
   Building2,
   Plus,
@@ -88,6 +88,7 @@ export const HrmDivisionsPage: React.FC = () => {
   const [latitude, setLatitude] = useState<number>(-6.225);
   const [longitude, setLongitude] = useState<number>(106.809);
   const [radiusMeters, setRadiusMeters] = useState<number>(150);
+  const [allowedPosts, setAllowedPosts] = useState<DivisionAssignedPost[]>([]);
   const [gettingLocation, setGettingLocation] = useState(false);
   const [detectedAccuracy, setDetectedAccuracy] = useState<number | null>(null);
   const [detectedTime, setDetectedTime] = useState<string | null>(null);
@@ -625,6 +626,7 @@ export const HrmDivisionsPage: React.FC = () => {
     setLatitude(defaultOffice?.latitude || -6.225);
     setLongitude(defaultOffice?.longitude || 106.809);
     setRadiusMeters(150);
+    setAllowedPosts(FIELD_SENTINEL_6_POST_PRESETS.map((p) => ({ ...p })));
     setError(null);
     setModalOpen(true);
   };
@@ -640,6 +642,11 @@ export const HrmDivisionsPage: React.FC = () => {
     setLatitude(typeof d.latitude === 'number' ? d.latitude : -6.225);
     setLongitude(typeof d.longitude === 'number' ? d.longitude : 106.809);
     setRadiusMeters(d.radiusMeters || 150);
+    setAllowedPosts(
+      Array.isArray(d.allowedPosts) && d.allowedPosts.length > 0
+        ? d.allowedPosts
+        : FIELD_SENTINEL_6_POST_PRESETS.map((p) => ({ ...p }))
+    );
     setError(null);
     setModalOpen(true);
   };
@@ -730,6 +737,7 @@ export const HrmDivisionsPage: React.FC = () => {
         latitude: Number(latitude),
         longitude: Number(longitude),
         radiusMeters: Number(radiusMeters) || 150,
+        allowedPosts: allowedPosts,
       };
 
       if (editingDiv) {
@@ -873,6 +881,33 @@ export const HrmDivisionsPage: React.FC = () => {
                     <p className="text-[11px] text-muted-foreground italic">
                       Koordinat belum diatur (menggunakan kantor pusat)
                     </p>
+                  )}
+                  {/* Badges for Allowed Posts */}
+                  {d.allowedPosts && d.allowedPosts.length > 0 && (
+                    <div className="space-y-1 pt-1.5 border-t border-border/60">
+                      <span className="text-[10px] text-muted-foreground block font-medium">
+                        Titik Presensi Sah ({d.allowedPosts.length} Pos):
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {d.allowedPosts.map((p) => {
+                          const isClockOutOnly = Boolean(p.isClockOutOnly || (p.allowClockIn === false && p.allowClockOut === true));
+                          return (
+                            <Badge
+                              key={p.code}
+                              variant="outline"
+                              className={`text-[9px] font-mono py-0 px-1.5 ${
+                                isClockOutOnly
+                                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300'
+                                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                              }`}
+                              title={`${p.name} (${isClockOutOnly ? 'Khusus Ceklok Pulang' : 'Ceklok Masuk & Pulang'})`}
+                            >
+                              {p.code} {isClockOutOnly ? '🛑 Pulang' : '🟢 In/Out'}
+                            </Badge>
+                          );
+                        })}
+                      </div>
+                    </div>
                   )}
                 </div>
 
@@ -1110,6 +1145,53 @@ export const HrmDivisionsPage: React.FC = () => {
                 </div>
               )}
 
+              {/* Opsi Cepat: 6 Titik Pos Lapangan FRP */}
+              <div className="space-y-2 p-3 bg-indigo-500/5 dark:bg-indigo-950/20 border border-indigo-500/20 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-indigo-600" />
+                    Pilih Cepat Titik dari 6 Pos Lapangan:
+                  </Label>
+                  <span className="text-[10px] text-muted-foreground">Klik titik untuk terapkan</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                  {FIELD_SENTINEL_6_POST_PRESETS.map((preset) => {
+                    const isSelected = latitude === preset.latitude && longitude === preset.longitude;
+                    return (
+                      <button
+                        key={preset.code}
+                        type="button"
+                        onClick={() => {
+                          setLatitude(preset.latitude);
+                          setLongitude(preset.longitude);
+                          setRadiusMeters(preset.radiusMeters || 250);
+                          setLocationName(preset.name);
+                          setAddress(preset.description || preset.name);
+                          toast.success(`Titik ${preset.name} diterapkan ke divisi!`);
+                        }}
+                        className={`p-2 text-left rounded-xl border text-[11px] transition-all flex flex-col justify-between ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                            : 'bg-card hover:bg-muted/50 border-border text-foreground'
+                        }`}
+                      >
+                        <div className="font-semibold truncate">{preset.name}</div>
+                        <div className={`text-[10px] font-mono mt-0.5 truncate ${isSelected ? 'text-indigo-100' : 'text-muted-foreground'}`}>
+                          {preset.code}
+                        </div>
+                        {preset.isClockOutOnly && (
+                          <span className={`inline-block mt-1 text-[9px] font-bold px-1.5 py-0.2 rounded-md ${
+                            isSelected ? 'bg-white/20 text-white' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                          }`}>
+                            Khusus Pulang
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="space-y-1">
                 <Label className="text-[11px] text-muted-foreground">Nama Lokasi / Gedung Divisi</Label>
                 <Input
@@ -1185,6 +1267,126 @@ export const HrmDivisionsPage: React.FC = () => {
                 <p className="text-[10px] text-muted-foreground">
                   Karyawan divisi ini wajib berada dalam radius {radiusMeters} meter dari titik koordinat ini untuk presensi.
                 </p>
+              </div>
+
+              {/* Multi-Titik Titik Koordinat Presensi Divisi (Bank Titik Sah) */}
+              <div className="space-y-2.5 p-3.5 bg-muted/30 border border-border rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <Crosshair className="w-3.5 h-3.5 text-primary" />
+                      Multi-Titik Koordinat Presensi Divisi (Bank Titik Sah):
+                    </Label>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      Pilih pos mana saja yang sah digunakan oleh staf divisi ini untuk ceklok masuk dan pulang.
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="text-[10px] font-mono">
+                    {allowedPosts.length} Titik Terpilih
+                  </Badge>
+                </div>
+
+                <div className="space-y-2 mt-2">
+                  {FIELD_SENTINEL_6_POST_PRESETS.map((preset) => {
+                    const existingIdx = allowedPosts.findIndex(
+                      (p) => p.code === preset.code || (p.latitude === preset.latitude && p.longitude === preset.longitude)
+                    );
+                    const isChecked = existingIdx !== -1;
+                    const currentPost = isChecked ? allowedPosts[existingIdx] : preset;
+                    const isClockOutOnly = Boolean(
+                      currentPost.isClockOutOnly || (currentPost.allowClockIn === false && currentPost.allowClockOut === true)
+                    );
+
+                    return (
+                      <div
+                        key={preset.code}
+                        className={`p-2.5 rounded-xl border transition-all text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                          isChecked ? 'bg-card border-primary/40 shadow-xs' : 'bg-muted/20 border-border/60 opacity-70'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setAllowedPosts([...allowedPosts, { ...preset }]);
+                              } else {
+                                setAllowedPosts(allowedPosts.filter((_, idx) => idx !== existingIdx));
+                              }
+                            }}
+                            className="mt-0.5 rounded accent-primary cursor-pointer w-4 h-4"
+                          />
+                          <div>
+                            <div className="font-semibold text-foreground flex items-center gap-1.5">
+                              <span>{preset.name}</span>
+                              <span className="text-[10px] font-mono text-muted-foreground">({preset.code})</span>
+                            </div>
+                            <div className="text-[10px] font-mono text-muted-foreground">
+                              {preset.latitude.toFixed(6)}, {preset.longitude.toFixed(6)} • Radius {preset.radiusMeters}m
+                            </div>
+                          </div>
+                        </div>
+
+                        {isChecked && (
+                          <div className="flex items-center gap-2 pl-6 sm:pl-0">
+                            <span className="text-[10px] text-muted-foreground">Aturan Presensi:</span>
+                            <div className="flex items-center rounded-lg border border-border p-0.5 bg-background">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = [...allowedPosts];
+                                  updated[existingIdx] = {
+                                    ...updated[existingIdx],
+                                    allowClockIn: true,
+                                    allowClockOut: true,
+                                    isClockOutOnly: false,
+                                  };
+                                  setAllowedPosts(updated);
+                                }}
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-medium transition-all ${
+                                  !isClockOutOnly
+                                    ? 'bg-emerald-600 text-white font-bold'
+                                    : 'text-muted-foreground hover:text-foreground'
+                                }`}
+                              >
+                                Masuk &amp; Pulang
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = [...allowedPosts];
+                                  updated[existingIdx] = {
+                                    ...updated[existingIdx],
+                                    allowClockIn: false,
+                                    allowClockOut: true,
+                                    isClockOutOnly: true,
+                                  };
+                                  setAllowedPosts(updated);
+                                }}
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-medium transition-all ${
+                                  isClockOutOnly
+                                    ? 'bg-rose-600 text-white font-bold'
+                                    : 'text-muted-foreground hover:text-foreground'
+                                }`}
+                              >
+                                Khusus Ceklok Pulang
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Exemption Callout for 3 Special Officers */}
+                <div className="mt-3 p-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-[11px] text-emerald-800 dark:text-emerald-300 flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">Pengecualian Mutlak Sistem:</span> Aturan pembatasan titik divisi &amp; pembatasan khusus pulang Pos OGS ini <strong>TIDAK BERLAKU</strong> untuk 3 Petugas Lapangan (<strong>Muh Aslam Faisal</strong>, <strong>TAKDIR</strong>, dan <strong>LA UNGA SAMSI</strong>). Ketiganya tetap bebas presensi masuk dan pulang di seluruh bank pos mereka.
+                  </div>
+                </div>
               </div>
             </div>
           </div>

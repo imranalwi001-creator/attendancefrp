@@ -1104,8 +1104,36 @@ export const HrmEmployeeDashboard: React.FC = () => {
       return;
     }
 
+    // Pengecualian 3 Petugas Lapangan Khusus (Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI)
+    const isExemptOfficer = [
+      'aslamfaisal10okt@gmail.com',
+      'abangelsamsi@gmail.com',
+      'mtakdir46@gmail.com'
+    ].includes((user.email || '').toLowerCase()) ||
+    ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes((user.nip || '').trim());
+
+    // Cek keberadaan di Titik Pos OGS (-4.787904, 119.613399, radius 250m)
+    const distToOgs = currentCoords
+      ? geofenceService.calculateDistance(currentCoords, { latitude: -4.787904, longitude: 119.613399 })
+      : 9999;
+    const isAtOgs = distToOgs <= 250;
+
+    // Aturan Khusus Pos OGS: Hanya sah untuk Ceklok Pulang bagi karyawan non-khusus
+    if (!isExemptOfficer && isAtOgs && actionType === 'clock_in') {
+      setAttendanceMessage({
+        type: 'error',
+        text: 'Presensi Masuk Ditolak! Titik Pos OGS khusus disetel hanya untuk Ceklok Pulang (Presensi Keluar). Silakan lakukan presensi masuk di titik kantor divisi Anda.',
+      });
+      toast.error('Pos OGS hanya diizinkan untuk Ceklok Pulang!');
+      setSubmitting(false);
+      return;
+    }
+
+    // Jika karyawan pulang di Pos OGS, izinkan presensi pulang
+    const effectiveLocationStatus = (isAtOgs && actionType === 'clock_out') ? 'inside' : locationStatus;
+
     // Enforce Geofence Perimeter Check
-    if (locationStatus === 'outside') {
+    if (effectiveLocationStatus === 'outside') {
       const dist = geofenceEval ? Math.round(geofenceEval.distanceMeters) : (distanceToOffice ? Math.round(distanceToOffice) : 0);
       setAttendanceMessage({
         type: 'error',

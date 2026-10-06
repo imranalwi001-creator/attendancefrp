@@ -109,6 +109,88 @@ export interface EmployeeDocument {
   notes?: string;
 }
 
+export interface DivisionAssignedPost {
+  id?: string;
+  code: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  description?: string;
+  allowClockIn?: boolean;   // Sah untuk presensi masuk (default true)
+  allowClockOut?: boolean;  // Sah untuk presensi pulang (default true)
+  isClockOutOnly?: boolean; // Khusus hanya untuk ceklok pulang (cth: Pos OGS)
+}
+
+export const FIELD_SENTINEL_6_POST_PRESETS: DivisionAssignedPost[] = [
+  {
+    code: 'KANTOR FRP',
+    name: 'FRP (Kantor Umum)',
+    latitude: -4.794135,
+    longitude: 119.604382,
+    radiusMeters: 250,
+    description: 'Kantor umum FRP',
+    allowClockIn: true,
+    allowClockOut: true,
+    isClockOutOnly: false,
+  },
+  {
+    code: 'KANTOR MATCHING BONTOA',
+    name: 'Matching Bontoa',
+    latitude: -4.802450,
+    longitude: 119.598640,
+    radiusMeters: 250,
+    description: 'Kantor Matching Bontoa',
+    allowClockIn: true,
+    allowClockOut: true,
+    isClockOutOnly: false,
+  },
+  {
+    code: 'KANTOR PUSAT',
+    name: 'Central Office (Kantor Pusat)',
+    latitude: -4.800089,
+    longitude: 119.608477,
+    radiusMeters: 250,
+    description: 'Kantor Pusat PT FRP',
+    allowClockIn: true,
+    allowClockOut: true,
+    isClockOutOnly: false,
+  },
+  {
+    code: 'KANTOR STAFF',
+    name: 'Staff Office (Kantor Staff)',
+    latitude: -4.789289,
+    longitude: 119.612770,
+    radiusMeters: 250,
+    description: 'Area Kantor Staff',
+    allowClockIn: true,
+    allowClockOut: true,
+    isClockOutOnly: false,
+  },
+  {
+    code: 'PINTU OGS',
+    name: 'Pos OGS',
+    latitude: -4.787904,
+    longitude: 119.613399,
+    radiusMeters: 250,
+    description: 'Titik Pos OGS (Khusus Ceklok Pulang)',
+    allowClockIn: false,
+    allowClockOut: true,
+    isClockOutOnly: true,
+  },
+  {
+    code: 'WISMA RUMAH TANGGA',
+    name: 'Wisma Rumah Tangga',
+    latitude: -4.792870,
+    longitude: 119.608797,
+    radiusMeters: 250,
+    description: 'Wisma Rumah Tangga FRP',
+    allowClockIn: true,
+    allowClockOut: true,
+    isClockOutOnly: false,
+  },
+];
+
 export interface Division {
   id: string;
   code: string;
@@ -123,6 +205,7 @@ export interface Division {
   polygonCoords?: Array<{ lat: number; lng: number }>;
   bssidWhitelist?: string;
   wifiSsid?: string;
+  allowedPosts?: DivisionAssignedPost[];
 }
 
 export interface Shift {
@@ -253,6 +336,9 @@ export interface UserProfile {
   assignedPosts?: FieldAssignedPost[];
   customStartTime?: string;      // e.g. '07:30'
   customEndTime?: string;        // e.g. '16:30'
+  lateToleranceMinutes?: number; // e.g. 15
+  allowedPosts?: DivisionAssignedPost[];
+  allowOgsClockOut?: boolean;
 
   // ─── Documents ──────────────────────────────────────────
   employeeDocuments?: EmployeeDocument[];
