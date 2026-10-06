@@ -14,6 +14,10 @@ import {
   ExternalLink,
   CheckCircle2,
   User,
+  UserPlus,
+  UserMinus,
+  Search,
+  X,
   Shield,
   Mail,
   Phone,
@@ -96,9 +100,14 @@ export const HrmDivisionsPage: React.FC = () => {
   const [detectedTime, setDetectedTime] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Employee List Modal for specific division
+  // Employee List Modal for specific division (with Add & Remove Employee features)
   const [viewEmployeesDiv, setViewEmployeesDiv] = useState<Division | null>(null);
   const [employeeModalOpen, setEmployeeModalOpen] = useState(false);
+  const [isAddEmpOpen, setIsAddEmpOpen] = useState(false);
+  const [selectedEmpIdToAdd, setSelectedEmpIdToAdd] = useState<string>('');
+  const [searchEmpInDiv, setSearchEmpInDiv] = useState<string>('');
+  const [searchEmpToAdd, setSearchEmpToAdd] = useState<string>('');
+  const [isAddingEmp, setIsAddingEmp] = useState(false);
 
   // Smart Roster AI Modal State
   const [rosterModalOpen, setRosterModalOpen] = useState(false);
@@ -806,7 +815,55 @@ export const HrmDivisionsPage: React.FC = () => {
 
   const handleViewEmployees = (d: Division) => {
     setViewEmployeesDiv(d);
+    setIsAddEmpOpen(false);
+    setSelectedEmpIdToAdd('');
+    setSearchEmpInDiv('');
+    setSearchEmpToAdd('');
     setEmployeeModalOpen(true);
+  };
+
+  const handleRemoveEmployeeFromDivision = async (emp: UserProfile) => {
+    if (!viewEmployeesDiv) return;
+    if (confirm(`Keluarkan karyawan "${emp.fullName}" (${emp.nip}) dari divisi "${viewEmployeesDiv.name}"? Karyawan ini tidak lagi bernaung di divisi ini.`)) {
+      try {
+        hrmService.updateUser(emp.id, {
+          divisionId: undefined,
+          divisionName: undefined,
+        });
+        loadData();
+        toast.success(`Karyawan ${emp.fullName} berhasil dikeluarkan dari divisi ${viewEmployeesDiv.name}.`);
+      } catch (err: any) {
+        toast.error(err.message || 'Gagal mengeluarkan karyawan dari divisi.');
+      }
+    }
+  };
+
+  const handleAddEmployeeToDivision = async () => {
+    if (!viewEmployeesDiv || !selectedEmpIdToAdd) {
+      toast.error('Pilih karyawan yang ingin ditambahkan terlebih dahulu.');
+      return;
+    }
+    const targetUser = users.find((u) => u.id === selectedEmpIdToAdd);
+    if (!targetUser) return;
+
+    try {
+      setIsAddingEmp(true);
+      hrmService.assignUserDivision(
+        targetUser.id,
+        viewEmployeesDiv.id,
+        `Ditugaskan ke divisi ${viewEmployeesDiv.name}`,
+        'Superadmin'
+      );
+      loadData();
+      setSelectedEmpIdToAdd('');
+      setIsAddEmpOpen(false);
+      setSearchEmpToAdd('');
+      toast.success(`${targetUser.fullName} berhasil ditambahkan ke divisi ${viewEmployeesDiv.name}!`);
+    } catch (err: any) {
+      toast.error(err.message || 'Gagal menambahkan karyawan ke divisi.');
+    } finally {
+      setIsAddingEmp(false);
+    }
   };
 
   return (
@@ -1518,22 +1575,24 @@ export const HrmDivisionsPage: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Division Employees Viewer Modal */}
+      {/* Division Employees Viewer Modal with Add & Remove */}
       <Dialog open={employeeModalOpen} onOpenChange={setEmployeeModalOpen}>
         <DialogContent className="max-w-xl rounded-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Users className="w-5 h-5 text-primary" />
-              Daftar Karyawan: {viewEmployeesDiv?.name}
-            </DialogTitle>
+            <div className="flex items-center justify-between pr-6">
+              <DialogTitle className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-primary" />
+                Daftar Karyawan: {viewEmployeesDiv?.name}
+              </DialogTitle>
+            </div>
             <DialogDescription>
               Karyawan yang saat ini terdaftar dan bernaung di divisi {viewEmployeesDiv?.name} ({viewEmployeesDiv?.code}).
             </DialogDescription>
           </DialogHeader>
 
-          {/* Division Location Info Bar */}
+          {/* Division Location Info Bar + Tombol Tambah Karyawan */}
           {viewEmployeesDiv && (
-            <div className="p-3 bg-muted/30 border border-border rounded-xl text-xs flex items-center justify-between">
+            <div className="p-3 bg-muted/30 border border-border rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
               <div className="flex items-center gap-2 text-muted-foreground">
                 <MapPin className="w-4 h-4 text-primary shrink-0" />
                 <div>
@@ -1543,20 +1602,175 @@ export const HrmDivisionsPage: React.FC = () => {
                   </p>
                 </div>
               </div>
-              <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs">
-                {(divisionEmployeesMap[viewEmployeesDiv.id] || []).length} Karyawan
-              </Badge>
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs">
+                  {(divisionEmployeesMap[viewEmployeesDiv.id] || []).length} Karyawan
+                </Badge>
+                <Button
+                  size="sm"
+                  variant={isAddEmpOpen ? 'secondary' : 'default'}
+                  onClick={() => setIsAddEmpOpen(!isAddEmpOpen)}
+                  className="rounded-xl text-xs h-7 px-2.5 gap-1.5 shadow-xs"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  {isAddEmpOpen ? 'Tutup Form' : '+ Tambah Karyawan'}
+                </Button>
+              </div>
             </div>
           )}
 
-          <div className="space-y-2.5 my-2">
-            {viewEmployeesDiv && (divisionEmployeesMap[viewEmployeesDiv.id] || []).length === 0 ? (
-              <div className="py-8 text-center text-muted-foreground text-xs">
-                Belum ada karyawan yang ditempatkan pada divisi ini.
+          {/* Panel Tambah Karyawan ke Divisi */}
+          {isAddEmpOpen && viewEmployeesDiv && (
+            <div className="p-3.5 bg-primary/5 border border-primary/25 rounded-2xl space-y-3 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                  <UserPlus className="w-4 h-4 text-primary" />
+                  Pilih Karyawan untuk Dimasukkan ke Divisi Ini:
+                </Label>
+                <button
+                  type="button"
+                  onClick={() => setIsAddEmpOpen(false)}
+                  className="text-muted-foreground hover:text-foreground p-1 rounded-md"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-            ) : (
-              viewEmployeesDiv &&
-              (divisionEmployeesMap[viewEmployeesDiv.id] || []).map((emp) => (
+
+              {/* Input pencarian calon karyawan */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Cari nama atau NIP karyawan..."
+                  value={searchEmpToAdd}
+                  onChange={(e) => setSearchEmpToAdd(e.target.value)}
+                  className="pl-8 text-xs h-8 rounded-xl"
+                />
+              </div>
+
+              {/* List pilihan calon karyawan */}
+              {(() => {
+                const candidates = users
+                  .filter((u) => u.divisionId !== viewEmployeesDiv.id)
+                  .filter((u) => {
+                    if (!searchEmpToAdd.trim()) return true;
+                    const q = searchEmpToAdd.toLowerCase();
+                    return (
+                      (u.fullName || '').toLowerCase().includes(q) ||
+                      (u.nip || '').toLowerCase().includes(q)
+                    );
+                  });
+
+                if (candidates.length === 0) {
+                  return (
+                    <div className="text-center py-4 text-xs text-muted-foreground">
+                      {searchEmpToAdd.trim()
+                        ? 'Tidak ada karyawan yang cocok dengan pencarian.'
+                        : 'Semua karyawan telah berada di divisi ini.'}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-2">
+                    <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 border border-border/60 rounded-xl p-2 bg-background/60">
+                      {candidates.map((cand) => {
+                        const isChosen = selectedEmpIdToAdd === cand.id;
+                        const currentDiv = divisions.find((d) => d.id === cand.divisionId);
+                        return (
+                          <div
+                            key={cand.id}
+                            onClick={() => setSelectedEmpIdToAdd(cand.id)}
+                            className={`p-2 rounded-xl text-xs flex items-center justify-between gap-2 cursor-pointer transition-all ${
+                              isChosen
+                                ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                                : 'hover:bg-muted border border-transparent hover:border-border'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate">{cand.fullName}</span>
+                                <span className={`text-[10px] font-mono ${isChosen ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
+                                  ({cand.nip})
+                                </span>
+                              </div>
+                              <div className={`text-[10px] ${isChosen ? 'text-primary-foreground/75' : 'text-muted-foreground'} truncate`}>
+                                {currentDiv ? `Saat ini: Divisi ${currentDiv.name}` : 'Belum memiliki divisi'}
+                              </div>
+                            </div>
+                            <div className="shrink-0 text-[10px] font-bold">
+                              {isChosen ? '✓ Terpilih' : '+ Pilih'}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setSelectedEmpIdToAdd('');
+                          setIsAddEmpOpen(false);
+                        }}
+                        className="h-8 text-xs rounded-xl"
+                      >
+                        Batal
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={!selectedEmpIdToAdd || isAddingEmp}
+                        onClick={handleAddEmployeeToDivision}
+                        className="h-8 text-xs rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        {isAddingEmp ? 'Menambahkan...' : 'Tambahkan ke Divisi'}
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Search bar inside current division employees */}
+          {viewEmployeesDiv && (divisionEmployeesMap[viewEmployeesDiv.id] || []).length > 3 && (
+            <div className="relative my-1">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Cari karyawan di divisi ini (nama atau NIP)..."
+                value={searchEmpInDiv}
+                onChange={(e) => setSearchEmpInDiv(e.target.value)}
+                className="pl-8 text-xs h-8 rounded-xl"
+              />
+            </div>
+          )}
+
+          {/* List Karyawan Saat Ini */}
+          <div className="space-y-2.5 my-2">
+            {viewEmployeesDiv && (() => {
+              const divEmps = (divisionEmployeesMap[viewEmployeesDiv.id] || []).filter((emp) => {
+                if (!searchEmpInDiv.trim()) return true;
+                const q = searchEmpInDiv.toLowerCase();
+                return (
+                  (emp.fullName || '').toLowerCase().includes(q) ||
+                  (emp.nip || '').toLowerCase().includes(q)
+                );
+              });
+
+              if (divEmps.length === 0) {
+                return (
+                  <div className="py-8 text-center text-muted-foreground text-xs">
+                    {searchEmpInDiv.trim()
+                      ? 'Tidak ada karyawan yang cocok dengan pencarian.'
+                      : 'Belum ada karyawan yang ditempatkan pada divisi ini.'}
+                  </div>
+                );
+              }
+
+              return divEmps.map((emp) => (
                 <div
                   key={emp.id}
                   className="p-3 bg-card border border-border rounded-xl flex items-center justify-between gap-3 hover:border-primary/20 transition-colors"
@@ -1588,7 +1802,7 @@ export const HrmDivisionsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="text-right shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <Badge
                       variant="outline"
                       className={
@@ -1599,10 +1813,19 @@ export const HrmDivisionsPage: React.FC = () => {
                     >
                       {emp.isActive ? 'Aktif' : 'Nonaktif'}
                     </Badge>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Keluarkan karyawan dari divisi ini"
+                      onClick={() => handleRemoveEmployeeFromDivision(emp)}
+                      className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
                 </div>
-              ))
-            )}
+              ));
+            })()}
           </div>
 
           <DialogFooter>
