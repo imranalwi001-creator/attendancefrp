@@ -45,6 +45,10 @@ import {
   ShieldCheck,
   Briefcase,
   Users,
+  Smartphone,
+  DownloadCloud,
+  Share,
+  PlusSquare,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -184,6 +188,45 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const isAlarmSilencedRef = useRef<boolean>(false);
   const lastRequestedAtRef = useRef<string | null>(null);
   const isSubmittingPatrolRef = useRef<boolean>(false);
+
+  // PWA Standalone Detection & Installation State
+  const [isStandaloneApp, setIsStandaloneApp] = useState<boolean>(true);
+  const [showPwaInstallModal, setShowPwaInstallModal] = useState<boolean>(false);
+  const [pwaGuideTab, setPwaGuideTab] = useState<'android' | 'ios' | 'apk'>('android');
+
+  useEffect(() => {
+    const checkStandalone = () => {
+      const standalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as any).standalone === true ||
+        document.referrer.includes('android-app://') ||
+        window.location.search.includes('source=pwa');
+      setIsStandaloneApp(standalone);
+    };
+    checkStandalone();
+    const ua = window.navigator.userAgent.toLowerCase();
+    if (/iphone|ipad|ipod/.test(ua)) setPwaGuideTab('ios');
+    window.addEventListener('appinstalled', checkStandalone);
+    return () => window.removeEventListener('appinstalled', checkStandalone);
+  }, []);
+
+  const handleTriggerPwaInstall = async () => {
+    const promptEvent = (window as any).__pwaInstallPrompt;
+    if (promptEvent) {
+      try {
+        await promptEvent.prompt();
+        const choice = await promptEvent.userChoice;
+        if (choice.outcome === 'accepted') {
+          toast.success('PWA berhasil dipasang ke Layar Utama HP!');
+          (window as any).__pwaInstallPrompt = null;
+        }
+      } catch (e) {
+        setShowPwaInstallModal(true);
+      }
+    } else {
+      setShowPwaInstallModal(true);
+    }
+  };
 
   // Master Face Enrollment Modal
   const [enrollModalOpen, setEnrollModalOpen] = useState(false);
@@ -1929,6 +1972,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Tombol Pasang PWA ke Layar HP jika dibuka lewat peramban browser */}
+            {!isStandaloneApp && (
+              <button
+                type="button"
+                onClick={handleTriggerPwaInstall}
+                className="relative w-8 h-8 rounded-full bg-emerald-500 hover:bg-emerald-400 text-white flex items-center justify-center transition-all active:scale-90 shadow-md animate-pulse"
+                title="Pasang Aplikasi ke Layar Utama HP"
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+              </button>
+            )}
+
             {/* Lonceng Notifikasi Realtime Pengajuan */}
             <button
               type="button"
@@ -1998,6 +2053,28 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         {/* ─── TAB 1: BERANDA PRESENSI UTAMA ─── */}
         {activeTab === 'beranda' && (
           <div className="space-y-4 animate-in fade-in duration-200">
+            {/* Banner Pasang PWA jika dibuka lewat browser */}
+            {!isStandaloneApp && (
+              <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white rounded-2xl p-3 flex items-center justify-between gap-2.5 shadow-md border border-emerald-400/40">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center shrink-0">
+                    <Smartphone className="w-4 h-4 text-white" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-extrabold text-xs text-white truncate">Pasang Aplikasi di Layar HP</p>
+                    <p className="text-[10px] text-emerald-100 truncate">Akses presensi instan tanpa buka browser</p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={handleTriggerPwaInstall}
+                  className="h-8 px-3 bg-white text-emerald-900 hover:bg-emerald-50 text-[11px] font-black rounded-xl shrink-0 shadow-xs active:scale-95"
+                >
+                  Pasang PWA
+                </Button>
+              </div>
+            )}
+
             {/* Greeting & Identity Section */}
             <div className="flex items-center justify-between gap-3 pt-1">
               <div className="space-y-0.5 min-w-0">
@@ -3935,6 +4012,118 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL PANDUAN INSTALASI PWA & DOWNLOAD APK LANGSUNG ─── */}
+      <Dialog open={showPwaInstallModal} onOpenChange={setShowPwaInstallModal}>
+        <DialogContent className="max-w-md rounded-3xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2 text-foreground">
+              <Smartphone className="w-5 h-5 text-emerald-600" />
+              Pasang Aplikasi HRM di HP
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Install aplikasi ke layar utama agar presensi instan tanpa buka browser lagi:
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Sub-Tabs Switcher */}
+          <div className="flex rounded-xl bg-muted p-1 gap-1 text-xs font-bold">
+            <button
+              type="button"
+              onClick={() => setPwaGuideTab('android')}
+              className={`flex-1 py-1.5 rounded-lg transition-all text-center truncate ${
+                pwaGuideTab === 'android'
+                  ? 'bg-card text-emerald-700 dark:text-emerald-400 shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Android (Chrome)
+            </button>
+            <button
+              type="button"
+              onClick={() => setPwaGuideTab('ios')}
+              className={`flex-1 py-1.5 rounded-lg transition-all text-center truncate ${
+                pwaGuideTab === 'ios'
+                  ? 'bg-card text-emerald-700 dark:text-emerald-400 shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              iPhone (Safari)
+            </button>
+            <button
+              type="button"
+              onClick={() => setPwaGuideTab('apk')}
+              className={`flex-1 py-1.5 rounded-lg transition-all text-center truncate ${
+                pwaGuideTab === 'apk'
+                  ? 'bg-card text-emerald-700 dark:text-emerald-400 shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Download APK
+            </button>
+          </div>
+
+          {pwaGuideTab === 'android' && (
+            <div className="space-y-3 text-xs">
+              <div className="space-y-2 bg-muted/40 p-3.5 rounded-2xl border border-border">
+                <p className="font-bold text-foreground">🤖 Langkah Pasang di Android:</p>
+                <ol className="space-y-2 list-decimal list-inside text-muted-foreground leading-relaxed">
+                  <li>Buka browser <b>Google Chrome</b>.</li>
+                  <li>Ketuk ikon <b>titik tiga (⋮)</b> di pojok kanan atas.</li>
+                  <li>Pilih <b>"Pasang aplikasi"</b> atau <b>"Tambahkan ke Layar Utama"</b>.</li>
+                  <li>Klik <b>"Install"</b>. Aplikasi HRM akan langsung muncul di beranda HP Anda!</li>
+                </ol>
+              </div>
+            </div>
+          )}
+
+          {pwaGuideTab === 'ios' && (
+            <div className="space-y-3 text-xs">
+              <div className="space-y-2 bg-muted/40 p-3.5 rounded-2xl border border-border">
+                <p className="font-bold text-foreground">🍎 Langkah Pasang di iPhone/iPad:</p>
+                <ol className="space-y-2 list-decimal list-inside text-muted-foreground leading-relaxed">
+                  <li>Buka link di browser <b>Safari</b>.</li>
+                  <li>Ketuk tombol <b>Bagikan (Share)</b> di bilah bawah (<Share className="w-3.5 h-3.5 inline text-emerald-600" />).</li>
+                  <li>Pilih <b>"Tambahkan ke Layar Utama"</b> (<PlusSquare className="w-3.5 h-3.5 inline text-emerald-600" />).</li>
+                  <li>Ketuk <b>"Tambah" (Add)</b> di pojok kanan atas.</li>
+                </ol>
+              </div>
+            </div>
+          )}
+
+          {pwaGuideTab === 'apk' && (
+            <div className="space-y-3 text-xs">
+              <div className="bg-muted/40 p-3.5 rounded-2xl border border-border space-y-2.5">
+                <p className="font-bold text-foreground">📦 Unduh File APK Android Resmi:</p>
+                <p className="text-muted-foreground leading-relaxed text-[11.5px]">
+                  File paket installer APK resmi PT. FRP (.apk ~27 MB) untuk HP Android.
+                </p>
+                <a
+                  href="/downloads/hrm_attendance_app.apk"
+                  download="hrm_attendance_app.apk"
+                  className="block w-full"
+                >
+                  <Button className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-xs gap-2 h-11">
+                    <DownloadCloud className="w-4 h-4" />
+                    <span>Download hrm_attendance_app.apk (27 MB)</span>
+                  </Button>
+                </a>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowPwaInstallModal(false)}
+              className="w-full rounded-xl text-xs font-semibold"
+            >
+              Tutup Panduan
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

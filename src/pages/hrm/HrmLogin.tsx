@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
+import { HrmPwaFrontInstallBanner } from '@/components/pwa/HrmPwaFrontInstallBanner';
 
 export const HrmLogin: React.FC = () => {
   const { login, isAuthenticated } = useHrmAuth();
@@ -85,6 +86,9 @@ export const HrmLogin: React.FC = () => {
       </div>
 
       <div className="w-full max-w-md space-y-4">
+        {/* Tombol & Banner Pasang / Download PWA di Halaman Paling Depan */}
+        <HrmPwaFrontInstallBanner />
+
         <Card className="shadow-xl border border-border/80 rounded-xl sm:rounded-2xl overflow-hidden bg-card/95 backdrop-blur-sm">
           <CardHeader className="space-y-3 sm:space-y-4 text-center pb-4 sm:pb-6 px-4 sm:px-6 pt-5 sm:pt-6 bg-card relative">
             <div className="mx-auto flex h-16 w-16 sm:h-20 sm:w-20 items-center justify-center rounded-2xl bg-transparent p-1 transition-all">
