@@ -1046,9 +1046,9 @@ export const HrmSettingsPage: React.FC = () => {
                         <span className="font-mono text-[11px] font-bold text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded">
                           {shift.code && shift.code !== 'SHIF' ? shift.code : (
                             shift.name.includes('Day Shift') ? 'DAY' :
-                            shift.name.includes('Shift I ') || shift.name.includes('Shift I(') ? 'SHF-I' :
-                            shift.name.includes('Shift II') ? 'SHF-II' :
                             shift.name.includes('Shift III') ? 'SHF-III' :
+                            shift.name.includes('Shift II') ? 'SHF-II' :
+                            shift.name.includes('Shift I ') || shift.name.includes('Shift I(') ? 'SHF-I' :
                             (shift.code || 'SHF')
                           )}
                         </span>

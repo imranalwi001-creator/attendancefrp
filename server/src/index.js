@@ -554,9 +554,9 @@ app.get('/api/sync/bootstrap', async (req, res) => {
     const shifts = shiftsRes.rows.map((s) => {
       let code = 'SHF';
       if (s.name.includes('Day Shift')) code = 'DAY';
-      else if (s.name.includes('Shift I ') || s.name.includes('Shift I(')) code = 'SHF-I';
-      else if (s.name.includes('Shift II')) code = 'SHF-II';
       else if (s.name.includes('Shift III')) code = 'SHF-III';
+      else if (s.name.includes('Shift II')) code = 'SHF-II';
+      else if (s.name.includes('Shift I ') || s.name.includes('Shift I(')) code = 'SHF-I';
       else if (s.code) code = s.code;
       else code = s.name.substring(0, 4).toUpperCase();
 
@@ -705,9 +705,9 @@ app.get('/api/shifts', async (req, res) => {
     const shifts = result.rows.map((s) => {
       let code = 'SHF';
       if (s.name.includes('Day Shift')) code = 'DAY';
-      else if (s.name.includes('Shift I ') || s.name.includes('Shift I(')) code = 'SHF-I';
-      else if (s.name.includes('Shift II')) code = 'SHF-II';
       else if (s.name.includes('Shift III')) code = 'SHF-III';
+      else if (s.name.includes('Shift II')) code = 'SHF-II';
+      else if (s.name.includes('Shift I ') || s.name.includes('Shift I(')) code = 'SHF-I';
       else if (s.code) code = s.code;
       else code = s.name.substring(0, 4).toUpperCase();
       return {
