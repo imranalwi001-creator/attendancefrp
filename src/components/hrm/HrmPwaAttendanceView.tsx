@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, FIELD_SENTINEL_6_POST_PRESETS } from '@/types/hrm';
+import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer } from '@/types/hrm';
 import {
   Clock,
   MapPin,
@@ -41,6 +41,7 @@ import {
   Image as ImageIcon,
   Filter,
   CheckCheck,
+  Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { biometricService, BiometricMatchResult } from '@/services/biometricService';
@@ -87,7 +88,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   // Fullscreen Live Camera States (Persis Lampiran 3)
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
-  const [actionType, setActionType] = useState<'clock_in' | 'clock_out'>('clock_in');
+  const [actionType, setActionType] = useState<'clock_in' | 'clock_out' | 'emergency_on_call' | 'emergency_on_call_out'>('clock_in');
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
@@ -464,6 +465,36 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   ) => {
     setCurrentCoords(coords);
     setCoordsAccuracy(accuracy);
+
+    // ⚡ Pengecualian Petugas Online Distribusi (Rusdi, Reza, Ichtiar): Fleksibilitas Luas (Matching/Pusat/Cafe/Rumah)
+    if (isMobileOnlineOfficer(user)) {
+      let matchedName = '';
+      let matchedDist = 0;
+      if (activePosts && activePosts.length > 0) {
+        const postsWithDist = activePosts.map((p) => {
+          const d = geofenceService.calculateDistance(coords, { latitude: p.latitude, longitude: p.longitude });
+          const r = p.radiusMeters || 250;
+          return { ...p, distance: d, radius: r, isInside: d <= r };
+        });
+        const insidePost = postsWithDist.find((p) => p.isInside);
+        if (insidePost) {
+          matchedName = `${insidePost.postName} [${insidePost.postCode}]`;
+          matchedDist = Math.round(insidePost.distance);
+        }
+      }
+      if (!matchedName && fallbackOffice) {
+        const evalResult = geofenceService.evaluateGeofence(coords, fallbackOffice);
+        if (evalResult.isInside) {
+          matchedName = fallbackOffice.name;
+          matchedDist = Math.round(evalResult.distanceMeters);
+        }
+      }
+
+      setDistanceToOffice(matchedDist);
+      setLocationStatus('inside');
+      setAssignedPostName(matchedName || 'Area Mobile / Online Remote (Matching/Pusat/Cafe/Rumah)');
+      return;
+    }
 
     if (activePosts && activePosts.length > 0) {
       // Dynamic GPS Accuracy buffer (up to 100m tolerance when mobile GPS is wide indoors)
@@ -879,18 +910,21 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   }, [attendancesHistory, user, todayAttendance, userLeaves, userOvertimeList, currentMonthStr]);
 
   // Start Camera Stream (Fullscreen View)
-  const openLiveCamera = async (type: 'clock_in' | 'clock_out') => {
+  const openLiveCamera = async (type: 'clock_in' | 'clock_out' | 'emergency_on_call' | 'emergency_on_call_out') => {
     // Pastikan getaran darurat dihentikan seketika saat kamera dibuka
     isAlarmSilencedRef.current = true;
     emergencyAlertService.stopEmergencyAlert();
 
-    // Validasi Geofence sebelum buka kamera (dikecualikan untuk spot check lapor wajah darurat pimpinan)
-    if (!isSpotCheckAction && type === 'clock_in' && locationStatus === 'outside') {
+    const isSpecialMobile = isMobileOnlineOfficer(user);
+    const isOnCallAction = type === 'emergency_on_call' || type === 'emergency_on_call_out';
+
+    // Validasi Geofence sebelum buka kamera (dikecualikan untuk spot check lapor wajah darurat pimpinan, mobile officer, & on-call duty)
+    if (!isSpotCheckAction && !isSpecialMobile && !isOnCallAction && type === 'clock_in' && locationStatus === 'outside') {
       toast.error('Presensi Masuk diblokir! Anda berada di luar radius kantor/pos tugas.');
       return;
     }
 
-    if (!isSpotCheckAction && type === 'clock_out' && (todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached)) {
+    if (!isSpotCheckAction && !isSpecialMobile && !isOnCallAction && type === 'clock_out' && (todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached)) {
       toast.error('Presensi Pulang Terkunci karena pelanggaran perimeter. Hubungi HRD.');
       return;
     }
@@ -1013,24 +1047,28 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     ctx.fillStyle = grad;
     ctx.fillRect(0, h - barHeight, w, barHeight);
 
-    // Top Status Accent Line (Hijau jika dalam pos, Amber jika spot check)
-    ctx.fillStyle = isSpotCheck ? '#f59e0b' : '#10b981';
+    const isOnCall = actionType === 'emergency_on_call' || actionType === 'emergency_on_call_out';
+
+    // Top Status Accent Line (Biru jika on-call, Hijau jika dalam pos, Amber jika spot check)
+    ctx.fillStyle = isSpotCheck ? '#f59e0b' : isOnCall ? '#3b82f6' : '#10b981';
     ctx.fillRect(0, h - barHeight + Math.round(20 * scale), w, Math.max(3 * scale, 3));
 
     // Header badge (Top Left)
-    const badgeW = Math.min(w - 24, Math.round(520 * scale));
+    const badgeW = Math.min(w - 24, Math.round(560 * scale));
     const badgeH = Math.round(34 * scale);
     ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
     ctx.fillRect(16, 16, badgeW, badgeH);
-    ctx.strokeStyle = isSpotCheck ? '#f59e0b' : '#10b981';
+    ctx.strokeStyle = isSpotCheck ? '#f59e0b' : isOnCall ? '#3b82f6' : '#10b981';
     ctx.lineWidth = Math.max(2 * scale, 2);
     ctx.strokeRect(16, 16, badgeW, badgeH);
 
     ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
-    ctx.fillStyle = isSpotCheck ? '#fbbf24' : '#10b981';
+    ctx.fillStyle = isSpotCheck ? '#fbbf24' : isOnCall ? '#60a5fa' : '#10b981';
     ctx.fillText(
       isSpotCheck
         ? `🛡️ PT FRP • 1 BUKTI SELFIE REALTIME • 1:1 SCORE: ${matchScore || 98}%`
+        : isOnCall
+        ? `⚡ PT FRP • ${actionType === 'emergency_on_call' ? 'MULAI ON-CALL DUTY' : 'SELESAI ON-CALL DUTY'} • 1:1 SCORE: ${matchScore || 98}%`
         : `🛡️ PT FRP • ${actionType === 'clock_in' ? 'CLOCK-IN (MASUK)' : 'CLOCK-OUT (PULANG)'} • 1:1 SCORE: ${matchScore || 98}%`,
       24,
       16 + Math.round(22 * scale)
@@ -1058,6 +1096,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
       ctx.fillStyle = '#fcd34d'; // Amber light
       ctx.fillText(`🚨 INSTRUKSI PIMPINAN: BUKTI 1 SELFIE REALTIME LAPORAN WAJAH`, paddingX, startY);
+    } else if (isOnCall) {
+      ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
+      ctx.fillStyle = '#93c5fd'; // Light blue
+      ctx.fillText(`⚡ STATUS: TUGAS DARURAT ONLINE (ON-CALL REMOTE WFA)`, paddingX, startY);
     } else {
       const cleanShiftName = userShift?.name || 'Shift Reguler';
       const shiftHoursStr = `${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA`;
@@ -1081,11 +1123,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     ctx.fillStyle = '#e2e8f0'; // Slate light
     ctx.fillText(`🕒 WAKTU REALTIME: ${dateFormatted} • ${timeFormatted} WITA`, paddingX, startY);
 
-    // Line 4: Lokasi Realtime 6 Titik Pos FRP
+    // Line 4: Lokasi Realtime 6 Titik Pos FRP / Jaringan Mobile
     startY += lineGap;
     let postDisplay = assignedPostName || 'Kantor FRP';
     let isSahDiPos = true;
-    if (detectedFrp) {
+    if (isOnCall || isMobileOnlineOfficer(user)) {
+      postDisplay = assignedPostName || 'Area Mobile / Online Remote (Matching/Pusat/Cafe/Rumah)';
+      isSahDiPos = true;
+    } else if (detectedFrp) {
       if (detectedFrp.isWithinRadius) {
         postDisplay = `${detectedFrp.name} [${detectedFrp.code}] (${detectedFrp.distance}m)`;
         isSahDiPos = true;
@@ -1094,7 +1139,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         isSahDiPos = false;
       }
     }
-    const locLine = `📍 POS REALTIME: ${postDisplay}`;
+    const locLine = isOnCall ? `📍 AREA/JARINGAN: ${postDisplay}` : `📍 POS REALTIME: ${postDisplay}`;
     ctx.font = `bold ${Math.round(14 * scale)}px system-ui, sans-serif`;
     ctx.fillStyle = isSahDiPos ? '#34d399' : '#fb7185'; // Emerald or Rose
     ctx.fillText(locLine, paddingX, startY);
@@ -1102,7 +1147,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     // Line 5: GPS Realtime & Akurasi
     startY += lineGap - Math.round(4 * scale);
     const coordsStr = currentCoords
-      ? `📡 GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 10}m) • ${isSahDiPos ? '✅ SAH DI POS TUGAS' : '⚠️ DI LUAR RADIUS'}`
+      ? `📡 GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 10}m) • ${isOnCall ? '🌐 KONEKSI ONLINE TERVERIFIKASI' : (isSahDiPos ? '✅ SAH DI POS TUGAS' : '⚠️ DI LUAR RADIUS')}`
       : `📡 GPS: Sinyal Aktif • Pos Terdata`;
     ctx.font = `bold ${Math.round(12 * scale)}px ui-monospace, SFMono-Regular, monospace`;
     ctx.fillStyle = '#94a3b8'; // Slate 400
@@ -1120,13 +1165,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       return;
     }
 
-    // Pengecualian 3 Petugas Lapangan Khusus (Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI)
+    // Pengecualian 3 Petugas Lapangan Khusus & 3 Petugas Distribusi Online Mobile
     const isExemptOfficer = [
       'aslamfaisal10okt@gmail.com',
       'abangelsamsi@gmail.com',
       'mtakdir46@gmail.com'
     ].includes((user.email || '').toLowerCase()) ||
-    ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes((user.nip || '').trim());
+    ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes((user.nip || '').trim()) ||
+    isMobileOnlineOfficer(user);
 
     const distToOgs = currentCoords
       ? geofenceService.calculateDistance(currentCoords, { latitude: -4.787904, longitude: 119.613399 })
@@ -1271,7 +1317,87 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         }
       }
 
-      // ─── CABANG 2: PRESENSI MASUK / PULANG REGULER ───
+      // ─── CABANG 2: TUGAS DARURAT ONLINE (ON-CALL DUTY SAAT LIBUR / CUTI / MENDADAK) ───
+      const isOnCall = actionType === 'emergency_on_call' || actionType === 'emergency_on_call_out';
+      if (isOnCall) {
+        const resolvedLoc = assignedPostName || 'Area Mobile / Online Remote (Matching/Pusat/Cafe/Rumah)';
+
+        // 1. Simpan ke Rekaman Kehadiran
+        const savedAttendance = await hrmService.recordAttendance({
+          userId: user.id,
+          date: todayStr,
+          clockIn: actionType === 'emergency_on_call' ? timeStr : todayAttendance?.clockIn || timeStr,
+          clockOut: actionType === 'emergency_on_call_out' ? timeStr : todayAttendance?.clockOut,
+          status: 'hadir',
+          lateMinutes: 0,
+          clockInPhoto: actionType === 'emergency_on_call' ? photoData : todayAttendance?.clockInPhoto,
+          clockOutPhoto: actionType === 'emergency_on_call_out' ? photoData : todayAttendance?.clockOutPhoto,
+          latitude: currentCoords?.lat,
+          longitude: currentCoords?.lng,
+          locationName: resolvedLoc,
+          biometricConfidence: verifiedConfidence,
+          isVerifiedBiometric: isVerifiedBiometric,
+          notes: actionType === 'emergency_on_call'
+            ? '⚡ Mulai Tugas Darurat Online (On-Call Remote) saat Libur/Cuti'
+            : '⚡ Selesai Tugas Darurat Online (On-Call Remote)',
+        });
+
+        if (savedAttendance) {
+          setTodayAttendance(savedAttendance);
+        }
+
+        // 2. Kirim Bukti Forensik & WhatsApp Alert ke Pimpinan & Superadmin
+        try {
+          await fieldSentinelService.submitPatrolCheck({
+            userId: user.id,
+            checkType: 'emergency_on_call',
+            locationName: resolvedLoc,
+            latitude: currentCoords?.lat || 0,
+            longitude: currentCoords?.lng || 0,
+            accuracyMeters: coordsAccuracy || 10,
+            watermarkedPhotoUrl: photoData,
+            biometricScore: verifiedConfidence,
+            notes: actionType === 'emergency_on_call'
+              ? '⚡ Mulai Tugas Darurat Online (On-Call Remote) saat Libur/Cuti'
+              : '⚡ Selesai Tugas Darurat Online (On-Call Remote)',
+          });
+        } catch (patrolErr) {
+          console.warn('[On-Call Patrol Alert Note]', patrolErr);
+        }
+
+        // 3. Otomatis ajukan overtime record sah agar hak lembur langsung tercatat
+        if (actionType === 'emergency_on_call') {
+          try {
+            await hrmService.requestOvertime({
+              userId: user.id,
+              date: todayStr,
+              startTime: timeStr,
+              endTime: '22:00',
+              hours: 3,
+              reason: 'Tugas Darurat Online (On-Call Duty) Operasional Distribusi FRP',
+              status: 'pending',
+            });
+          } catch (otErr) {
+            console.warn('[On-Call Overtime Auto-Request Note]', otErr);
+          }
+        }
+
+        // Haptic feedback
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+          try { navigator.vibrate([120, 60, 120]); } catch (e) {}
+        }
+
+        toast.success(
+          actionType === 'emergency_on_call'
+            ? `⚡ Tugas Darurat Online Dimulai! (${timeStr} WITA) Laporan terkirim ke pimpinan.`
+            : `⚡ Tugas Darurat Online Selesai! (${timeStr} WITA) Laporan tersimpan rapi.`
+        );
+
+        await loadRealData();
+        return;
+      }
+
+      // ─── CABANG 3: PRESENSI MASUK / PULANG REGULER ───
       // Determine late minutes
       let lateMinutes = 0;
       let status: 'hadir' | 'terlambat' = 'hadir';
@@ -1521,7 +1647,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   const hasClockedIn = Boolean(todayAttendance?.clockIn);
   const hasClockedOut = Boolean(todayAttendance?.clockOut);
-  const isClockOutAllowed = hasClockedIn && !hasClockedOut && (!isBeforeShiftEndTime || hasApprovedEmergencyLeave);
+  const isClockOutAllowed = hasClockedIn && !hasClockedOut && (!isBeforeShiftEndTime || hasApprovedEmergencyLeave || isMobileOnlineOfficer(user));
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 1. TAMPILAN FULLSCREEN LIVE CAMERA (PERSIS LAMPIRAN 3)
@@ -1534,7 +1660,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           <div className="text-xs text-white/70 font-mono">
             {currentTime.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WITA
           </div>
-          <h2 className="text-sm font-bold tracking-wider uppercase text-white/90">LIVE CAMERA</h2>
+          <h2 className="text-sm font-bold tracking-wider uppercase text-white/90">
+            {isSpotCheckAction || spotCheckModalOpen
+              ? 'BUKTI 1 SELFIE REALTIME'
+              : actionType === 'emergency_on_call'
+              ? '⚡ MULAI ON-CALL DUTY'
+              : actionType === 'emergency_on_call_out'
+              ? '⚡ SELESAI ON-CALL DUTY'
+              : 'LIVE CAMERA'}
+          </h2>
           <button
             type="button"
             onClick={closeLiveCamera}
@@ -2050,6 +2184,66 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <RotateCw className="w-4 h-4" />
               </button>
             </div>
+
+            {/* ─── BANNER / KONTROL KHUSUS: MODE TUGAS DARURAT ONLINE (ON-CALL DUTY) ─── */}
+            {isMobileOnlineOfficer(user) && (
+              <div className="bg-gradient-to-r from-blue-900/10 via-indigo-900/10 to-blue-900/10 dark:from-blue-950/40 dark:via-indigo-950/40 dark:to-blue-950/40 border-2 border-blue-500/40 rounded-2xl p-3.5 shadow-sm space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
+                      <Zap className="w-4 h-4 fill-white" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-blue-950 dark:text-blue-100">
+                          TUGAS DARURAT ONLINE (ON-CALL)
+                        </span>
+                        <span className="bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                          WFA REMOTE
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-blue-700 dark:text-blue-300">
+                        Matching • Kantor Pusat • Cafe/Warkop • Rumah (Libur/Cuti/Mendadak)
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white/70 dark:bg-slate-900/70 p-2.5 rounded-xl border border-blue-200/60 dark:border-blue-900/60 text-[10.5px] text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <Globe className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                    <span className="truncate">Radius Bebas & Koneksi Internet Sah</span>
+                  </div>
+                  <span className="font-mono font-bold text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-300/40 shrink-0">
+                    🟢 AUTO-APPROVE
+                  </span>
+                </div>
+
+                {/* Tombol Aksi Cepat Tugas Darurat */}
+                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                  <Button
+                    type="button"
+                    onClick={() => openLiveCamera('emergency_on_call')}
+                    disabled={hasClockedIn && !hasClockedOut}
+                    className="h-10 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs gap-1.5"
+                  >
+                    <Zap className="w-3.5 h-3.5 fill-white shrink-0" />
+                    <span className="truncate">⚡ Mulai On-Call</span>
+                  </Button>
+
+                  <Button
+                    type="button"
+                    onClick={() => openLiveCamera('emergency_on_call_out')}
+                    disabled={!hasClockedIn || hasClockedOut}
+                    variant="outline"
+                    className="h-10 border-blue-500/60 text-blue-700 dark:text-blue-300 hover:bg-blue-500 hover:text-white font-bold text-xs rounded-xl shadow-xs gap-1.5"
+                  >
+                    <LogOut className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">🛑 Selesai On-Call</span>
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {/* ─── TOMBOL AKSI PRESISI (DUAL BUTTONS PERSIS LAMPIRAN 2) ─── */}
             <div className="grid grid-cols-2 gap-3 pt-1">

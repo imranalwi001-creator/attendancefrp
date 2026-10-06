@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, calculateDistanceMeters, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, HrmNotification, EmployeeSchedule } from '@/types/hrm';
+import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, HrmNotification, EmployeeSchedule, isMobileOnlineOfficer } from '@/types/hrm';
 import {
   Clock,
   MapPin,
@@ -712,7 +712,11 @@ export const HrmEmployeeDashboard: React.FC = () => {
         const evalResult = geofenceService.evaluateGeofence({ lat: latitude, lng: longitude }, divLoc);
         setGeofenceEval(evalResult);
         setDistanceToOffice(evalResult.distanceMeters);
-        setLocationStatus(evalResult.isInside ? 'inside' : 'outside');
+        if (isMobileOnlineOfficer(user)) {
+          setLocationStatus('inside');
+        } else {
+          setLocationStatus(evalResult.isInside ? 'inside' : 'outside');
+        }
       }
     };
 
@@ -1104,13 +1108,14 @@ export const HrmEmployeeDashboard: React.FC = () => {
       return;
     }
 
-    // Pengecualian 3 Petugas Lapangan Khusus (Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI)
+    // Pengecualian 3 Petugas Lapangan Khusus & 3 Petugas Distribusi Online Mobile
     const isExemptOfficer = [
       'aslamfaisal10okt@gmail.com',
       'abangelsamsi@gmail.com',
       'mtakdir46@gmail.com'
     ].includes((user.email || '').toLowerCase()) ||
-    ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes((user.nip || '').trim());
+    ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes((user.nip || '').trim()) ||
+    isMobileOnlineOfficer(user);
 
     // Cek keberadaan di Titik Pos OGS (-4.787904, 119.613399, radius 250m)
     const distToOgs = currentCoords
@@ -1129,11 +1134,11 @@ export const HrmEmployeeDashboard: React.FC = () => {
       return;
     }
 
-    // Jika karyawan pulang di Pos OGS, izinkan presensi pulang
-    const effectiveLocationStatus = (isAtOgs && actionType === 'clock_out') ? 'inside' : locationStatus;
+    // Jika karyawan pulang di Pos OGS atau petugas mobile, izinkan presensi
+    const effectiveLocationStatus = (isAtOgs && actionType === 'clock_out') || isMobileOnlineOfficer(user) ? 'inside' : locationStatus;
 
     // Enforce Geofence Perimeter Check
-    if (effectiveLocationStatus === 'outside') {
+    if (effectiveLocationStatus === 'outside' && !isMobileOnlineOfficer(user)) {
       const dist = geofenceEval ? Math.round(geofenceEval.distanceMeters) : (distanceToOffice ? Math.round(distanceToOffice) : 0);
       setAttendanceMessage({
         type: 'error',

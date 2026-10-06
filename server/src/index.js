@@ -1804,7 +1804,16 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
     const isOnBreakToday = todayAttRes.rows[0]?.is_on_break === true;
     const isEarlyLeaveToday = todayAttRes.rows[0]?.is_early_leave === true;
     const hasClockedOutToday = Boolean(todayAttRes.rows[0]?.clock_out);
-    const isExcusedFromBreach = isOnBreakToday || isEarlyLeaveToday || hasClockedOutToday;
+
+    // Pengecualian 3 Petugas Distribusi Online Mobile (Rusdi, Reza, Ichtiar)
+    const isMobileOnlineSpecialist = [
+      'f0aaf721-203c-4b45-b610-213204bc7ffe', // Rusdi Aryanto
+      'd1e4eaf3-fa45-474b-b7a2-32e4114d8f2b', // M. Reza Angga Dwi S
+      '2939502e-e63c-4c63-aafb-a69abccba828', // Ichtiar
+    ].includes(validUserId) || 
+    ['FR07046', 'FR07042', 'FR07044', 'FR.07.046', 'FR.07.042', 'FR.07.044', 'FRP07046', 'FRP07042', 'FRP07044'].includes((prof.nip || '').trim());
+
+    const isExcusedFromBreach = isOnBreakToday || isEarlyLeaveToday || hasClockedOutToday || isMobileOnlineSpecialist;
 
     // ─── QUERY ALL REGISTERED ACTIVE POSTS IN THE BANK (Titik A, Titik B, Titik C, ...) ───
     const postsRes = await pool.query(
@@ -2122,6 +2131,22 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
       }
     }
 
+    // ⚡ Pengecualian Petugas Online Distribusi (Rusdi, Reza, Ichtiar) & Tugas Darurat On-Call
+    const isMobileOnlineSpecialistCheck = [
+      'f0aaf721-203c-4b45-b610-213204bc7ffe', // Rusdi Aryanto
+      'd1e4eaf3-fa45-474b-b7a2-32e4114d8f2b', // M. Reza Angga Dwi S
+      '2939502e-e63c-4c63-aafb-a69abccba828', // Ichtiar
+    ].includes(validUserId) || 
+    ['FR07046', 'FR07042', 'FR07044', 'FR.07.046', 'FR.07.042', 'FR.07.044', 'FRP07046', 'FRP07042', 'FRP07044'].includes((user.nip || '').trim()) ||
+    checkType === 'emergency_on_call';
+
+    if (isMobileOnlineSpecialistCheck) {
+      isWithinRadius = true;
+      if (!matchedFRP && (!fieldPosts || fieldPosts.rows.length === 0)) {
+        resolvedLocName = locationName || 'Area Mobile / Online Remote (Matching/Pusat/Cafe/Rumah)';
+      }
+    }
+
     const insRes = await pool.query(
       `INSERT INTO hrm_field_patrol_checks (
          user_id, user_name, user_nip, check_type, location_name,
@@ -2173,8 +2198,29 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
     const nowWita = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Makassar' }).replace(/\./g, ':');
     const nowDateWita = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' });
 
-    // Send WhatsApp confirmation to Pimpinan & Superadmin (1 Bukti Selfie Realtime)
-    const patrolWaMsg = 
+    // Send WhatsApp confirmation to Pimpinan & Superadmin
+    let alertTitle = `📸 1 Selfie Realtime Diterima: ${user.full_name}`;
+    let alertMsg = `${user.full_name} telah mengirimkan 1 foto bukti selfie realtime di ${patrol.location_name}.`;
+    let patrolWaMsg = '';
+
+    if (checkType === 'emergency_on_call') {
+      alertTitle = `⚡ Tugas Darurat Online: ${user.full_name}`;
+      alertMsg = `${user.full_name} aktif bertugas mendadak secara online (On-Call Remote) di ${patrol.location_name}.`;
+      patrolWaMsg = 
+`⚡ *LAPORAN TUGAS DARURAT ONLINE (ON-CALL DUTY)* ⚡
+Petugas Operasional Online telah aktif bertugas mendadak!
+
+👤 Petugas: *${user.full_name}* (${user.nip || 'FRP-DIST'})
+📍 Area/Jaringan: *${patrol.location_name}*
+📏 Status Akses: *✅ Sah (Penugasan Online Mobile / On-Call Duty)*
+🛡️ Skor Biometrik: ${patrol.biometric_score || 98.6}% (Lolos 1:1)
+🕒 Waktu Realtime: ${nowDateWita} • ${nowWita} WITA
+📡 Koordinat GPS: ${uLat.toFixed(6)}, ${uLon.toFixed(6)} (±${Math.round(accuracyMeters || 5)}m)
+📝 Catatan: *${notes || 'Tugas Darurat Online saat Libur/Cuti/Luar Jam Kerja'}*
+
+_Karyawan telah aktif terhubung dan menjalankan tugas operasional online._`;
+    } else {
+      patrolWaMsg = 
 `📸 *1 BUKTI SELFIE REALTIME LAPORAN WAJAH*
 
 👤 Petugas: *${user.full_name}* (${user.nip || 'FRP-FIELD'})
@@ -2185,14 +2231,15 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
 📡 Koordinat GPS: ${uLat.toFixed(6)}, ${uLon.toFixed(6)} (±${Math.round(accuracyMeters || 5)}m)
 
 _1 Bukti selfie realtime berhasil diverifikasi dan tersimpan di radar pengawasan FRP._`;
+    }
 
     alertLeadershipViaWhatsAppAndSystem({
-      title: `📸 1 Selfie Realtime Diterima: ${user.full_name}`,
-      message: `${user.full_name} telah mengirimkan 1 foto bukti selfie realtime di ${patrol.location_name}.`,
+      title: alertTitle,
+      message: alertMsg,
       waMessage: patrolWaMsg,
       link: '/admin/monitoring',
       metadata: {
-        type: 'patrol_verified',
+        type: checkType === 'emergency_on_call' ? 'emergency_on_call' : 'patrol_verified',
         userId: validUserId,
         photoUrl: watermarkedPhotoUrl,
         locationName: patrol.location_name

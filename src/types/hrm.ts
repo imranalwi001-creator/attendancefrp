@@ -224,6 +224,35 @@ export const FIELD_SENTINEL_6_POST_PRESETS: DivisionAssignedPost[] = [
   },
 ];
 
+// ─── 3 KARYAWAN KHUSUS OPERATOR ONLINE & MOBILE (WFA / ON-CALL DUTY) ─────────
+export const ONLINE_MOBILE_SPECIALIST_USERS = [
+  { name: 'Rusdi Aryanto', nip: 'FR07046', email: 'fr07046@fawwazreski.co.id', id: 'f0aaf721-203c-4b45-b610-213204bc7ffe' },
+  { name: 'M. Reza Angga Dwi S', nip: 'FR07042', email: 'fr07042@fawwazreski.co.id', id: 'd1e4eaf3-fa45-474b-b7a2-32e4114d8f2b' },
+  { name: 'Ichtiar', nip: 'FR07044', email: 'fr07044@fawwazreski.co.id', id: '2939502e-e63c-4c63-aafb-a69abccba828' },
+];
+
+export const isMobileOnlineOfficer = (userOrNipOrEmail: any): boolean => {
+  if (!userOrNipOrEmail) return false;
+  let email = '';
+  let nip = '';
+  let name = '';
+  if (typeof userOrNipOrEmail === 'string') {
+    email = userOrNipOrEmail.toLowerCase();
+    nip = userOrNipOrEmail.toUpperCase();
+  } else {
+    email = (userOrNipOrEmail.email || '').toLowerCase().trim();
+    nip = (userOrNipOrEmail.nip || '').toUpperCase().trim();
+    name = (userOrNipOrEmail.fullName || userOrNipOrEmail.name || '').toLowerCase().trim();
+  }
+  return (
+    ['fr07046@fawwazreski.co.id', 'fr07042@fawwazreski.co.id', 'fr07044@fawwazreski.co.id'].includes(email) ||
+    ['FR07046', 'FR07042', 'FR07044', 'FR.07.046', 'FR.07.042', 'FR.07.044', 'FRP07046', 'FRP07042', 'FRP07044', 'FRP 07046', 'FRP 07042', 'FRP 07044'].includes(nip) ||
+    name.includes('rusdi aryanto') ||
+    name.includes('reza angga') ||
+    name.includes('ichtiar')
+  );
+};
+
 export interface Division {
   id: string;
   code: string;
