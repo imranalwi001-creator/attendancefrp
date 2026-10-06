@@ -253,6 +253,37 @@ export const isMobileOnlineOfficer = (userOrNipOrEmail: any): boolean => {
   );
 };
 
+export const isLeadershipSpecialFieldOfficer = (userOrNipOrEmail: any): boolean => {
+  if (!userOrNipOrEmail) return false;
+  let email = '';
+  let nip = '';
+  let id = '';
+  let name = '';
+  if (typeof userOrNipOrEmail === 'string') {
+    email = userOrNipOrEmail.toLowerCase();
+    nip = userOrNipOrEmail.toUpperCase().replace(/[\s.]/g, '');
+    id = userOrNipOrEmail.toLowerCase();
+  } else {
+    email = (userOrNipOrEmail.email || '').toLowerCase().trim();
+    nip = (userOrNipOrEmail.nip || '').toUpperCase().trim().replace(/[\s.]/g, '');
+    id = (userOrNipOrEmail.id || '').toLowerCase();
+    name = (userOrNipOrEmail.fullName || userOrNipOrEmail.name || '').toLowerCase().trim();
+  }
+  return (
+    ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes(email) ||
+    ['FRP07065', 'FR07066', 'FRP07046', 'FR07065', 'FR07046'].includes(nip) ||
+    ['ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632'].includes(id) ||
+    name.includes('aslam faisal') ||
+    name.includes('unga samsi') ||
+    name.includes('takdir')
+  );
+};
+
+export const isSpecialDutyOfficer = (userOrNipOrEmail: any): boolean => {
+  return isMobileOnlineOfficer(userOrNipOrEmail) || isLeadershipSpecialFieldOfficer(userOrNipOrEmail);
+};
+
+
 export interface Division {
   id: string;
   code: string;
