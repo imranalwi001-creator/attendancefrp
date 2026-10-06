@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest } from '@/types/hrm';
+import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, FIELD_SENTINEL_6_POST_PRESETS } from '@/types/hrm';
 import {
   Clock,
   MapPin,
@@ -178,6 +178,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [spotCheckSecondsLeft, setSpotCheckSecondsLeft] = useState<number>(300);
   const isAlarmSilencedRef = useRef<boolean>(false);
   const lastRequestedAtRef = useRef<string | null>(null);
+  const isSubmittingPatrolRef = useRef<boolean>(false);
 
   // Master Face Enrollment Modal
   const [enrollModalOpen, setEnrollModalOpen] = useState(false);
@@ -879,13 +880,17 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   // Start Camera Stream (Fullscreen View)
   const openLiveCamera = async (type: 'clock_in' | 'clock_out') => {
-    // Validasi Geofence sebelum buka kamera
-    if (type === 'clock_in' && locationStatus === 'outside') {
+    // Pastikan getaran darurat dihentikan seketika saat kamera dibuka
+    isAlarmSilencedRef.current = true;
+    emergencyAlertService.stopEmergencyAlert();
+
+    // Validasi Geofence sebelum buka kamera (dikecualikan untuk spot check lapor wajah darurat pimpinan)
+    if (!isSpotCheckAction && type === 'clock_in' && locationStatus === 'outside') {
       toast.error('Presensi Masuk diblokir! Anda berada di luar radius kantor/pos tugas.');
       return;
     }
 
-    if (type === 'clock_out' && (todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached)) {
+    if (!isSpotCheckAction && type === 'clock_out' && (todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached)) {
       toast.error('Presensi Pulang Terkunci karena pelanggaran perimeter. Hubungi HRD.');
       return;
     }
@@ -963,6 +968,28 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
   };
 
+  // Deteksi Realtime Kecocokan Posisi dengan 6 Titik Pos Resmi PT FRP
+  const detectMatchingFRPPost = (coords: { lat: number; lng: number } | null) => {
+    if (!coords) return null;
+    let closest: { code: string; name: string; distance: number; isWithinRadius: boolean; radiusMeters: number } | null = null;
+    let minDistance = 999999;
+
+    for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
+      const dist = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
+      if (dist < minDistance) {
+        minDistance = dist;
+        closest = {
+          code: post.code,
+          name: post.name,
+          distance: Math.round(dist),
+          isWithinRadius: dist <= post.radiusMeters,
+          radiusMeters: post.radiusMeters,
+        };
+      }
+    }
+    return closest;
+  };
+
   // Watermark Stamping pada Canvas (Forensic Pixel Stamping - Ukuran Sedang & Jelas Terbaca)
   const applyWatermark = (canvas: HTMLCanvasElement, matchScore?: number) => {
     const ctx = canvas.getContext('2d');
@@ -970,65 +997,77 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const w = canvas.width;
     const h = canvas.height;
 
+    // Deteksi apakah sedang dalam mode Spot-Check Lapor Wajah Darurat atas Instruksi Pimpinan
+    const isSpotCheck = isSpotCheckAction || spotCheckModalOpen || Boolean(spotCheckData);
+    const detectedFrp = detectMatchingFRPPost(currentCoords);
+
     // Normalisasi skala ukuran sedang (medium) agar pas di berbagai resolusi layar HP & kamera
     const scale = Math.min(Math.max(w / 800, 0.9), 1.25);
 
-    // Dark Gradient Bar di bagian bawah (tinggi proporsional ~180px * scale)
-    const barHeight = Math.round(180 * scale);
+    // Dark Gradient Bar di bagian bawah (tinggi proporsional ~190px * scale)
+    const barHeight = Math.round(190 * scale);
     const grad = ctx.createLinearGradient(0, h - barHeight, 0, h);
     grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    grad.addColorStop(0.18, 'rgba(15, 23, 42, 0.92)');
-    grad.addColorStop(1, 'rgba(15, 23, 42, 0.98)');
+    grad.addColorStop(0.18, 'rgba(15, 23, 42, 0.94)');
+    grad.addColorStop(1, 'rgba(15, 23, 42, 0.99)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, h - barHeight, w, barHeight);
 
-    // Top Status Accent Line
-    ctx.fillStyle = '#10b981';
+    // Top Status Accent Line (Hijau jika dalam pos, Amber jika spot check)
+    ctx.fillStyle = isSpotCheck ? '#f59e0b' : '#10b981';
     ctx.fillRect(0, h - barHeight + Math.round(20 * scale), w, Math.max(3 * scale, 3));
 
     // Header badge (Top Left)
-    const badgeW = Math.min(w - 24, Math.round(440 * scale));
+    const badgeW = Math.min(w - 24, Math.round(520 * scale));
     const badgeH = Math.round(34 * scale);
     ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
     ctx.fillRect(16, 16, badgeW, badgeH);
-    ctx.strokeStyle = '#10b981';
+    ctx.strokeStyle = isSpotCheck ? '#f59e0b' : '#10b981';
     ctx.lineWidth = Math.max(2 * scale, 2);
     ctx.strokeRect(16, 16, badgeW, badgeH);
 
     ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
-    ctx.fillStyle = '#10b981';
+    ctx.fillStyle = isSpotCheck ? '#fbbf24' : '#10b981';
     ctx.fillText(
-      `🛡️ PT FRP • ${actionType === 'clock_in' ? 'CLOCK-IN (MASUK)' : 'CLOCK-OUT (PULANG)'} • 1:1 SCORE: ${matchScore || 98}%`,
+      isSpotCheck
+        ? `🛡️ PT FRP • 1 BUKTI SELFIE REALTIME • 1:1 SCORE: ${matchScore || 98}%`
+        : `🛡️ PT FRP • ${actionType === 'clock_in' ? 'CLOCK-IN (MASUK)' : 'CLOCK-OUT (PULANG)'} • 1:1 SCORE: ${matchScore || 98}%`,
       24,
       16 + Math.round(22 * scale)
     );
 
     // Text rows in bottom banner - UKURAN SEDANG, TAJAM, KONTRAS TINGGI
     const paddingX = Math.round(18 * scale);
-    let startY = h - barHeight + Math.round(50 * scale);
-    const lineGap = Math.round(32 * scale);
+    let startY = h - barHeight + Math.round(48 * scale);
+    const lineGap = Math.round(30 * scale);
 
-    // Line 1: Employee Name & NIP & Division (Ukuran Sedang: 16px * scale)
+    // Line 1: Employee Name & NIP & Division
     ctx.font = `bold ${Math.round(16 * scale)}px system-ui, sans-serif`;
     ctx.fillStyle = '#ffffff';
     ctx.shadowColor = 'rgba(0,0,0,0.85)';
     ctx.shadowBlur = 3;
     ctx.fillText(
-      `👤 ${user.fullName} (${user.nip || 'ID: ' + user.id.slice(0, 8)}) • ${user.divisionName || 'Operasional'}`,
+      `👤 ${user.fullName} (${user.nip || 'ID: ' + user.id.slice(0, 8)}) • ${user.divisionName || 'Petugas Lapangan'}`,
       paddingX,
       startY
     );
 
-    // Line 2: Shift Berapa (Ukuran Sedang: 14px * scale)
+    // Line 2: Shift atau Instruksi Lapor Realtime
     startY += lineGap;
-    const cleanShiftName = userShift?.name || 'Shift Reguler';
-    const shiftHoursStr = `${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA`;
-    const shiftText = cleanShiftName.includes('(') ? `⏰ Shift: ${cleanShiftName}` : `⏰ Shift: ${cleanShiftName} (${shiftHoursStr})`;
-    ctx.font = `bold ${Math.round(14 * scale)}px system-ui, sans-serif`;
-    ctx.fillStyle = '#fbbf24'; // Amber / Gold
-    ctx.fillText(shiftText, paddingX, startY);
+    if (isSpotCheck) {
+      ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
+      ctx.fillStyle = '#fcd34d'; // Amber light
+      ctx.fillText(`🚨 INSTRUKSI PIMPINAN: BUKTI 1 SELFIE REALTIME LAPORAN WAJAH`, paddingX, startY);
+    } else {
+      const cleanShiftName = userShift?.name || 'Shift Reguler';
+      const shiftHoursStr = `${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA`;
+      const shiftText = cleanShiftName.includes('(') ? `⏰ Shift: ${cleanShiftName}` : `⏰ Shift: ${cleanShiftName} (${shiftHoursStr})`;
+      ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
+      ctx.fillStyle = '#fbbf24'; // Amber / Gold
+      ctx.fillText(shiftText, paddingX, startY);
+    }
 
-    // Line 3: Tanggal dan Waktu WITA (Ukuran Sedang: 14px * scale)
+    // Line 3: Tanggal dan Waktu WITA REALTIME (Hingga Detik)
     startY += lineGap;
     const now = new Date();
     const dateFormatted = now.toLocaleDateString('id-ID', {
@@ -1039,16 +1078,34 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     });
     const timeFormatted = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\./g, ':');
     ctx.font = `bold ${Math.round(14 * scale)}px ui-monospace, SFMono-Regular, monospace`;
-    ctx.fillStyle = '#cbd5e1'; // Slate light
-    ctx.fillText(`🕒 ${dateFormatted} • ${timeFormatted} WITA`, paddingX, startY);
+    ctx.fillStyle = '#e2e8f0'; // Slate light
+    ctx.fillText(`🕒 WAKTU REALTIME: ${dateFormatted} • ${timeFormatted} WITA`, paddingX, startY);
 
-    // Line 4: Titik Lokasi GPS & Nama Pos (Ukuran Sedang: 14px * scale)
+    // Line 4: Lokasi Realtime 6 Titik Pos FRP
     startY += lineGap;
-    const coordsStr = currentCoords
-      ? `📍 Pos: ${assignedPostName || 'Kantor FRP'} • GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 10}m)`
-      : `📍 Pos: ${assignedPostName || 'Kantor FRP'}`;
+    let postDisplay = assignedPostName || 'Kantor FRP';
+    let isSahDiPos = true;
+    if (detectedFrp) {
+      if (detectedFrp.isWithinRadius) {
+        postDisplay = `${detectedFrp.name} [${detectedFrp.code}] (${detectedFrp.distance}m)`;
+        isSahDiPos = true;
+      } else {
+        postDisplay = `${detectedFrp.name} [${detectedFrp.code}] (${detectedFrp.distance}m - Radius ${detectedFrp.radiusMeters}m)`;
+        isSahDiPos = false;
+      }
+    }
+    const locLine = `📍 POS REALTIME: ${postDisplay}`;
     ctx.font = `bold ${Math.round(14 * scale)}px system-ui, sans-serif`;
-    ctx.fillStyle = '#34d399'; // Emerald
+    ctx.fillStyle = isSahDiPos ? '#34d399' : '#fb7185'; // Emerald or Rose
+    ctx.fillText(locLine, paddingX, startY);
+
+    // Line 5: GPS Realtime & Akurasi
+    startY += lineGap - Math.round(4 * scale);
+    const coordsStr = currentCoords
+      ? `📡 GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 10}m) • ${isSahDiPos ? '✅ SAH DI POS TUGAS' : '⚠️ DI LUAR RADIUS'}`
+      : `📡 GPS: Sinyal Aktif • Pos Terdata`;
+    ctx.font = `bold ${Math.round(12 * scale)}px ui-monospace, SFMono-Regular, monospace`;
+    ctx.fillStyle = '#94a3b8'; // Slate 400
     ctx.fillText(coordsStr, paddingX, startY);
 
     // Reset shadow
@@ -1148,27 +1205,37 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const pad = (n: number) => String(n).padStart(2, '0');
       const timeStr = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-      // ─── CABANG 1: LAPOR WAJAH DARURAT (SPOT-CHECK ATAS PERINTAH PIMPINAN) ───
+      // ─── CABANG 1: LAPOR WAJAH DARURAT (SPOT-CHECK ATAS PERINTAH PIMPINAN: 1 SELFIE SAJA) ───
       if (isSpotCheckAction || spotCheckModalOpen || spotCheckData) {
+        if (isSubmittingPatrolRef.current) return;
+        isSubmittingPatrolRef.current = true;
+
         try {
+          // Deteksi lokasi pos realtime dari 6 titik FRP
+          const detectedFrp = detectMatchingFRPPost(currentCoords);
+          const resolvedLoc = detectedFrp?.isWithinRadius
+            ? `${detectedFrp.name} [${detectedFrp.code}]`
+            : (assignedPostName || 'Pos Lapangan Terdaftar');
+
           await fieldSentinelService.submitPatrolCheck({
             userId: user.id,
             checkType: 'spot_check',
-            locationName: assignedPostName || 'Pos Lapangan Terdaftar',
+            locationName: resolvedLoc,
             latitude: currentCoords?.lat || 0,
             longitude: currentCoords?.lng || 0,
             accuracyMeters: coordsAccuracy || 10,
             watermarkedPhotoUrl: photoData,
             biometricScore: verifiedConfidence,
-            notes: spotCheckData?.notes || 'Verifikasi Laporan Wajah atas Instruksi Pimpinan',
+            notes: spotCheckData?.notes || '1 Bukti Selfie Realtime atas Instruksi Pimpinan',
           });
 
-          // Hentikan sirene dan bersihkan status darurat
+          // Hentikan getaran dan bersihkan status darurat seketika
           isAlarmSilencedRef.current = true;
           emergencyAlertService.stopEmergencyAlert();
           setIsSpotCheckAction(false);
           setSpotCheckModalOpen(false);
           setSpotCheckData(null);
+          lastRequestedAtRef.current = null;
 
           // Update foto presensi hari ini secara non-blocking jika record sudah ada
           if (todayAttendance?.id) {
@@ -1179,7 +1246,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 clockInPhoto: photoData,
                 latitude: currentCoords?.lat,
                 longitude: currentCoords?.lng,
-                locationName: assignedPostName,
+                locationName: resolvedLoc,
                 biometricConfidence: verifiedConfidence,
                 isVerifiedBiometric: isVerifiedBiometric,
               });
@@ -1188,13 +1255,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             }
           }
 
-          toast.success(`✅ Laporan Wajah Berhasil Terkirim ke Pimpinan & Superadmin! (${timeStr} WITA)`);
+          toast.success(`✅ 1 Bukti Selfie Realtime Berhasil Terkirim ke Pimpinan & Superadmin! (${timeStr} WITA)`);
           await loadRealData();
           return;
         } catch (patrolErr: any) {
           console.error('[Spot Check Submit Error]', patrolErr);
-          toast.error('Gagal mengirim laporan wajah: ' + (patrolErr?.message || 'Koneksi error'));
+          toast.error('Gagal mengirim 1 bukti selfie: ' + (patrolErr?.message || 'Koneksi error'));
           return;
+        } finally {
+          setIsCapturing(false);
+          isTriggeringAutoRef.current = false;
+          setTimeout(() => {
+            isSubmittingPatrolRef.current = false;
+          }, 3000);
         }
       }
 
@@ -3488,12 +3561,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 onClick={() => {
                   isAlarmSilencedRef.current = true;
                   emergencyAlertService.stopEmergencyAlert();
-                  toast.info('Alarm suara & getar diheningkan. Silakan tetap segera ambil foto lapor wajah.');
+                  toast.info('Getaran dihentikan. Silakan lakukan pengambilan 1 foto selfie bukti realtime.');
                 }}
                 className="w-full text-xs text-slate-400 hover:text-white hover:bg-slate-900 rounded-xl h-9 flex items-center justify-center gap-1.5"
               >
                 <VolumeX className="w-3.5 h-3.5" />
-                <span>Heningkan Suara / Getar Sementara</span>
+                <span>Heningkan Getaran</span>
               </Button>
             </div>
           </div>

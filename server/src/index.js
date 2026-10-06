@@ -2060,31 +2060,62 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
     let distance = 0;
     let isWithinRadius = true;
 
-    // Cek bank multi-titik pos penugasan (hrm_field_assigned_posts)
-    const fieldPosts = await pool.query(
-      'SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true',
-      [validUserId]
-    );
+    // Daftar 6 Titik Pos Resmi FRP
+    const FRP_6_OFFICIAL_LOCATIONS = [
+      { code: 'KANTOR FRP', name: 'Kantor FRP', lat: -4.794135, lon: 119.604382, radius: 250 },
+      { code: 'KANTOR MATCHING BONTOA', name: 'Matching Bontoa', lat: -4.802450, lon: 119.598640, radius: 250 },
+      { code: 'KANTOR PUSAT', name: 'Kantor Pusat', lat: -4.800089, lon: 119.608477, radius: 250 },
+      { code: 'KANTOR STAFF', name: 'Kantor Staff', lat: -4.789289, lon: 119.612770, radius: 250 },
+      { code: 'PINTU OGS', name: 'Pos OGS', lat: -4.787904, lon: 119.613399, radius: 250 },
+      { code: 'WISMA RUMAH TANGGA', name: 'Wisma Rumah Tangga', lat: -4.792870, lon: 119.608797, radius: 250 },
+    ];
 
-    if (fieldPosts.rows.length > 0) {
-      const postsWithDist = fieldPosts.rows.map(p => {
-        const d = calculateHaversineMeters(uLat, uLon, parseFloat(p.latitude), parseFloat(p.longitude));
-        return { ...p, distance: d, isValid: d <= parseFloat(p.radius_meters) };
-      });
-      const matched = postsWithDist.find(p => p.isValid);
-      if (matched) {
-        distance = Math.round(matched.distance);
-        isWithinRadius = true;
-        resolvedLocName = `${matched.post_name} [${matched.post_code}]`;
-      } else {
-        const nearest = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
-        distance = Math.round(nearest.distance);
-        isWithinRadius = false;
-        resolvedLocName = `${nearest.post_name} [${nearest.post_code}]`;
-      }
+    // Prioritas 1: Cocokkan uLat & uLon dengan salah satu dari 6 Titik Pos Resmi FRP
+    const frpMatches = FRP_6_OFFICIAL_LOCATIONS.map(p => {
+      const d = calculateHaversineMeters(uLat, uLon, p.lat, p.lon);
+      return { ...p, distance: d, isValid: d <= p.radius };
+    });
+    const matchedFRP = frpMatches.find(p => p.isValid);
+
+    if (matchedFRP) {
+      distance = Math.round(matchedFRP.distance);
+      isWithinRadius = true;
+      resolvedLocName = `${matchedFRP.name} [${matchedFRP.code}]`;
     } else {
-      distance = calculateHaversineMeters(uLat, uLon, targetLat, targetLon);
-      isWithinRadius = distance <= targetRad;
+      // Prioritas 2: Cek bank multi-titik pos penugasan karyawan (hrm_field_assigned_posts)
+      const fieldPosts = await pool.query(
+        'SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true',
+        [validUserId]
+      );
+
+      if (fieldPosts.rows.length > 0) {
+        const postsWithDist = fieldPosts.rows.map(p => {
+          const d = calculateHaversineMeters(uLat, uLon, parseFloat(p.latitude), parseFloat(p.longitude));
+          return { ...p, distance: d, isValid: d <= parseFloat(p.radius_meters) };
+        });
+        const matched = postsWithDist.find(p => p.isValid);
+        if (matched) {
+          distance = Math.round(matched.distance);
+          isWithinRadius = true;
+          resolvedLocName = `${matched.post_name} [${matched.post_code}]`;
+        } else {
+          const nearest = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
+          distance = Math.round(nearest.distance);
+          isWithinRadius = false;
+          resolvedLocName = `${nearest.post_name} [${nearest.post_code}]`;
+        }
+      } else {
+        // Prioritas 3: Cari pos terdekat dari 6 titik FRP jika tidak di bank pos
+        const nearestFRP = frpMatches.sort((a, b) => a.distance - b.distance)[0];
+        if (nearestFRP) {
+          distance = Math.round(nearestFRP.distance);
+          isWithinRadius = nearestFRP.isValid;
+          resolvedLocName = `${nearestFRP.name} [${nearestFRP.code}]`;
+        } else {
+          distance = calculateHaversineMeters(uLat, uLon, targetLat, targetLon);
+          isWithinRadius = distance <= targetRad;
+        }
+      }
     }
 
     const insRes = await pool.query(
@@ -2114,7 +2145,7 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
     );
     const patrol = insRes.rows[0];
 
-    // Ephemeral Rolling Photo Replacement: Foto selfie di titik lokasi yang lalu otomatis dihapus dan digantikan hanya dengan foto selfie terbaru
+    // Ephemeral Rolling Photo Replacement: Foto selfie di titik lokasi yang lalu otomatis dihapus dan digantikan hanya dengan 1 foto selfie terbaru
     if (watermarkedPhotoUrl && validUserId && patrol?.id) {
       await pool.query(
         `UPDATE hrm_field_patrol_checks 
@@ -2134,21 +2165,26 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
       [validUserId]
     );
 
-    // Send WhatsApp confirmation to Pimpinan & Superadmin
+    // Waktu Realtime WITA (UTC+8)
+    const nowWita = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Makassar' }).replace(/\./g, ':');
+    const nowDateWita = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' });
+
+    // Send WhatsApp confirmation to Pimpinan & Superadmin (1 Bukti Selfie Realtime)
     const patrolWaMsg = 
-`📸 *LAPORAN VERIFIKASI WAJAH LAPANGAN*
+`📸 *1 BUKTI SELFIE REALTIME LAPORAN WAJAH*
 
 👤 Petugas: *${user.full_name}* (${user.nip || 'FRP-FIELD'})
-📍 Pos: *${patrol.location_name}*
-📏 Geofence: *${isWithinRadius ? '✅ Sah di Dalam Pos' : `⚠️ Di Luar Radius (${Math.round(distance)}m)`}*
-🛡️ Biometrik: ${patrol.biometric_score || 98.6}% Match
-⏰ Waktu: ${new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WITA
+📍 Lokasi Realtime: *${patrol.location_name}*
+📏 Status Pos: *${isWithinRadius ? `✅ Sah di Dalam Pos (${Math.round(distance)}m)` : `⚠️ Di Luar Radius Pos (${Math.round(distance)}m)`}*
+🛡️ Skor Biometrik: ${patrol.biometric_score || 98.6}% Match
+🕒 Waktu Realtime: ${nowDateWita} • ${nowWita} WITA
+📡 Koordinat GPS: ${uLat.toFixed(6)}, ${uLon.toFixed(6)} (±${Math.round(accuracyMeters || 5)}m)
 
-Bukti foto forensik kriptografis telah tersimpan di sistem.`;
+_1 Bukti selfie realtime berhasil diverifikasi dan tersimpan di radar pengawasan FRP._`;
 
     alertLeadershipViaWhatsAppAndSystem({
-      title: `📸 Lapor Wajah Diterima: ${user.full_name}`,
-      message: `${user.full_name} telah mengirimkan foto verifikasi wajah di ${patrol.location_name}.`,
+      title: `📸 1 Selfie Realtime Diterima: ${user.full_name}`,
+      message: `${user.full_name} telah mengirimkan 1 foto bukti selfie realtime di ${patrol.location_name}.`,
       waMessage: patrolWaMsg,
       link: '/admin/monitoring',
       metadata: {

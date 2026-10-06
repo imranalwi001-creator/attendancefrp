@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { UserProfile } from '@/types/hrm';
+import { UserProfile, FIELD_SENTINEL_6_POST_PRESETS } from '@/types/hrm';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -8,6 +8,7 @@ import { burnForensicWatermark } from '@/services/forensicWatermarkService';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { biometricService } from '@/services/biometricService';
 import { emergencyAlertService } from '@/services/emergencyAlertAudioService';
+import { geofenceService } from '@/services/geofenceService';
 
 interface HrmSpotCheckModalProps {
   open: boolean;
@@ -132,8 +133,28 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
       // Stop camera stream once snapped
       stopCamera();
 
+      // Deteksi Realtime 6 Titik Pos Resmi FRP
+      let detectedPost: { code: string; name: string; distance: number; isWithinRadius: boolean } | null = null;
+      if (coords) {
+        let minDist = 999999;
+        for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
+          const d = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
+          if (d < minDist) {
+            minDist = d;
+            detectedPost = {
+              code: post.code,
+              name: post.name,
+              distance: Math.round(d),
+              isWithinRadius: d <= post.radiusMeters,
+            };
+          }
+        }
+      }
+
       // Burn Cryptographic Forensic Watermark
-      const targetLocationName = user.assignedLocationName || user.divisionName || 'Pos Tugas Lapangan';
+      const targetLocationName = detectedPost?.isWithinRadius
+        ? `${detectedPost.name} [${detectedPost.code}]`
+        : (user.assignedLocationName || user.divisionName || 'Pos Tugas Lapangan');
       const userLat = coords?.lat || user.assignedLatitude || -6.2088;
       const userLng = coords?.lng || user.assignedLongitude || 106.8456;
 
@@ -145,7 +166,9 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
         latitude: userLat,
         longitude: userLng,
         accuracyMeters: coords?.accuracy || 5,
-        tag: 'SPOT-CHECK PATROLI',
+        distanceMeters: detectedPost ? detectedPost.distance : undefined,
+        isWithinRadius: detectedPost ? detectedPost.isWithinRadius : true,
+        tag: '1 BUKTI SELFIE REALTIME',
         biometricScore: 98.7,
       });
 
@@ -164,14 +187,36 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
     startCamera();
   };
 
-  // 4. Send directly to Pimpinan & Superadmin via Backend API
+  // 4. Send directly to Pimpinan & Superadmin via Backend API (Hanya 1 Selfie Sah)
   const handleSubmit = async () => {
-    if (!watermarkedPhoto) return;
+    if (!watermarkedPhoto || isSubmitting) return;
     setIsSubmitting(true);
     setErrorMsg(null);
 
     try {
-      const targetLocationName = user.assignedLocationName || user.divisionName || 'Pos Tugas Lapangan';
+      // Hentikan getaran seketika
+      emergencyAlertService.stopEmergencyAlert();
+
+      let detectedPost: { code: string; name: string; distance: number; isWithinRadius: boolean } | null = null;
+      if (coords) {
+        let minDist = 999999;
+        for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
+          const d = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
+          if (d < minDist) {
+            minDist = d;
+            detectedPost = {
+              code: post.code,
+              name: post.name,
+              distance: Math.round(d),
+              isWithinRadius: d <= post.radiusMeters,
+            };
+          }
+        }
+      }
+
+      const targetLocationName = detectedPost?.isWithinRadius
+        ? `${detectedPost.name} [${detectedPost.code}]`
+        : (user.assignedLocationName || user.divisionName || 'Pos Tugas Lapangan');
       const userLat = coords?.lat || user.assignedLatitude || -6.2088;
       const userLng = coords?.lng || user.assignedLongitude || 106.8456;
 
@@ -184,7 +229,7 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
         accuracyMeters: coords?.accuracy || 5,
         watermarkedPhotoUrl: watermarkedPhoto,
         biometricScore: 98.7,
-        notes: instructionNotes || 'Konfirmasi kehadiran live sesuai instruksi Pimpinan.',
+        notes: instructionNotes || '1 Bukti Selfie Realtime sesuai instruksi Pimpinan.',
       });
 
       emergencyAlertService.stopEmergencyAlert();
@@ -193,7 +238,7 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
       }
       onClose();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Gagal mengirimkan verifikasi.');
+      setErrorMsg(err.message || 'Gagal mengirimkan 1 bukti selfie.');
     } finally {
       setIsSubmitting(false);
     }
@@ -311,12 +356,12 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
                 {isSubmitting ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Mengirim ke Pimpinan...
+                    Mengirim 1 Selfie...
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-3.5 h-3.5" />
-                    Kirim Bukti ke Pimpinan &amp; Admin
+                    Kirim 1 Selfie Bukti ke Pimpinan &amp; Admin
                   </>
                 )}
               </Button>

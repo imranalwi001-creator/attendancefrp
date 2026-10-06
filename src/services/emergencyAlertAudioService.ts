@@ -9,59 +9,17 @@ class EmergencyAlertAudioService {
   private vibrationIntervalId: any = null;
   private autoTimeoutId: any = null;
 
-  private initAudio() {
-    if (!this.audioCtx) {
-      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtxClass) {
-        this.audioCtx = new AudioCtxClass();
-      }
-    }
-    if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume().catch(() => null);
-    }
-  }
-
-  // Play a single 2-tone siren burst (high-pitch attention grabber: 880Hz to 1320Hz)
+  // Sound synthesis permanently disabled: Notifikasi hanya bergetar tanpa bunyi
   private playSirenTone() {
-    try {
-      this.initAudio();
-      if (!this.audioCtx) return;
-
-      const now = this.audioCtx.currentTime;
-      const osc = this.audioCtx.createOscillator();
-      const gain = this.audioCtx.createGain();
-
-      osc.type = 'sawtooth';
-      // Emergency frequency sweep (880Hz -> 1320Hz -> 880Hz)
-      osc.frequency.setValueAtTime(880, now);
-      osc.frequency.exponentialRampToValueAtTime(1320, now + 0.25);
-      osc.frequency.exponentialRampToValueAtTime(880, now + 0.5);
-
-      gain.gain.setValueAtTime(0.35, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.55);
-
-      osc.connect(gain);
-      gain.connect(this.audioCtx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.55);
-    } catch (e) {
-      console.warn('[EmergencyAlert] Audio synthesis error:', e);
-    }
+    // Silent mode enforced: no sound synthesis
   }
 
-  // Trigger continuous siren + mobile vibration + notification (Auto-silences after 15 seconds)
+  // Trigger continuous mobile vibration + notification (Vibration ONLY, without sound)
   public startEmergencyAlert(title: string = '🚨 INSTRUKSI PIMPINAN SEGERA LAPOR WAJAH', message?: string) {
     if (this.isAlarmRunning) return;
     this.isAlarmRunning = true;
 
-    // 1. Play immediate sound
-    this.playSirenTone();
-    this.intervalId = setInterval(() => {
-      if (this.isAlarmRunning) {
-        this.playSirenTone();
-      }
-    }, 700);
+    // 1. Audio sound intentionally omitted per requirement: HANYA BERGETAR TANPA BUNYI
 
     // 2. Continuous Haptic Vibration (Android PWA supported)
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
