@@ -2060,18 +2060,22 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
     let distance = 0;
     let isWithinRadius = true;
 
-    // Daftar 6 Titik Pos Resmi FRP
-    const FRP_6_OFFICIAL_LOCATIONS = [
+    // Daftar Titik Pos Resmi FRP (Termasuk Titik Pos Timbangan)
+    const FRP_OFFICIAL_LOCATIONS = [
       { code: 'KANTOR FRP', name: 'Kantor FRP', lat: -4.794135, lon: 119.604382, radius: 250 },
       { code: 'KANTOR MATCHING BONTOA', name: 'Matching Bontoa', lat: -4.802450, lon: 119.598640, radius: 250 },
       { code: 'KANTOR PUSAT', name: 'Kantor Pusat', lat: -4.800089, lon: 119.608477, radius: 250 },
       { code: 'KANTOR STAFF', name: 'Kantor Staff', lat: -4.789289, lon: 119.612770, radius: 250 },
       { code: 'PINTU OGS', name: 'Pos OGS', lat: -4.787904, lon: 119.613399, radius: 250 },
       { code: 'WISMA RUMAH TANGGA', name: 'Wisma Rumah Tangga', lat: -4.792870, lon: 119.608797, radius: 250 },
+      { code: 'TIMBANGAN 2/3', name: 'Timbangan 2/3', lat: -4.783865, lon: 119.615338, radius: 50 },
+      { code: 'TIMBANGAN 4', name: 'Timbangan 4', lat: -4.789666, lon: 119.612852, radius: 50 },
+      { code: 'TIMBANGAN 5', name: 'Timbangan 5', lat: -4.789809, lon: 119.612887, radius: 50 },
+      { code: 'TIMBANBAN 5', name: 'Timbangan 5', lat: -4.789809, lon: 119.612887, radius: 50 },
     ];
 
-    // Prioritas 1: Cocokkan uLat & uLon dengan salah satu dari 6 Titik Pos Resmi FRP
-    const frpMatches = FRP_6_OFFICIAL_LOCATIONS.map(p => {
+    // Prioritas 1: Cocokkan uLat & uLon dengan salah satu dari Titik Pos Resmi FRP
+    const frpMatches = FRP_OFFICIAL_LOCATIONS.map(p => {
       const d = calculateHaversineMeters(uLat, uLon, p.lat, p.lon);
       return { ...p, distance: d, isValid: d <= p.radius };
     });

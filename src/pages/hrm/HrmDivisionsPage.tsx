@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { hrmService } from '@/services/hrmService';
+import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { Division, UserProfile, DivisionAssignedPost, FIELD_SENTINEL_6_POST_PRESETS } from '@/types/hrm';
 import {
   Building2,
@@ -89,6 +90,7 @@ export const HrmDivisionsPage: React.FC = () => {
   const [longitude, setLongitude] = useState<number>(106.809);
   const [radiusMeters, setRadiusMeters] = useState<number>(150);
   const [allowedPosts, setAllowedPosts] = useState<DivisionAssignedPost[]>([]);
+  const [officialPostsList, setOfficialPostsList] = useState<DivisionAssignedPost[]>(FIELD_SENTINEL_6_POST_PRESETS);
   const [gettingLocation, setGettingLocation] = useState(false);
   const [detectedAccuracy, setDetectedAccuracy] = useState<number | null>(null);
   const [detectedTime, setDetectedTime] = useState<string | null>(null);
@@ -566,8 +568,40 @@ export const HrmDivisionsPage: React.FC = () => {
     setDivisionEmployeesMap(map);
   };
 
+  const loadPosts = async () => {
+    try {
+      const dbPosts = await fieldSentinelService.getFieldPosts();
+      if (Array.isArray(dbPosts) && dbPosts.length > 0) {
+        const map = new Map<string, DivisionAssignedPost>();
+        FIELD_SENTINEL_6_POST_PRESETS.forEach((p) => {
+          const key = `${p.latitude.toFixed(6)}_${p.longitude.toFixed(6)}`;
+          map.set(key, p);
+        });
+        dbPosts.forEach((p) => {
+          const key = `${Number(p.latitude).toFixed(6)}_${Number(p.longitude).toFixed(6)}`;
+          const existing = map.get(key);
+          map.set(key, {
+            code: p.postCode || existing?.code || p.postName.toUpperCase(),
+            name: p.postName,
+            latitude: Number(p.latitude),
+            longitude: Number(p.longitude),
+            radiusMeters: Number(p.radiusMeters) || 50,
+            description: p.description || existing?.description || p.postName,
+            allowClockIn: existing ? existing.allowClockIn : true,
+            allowClockOut: existing ? existing.allowClockOut : true,
+            isClockOutOnly: existing ? existing.isClockOutOnly : false,
+          });
+        });
+        setOfficialPostsList(Array.from(map.values()));
+      }
+    } catch (err) {
+      console.warn('Gagal memuat pos lapangan dinamis:', err);
+    }
+  };
+
   useEffect(() => {
     loadData();
+    loadPosts();
   }, []);
 
   // Update dynamic terminal barcode every second when terminal modal is open
@@ -626,7 +660,7 @@ export const HrmDivisionsPage: React.FC = () => {
     setLatitude(defaultOffice?.latitude || -6.225);
     setLongitude(defaultOffice?.longitude || 106.809);
     setRadiusMeters(150);
-    setAllowedPosts(FIELD_SENTINEL_6_POST_PRESETS.map((p) => ({ ...p })));
+    setAllowedPosts(officialPostsList.map((p) => ({ ...p })));
     setError(null);
     setModalOpen(true);
   };
@@ -645,7 +679,7 @@ export const HrmDivisionsPage: React.FC = () => {
     setAllowedPosts(
       Array.isArray(d.allowedPosts) && d.allowedPosts.length > 0
         ? d.allowedPosts
-        : FIELD_SENTINEL_6_POST_PRESETS.map((p) => ({ ...p }))
+        : officialPostsList.map((p) => ({ ...p }))
     );
     setError(null);
     setModalOpen(true);
@@ -1145,17 +1179,17 @@ export const HrmDivisionsPage: React.FC = () => {
                 </div>
               )}
 
-              {/* Opsi Cepat: 6 Titik Pos Lapangan FRP */}
+              {/* Opsi Cepat: Multi-Titik Pos Lapangan FRP */}
               <div className="space-y-2 p-3 bg-indigo-500/5 dark:bg-indigo-950/20 border border-indigo-500/20 rounded-xl">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                     <MapPin className="w-3.5 h-3.5 text-indigo-600" />
-                    Pilih Cepat Titik dari 6 Pos Lapangan:
+                    Pilih Cepat Titik dari {officialPostsList.length} Pos Lapangan:
                   </Label>
                   <span className="text-[10px] text-muted-foreground">Klik titik untuk terapkan</span>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                  {FIELD_SENTINEL_6_POST_PRESETS.map((preset) => {
+                  {officialPostsList.map((preset) => {
                     const isSelected = latitude === preset.latitude && longitude === preset.longitude;
                     return (
                       <button
@@ -1164,7 +1198,7 @@ export const HrmDivisionsPage: React.FC = () => {
                         onClick={() => {
                           setLatitude(preset.latitude);
                           setLongitude(preset.longitude);
-                          setRadiusMeters(preset.radiusMeters || 250);
+                          setRadiusMeters(preset.radiusMeters || 50);
                           setLocationName(preset.name);
                           setAddress(preset.description || preset.name);
                           toast.success(`Titik ${preset.name} diterapkan ke divisi!`);
@@ -1287,7 +1321,7 @@ export const HrmDivisionsPage: React.FC = () => {
                 </div>
 
                 <div className="space-y-2 mt-2">
-                  {FIELD_SENTINEL_6_POST_PRESETS.map((preset) => {
+                  {officialPostsList.map((preset) => {
                     const existingIdx = allowedPosts.findIndex(
                       (p) => p.code === preset.code || (p.latitude === preset.latitude && p.longitude === preset.longitude)
                     );
