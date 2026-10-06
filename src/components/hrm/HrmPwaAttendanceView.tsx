@@ -176,6 +176,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [spotCheckData, setSpotCheckData] = useState<{ requestedAt?: string; notes?: string } | null>(null);
   const [isSpotCheckAction, setIsSpotCheckAction] = useState(false);
   const [spotCheckSecondsLeft, setSpotCheckSecondsLeft] = useState<number>(300);
+  const isAlarmSilencedRef = useRef<boolean>(false);
+  const lastRequestedAtRef = useRef<string | null>(null);
 
   // Master Face Enrollment Modal
   const [enrollModalOpen, setEnrollModalOpen] = useState(false);
@@ -596,7 +598,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return () => clearInterval(timer);
   }, [spotCheckModalOpen]);
 
-  // Urgent Spot-Check Poller (Every 7 seconds - Listens for Pimpinan's Minta Lapor Wajah)
+  // Urgent Spot-Check Poller (Every 8 seconds - Listens for Pimpinan's Minta Lapor Wajah)
   useEffect(() => {
     if (!user?.id) return;
 
@@ -605,26 +607,38 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       try {
         const res = await fieldSentinelService.getSpotCheckStatus(user.id);
         if (res && res.requested) {
+          // Jika ada instruksi baru dari pimpinan (timestamp berbeda), aktifkan kembali kesempatan notifikasi
+          if (res.requestedAt && res.requestedAt !== lastRequestedAtRef.current) {
+            lastRequestedAtRef.current = res.requestedAt;
+            isAlarmSilencedRef.current = false;
+          }
+
           setSpotCheckData({
             requestedAt: res.requestedAt,
             notes: res.notes || 'Pimpinan meminta Anda segera melakukan verifikasi scan wajah di pos tugas.',
           });
-          setSpotCheckModalOpen(true);
 
-          // Trigger Web Audio Siren + Continuous Mobile Vibration + OS Notification Banner
-          if (!emergencyAlertService.isAlertActive()) {
+          // Tampilkan modal HANYA jika kamera belum aktif dan aksi lapor belum berjalan
+          if (!isCameraActive && !isSpotCheckAction) {
+            setSpotCheckModalOpen(true);
+          }
+
+          // Bunyikan sirene HANYA jika belum pernah dibungkam/diheningkan oleh user dan kamera belum dibuka
+          if (!isAlarmSilencedRef.current && !isCameraActive && !isSpotCheckAction && !emergencyAlertService.isAlertActive()) {
             emergencyAlertService.startEmergencyAlert(
               '🚨 INSTRUKSI PIMPINAN: SEGERA LAPOR WAJAH!',
               res.notes || 'Pimpinan meminta Anda segera melakukan verifikasi scan wajah di pos tugas.'
             );
           }
         } else if (res && !res.requested) {
-          // If request was completed or cleared
+          // Jika instruksi sudah selesai atau dibatalkan di server
+          lastRequestedAtRef.current = null;
+          isAlarmSilencedRef.current = false;
           if (spotCheckModalOpen && !isCameraActive) {
             setSpotCheckModalOpen(false);
             setSpotCheckData(null);
-            emergencyAlertService.stopEmergencyAlert();
           }
+          emergencyAlertService.stopEmergencyAlert();
         }
       } catch (err) {
         // silent catch
@@ -633,12 +647,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
     // Initial check
     checkSpotCheckStatus();
-    poller = setInterval(checkSpotCheckStatus, 7000);
+    poller = setInterval(checkSpotCheckStatus, 8000);
 
     return () => {
       if (poller) clearInterval(poller);
     };
-  }, [user?.id, spotCheckModalOpen, isCameraActive]);
+  }, [user?.id, isCameraActive, isSpotCheckAction]);
 
   // Real GPS Geofencing Evaluation
   const evaluateRealLocation = () => {
@@ -1134,6 +1148,57 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const pad = (n: number) => String(n).padStart(2, '0');
       const timeStr = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
+      // ─── CABANG 1: LAPOR WAJAH DARURAT (SPOT-CHECK ATAS PERINTAH PIMPINAN) ───
+      if (isSpotCheckAction || spotCheckModalOpen || spotCheckData) {
+        try {
+          await fieldSentinelService.submitPatrolCheck({
+            userId: user.id,
+            checkType: 'spot_check',
+            locationName: assignedPostName || 'Pos Lapangan Terdaftar',
+            latitude: currentCoords?.lat || 0,
+            longitude: currentCoords?.lng || 0,
+            accuracyMeters: coordsAccuracy || 10,
+            watermarkedPhotoUrl: photoData,
+            biometricScore: verifiedConfidence,
+            notes: spotCheckData?.notes || 'Verifikasi Laporan Wajah atas Instruksi Pimpinan',
+          });
+
+          // Hentikan sirene dan bersihkan status darurat
+          isAlarmSilencedRef.current = true;
+          emergencyAlertService.stopEmergencyAlert();
+          setIsSpotCheckAction(false);
+          setSpotCheckModalOpen(false);
+          setSpotCheckData(null);
+
+          // Update foto presensi hari ini secara non-blocking jika record sudah ada
+          if (todayAttendance?.id) {
+            try {
+              await hrmService.recordAttendance({
+                userId: user.id,
+                date: todayStr,
+                clockInPhoto: photoData,
+                latitude: currentCoords?.lat,
+                longitude: currentCoords?.lng,
+                locationName: assignedPostName,
+                biometricConfidence: verifiedConfidence,
+                isVerifiedBiometric: isVerifiedBiometric,
+              });
+            } catch (syncErr) {
+              console.info('[Spot Check Attendance Sync Note]', syncErr);
+            }
+          }
+
+          toast.success(`✅ Laporan Wajah Berhasil Terkirim ke Pimpinan & Superadmin! (${timeStr} WITA)`);
+          await loadRealData();
+          return;
+        } catch (patrolErr: any) {
+          console.error('[Spot Check Submit Error]', patrolErr);
+          toast.error('Gagal mengirim laporan wajah: ' + (patrolErr?.message || 'Koneksi error'));
+          return;
+        }
+      }
+
+      // ─── CABANG 2: PRESENSI MASUK / PULANG REGULER ───
       // Determine late minutes
       let lateMinutes = 0;
       let status: 'hadir' | 'terlambat' = 'hadir';
@@ -1170,30 +1235,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       // Haptic feedback
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
         try { navigator.vibrate([100, 50, 100]); } catch (e) {}
-      }
-
-      // Kirim bukti forensik spot-check jika ada instruksi khusus dari pimpinan
-      if (isSpotCheckAction || spotCheckModalOpen || spotCheckData) {
-        try {
-          await fieldSentinelService.submitPatrolCheck({
-            userId: user.id,
-            checkType: 'spot_check',
-            locationName: assignedPostName || 'Pos Lapangan Terdaftar',
-            latitude: currentCoords?.lat || 0,
-            longitude: currentCoords?.lng || 0,
-            accuracyMeters: coordsAccuracy || 10,
-            watermarkedPhotoUrl: photoData,
-            biometricScore: verifiedConfidence,
-            notes: spotCheckData?.notes || 'Verifikasi Laporan Wajah atas Instruksi Pimpinan',
-          });
-          toast.success('Bukti Forensik Laporan Wajah terkirim langsung ke Pimpinan & Superadmin!');
-        } catch (patrolErr) {
-          console.warn('[Patrol Check Submit Error]', patrolErr);
-        }
-        setIsSpotCheckAction(false);
-        setSpotCheckModalOpen(false);
-        setSpotCheckData(null);
-        emergencyAlertService.stopEmergencyAlert();
       }
 
       toast.success(
@@ -3356,7 +3397,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         open={spotCheckModalOpen}
         onOpenChange={(open) => {
           if (!open) {
-            // Pengguna menutup modal: matikan sirene
+            // Pengguna menutup modal: matikan sirene dan bungkam agar tidak bunyi berulang
+            isAlarmSilencedRef.current = true;
             emergencyAlertService.stopEmergencyAlert();
             setSpotCheckModalOpen(false);
           }
@@ -3428,6 +3470,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               <Button
                 type="button"
                 onClick={() => {
+                  isAlarmSilencedRef.current = true;
                   emergencyAlertService.stopEmergencyAlert();
                   setSpotCheckModalOpen(false);
                   setIsSpotCheckAction(true);
@@ -3443,6 +3486,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 type="button"
                 variant="ghost"
                 onClick={() => {
+                  isAlarmSilencedRef.current = true;
                   emergencyAlertService.stopEmergencyAlert();
                   toast.info('Alarm suara & getar diheningkan. Silakan tetap segera ambil foto lapor wajah.');
                 }}

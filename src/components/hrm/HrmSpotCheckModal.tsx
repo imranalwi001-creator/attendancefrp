@@ -7,6 +7,7 @@ import { Camera, CheckCircle2, RefreshCw, ShieldAlert, Sparkles, Loader2, MapPin
 import { burnForensicWatermark } from '@/services/forensicWatermarkService';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { biometricService } from '@/services/biometricService';
+import { emergencyAlertService } from '@/services/emergencyAlertAudioService';
 
 interface HrmSpotCheckModalProps {
   open: boolean;
@@ -61,8 +62,9 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
     }
   }, [open, user]);
 
-  // 2. Start Camera
+  // 2. Start Camera & Stop Siren Alarm
   useEffect(() => {
+    emergencyAlertService.stopEmergencyAlert();
     if (!open) {
       stopCamera();
       setCapturedPhoto(null);
@@ -72,7 +74,10 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
     }
 
     startCamera();
-    return () => stopCamera();
+    return () => {
+      stopCamera();
+      emergencyAlertService.stopEmergencyAlert();
+    };
   }, [open]);
 
   const startCamera = async () => {
@@ -182,6 +187,7 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
         notes: instructionNotes || 'Konfirmasi kehadiran live sesuai instruksi Pimpinan.',
       });
 
+      emergencyAlertService.stopEmergencyAlert();
       if (typeof onSuccess === 'function') {
         onSuccess();
       }

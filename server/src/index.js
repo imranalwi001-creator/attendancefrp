@@ -2053,12 +2053,39 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
     const user = uRes.rows[0];
     const uLat = latitude ? parseFloat(latitude) : parseFloat(user.target_lat);
     const uLon = longitude ? parseFloat(longitude) : parseFloat(user.target_lon);
-    const targetLat = parseFloat(user.target_lat);
-    const targetLon = parseFloat(user.target_lon);
-    const targetRad = parseFloat(user.target_radius);
+    let targetLat = parseFloat(user.target_lat);
+    let targetLon = parseFloat(user.target_lon);
+    let targetRad = parseFloat(user.target_radius);
+    let resolvedLocName = locationName || user.target_loc_name || 'Pos Lapangan';
+    let distance = 0;
+    let isWithinRadius = true;
 
-    const distance = calculateHaversineMeters(uLat, uLon, targetLat, targetLon);
-    const isWithinRadius = distance <= targetRad;
+    // Cek bank multi-titik pos penugasan (hrm_field_assigned_posts)
+    const fieldPosts = await pool.query(
+      'SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true',
+      [validUserId]
+    );
+
+    if (fieldPosts.rows.length > 0) {
+      const postsWithDist = fieldPosts.rows.map(p => {
+        const d = calculateHaversineMeters(uLat, uLon, parseFloat(p.latitude), parseFloat(p.longitude));
+        return { ...p, distance: d, isValid: d <= parseFloat(p.radius_meters) };
+      });
+      const matched = postsWithDist.find(p => p.isValid);
+      if (matched) {
+        distance = Math.round(matched.distance);
+        isWithinRadius = true;
+        resolvedLocName = `${matched.post_name} [${matched.post_code}]`;
+      } else {
+        const nearest = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
+        distance = Math.round(nearest.distance);
+        isWithinRadius = false;
+        resolvedLocName = `${nearest.post_name} [${nearest.post_code}]`;
+      }
+    } else {
+      distance = calculateHaversineMeters(uLat, uLon, targetLat, targetLon);
+      isWithinRadius = distance <= targetRad;
+    }
 
     const insRes = await pool.query(
       `INSERT INTO hrm_field_patrol_checks (
@@ -2073,7 +2100,7 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
         user.full_name,
         user.nip,
         checkType || 'spot_check',
-        locationName || user.target_loc_name,
+        resolvedLocName,
         uLat,
         uLon,
         accuracyMeters ? parseFloat(accuracyMeters) : 5,

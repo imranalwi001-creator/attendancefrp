@@ -7,6 +7,7 @@ class EmergencyAlertAudioService {
   private isAlarmRunning: boolean = false;
   private intervalId: any = null;
   private vibrationIntervalId: any = null;
+  private autoTimeoutId: any = null;
 
   private initAudio() {
     if (!this.audioCtx) {
@@ -49,7 +50,7 @@ class EmergencyAlertAudioService {
     }
   }
 
-  // Trigger continuous siren + mobile vibration + notification
+  // Trigger continuous siren + mobile vibration + notification (Auto-silences after 15 seconds)
   public startEmergencyAlert(title: string = '🚨 INSTRUKSI PIMPINAN SEGERA LAPOR WAJAH', message?: string) {
     if (this.isAlarmRunning) return;
     this.isAlarmRunning = true;
@@ -104,6 +105,12 @@ class EmergencyAlertAudioService {
         console.warn('[EmergencyAlert] Notification failed:', err);
       }
     }
+
+    // 4. Auto-timeout safety: Automatically silence siren after 15 seconds to prevent continuous buzzing
+    if (this.autoTimeoutId) clearTimeout(this.autoTimeoutId);
+    this.autoTimeoutId = setTimeout(() => {
+      this.stopEmergencyAlert();
+    }, 15000);
   }
 
   // Stop sound and vibration immediately
@@ -116,6 +123,10 @@ class EmergencyAlertAudioService {
     if (this.vibrationIntervalId) {
       clearInterval(this.vibrationIntervalId);
       this.vibrationIntervalId = null;
+    }
+    if (this.autoTimeoutId) {
+      clearTimeout(this.autoTimeoutId);
+      this.autoTimeoutId = null;
     }
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
       try {
