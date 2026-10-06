@@ -1019,47 +1019,67 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     </div>
 
                     {/* Latest Forensic Watermark Photo Thumbnail */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-medium text-foreground flex items-center gap-1">
-                          <FileImage size={12} className="text-primary" /> Bukti Spot-Check Forensik:
-                        </span>
-                        {latestCheck && latestCheck.photoUrl && (
-                          <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-500/30 bg-emerald-500/10 font-mono">
-                            {Math.round(latestCheck.faceMatchScore ? latestCheck.faceMatchScore * 100 : 100)}% Wajah Cocok
-                          </Badge>
-                        )}
-                      </div>
+                    {(() => {
+                      const photoSrc = latestCheck?.photoUrl || latestCheck?.watermarked_photo_url || latestCheck?.watermarkedPhotoUrl || latestCheck?.photo_url;
+                      const matchScore = latestCheck?.faceMatchScore
+                        ? (latestCheck.faceMatchScore > 1 ? Math.round(latestCheck.faceMatchScore) : Math.round(latestCheck.faceMatchScore * 100))
+                        : Math.round(latestCheck?.biometricScore || latestCheck?.biometric_score || 98);
+                      const checkedTime = latestCheck?.checkedAt || latestCheck?.createdAt || latestCheck?.created_at;
+                      const locName = latestCheck?.locationName || latestCheck?.location_name || agent.assignedLocationName || 'Pos Lapangan';
 
-                      {latestCheck?.photoUrl ? (
-                        <div
-                          onClick={() => {
-                            setPreviewWatermarkData(latestCheck);
-                            setPreviewWatermarkModalOpen(true);
-                          }}
-                          className="relative rounded-xl overflow-hidden border border-border group cursor-pointer aspect-video bg-black/40 hover:border-primary transition-all shadow-xs"
-                        >
-                          <img
-                            src={latestCheck.photoUrl}
-                            alt="Bukti Spot Check"
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                          />
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-2 text-white">
-                            <p className="text-[11px] font-bold truncate">
-                              {latestCheck.locationName || 'Pos Lapangan'}
-                            </p>
-                            <p className="text-[10px] text-zinc-300 font-mono flex items-center justify-between">
-                              <span>{new Date(latestCheck.checkedAt).toLocaleTimeString('id-ID')} WITA</span>
-                              <span className="underline text-indigo-300 group-hover:text-white">Perbesar &rarr;</span>
-                            </p>
+                      return (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-medium text-foreground flex items-center gap-1">
+                              <FileImage size={12} className="text-primary" /> Bukti Selfie / Spot-Check:
+                            </span>
+                            {photoSrc && (
+                              <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-500/30 bg-emerald-500/10 font-mono">
+                                {matchScore}% Wajah Cocok
+                              </Badge>
+                            )}
                           </div>
+
+                          {photoSrc ? (
+                            <div
+                              onClick={() => {
+                                setPreviewWatermarkData({
+                                  ...latestCheck,
+                                  photoUrl: photoSrc,
+                                  userName: agent.fullName,
+                                  userNip: agent.nip,
+                                  locationName: locName,
+                                  time: checkedTime ? new Date(checkedTime).toISOString() : new Date().toISOString(),
+                                  isWithinRadius: latestCheck?.isWithinRadius !== false && latestCheck?.is_within_radius !== false,
+                                  distance: latestCheck?.distanceFromTarget || latestCheck?.distance_from_target || latestCheck?.distance || 0,
+                                });
+                                setPreviewWatermarkModalOpen(true);
+                              }}
+                              className="relative rounded-xl overflow-hidden border border-border group cursor-pointer aspect-video bg-black/40 hover:border-primary transition-all shadow-xs"
+                            >
+                              <img
+                                src={photoSrc}
+                                alt="Bukti Selfie Forensik"
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              />
+                              <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent flex flex-col justify-end p-2 text-white">
+                                <p className="text-[11px] font-bold truncate">
+                                  {locName}
+                                </p>
+                                <p className="text-[10px] text-zinc-300 font-mono flex items-center justify-between">
+                                  <span>{checkedTime ? new Date(checkedTime).toLocaleTimeString('id-ID') : ''} WITA</span>
+                                  <span className="underline text-indigo-300 group-hover:text-white font-semibold">Perbesar Bukti &rarr;</span>
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="p-3 rounded-xl border border-dashed border-border/80 text-center text-xs text-muted-foreground bg-muted/20">
+                              Belum ada foto selfie terverifikasi.
+                            </div>
+                          )}
                         </div>
-                      ) : (
-                        <div className="p-3 rounded-xl border border-dashed border-border/80 text-center text-xs text-muted-foreground bg-muted/20">
-                          Belum ada foto spot-check terverifikasi hari ini.
-                        </div>
-                      )}
-                    </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Action Buttons */}

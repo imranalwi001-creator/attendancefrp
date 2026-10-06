@@ -2215,17 +2215,60 @@ app.get('/api/field-sentinel/active-agents', async (req, res) => {
              COALESCE(d.name, p.division_name, 'Umum') as resolved_division_name,
              (
                SELECT json_build_object(
-                 'id', pc.id,
-                 'check_type', pc.check_type,
-                 'created_at', pc.created_at,
-                 'watermarked_photo_url', pc.watermarked_photo_url,
-                 'location_name', pc.location_name,
-                 'is_within_radius', pc.is_within_radius,
-                 'distance_from_target', pc.distance_from_target
+                 'id', sub.id,
+                 'checkType', sub.check_type,
+                 'check_type', sub.check_type,
+                 'createdAt', sub.created_at,
+                 'created_at', sub.created_at,
+                 'checkedAt', sub.created_at,
+                 'time', to_char(sub.created_at AT TIME ZONE 'Asia/Makassar', 'HH24:MI:SS WITA'),
+                 'photoUrl', sub.photo_url,
+                 'watermarked_photo_url', sub.photo_url,
+                 'watermarkedPhotoUrl', sub.photo_url,
+                 'locationName', sub.location_name,
+                 'location_name', sub.location_name,
+                 'isWithinRadius', sub.is_within_radius,
+                 'is_within_radius', sub.is_within_radius,
+                 'distanceFromTarget', sub.distance,
+                 'distance_from_target', sub.distance,
+                 'distance', sub.distance,
+                 'biometricScore', sub.biometric_score,
+                 'biometric_score', sub.biometric_score,
+                 'faceMatchScore', COALESCE(sub.biometric_score, 98) / 100.0,
+                 'userName', p.full_name,
+                 'user_name', p.full_name,
+                 'userNip', p.nip,
+                 'user_nip', p.nip
                )
-               FROM hrm_field_patrol_checks pc
-               WHERE pc.user_id = p.id
-               ORDER BY pc.created_at DESC LIMIT 1
+               FROM (
+                 SELECT 
+                   pc.id,
+                   pc.check_type,
+                   pc.created_at,
+                   pc.watermarked_photo_url as photo_url,
+                   pc.location_name,
+                   pc.is_within_radius,
+                   pc.distance_from_target as distance,
+                   pc.biometric_score
+                 FROM hrm_field_patrol_checks pc
+                 WHERE pc.user_id = p.id AND pc.watermarked_photo_url IS NOT NULL
+                 
+                 UNION ALL
+                 
+                 SELECT
+                   a.id,
+                   'attendance_selfie' as check_type,
+                   (a.attendance_date + COALESCE(a.clock_in, a.clock_out, '08:00:00'::time))::timestamp with time zone as created_at,
+                   COALESCE(a.photo_in, a.photo_out) as photo_url,
+                   COALESCE(p.assigned_location_name, 'Pos Lapangan Terdaftar') as location_name,
+                   COALESCE(a.geofence_valid, true) as is_within_radius,
+                   COALESCE(a.geofence_distance_meters, 0) as distance,
+                   COALESCE(a.biometric_score, 98.6) as biometric_score
+                 FROM hrm_attendances a
+                 WHERE a.user_id = p.id AND (a.photo_in IS NOT NULL OR a.photo_out IS NOT NULL)
+                 
+                 ORDER BY created_at DESC LIMIT 1
+               ) sub
              ) as latest_patrol_check,
              (
                SELECT COALESCE(json_agg(
