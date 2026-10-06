@@ -481,19 +481,25 @@ export const HrmApprovalPage: React.FC = () => {
 
   const filteredLeaves = leaves.filter((l) => {
     const matchStatus = filterStatus === 'all' || l.status === filterStatus;
+    const q = (searchQuery || '').toLowerCase();
     const matchSearch =
-      l.userName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      l.userNip.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      l.reason.toLowerCase().includes(searchQuery.toLowerCase());
+      !q ||
+      (l.userName || '').toLowerCase().includes(q) ||
+      (l.userNip || '').toLowerCase().includes(q) ||
+      (l.reason || '').toLowerCase().includes(q) ||
+      (l.divisionName || '').toLowerCase().includes(q);
     return matchStatus && matchSearch;
   });
 
   const filteredOvertime = overtimeList.filter((o) => {
     const matchStatus = filterStatus === 'all' || o.status === filterStatus;
+    const q = (searchQuery || '').toLowerCase();
     const matchSearch =
-      o.userName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      o.userNip.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      o.taskDescription.toLowerCase().includes(searchQuery.toLowerCase());
+      !q ||
+      (o.userName || '').toLowerCase().includes(q) ||
+      (o.userNip || '').toLowerCase().includes(q) ||
+      (o.taskDescription || '').toLowerCase().includes(q) ||
+      (o.divisionName || '').toLowerCase().includes(q);
     return matchStatus && matchSearch;
   });
 
@@ -1479,7 +1485,7 @@ export const HrmApprovalPage: React.FC = () => {
                         const punctualityRate = totalHadir > 0 ? Math.round((tepatWaktu / totalHadir) * 100) : 100;
 
                         return (
-                          <tr key={row.user_id} className="hover:bg-muted/30 transition-colors">
+                          <tr key={row.id || row.user_id || `roster-${row.nip}`} className="hover:bg-muted/30 transition-colors">
                             <td className="py-3 px-4">
                               <p className="font-semibold text-foreground">{row.full_name}</p>
                               <p className="text-[11px] text-muted-foreground font-mono">{row.nip}</p>

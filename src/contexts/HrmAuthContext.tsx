@@ -177,7 +177,8 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return clean;
   };
 
-  const role = normalizeRole(user?.roleName);
+  const rawRole = user?.roleName || user?.role || (user as any)?.role_name || (user as any)?.role_code || (user as any)?.roleId || 'karyawan';
+  const role = normalizeRole(rawRole);
 
   return (
     <HrmAuthContext.Provider

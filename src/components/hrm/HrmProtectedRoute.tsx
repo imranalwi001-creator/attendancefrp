@@ -28,8 +28,21 @@ export const HrmProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, all
 
   // Check role permission if specified
   if (allowedRoles && allowedRoles.length > 0) {
-    const userRole = role.toLowerCase();
-    if (userRole !== 'superadmin' && !allowedRoles.includes(userRole)) {
+    const userRole = (role || '').toLowerCase();
+    const cleanUserRole = userRole.replace(/[\s_-]/g, '');
+    const isSuper = cleanUserRole.includes('superadmin');
+
+    const isMatch = isSuper || allowedRoles.some((allowed) => {
+      const cleanAllowed = allowed.toLowerCase().replace(/[\s_-]/g, '');
+      return (
+        cleanAllowed === cleanUserRole ||
+        userRole === allowed.toLowerCase() ||
+        cleanUserRole.includes(cleanAllowed) ||
+        cleanAllowed.includes(cleanUserRole)
+      );
+    });
+
+    if (!isMatch) {
       return <Navigate to="/dashboard" replace />;
     }
   }

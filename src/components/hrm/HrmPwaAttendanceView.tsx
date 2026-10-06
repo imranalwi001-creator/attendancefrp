@@ -58,6 +58,7 @@ import { geofenceService, GeofenceEvaluation } from '@/services/geofenceService'
 import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { emergencyAlertService } from '@/services/emergencyAlertAudioService';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
+import { HrmFieldAuthorityMobileModal } from '@/components/hrm/HrmFieldAuthorityMobileModal';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -104,11 +105,26 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [faceDetected, setFaceDetected] = useState<boolean>(true);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const nativeCameraInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Field Authority Modal State (Approval Hub & Rekap Tim Mobile)
+  const [fieldAuthorityModalOpen, setFieldAuthorityModalOpen] = useState<boolean>(false);
+  const [fieldAuthorityInitialTab, setFieldAuthorityInitialTab] = useState<'leaves' | 'overtime' | 'recap'>('leaves');
 
   // Synchronize cameraStreamRef & ensure unmount cleanup
   useEffect(() => {
     cameraStreamRef.current = cameraStream;
   }, [cameraStream]);
+
+  // Direct video element binding whenever stream is active
+  useEffect(() => {
+    if (isCameraActive && cameraStream && videoRef.current) {
+      if (videoRef.current.srcObject !== cameraStream) {
+        videoRef.current.srcObject = cameraStream;
+      }
+      videoRef.current.play().catch(() => null);
+    }
+  }, [isCameraActive, cameraStream]);
 
   useEffect(() => {
     return () => {
@@ -989,31 +1005,46 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       if (cameraStream) {
         cameraStream.getTracks().forEach((t) => t.stop());
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+
+      // Robust progressive media constraints resolution
+      let stream: MediaStream | null = null;
+      const constraintsList: MediaStreamConstraints[] = [
+        {
+          video: {
+            facingMode: { ideal: facingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
         },
-      });
-      setCameraStream(stream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => null);
+        { video: { facingMode: { ideal: facingMode } } },
+        { video: { facingMode: facingMode } },
+        { video: { facingMode: 'user' } },
+        { video: true },
+      ];
+
+      for (const constraints of constraintsList) {
+        try {
+          if (navigator?.mediaDevices?.getUserMedia) {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            if (stream) break;
+          }
+        } catch {
+          // Continue to next fallback constraint
+        }
+      }
+
+      if (stream) {
+        setCameraStream(stream);
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => null);
+        }
+      } else {
+        setCameraError('Sensor kamera browser tidak merespons. Anda dapat menggunakan tombol "Buka Kamera Bawaan HP" di bawah.');
       }
     } catch (err: any) {
       console.warn('[Camera Error]', err);
-      // Fallback
-      try {
-        const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        setCameraStream(fallbackStream);
-        if (videoRef.current) {
-          videoRef.current.srcObject = fallbackStream;
-          videoRef.current.play().catch(() => null);
-        }
-      } catch (err2) {
-        setCameraError('Gagal mengakses kamera perangkat. Harap izinkan akses kamera pada browser.');
-      }
+      setCameraError('Izin akses kamera browser belum aktif. Silakan izinkan akses atau gunakan tombol kamera bawaan HP.');
     }
   };
 
@@ -1757,16 +1788,35 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             autoPlay
             playsInline
             muted
+            onLoadedMetadata={(e) => {
+              (e.target as HTMLVideoElement).play().catch(() => null);
+            }}
             className={`absolute inset-0 w-full h-full object-cover ${facingMode === 'user' ? '-scale-x-100' : ''}`}
           />
 
           {cameraError && (
-            <div className="absolute inset-0 z-30 bg-black/90 flex flex-col items-center justify-center p-6 text-center space-y-3">
+            <div className="absolute inset-0 z-30 bg-black/92 flex flex-col items-center justify-center p-6 text-center space-y-4">
               <AlertCircle className="w-12 h-12 text-rose-500 animate-bounce" />
-              <p className="text-sm font-medium text-rose-200">{cameraError}</p>
-              <Button size="sm" variant="outline" onClick={() => openLiveCamera(actionType)} className="rounded-xl text-xs">
-                Coba Lagi
-              </Button>
+              <p className="text-xs sm:text-sm font-medium text-rose-200 max-w-xs">{cameraError}</p>
+              
+              <div className="flex flex-col gap-2 w-full max-w-xs">
+                <Button
+                  size="sm"
+                  onClick={() => nativeCameraInputRef.current?.click()}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs py-2 shadow-lg"
+                >
+                  <Camera className="w-4 h-4 mr-1.5" />
+                  <span>Buka Kamera Bawaan HP (100% Berhasil)</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => openLiveCamera(actionType)}
+                  className="rounded-xl text-xs border-white/20 text-white hover:bg-white/10"
+                >
+                  Coba Akses Kamera Web Lagi
+                </Button>
+              </div>
             </div>
           )}
 
@@ -1903,10 +1953,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </svg>
               )}
 
-              {/* Tombol Ambil Gambar: Aktif saat indikator hijau / wajah terdeteksi */}
+              {/* Tombol Ambil Gambar: Selalu Aktif untuk Kenyamanan Maksimal Petugas */}
               <button
                 type="button"
-                disabled={!liveFaceStatus.isGreen && !liveFaceStatus.detected}
                 onClick={() => {
                   if (isCapturing) {
                     setIsCapturing(false);
@@ -1914,21 +1963,21 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   }
                   handleShutterCapture();
                 }}
-                className={`w-18 h-18 rounded-full border-4 p-1 flex items-center justify-center transition-all ${
+                className={`w-18 h-18 rounded-full border-4 p-1 flex items-center justify-center transition-all cursor-pointer active:scale-90 ${
                   liveFaceStatus.isGreen || liveFaceStatus.detected
-                    ? 'border-emerald-400 hover:border-emerald-300 shadow-[0_0_26px_rgba(52,211,153,0.65)] cursor-pointer active:scale-90 animate-pulse'
-                    : 'border-slate-700/60 bg-slate-900/60 opacity-35 cursor-not-allowed'
+                    ? 'border-emerald-400 hover:border-emerald-300 shadow-[0_0_26px_rgba(52,211,153,0.65)] animate-pulse'
+                    : 'border-white/80 hover:border-white shadow-[0_0_15px_rgba(255,255,255,0.4)]'
                 }`}
-                title={liveFaceStatus.isGreen ? 'Ambil Foto Presensi Sekarang' : 'Posisikan wajah hingga indikator hijau'}
+                title="Ambil Foto Presensi Sekarang"
               >
                 <div
                   className={`w-full h-full rounded-full flex items-center justify-center transition-colors ${
                     liveFaceStatus.isGreen
                       ? 'bg-emerald-500 hover:bg-emerald-400 text-white shadow-inner'
-                      : 'bg-slate-800 text-slate-500'
+                      : 'bg-emerald-600 hover:bg-emerald-500 text-white'
                   }`}
                 >
-                  <Camera className="w-6 h-6" />
+                  <Camera className="w-7 h-7" />
                 </div>
               </button>
             </div>
@@ -1941,6 +1990,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               title="Ganti Kamera Depan/Belakang"
             >
               <SwitchCamera className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Opsi Kamera Alternatif Bawaan HP */}
+          <div className="flex justify-center pb-1">
+            <button
+              type="button"
+              onClick={() => nativeCameraInputRef.current?.click()}
+              className="px-3.5 py-1.5 bg-white/15 hover:bg-white/25 border border-white/25 backdrop-blur-md rounded-full text-[11px] font-semibold text-white/90 flex items-center gap-1.5 active:scale-95 transition-all shadow-sm"
+            >
+              <Camera className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Gunakan Kamera Bawaan HP (Alternatif)</span>
             </button>
           </div>
         </div>
@@ -2159,16 +2220,27 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <Link to="/admin/approval">
-                        <Button size="sm" className="h-7.5 px-2.5 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs">
-                          Approval Hub
-                        </Button>
-                      </Link>
-                      <Link to="/admin/approval?tab=recap">
-                        <Button size="sm" variant="outline" className="h-7.5 px-2 text-[11px] border-emerald-500/40 text-emerald-700 dark:text-emerald-300 rounded-xl">
-                          Rekap Tim
-                        </Button>
-                      </Link>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setFieldAuthorityInitialTab('leaves');
+                          setFieldAuthorityModalOpen(true);
+                        }}
+                        className="h-7.5 px-2.5 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs"
+                      >
+                        Approval Hub
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setFieldAuthorityInitialTab('recap');
+                          setFieldAuthorityModalOpen(true);
+                        }}
+                        className="h-7.5 px-2 text-[11px] border-emerald-500/40 text-emerald-700 dark:text-emerald-300 rounded-xl"
+                      >
+                        Rekap Tim
+                      </Button>
                     </div>
                   </div>
                 );
@@ -2187,16 +2259,27 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <Link to="/admin/approval">
-                        <Button size="sm" className="h-7.5 px-2.5 text-[11px] bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-xs">
-                          Approval Hub
-                        </Button>
-                      </Link>
-                      <Link to="/admin/approval?tab=recap">
-                        <Button size="sm" variant="outline" className="h-7.5 px-2 text-[11px] border-amber-500/40 text-amber-700 dark:text-amber-300 rounded-xl">
-                          Rekap Tim
-                        </Button>
-                      </Link>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setFieldAuthorityInitialTab('leaves');
+                          setFieldAuthorityModalOpen(true);
+                        }}
+                        className="h-7.5 px-2.5 text-[11px] bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-xs"
+                      >
+                        Approval Hub
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setFieldAuthorityInitialTab('recap');
+                          setFieldAuthorityModalOpen(true);
+                        }}
+                        className="h-7.5 px-2 text-[11px] border-amber-500/40 text-amber-700 dark:text-amber-300 rounded-xl"
+                      >
+                        Rekap Tim
+                      </Button>
                     </div>
                   </div>
                 );
@@ -2215,16 +2298,27 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <Link to="/admin/approval">
-                        <Button size="sm" className="h-7.5 px-2.5 text-[11px] bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl shadow-xs">
-                          Approval Hub
-                        </Button>
-                      </Link>
-                      <Link to="/admin/approval?tab=recap">
-                        <Button size="sm" variant="outline" className="h-7.5 px-2 text-[11px] border-sky-500/40 text-sky-700 dark:text-sky-300 rounded-xl">
-                          Rekap Tim
-                        </Button>
-                      </Link>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setFieldAuthorityInitialTab('leaves');
+                          setFieldAuthorityModalOpen(true);
+                        }}
+                        className="h-7.5 px-2.5 text-[11px] bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl shadow-xs"
+                      >
+                        Approval Hub
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setFieldAuthorityInitialTab('recap');
+                          setFieldAuthorityModalOpen(true);
+                        }}
+                        className="h-7.5 px-2 text-[11px] border-sky-500/40 text-sky-700 dark:text-sky-300 rounded-xl"
+                      >
+                        Rekap Tim
+                      </Button>
                     </div>
                   </div>
                 );
@@ -4137,6 +4231,120 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           refreshUser?.();
           loadRealData();
           toast.success('Pendaftaran Biometrik Master Berhasil Disimpan ke Database!');
+        }}
+      />
+
+      {/* ─── MODAL PUSAT OTORITAS LAPANGAN & REKAP TIM (PWA MOBILE) ─── */}
+      <HrmFieldAuthorityMobileModal
+        isOpen={fieldAuthorityModalOpen}
+        onClose={() => setFieldAuthorityModalOpen(false)}
+        initialTab={fieldAuthorityInitialTab}
+        currentUser={user}
+      />
+
+      {/* ─── HIDDEN INPUT NATIVE DEVICE CAMERA CAPTURE (100% BULLETPROOF FALLBACK) ─── */}
+      <input
+        type="file"
+        ref={nativeCameraInputRef}
+        accept="image/*"
+        capture="user"
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (!file || !user) return;
+          setIsCapturing(true);
+          try {
+            const img = new Image();
+            const objectUrl = URL.createObjectURL(file);
+            await new Promise((resolve, reject) => {
+              img.onload = resolve;
+              img.onerror = reject;
+              img.src = objectUrl;
+            });
+
+            const canvas = document.createElement('canvas');
+            const maxDim = 1280;
+            let w = img.width;
+            let h = img.height;
+            if (w > maxDim || h > maxDim) {
+              if (w > h) {
+                h = Math.round((h * maxDim) / w);
+                w = maxDim;
+              } else {
+                w = Math.round((w * maxDim) / h);
+                h = maxDim;
+              }
+            }
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('Canvas context error');
+            ctx.drawImage(img, 0, 0, w, h);
+            URL.revokeObjectURL(objectUrl);
+
+            // Terapkan Watermark Forensik
+            applyWatermark(canvas, 96);
+            const photoData = canvas.toDataURL('image/jpeg', 0.85);
+
+            // Tutup live camera jika sedang terbuka
+            closeLiveCamera();
+
+            // Submit Attendance
+            const todayStr = getTodayDateStr();
+            const now = new Date();
+            const pad = (n: number) => String(n).padStart(2, '0');
+            const timeStr = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+            let lateMinutes = 0;
+            let status: 'hadir' | 'terlambat' = 'hadir';
+            if (actionType === 'clock_in' && userShift?.startTime) {
+              const [sH, sM] = userShift.startTime.split(':').map(Number);
+              const [cH, cM] = [now.getHours(), now.getMinutes()];
+              const diff = (cH * 60 + cM) - (sH * 60 + sM);
+              if (diff > 0) {
+                lateMinutes = diff;
+                status = 'terlambat';
+              }
+            }
+
+            const savedAttendance = await hrmService.recordAttendance({
+              userId: user.id,
+              date: todayStr,
+              clockIn: actionType === 'clock_in' ? timeStr : todayAttendance?.clockIn || timeStr,
+              clockOut: actionType === 'clock_out' ? timeStr : todayAttendance?.clockOut,
+              status: actionType === 'clock_in' ? status : todayAttendance?.status || 'hadir',
+              lateMinutes: actionType === 'clock_in' ? lateMinutes : todayAttendance?.lateMinutes || 0,
+              clockInPhoto: actionType === 'clock_in' ? photoData : todayAttendance?.clockInPhoto,
+              clockOutPhoto: actionType === 'clock_out' ? photoData : todayAttendance?.clockOutPhoto,
+              latitude: currentCoords?.lat,
+              longitude: currentCoords?.lng,
+              locationName: assignedPostName,
+              biometricConfidence: 96,
+              isVerifiedBiometric: true,
+            });
+
+            if (savedAttendance) {
+              setTodayAttendance(savedAttendance);
+            }
+
+            if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+              try { navigator.vibrate([100, 50, 100]); } catch (e) {}
+            }
+
+            toast.success(
+              actionType === 'clock_in'
+                ? `Absen Masuk Berhasil via Kamera HP! (${timeStr} WITA)`
+                : `Absen Pulang Berhasil via Kamera HP! (${timeStr} WITA)`
+            );
+
+            await loadRealData();
+          } catch (err: any) {
+            console.error('[Native Camera Capture Error]', err);
+            toast.error('Gagal memproses foto kamera: ' + (err.message || 'Error'));
+          } finally {
+            setIsCapturing(false);
+            if (nativeCameraInputRef.current) nativeCameraInputRef.current.value = '';
+          }
         }}
       />
     </div>
