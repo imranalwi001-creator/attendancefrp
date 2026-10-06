@@ -114,8 +114,60 @@ export class GeofenceService {
       longitude: number;
       radiusMeters?: number;
       polygonCoords?: Coordinates[];
+      allowedPosts?: import('@/types/hrm').DivisionAssignedPost[];
     }
   ): GeofenceEvaluation {
+    // 0. Multi-Titik Geofence (Cek seluruh titik pos sah divisi)
+    if (divisionLocation.allowedPosts && divisionLocation.allowedPosts.length > 0) {
+      const postsWithDist = divisionLocation.allowedPosts.map((p) => {
+        const d = this.calculateDistanceMeters(userCoords.lat, userCoords.lng, p.latitude, p.longitude);
+        const r = p.radiusMeters || 100;
+        return {
+          ...p,
+          distance: d,
+          radius: r,
+          isInside: d <= r,
+          bearing: this.calculateBearing(userCoords.lat, userCoords.lng, p.latitude, p.longitude),
+        };
+      });
+
+      const insidePost = postsWithDist.find((p) => p.isInside);
+      if (insidePost) {
+        return {
+          isInside: true,
+          zone: 'green',
+          distanceMeters: Math.round(insidePost.distance),
+          allowedRadiusMeters: insidePost.radius,
+          deltaMeters: 0,
+          bearingDegrees: insidePost.bearing,
+          cardinalDirection: this.getCardinalDirection(insidePost.bearing),
+          message: `Area Valid: ${Math.round(insidePost.distance)}m di Pos ${insidePost.name} (Maks ${insidePost.radius}m)`,
+        };
+      }
+
+      // Jika di luar semua pos yang diizinkan, gunakan pos terdekat
+      const sorted = [...postsWithDist].sort((a, b) => a.distance - b.distance);
+      const nearest = sorted[0];
+      if (nearest) {
+        const nearestDelta = nearest.distance - nearest.radius;
+        const isAmber = nearest.distance <= nearest.radius + 15;
+        const nearestCardinal = this.getCardinalDirection(nearest.bearing);
+
+        return {
+          isInside: false,
+          zone: isAmber ? 'amber' : 'red',
+          distanceMeters: Math.round(nearest.distance),
+          allowedRadiusMeters: nearest.radius,
+          deltaMeters: Math.round(nearestDelta),
+          bearingDegrees: nearest.bearing,
+          cardinalDirection: nearestCardinal,
+          message: isAmber
+            ? `Tepi Batas: Melewati batas ${Math.round(nearestDelta)}m dari Pos ${nearest.name}. Dekati ke arah ${nearestCardinal}.`
+            : `Di Luar Area: Berjarak ${Math.round(nearest.distance)}m dari Pos ${nearest.name}. Arahkan ke ${nearestCardinal}.`,
+        };
+      }
+    }
+
     const allowedRadius = divisionLocation.radiusMeters || 100;
     const distance = this.calculateDistanceMeters(
       userCoords.lat,

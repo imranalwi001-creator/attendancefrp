@@ -1179,48 +1179,126 @@ export const HrmDivisionsPage: React.FC = () => {
                 </div>
               )}
 
-              {/* Opsi Cepat: Multi-Titik Pos Lapangan FRP */}
-              <div className="space-y-2 p-3 bg-indigo-500/5 dark:bg-indigo-950/20 border border-indigo-500/20 rounded-xl">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-indigo-600" />
-                    Pilih Cepat Titik dari {officialPostsList.length} Pos Lapangan:
-                  </Label>
-                  <span className="text-[10px] text-muted-foreground">Klik titik untuk terapkan</span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                  {officialPostsList.map((preset) => {
-                    const isSelected = latitude === preset.latitude && longitude === preset.longitude;
-                    return (
+              {/* Opsi Cepat: Multi-Titik Pos Lapangan FRP (Dapat Memilih Lebih Dari Satu Titik) */}
+              <div className="space-y-2.5 p-3.5 bg-indigo-500/5 dark:bg-indigo-950/20 border border-indigo-500/25 rounded-2xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <MapPin className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      Pilih Pos Presensi Lapangan (Bisa Pilih Lebih dari 1 Titik):
+                    </Label>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      Klik kartu untuk menambah/menghapus pos presensi yang sah bagi divisi ini.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Badge variant="secondary" className="text-[10px] font-semibold bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-500/30">
+                      {allowedPosts.length} dari {officialPostsList.length} Pos Terpilih
+                    </Badge>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAllowedPosts(officialPostsList.map((p) => ({ ...p })));
+                        toast.success(`Semua ${officialPostsList.length} pos lapangan berhasil dipilih!`);
+                      }}
+                      className="px-2 py-0.5 text-[10px] font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
+                    >
+                      Pilih Semua
+                    </button>
+                    {allowedPosts.length > 0 && (
                       <button
-                        key={preset.code}
                         type="button"
                         onClick={() => {
-                          setLatitude(preset.latitude);
-                          setLongitude(preset.longitude);
-                          setRadiusMeters(preset.radiusMeters || 50);
-                          setLocationName(preset.name);
-                          setAddress(preset.description || preset.name);
-                          toast.success(`Titik ${preset.name} diterapkan ke divisi!`);
+                          setAllowedPosts([]);
+                          toast.info('Pilihan pos dikosongkan.');
                         }}
-                        className={`p-2 text-left rounded-xl border text-[11px] transition-all flex flex-col justify-between ${
+                        className="px-2 py-0.5 text-[10px] font-semibold rounded-lg bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {officialPostsList.map((preset) => {
+                    const isSelected = allowedPosts.some(
+                      (p) => p.code === preset.code || (p.latitude === preset.latitude && p.longitude === preset.longitude)
+                    );
+                    const isPrimary = latitude === preset.latitude && longitude === preset.longitude;
+
+                    return (
+                      <div
+                        key={preset.code}
+                        onClick={() => {
+                          if (isSelected) {
+                            const next = allowedPosts.filter(
+                              (p) => !(p.code === preset.code || (p.latitude === preset.latitude && p.longitude === preset.longitude))
+                            );
+                            setAllowedPosts(next);
+                            if (isPrimary && next.length > 0) {
+                              setLatitude(next[0].latitude);
+                              setLongitude(next[0].longitude);
+                              setRadiusMeters(next[0].radiusMeters || 50);
+                              setLocationName(next[0].name);
+                              setAddress(next[0].description || next[0].name);
+                            }
+                            toast.info(`Titik ${preset.name} dihapus dari pilihan divisi.`);
+                          } else {
+                            const next = [...allowedPosts, { ...preset }];
+                            setAllowedPosts(next);
+                            if (allowedPosts.length === 0 || !locationName) {
+                              setLatitude(preset.latitude);
+                              setLongitude(preset.longitude);
+                              setRadiusMeters(preset.radiusMeters || 50);
+                              setLocationName(preset.name);
+                              setAddress(preset.description || preset.name);
+                            }
+                            toast.success(`Titik ${preset.name} ditambahkan! (${next.length} pos aktif)`);
+                          }
+                        }}
+                        className={`p-2.5 text-left rounded-xl border text-[11px] transition-all cursor-pointer select-none flex flex-col justify-between gap-1.5 relative ${
                           isSelected
-                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                            : 'bg-card hover:bg-muted/50 border-border text-foreground'
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-md ring-2 ring-indigo-500/30'
+                            : 'bg-card hover:bg-muted/60 border-border text-foreground hover:border-indigo-500/40'
                         }`}
                       >
-                        <div className="font-semibold truncate">{preset.name}</div>
-                        <div className={`text-[10px] font-mono mt-0.5 truncate ${isSelected ? 'text-indigo-100' : 'text-muted-foreground'}`}>
-                          {preset.code}
-                        </div>
-                        {preset.isClockOutOnly && (
-                          <span className={`inline-block mt-1 text-[9px] font-bold px-1.5 py-0.2 rounded-md ${
-                            isSelected ? 'bg-white/20 text-white' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                        <div className="flex items-start justify-between gap-1">
+                          <div className="font-bold truncate text-xs">{preset.name}</div>
+                          <div className={`w-4 h-4 rounded-md flex items-center justify-center text-[10px] shrink-0 font-bold ${
+                            isSelected ? 'bg-white text-indigo-600 shadow-xs' : 'border border-muted-foreground/30 text-transparent'
                           }`}>
-                            Khusus Pulang
-                          </span>
-                        )}
-                      </button>
+                            ✓
+                          </div>
+                        </div>
+
+                        <div className={`text-[10px] font-mono truncate ${isSelected ? 'text-indigo-100' : 'text-muted-foreground'}`}>
+                          {preset.code} • {preset.radiusMeters}m
+                        </div>
+
+                        <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                          {isPrimary && (
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                              isSelected ? 'bg-amber-400 text-amber-950' : 'bg-amber-500/20 text-amber-600'
+                            }`}>
+                              ★ Titik Utama
+                            </span>
+                          )}
+                          {preset.isClockOutOnly ? (
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                              isSelected ? 'bg-white/20 text-white' : 'bg-rose-500/10 text-rose-600 border border-rose-500/20'
+                            }`}>
+                              Khusus Pulang
+                            </span>
+                          ) : (
+                            <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded ${
+                              isSelected ? 'bg-white/15 text-indigo-50' : 'bg-muted text-muted-foreground'
+                            }`}>
+                              Masuk & Pulang
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
