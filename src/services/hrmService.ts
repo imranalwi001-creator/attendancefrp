@@ -693,7 +693,19 @@ export const hrmService = {
           safeSetJson(STORAGE_KEYS.DIVISIONS, divisions);
         }
         if (Array.isArray(shifts) && shifts.length > 0) {
-          safeSetJson(STORAGE_KEYS.SHIFTS, shifts);
+          const seenNames = new Set<string>();
+          const seenIds = new Set<string>();
+          const cleanShifts: Shift[] = [];
+          for (const s of shifts) {
+            const normName = (s.name || '').trim().toLowerCase();
+            if (!seenNames.has(normName) && !seenIds.has(s.id)) {
+              seenNames.add(normName);
+              seenIds.add(s.id);
+              cleanShifts.push(s);
+            }
+          }
+          safeSetJson(STORAGE_KEYS.SHIFTS, cleanShifts);
+          window.dispatchEvent(new Event('hrm_shifts_updated'));
         }
         if (office) {
           safeSetJson(STORAGE_KEYS.OFFICE, office);
@@ -1203,11 +1215,34 @@ export const hrmService = {
   // SHIFTS
   getShifts: (): Shift[] => {
     hrmService.init();
-    return safeGetJson<Shift[]>(STORAGE_KEYS.SHIFTS, DEFAULT_SHIFTS);
+    const rawShifts = safeGetJson<Shift[]>(STORAGE_KEYS.SHIFTS, DEFAULT_SHIFTS);
+    // Anti-duplication shield: filter unique shifts by name and id
+    const seenNames = new Set<string>();
+    const seenIds = new Set<string>();
+    const uniqueShifts: Shift[] = [];
+    for (const s of rawShifts) {
+      const normName = (s.name || '').trim().toLowerCase();
+      if (!seenNames.has(normName) && !seenIds.has(s.id)) {
+        seenNames.add(normName);
+        seenIds.add(s.id);
+        uniqueShifts.push(s);
+      }
+    }
+    if (uniqueShifts.length !== rawShifts.length) {
+      safeSetJson(STORAGE_KEYS.SHIFTS, uniqueShifts);
+    }
+    return uniqueShifts.length > 0 ? uniqueShifts : DEFAULT_SHIFTS;
   },
 
   saveShifts: (shifts: Shift[]) => {
-    localStorage.setItem(STORAGE_KEYS.SHIFTS, JSON.stringify(shifts));
+    const seenNames = new Set<string>();
+    const uniqueShifts = shifts.filter((s) => {
+      const norm = (s.name || '').trim().toLowerCase();
+      if (seenNames.has(norm)) return false;
+      seenNames.add(norm);
+      return true;
+    });
+    localStorage.setItem(STORAGE_KEYS.SHIFTS, JSON.stringify(uniqueShifts));
     window.dispatchEvent(new Event('hrm_shifts_updated'));
   },
 
@@ -1223,6 +1258,21 @@ export const hrmService = {
     }
     shifts.push(newShift);
     hrmService.saveShifts(shifts);
+
+    // Sync to PostgreSQL backend asynchronously
+    api.post('/shifts', {
+      name: newShift.name,
+      startTime: newShift.startTime,
+      endTime: newShift.endTime,
+      lateToleranceMinutes: newShift.lateToleranceMinutes,
+      isDefault: newShift.isDefault,
+    }).then((res: any) => {
+      if (res?.data?.id) {
+        newShift.id = res.data.id;
+        hrmService.saveShifts(shifts);
+      }
+    }).catch((err) => console.warn('[Shift API] Error persisting new shift:', err.message));
+
     return newShift;
   },
 
@@ -1235,6 +1285,16 @@ export const hrmService = {
     }
     shifts[idx] = { ...shifts[idx], ...shiftData };
     hrmService.saveShifts(shifts);
+
+    // Sync to PostgreSQL backend asynchronously
+    api.put(`/shifts/${id}`, {
+      name: shiftData.name,
+      startTime: shiftData.startTime,
+      endTime: shiftData.endTime,
+      lateToleranceMinutes: shiftData.lateToleranceMinutes,
+      isDefault: shiftData.isDefault,
+    }).catch((err) => console.warn('[Shift API] Error updating shift:', err.message));
+
     return shifts[idx];
   },
 
@@ -1249,6 +1309,10 @@ export const hrmService = {
       throw new Error('Minimal harus ada 1 shift yang aktif di sistem.');
     }
     hrmService.saveShifts(filtered);
+
+    // Sync to PostgreSQL backend asynchronously
+    api.delete(`/shifts/${id}`).catch((err) => console.warn('[Shift API] Error deleting shift:', err.message));
+
     return true;
   },
 
@@ -1258,6 +1322,9 @@ export const hrmService = {
       s.isDefault = s.id === id;
     });
     hrmService.saveShifts(shifts);
+
+    // Sync to PostgreSQL backend asynchronously
+    api.post(`/shifts/${id}/default`).catch((err) => console.warn('[Shift API] Error setting default shift:', err.message));
   },
 
   // ─── EMPLOYEE ROSTER & SCHEDULE PERSISTENCE ──────────────────────────────

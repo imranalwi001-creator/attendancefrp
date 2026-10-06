@@ -187,6 +187,12 @@ export const HrmSettingsPage: React.FC = () => {
     setOvertimeSettings(hrmService.getOvertimeSettings());
     setCompanyProfile(hrmService.getCompanyProfile());
     setCompanyDocs(hrmService.getCompanyDocuments());
+
+    const handleShiftsUpdate = () => {
+      setShifts(hrmService.getShifts());
+    };
+    window.addEventListener('hrm_shifts_updated', handleShiftsUpdate);
+    return () => window.removeEventListener('hrm_shifts_updated', handleShiftsUpdate);
   }, []);
 
   const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1037,7 +1043,15 @@ export const HrmSettingsPage: React.FC = () => {
                   <div className="flex items-start justify-between mb-3">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-[11px] font-bold text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded">{shift.code || 'SHF'}</span>
+                        <span className="font-mono text-[11px] font-bold text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded">
+                          {shift.code && shift.code !== 'SHIF' ? shift.code : (
+                            shift.name.includes('Day Shift') ? 'DAY' :
+                            shift.name.includes('Shift I ') || shift.name.includes('Shift I(') ? 'SHF-I' :
+                            shift.name.includes('Shift II') ? 'SHF-II' :
+                            shift.name.includes('Shift III') ? 'SHF-III' :
+                            (shift.code || 'SHF')
+                          )}
+                        </span>
                         {shift.isDefault && <Badge className="text-[10px] px-1.5 py-0 bg-primary/10 text-primary border-primary/20">Default</Badge>}
                       </div>
                       <p className="font-semibold text-sm text-foreground mt-1">{shift.name}</p>

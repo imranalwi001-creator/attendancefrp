@@ -400,43 +400,63 @@ export async function initDb() {
       CREATE INDEX IF NOT EXISTS idx_emp_schedules_user_date ON hrm_employee_schedules(user_id, schedule_date);
       CREATE INDEX IF NOT EXISTS idx_emp_schedules_date ON hrm_employee_schedules(schedule_date);
 
-      -- ─── MASTER SHIFTS SYNCHRONIZATION (SESUAI SURAT KEPUTUSAN JAM KERJA) ───
+      -- ─── MASTER SHIFTS SYNCHRONIZATION & DEDUPLICATION (SESUAI SURAT KEPUTUSAN JAM KERJA) ───
+      -- 1. Re-assign any profile or schedule pointing to duplicate shift rows to the earliest primary shift row
+      UPDATE hrm_profiles p
+      SET shift_id = s_canonical.id
+      FROM (
+        SELECT DISTINCT ON (name) id, name
+        FROM hrm_shifts
+        ORDER BY name, created_at ASC
+      ) s_canonical
+      JOIN hrm_shifts s_dup ON s_dup.name = s_canonical.name
+      WHERE p.shift_id = s_dup.id AND s_dup.id != s_canonical.id;
+
+      UPDATE hrm_employee_schedules es
+      SET shift_id = s_canonical.id
+      FROM (
+        SELECT DISTINCT ON (name) id, name
+        FROM hrm_shifts
+        ORDER BY name, created_at ASC
+      ) s_canonical
+      JOIN hrm_shifts s_dup ON s_dup.name = s_canonical.name
+      WHERE es.shift_id = s_dup.id AND s_dup.id != s_canonical.id;
+
+      -- 2. Hapus seluruh duplikat shift, pertahankan 1 baris pertama per nama
+      DELETE FROM hrm_shifts
+      WHERE id NOT IN (
+        SELECT DISTINCT ON (name) id
+        FROM hrm_shifts
+        ORDER BY name, created_at ASC
+      );
+
+      -- 3. Terapkan indeks unik pada nama shift agar duplikasi tidak pernah terjadi lagi
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_hrm_shifts_unique_name ON hrm_shifts(name);
+
+      -- 4. Sinkronisasi 4 shift resmi dengan ON CONFLICT (idempoten)
       -- Day Shift: Senin s/d Jumat (07:30 - 16:30 WITA)
-      UPDATE hrm_shifts 
-      SET name = 'Day Shift (07:30 - 16:30 WITA)', start_time = '07:30:00', end_time = '16:30:00', is_default = true 
-      WHERE name ILIKE '%Reguler%' OR name ILIKE '%Day Shift%';
+      INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
+      VALUES ('Day Shift (07:30 - 16:30 WITA)', '07:30:00', '16:30:00', 15, true)
+      ON CONFLICT (name) DO UPDATE 
+      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time, is_default = EXCLUDED.is_default;
 
       -- Shift I: 07:30 - 15:30 WITA
-      UPDATE hrm_shifts 
-      SET name = 'Shift I (07:30 - 15:30 WITA)', start_time = '07:30:00', end_time = '15:30:00', is_default = false 
-      WHERE name ILIKE '%Shift 1%' OR name ILIKE '%Shift I %' OR name ILIKE '%Shift I(%' OR name ILIKE '%Shift Pagi%';
+      INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
+      VALUES ('Shift I (07:30 - 15:30 WITA)', '07:30:00', '15:30:00', 15, false)
+      ON CONFLICT (name) DO UPDATE 
+      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time;
 
       -- Shift II: 15:30 - 22:30 WITA
-      UPDATE hrm_shifts 
-      SET name = 'Shift II (15:30 - 22:30 WITA)', start_time = '15:30:00', end_time = '22:30:00', is_default = false 
-      WHERE name ILIKE '%Shift 2%' OR name ILIKE '%Shift II%' OR name ILIKE '%Shift Siang%';
+      INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
+      VALUES ('Shift II (15:30 - 22:30 WITA)', '15:30:00', '22:30:00', 15, false)
+      ON CONFLICT (name) DO UPDATE 
+      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time;
 
       -- Shift III: 22:30 - 07:30 WITA
-      UPDATE hrm_shifts 
-      SET name = 'Shift III (22:30 - 07:30 WITA)', start_time = '22:30:00', end_time = '07:30:00', is_default = false 
-      WHERE name ILIKE '%Shift 3%' OR name ILIKE '%Shift III%' OR name ILIKE '%Shift Malam%';
-
-      -- Pastikan keempat shift master terdaftar di database
       INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
-      SELECT 'Day Shift (07:30 - 16:30 WITA)', '07:30:00', '16:30:00', 15, true
-      WHERE NOT EXISTS (SELECT 1 FROM hrm_shifts WHERE name ILIKE '%Day Shift%');
-
-      INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
-      SELECT 'Shift I (07:30 - 15:30 WITA)', '07:30:00', '15:30:00', 15, false
-      WHERE NOT EXISTS (SELECT 1 FROM hrm_shifts WHERE name ILIKE '%Shift I %' OR name ILIKE '%Shift I(%');
-
-      INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
-      SELECT 'Shift II (15:30 - 22:30 WITA)', '15:30:00', '22:30:00', 15, false
-      WHERE NOT EXISTS (SELECT 1 FROM hrm_shifts WHERE name ILIKE '%Shift II%');
-
-      INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
-      SELECT 'Shift III (22:30 - 07:30 WITA)', '22:30:00', '07:30:00', 15, false
-      WHERE NOT EXISTS (SELECT 1 FROM hrm_shifts WHERE name ILIKE '%Shift III%' OR name ILIKE '%Shift 3%');
+      VALUES ('Shift III (22:30 - 07:30 WITA)', '22:30:00', '07:30:00', 15, false)
+      ON CONFLICT (name) DO UPDATE 
+      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time;
 
       -- ─── 15. BANK POS TUGAS LAPANGAN & GEOFENCE MULTI-TITIK ───
       CREATE TABLE IF NOT EXISTS hrm_field_assigned_posts (

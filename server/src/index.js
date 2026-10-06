@@ -551,15 +551,25 @@ app.get('/api/sync/bootstrap', async (req, res) => {
 
     const divisions = divisionsRes.rows.map(formatDivisionRow);
 
-    const shifts = shiftsRes.rows.map((s) => ({
-      id: s.id,
-      code: s.name.substring(0, 4).toUpperCase(),
-      name: s.name,
-      startTime: s.start_time ? s.start_time.substring(0, 5) : '08:00',
-      endTime: s.end_time ? s.end_time.substring(0, 5) : '17:00',
-      lateToleranceMinutes: s.late_tolerance_minutes || 15,
-      isDefault: s.is_default,
-    }));
+    const shifts = shiftsRes.rows.map((s) => {
+      let code = 'SHF';
+      if (s.name.includes('Day Shift')) code = 'DAY';
+      else if (s.name.includes('Shift I ') || s.name.includes('Shift I(')) code = 'SHF-I';
+      else if (s.name.includes('Shift II')) code = 'SHF-II';
+      else if (s.name.includes('Shift III')) code = 'SHF-III';
+      else if (s.code) code = s.code;
+      else code = s.name.substring(0, 4).toUpperCase();
+
+      return {
+        id: s.id,
+        code,
+        name: s.name,
+        startTime: s.start_time ? s.start_time.substring(0, 5) : '08:00',
+        endTime: s.end_time ? s.end_time.substring(0, 5) : '17:00',
+        lateToleranceMinutes: s.late_tolerance_minutes || 15,
+        isDefault: s.is_default,
+      };
+    });
 
     const office = formatOfficeRow(officeRes.rows[0]);
 
@@ -684,6 +694,114 @@ app.get('/api/sync/bootstrap', async (req, res) => {
     });
   } catch (err) {
     console.error('Bootstrap error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── 2.1 SHIFTS MANAGEMENT ──────────────────────────────────────────────────
+app.get('/api/shifts', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM hrm_shifts ORDER BY start_time ASC');
+    const shifts = result.rows.map((s) => {
+      let code = 'SHF';
+      if (s.name.includes('Day Shift')) code = 'DAY';
+      else if (s.name.includes('Shift I ') || s.name.includes('Shift I(')) code = 'SHF-I';
+      else if (s.name.includes('Shift II')) code = 'SHF-II';
+      else if (s.name.includes('Shift III')) code = 'SHF-III';
+      else if (s.code) code = s.code;
+      else code = s.name.substring(0, 4).toUpperCase();
+      return {
+        id: s.id,
+        code,
+        name: s.name,
+        startTime: s.start_time ? s.start_time.substring(0, 5) : '08:00',
+        endTime: s.end_time ? s.end_time.substring(0, 5) : '17:00',
+        lateToleranceMinutes: s.late_tolerance_minutes || 15,
+        isDefault: s.is_default,
+      };
+    });
+    res.json({ success: true, data: shifts });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/shifts', async (req, res) => {
+  const { name, startTime, endTime, lateToleranceMinutes, isDefault } = req.body;
+  if (!name) return res.status(400).json({ success: false, error: 'Nama shift wajib diisi' });
+  try {
+    if (isDefault) {
+      await pool.query('UPDATE hrm_shifts SET is_default = false');
+    }
+    const result = await pool.query(
+      `INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (name) DO UPDATE SET
+         start_time = EXCLUDED.start_time,
+         end_time = EXCLUDED.end_time,
+         late_tolerance_minutes = EXCLUDED.late_tolerance_minutes,
+         is_default = EXCLUDED.is_default
+       RETURNING *;`,
+      [name.trim(), startTime || '08:00:00', endTime || '17:00:00', lateToleranceMinutes || 15, isDefault === true]
+    );
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.put('/api/shifts/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, startTime, endTime, lateToleranceMinutes, isDefault } = req.body;
+  try {
+    if (isDefault) {
+      await pool.query('UPDATE hrm_shifts SET is_default = false WHERE id != $1', [id]);
+    }
+    const result = await pool.query(
+      `UPDATE hrm_shifts SET
+         name = COALESCE($1, name),
+         start_time = COALESCE($2, start_time),
+         end_time = COALESCE($3, end_time),
+         late_tolerance_minutes = COALESCE($4, late_tolerance_minutes),
+         is_default = COALESCE($5, is_default)
+       WHERE id = $6
+       RETURNING *;`,
+      [name ? name.trim() : null, startTime || null, endTime || null, lateToleranceMinutes != null ? lateToleranceMinutes : null, isDefault != null ? isDefault : null, id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Shift tidak ditemukan' });
+    }
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/shifts/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const userCheck = await pool.query('SELECT count(*) FROM hrm_profiles WHERE shift_id = $1', [id]);
+    if (parseInt(userCheck.rows[0].count) > 0) {
+      return res.status(400).json({ success: false, error: 'Shift tidak dapat dihapus karena masih digunakan oleh karyawan.' });
+    }
+    const countCheck = await pool.query('SELECT count(*) FROM hrm_shifts');
+    if (parseInt(countCheck.rows[0].count) <= 1) {
+      return res.status(400).json({ success: false, error: 'Minimal harus ada 1 shift yang aktif di sistem.' });
+    }
+    await pool.query('DELETE FROM hrm_shifts WHERE id = $1', [id]);
+    res.json({ success: true, message: 'Shift berhasil dihapus' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/shifts/:id/default', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query('UPDATE hrm_shifts SET is_default = false');
+    const result = await pool.query('UPDATE hrm_shifts SET is_default = true WHERE id = $1 RETURNING *', [id]);
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
