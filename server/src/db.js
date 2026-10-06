@@ -493,6 +493,11 @@ export async function initDb() {
       SELECT 'k3', 'Petugas / Divisi K3', 'Pengawasan Keselamatan Kerja, K3, dan Persetujuan Izin Operasional', false, '["read", "write", "approval"]'::jsonb
       WHERE NOT EXISTS (SELECT 1 FROM hrm_roles WHERE name = 'k3');
 
+      -- ─── 17. ROLE DIRUT (DIREKTUR UTAMA) ───
+      INSERT INTO hrm_roles (name, label, description, is_system, permissions)
+      SELECT 'dirut', 'Direktur Utama (Dirut)', 'Pucuk pimpinan tertinggi PT FRP, otoritas kebijakan strategis, persetujuan level manajerial & visual analitik kinerja komprehensif', true, '["all"]'::jsonb
+      WHERE NOT EXISTS (SELECT 1 FROM hrm_roles WHERE name = 'dirut');
+
       -- Break late minutes & early leave approved
       ALTER TABLE hrm_attendances
       ADD COLUMN IF NOT EXISTS break_late_minutes INTEGER DEFAULT 0;

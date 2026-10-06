@@ -4206,10 +4206,22 @@ app.post('/api/leaves', async (req, res) => {
     let validUserId = userId;
     let userProfile = null;
     if (UUID_REGEX.test(userId)) {
-      const uRes = await pool.query('SELECT p.*, d.name as division_name FROM hrm_profiles p LEFT JOIN hrm_divisions d ON p.division_id = d.id WHERE p.id = $1 LIMIT 1', [userId]);
+      const uRes = await pool.query(`
+        SELECT p.*, d.name as division_name, r.name as role_name 
+        FROM hrm_profiles p 
+        LEFT JOIN hrm_divisions d ON p.division_id = d.id 
+        LEFT JOIN hrm_roles r ON p.role_id = r.id 
+        WHERE p.id = $1 LIMIT 1
+      `, [userId]);
       userProfile = uRes.rows[0];
     } else {
-      const uRes = await pool.query('SELECT p.*, d.name as division_name FROM hrm_profiles p LEFT JOIN hrm_divisions d ON p.division_id = d.id WHERE LOWER(p.email) = LOWER($1) OR LOWER(p.nip) = LOWER($1) LIMIT 1', [userId]);
+      const uRes = await pool.query(`
+        SELECT p.*, d.name as division_name, r.name as role_name 
+        FROM hrm_profiles p 
+        LEFT JOIN hrm_divisions d ON p.division_id = d.id 
+        LEFT JOIN hrm_roles r ON p.role_id = r.id 
+        WHERE LOWER(p.email) = LOWER($1) OR LOWER(p.nip) = LOWER($1) LIMIT 1
+      `, [userId]);
       userProfile = uRes.rows[0];
       if (userProfile) validUserId = userProfile.id;
     }
@@ -4269,34 +4281,34 @@ app.post('/api/leaves', async (req, res) => {
 
     let recipientRoles = [];
     if (isOfficer) {
-      // Jika Korlap, Admin, atau K3 yang mengajukan -> ajukan ke Dirut & Pimpinan konfirmasi via WA!
-      recipientRoles = ['pimpinan', 'superadmin'];
-      const waMsg = `📢 *PENGAJUAN ${typeLabel} DARI ${submitterRole.toUpperCase()}*\n\n` +
-        `Pemohon: *${userProfile.full_name}* (NIP: ${userProfile.nip || '-'})\n` +
-        `Jabatan: *${submitterRole.toUpperCase()}* - Divisi: ${userProfile.division_name || 'Operasional'}\n` +
-        `Jenis: *${typeLabel}*\n` +
-        `Periode: *${startDate} s/d ${endDate}* (${requestedDays} Hari)\n` +
-        `Alasan: "${reason}"\n\n` +
-        `⚠️ Pengajuan ini diajukan oleh pejabat pengawas (${submitterRole.toUpperCase()}) dan membutuhkan persetujuan langsung dari *Direktur Utama & Pimpinan*.\n` +
-        `Mohon verifikasi melalui: https://103.197.188.211/admin/approval`;
+      // 👔 TIER 2: Pengajuan dari Pejabat Pengawas (Korlap, Admin, K3) -> ke Direktur Utama (Dirut) & Pimpinan
+      recipientRoles = ['pimpinan', 'dirut', 'superadmin'];
+      const waMsg = `📢 *PENGAJUAN ${typeLabel} DARI PEJABAT PENGAWAS (${submitterRole.toUpperCase()})*\n\n` +
+        `👤 Pemohon: *${userProfile.full_name}* (NIP: ${userProfile.nip || '-'})\n` +
+        `🏢 Jabatan/Peran: *${submitterRole.toUpperCase()}* - Divisi: ${userProfile.division_name || 'Operasional'}\n` +
+        `📝 Jenis: *${typeLabel}*\n` +
+        `📅 Periode: *${startDate} s/d ${endDate}* (${requestedDays} Hari)\n` +
+        `💬 Alasan: "${reason}"\n\n` +
+        `⚠️ Pengajuan ini diajukan oleh pejabat pengawas (${submitterRole.toUpperCase()}) dan membutuhkan verifikasi serta persetujuan resmi dari *Direktur Utama & Pimpinan*.\n` +
+        `🔗 Mohon konfirmasi persetujuan: https://103.197.188.211/admin/approval`;
 
       await sendWhatsAppAlert({ phone: '082192755755', message: waMsg });
       await sendWhatsAppAlert({ phone: '081355904897', message: waMsg });
     } else {
-      // Jika Karyawan biasa -> masuk notifikasi sistem & via WA ke Korlap, Admin, atau K3 untuk persetujuan
+      // 👷 TIER 1: Pengajuan Karyawan Biasa -> Notifikasi serentak ke Korlap, Admin, dan K3 (First-Responder Rule)
       recipientRoles = ['korlap', 'admin', 'k3', 'superadmin'];
       const officerRes = await pool.query(
-        "SELECT full_name, phone, role_name FROM hrm_profiles WHERE role_name IN ('korlap', 'admin', 'k3') AND is_active = true AND phone IS NOT NULL AND phone != ''"
+        "SELECT p.full_name, p.phone, r.name as role_name FROM hrm_profiles p JOIN hrm_roles r ON p.role_id = r.id WHERE r.name IN ('korlap', 'admin', 'k3') AND p.is_active = true AND p.phone IS NOT NULL AND p.phone != ''"
       );
 
-      const waOfficerMsg = `📋 *PENGAJUAN ${typeLabel} BARU (BUTUH PERSETUJUAN)*\n\n` +
-        `Karyawan: *${userProfile.full_name}* (NIP: ${userProfile.nip || '-'})\n` +
-        `Divisi: *${userProfile.division_name || 'Operasional'}*\n` +
-        `Jenis: *${typeLabel}*\n` +
-        `Periode: *${startDate} s/d ${endDate}* (${requestedDays} Hari)\n` +
-        `Alasan: "${reason}"\n\n` +
-        `Mohon salah satu dari *Korlap, Admin, atau K3* melakukan verifikasi & persetujuan melalui portal HRM FRP:\n` +
-        `https://103.197.188.211/admin/approval`;
+      const waOfficerMsg = `📋 *PENGAJUAN ${typeLabel} KARYAWAN (BUTUH PERSETUJUAN)*\n\n` +
+        `👤 Karyawan: *${userProfile.full_name}* (NIP: ${userProfile.nip || '-'})\n` +
+        `🏢 Divisi: *${userProfile.division_name || 'Operasional'}*\n` +
+        `📝 Jenis: *${typeLabel}*\n` +
+        `📅 Periode: *${startDate} s/d ${endDate}* (${requestedDays} Hari)\n` +
+        `💬 Alasan: "${reason}"\n\n` +
+        `⚡ *ATURAN PERSETUJUAN:* Salah satu dari *Korlap, Admin, atau K3* dapat langsung melakukan persetujuan melalui portal HRM FRP:\n` +
+        `🔗 https://103.197.188.211/admin/approval`;
 
       for (const off of officerRes.rows) {
         if (off.phone) {
@@ -4529,17 +4541,19 @@ app.post('/api/overtime', async (req, res) => {
     let userProfile = null;
     if (UUID_REGEX.test(userId)) {
       const uRes = await pool.query(`
-        SELECT p.*, d.name as division_name, COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate
+        SELECT p.*, d.name as division_name, r.name as role_name, COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate
         FROM hrm_profiles p
         LEFT JOIN hrm_divisions d ON p.division_id = d.id
+        LEFT JOIN hrm_roles r ON p.role_id = r.id
         LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
         WHERE p.id = $1 LIMIT 1`, [userId]);
       userProfile = uRes.rows[0];
     } else {
       const uRes = await pool.query(`
-        SELECT p.*, d.name as division_name, COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate
+        SELECT p.*, d.name as division_name, r.name as role_name, COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate
         FROM hrm_profiles p
         LEFT JOIN hrm_divisions d ON p.division_id = d.id
+        LEFT JOIN hrm_roles r ON p.role_id = r.id
         LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
         WHERE LOWER(p.email) = LOWER($1) OR LOWER(p.nip) = LOWER($1) LIMIT 1`, [userId]);
       userProfile = uRes.rows[0];
@@ -4581,32 +4595,34 @@ app.post('/api/overtime', async (req, res) => {
 
     let recipientRoles = [];
     if (isOfficer) {
-      // Diajukan oleh Korlap/Admin/K3 -> ajukan ke Dirut & Pimpinan konfirmasi via WA!
-      recipientRoles = ['pimpinan', 'superadmin'];
-      const waMsg = `📢 *PENGAJUAN LEMBUR (SPL) DARI ${submitterRole.toUpperCase()}*\n\n` +
-        `Pemohon: *${userProfile.full_name}* (${userProfile.nip || '-'})\n` +
-        `Tanggal: *${date}* (${startTime} - ${endTime}, ${hours} Jam)\n` +
-        `Tugas: "${taskDescription}"\n` +
-        `Estimasi Kompensasi: Rp ${comp.toLocaleString('id-ID')}\n\n` +
-        `⚠️ Membutuhkan konfirmasi & persetujuan Direktur Utama & Pimpinan:\n` +
-        `https://103.197.188.211/admin/approval`;
+      // 👔 TIER 2: Diajukan oleh Korlap/Admin/K3 -> ajukan ke Dirut & Pimpinan konfirmasi via WA!
+      recipientRoles = ['pimpinan', 'dirut', 'superadmin'];
+      const waMsg = `📢 *PENGAJUAN LEMBUR (SPL) DARI PEJABAT PENGAWAS (${submitterRole.toUpperCase()})*\n\n` +
+        `👤 Pemohon: *${userProfile.full_name}* (${userProfile.nip || '-'})\n` +
+        `🏢 Jabatan: *${submitterRole.toUpperCase()}* - Divisi: ${userProfile.division_name || 'Operasional'}\n` +
+        `📅 Tanggal: *${date}* (${startTime} - ${endTime}, ${hours} Jam)\n` +
+        `📝 Tugas: "${taskDescription}"\n` +
+        `💰 Estimasi Kompensasi: Rp ${comp.toLocaleString('id-ID')}\n\n` +
+        `⚠️ Pengajuan ini diajukan oleh pejabat pengawas (${submitterRole.toUpperCase()}) dan membutuhkan verifikasi serta persetujuan resmi dari *Direktur Utama & Pimpinan*.\n` +
+        `🔗 Mohon konfirmasi: https://103.197.188.211/admin/approval`;
 
       await sendWhatsAppAlert({ phone: '082192755755', message: waMsg });
       await sendWhatsAppAlert({ phone: '081355904897', message: waMsg });
     } else {
-      // Karyawan biasa -> ke Korlap, Admin, K3
+      // 👷 TIER 1: Karyawan biasa -> Notifikasi serentak ke Korlap, Admin, K3 (First-Responder Rule)
       recipientRoles = ['korlap', 'admin', 'k3', 'superadmin'];
       const officerRes = await pool.query(
-        "SELECT full_name, phone, role_name FROM hrm_profiles WHERE role_name IN ('korlap', 'admin', 'k3') AND is_active = true AND phone IS NOT NULL AND phone != ''"
+        "SELECT p.full_name, p.phone, r.name as role_name FROM hrm_profiles p JOIN hrm_roles r ON p.role_id = r.id WHERE r.name IN ('korlap', 'admin', 'k3') AND p.is_active = true AND p.phone IS NOT NULL AND p.phone != ''"
       );
 
-      const waOfficerMsg = `⏱️ *PENGAJUAN SURAT PERINTAH LEMBUR (SPL) BARU*\n\n` +
-        `Karyawan: *${userProfile.full_name}* (${userProfile.nip || '-'})\n` +
-        `Tanggal: *${date}* (${startTime} - ${endTime}, ${hours} Jam)\n` +
-        `Uraian Tugas: "${taskDescription}"\n` +
-        `Estimasi Kompensasi: Rp ${comp.toLocaleString('id-ID')}\n\n` +
-        `Mohon salah satu dari *Korlap, Admin, atau K3* melakukan verifikasi & persetujuan:\n` +
-        `https://103.197.188.211/admin/approval`;
+      const waOfficerMsg = `⏱️ *PENGAJUAN SURAT PERINTAH LEMBUR (SPL) KARYAWAN*\n\n` +
+        `👤 Karyawan: *${userProfile.full_name}* (${userProfile.nip || '-'})\n` +
+        `🏢 Divisi: *${userProfile.division_name || 'Operasional'}*\n` +
+        `📅 Tanggal: *${date}* (${startTime} - ${endTime}, ${hours} Jam)\n` +
+        `📝 Uraian Tugas: "${taskDescription}"\n` +
+        `💰 Estimasi Kompensasi: Rp ${comp.toLocaleString('id-ID')}\n\n` +
+        `⚡ *ATURAN PERSETUJUAN:* Salah satu dari *Korlap, Admin, atau K3* dapat langsung melakukan verifikasi & persetujuan:\n` +
+        `🔗 https://103.197.188.211/admin/approval`;
 
       for (const off of officerRes.rows) {
         if (off.phone) {
@@ -4723,6 +4739,235 @@ app.put('/api/overtime/:id/status', async (req, res) => {
     });
   } catch (err) {
     console.error('Update overtime error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── ENDPOINTS REKAPAN KINERJA LAPANGAN (KORLAP, ADMIN, K3) ─────────────────
+app.get('/api/analytics/field-recap', async (req, res) => {
+  const { period = 'current_month', divisionId, startDate, endDate } = req.query;
+  try {
+    let startD, endD;
+    const now = new Date();
+    
+    if (period === 'last_month') {
+      const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastDayLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+      startD = firstDayLastMonth.toISOString().split('T')[0];
+      endD = lastDayLastMonth.toISOString().split('T')[0];
+    } else if (period === 'year' || period === 'ytd' || period === 'tahunan') {
+      startD = `${now.getFullYear()}-01-01`;
+      endD = now.toISOString().split('T')[0];
+    } else if (startDate && endDate) {
+      startD = startDate;
+      endD = endDate;
+    } else {
+      // current_month
+      startD = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+      endD = now.toISOString().split('T')[0];
+    }
+
+    let divFilterSql = '';
+    const queryParams = [startD, endD];
+    if (divisionId && divisionId !== 'all') {
+      divFilterSql = ' AND (p.division_id = $3 OR LOWER(d.code) = LOWER($3) OR LOWER(d.name) = LOWER($3))';
+      queryParams.push(divisionId);
+    }
+
+    const sql = `
+      WITH att_stats AS (
+        SELECT 
+          user_id,
+          COUNT(DISTINCT CASE WHEN status IN ('hadir', 'terlambat') THEN attendance_date END) as total_hadir,
+          COUNT(DISTINCT CASE WHEN status = 'hadir' THEN attendance_date END) as tepat_waktu,
+          COUNT(DISTINCT CASE WHEN status = 'terlambat' THEN attendance_date END) as total_terlambat,
+          COALESCE(SUM(late_minutes), 0) as total_late_minutes,
+          COUNT(DISTINCT CASE WHEN status = 'alpa' THEN attendance_date END) as total_alpa
+        FROM hrm_attendances
+        WHERE attendance_date BETWEEN $1 AND $2
+        GROUP BY user_id
+      ),
+      leave_stats AS (
+        SELECT
+          user_id,
+          COALESCE(SUM(CASE WHEN status = 'approved' AND leave_type IN ('cuti_tahunan', 'annual_leave', 'maternity_leave') THEN total_days ELSE 0 END), 0) as total_cuti_days,
+          COALESCE(SUM(CASE WHEN status = 'approved' AND leave_type IN ('sick_leave', 'sakit') THEN total_days ELSE 0 END), 0) as total_sakit_days,
+          COALESCE(SUM(CASE WHEN status = 'approved' AND leave_type NOT IN ('cuti_tahunan', 'annual_leave', 'sick_leave', 'sakit') THEN total_days ELSE 0 END), 0) as total_izin_days
+        FROM hrm_leave_requests
+        WHERE start_date <= $2 AND end_date >= $1 AND status = 'approved'
+        GROUP BY user_id
+      ),
+      ot_stats AS (
+        SELECT
+          user_id,
+          COUNT(id) as total_spl_count,
+          COALESCE(SUM(duration_hours), 0) as total_ot_hours,
+          COALESCE(SUM(compensation_amount), 0) as total_ot_comp
+        FROM hrm_overtime_records
+        WHERE date BETWEEN $1 AND $2 AND status = 'approved'
+        GROUP BY user_id
+      )
+      SELECT 
+        p.id as user_id,
+        p.full_name,
+        p.nip,
+        COALESCE(d.name, 'Umum') as division_name,
+        d.id as division_id,
+        p.avatar_url,
+        r.name as role_name,
+        COALESCE(att.total_hadir, 0)::int as total_hadir,
+        COALESCE(att.tepat_waktu, 0)::int as tepat_waktu,
+        COALESCE(att.total_terlambat, 0)::int as total_terlambat,
+        COALESCE(att.total_late_minutes, 0)::int as total_late_minutes,
+        COALESCE(att.total_alpa, 0)::int as total_mangkir,
+        COALESCE(lv.total_cuti_days, 0)::int as total_cuti,
+        COALESCE(lv.total_sakit_days, 0)::int as total_sakit,
+        COALESCE(lv.total_izin_days, 0)::int as total_izin,
+        COALESCE(ot.total_spl_count, 0)::int as total_lembur_count,
+        COALESCE(ot.total_ot_hours, 0)::numeric as total_lembur_hours,
+        COALESCE(ot.total_ot_comp, 0)::numeric as total_lembur_comp
+      FROM hrm_profiles p
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_roles r ON p.role_id = r.id
+      LEFT JOIN att_stats att ON att.user_id = p.id
+      LEFT JOIN leave_stats lv ON lv.user_id = p.id
+      LEFT JOIN ot_stats ot ON ot.user_id = p.id
+      WHERE p.is_active = true ${divFilterSql}
+      ORDER BY p.full_name ASC;
+    `;
+
+    const result = await pool.query(sql, queryParams);
+    const rows = result.rows;
+
+    const summary = {
+      totalEmployees: rows.length,
+      totalHadir: rows.reduce((acc, r) => acc + Number(r.total_hadir), 0),
+      totalTepatWaktu: rows.reduce((acc, r) => acc + Number(r.tepat_waktu), 0),
+      totalTerlambat: rows.reduce((acc, r) => acc + Number(r.total_terlambat), 0),
+      totalMangkir: rows.reduce((acc, r) => acc + Number(r.total_mangkir), 0),
+      totalCuti: rows.reduce((acc, r) => acc + Number(r.total_cuti), 0),
+      totalSakit: rows.reduce((acc, r) => acc + Number(r.total_sakit), 0),
+      totalIzin: rows.reduce((acc, r) => acc + Number(r.total_izin), 0),
+      totalLemburHours: rows.reduce((acc, r) => acc + Number(r.total_lembur_hours), 0),
+      totalLemburComp: rows.reduce((acc, r) => acc + Number(r.total_lembur_comp), 0),
+      period,
+      startDate: startD,
+      endDate: endD,
+    };
+
+    res.json({ success: true, data: { summary, roster: rows } });
+  } catch (err) {
+    console.error('Field recap analytics error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── ENDPOINTS EXECUTIVE VISUAL RADAR (SUPERADMIN, DIRUT, PIMPINAN) ──────────
+app.get('/api/analytics/executive-radar', async (req, res) => {
+  const { year, month } = req.query;
+  try {
+    const targetYear = parseInt(year, 10) || new Date().getFullYear();
+    const targetMonth = parseInt(month, 10) || (new Date().getMonth() + 1);
+
+    // 1. Monthly 12-month Trend (Jan-Des tahun target)
+    const trendSql = `
+      SELECT 
+        TO_CHAR(d.m, 'YYYY-MM') as month_str,
+        TO_CHAR(d.m, 'Mon') as month_name,
+        COALESCE(COUNT(DISTINCT CASE WHEN a.status IN ('hadir', 'terlambat') THEN a.id END), 0)::int as hadir,
+        COALESCE(COUNT(DISTINCT CASE WHEN a.status = 'terlambat' THEN a.id END), 0)::int as terlambat,
+        COALESCE(COUNT(DISTINCT CASE WHEN a.status = 'alpa' THEN a.id END), 0)::int as mangkir,
+        COALESCE(SUM(CASE WHEN o.status = 'approved' THEN o.duration_hours ELSE 0 END), 0)::numeric as lembur_jam,
+        COALESCE(SUM(CASE WHEN l.status = 'approved' AND l.leave_type IN ('cuti_tahunan', 'annual_leave') THEN l.total_days ELSE 0 END), 0)::int as cuti,
+        COALESCE(SUM(CASE WHEN l.status = 'approved' AND l.leave_type IN ('sick_leave', 'sakit') THEN l.total_days ELSE 0 END), 0)::int as sakit
+      FROM GENERATE_SERIES(
+        DATE_TRUNC('year', MAKE_DATE($1, 1, 1)),
+        DATE_TRUNC('year', MAKE_DATE($1, 1, 1)) + INTERVAL '11 months',
+        INTERVAL '1 month'
+      ) d(m)
+      LEFT JOIN hrm_attendances a ON DATE_TRUNC('month', a.attendance_date) = d.m
+      LEFT JOIN hrm_overtime_records o ON DATE_TRUNC('month', o.date) = d.m AND o.status = 'approved'
+      LEFT JOIN hrm_leave_requests l ON DATE_TRUNC('month', l.start_date) = d.m AND l.status = 'approved'
+      GROUP BY d.m
+      ORDER BY d.m ASC;
+    `;
+    const trendRes = await pool.query(trendSql, [targetYear]);
+
+    // 2. Division Performance Matrix
+    const divMatrixSql = `
+      SELECT 
+        d.id as division_id,
+        d.name as division_name,
+        d.code as division_code,
+        COUNT(DISTINCT p.id)::int as total_members,
+        COUNT(DISTINCT CASE WHEN a.status IN ('hadir', 'terlambat') THEN a.id END)::int as total_hadir,
+        COUNT(DISTINCT CASE WHEN a.status = 'terlambat' THEN a.id END)::int as total_terlambat,
+        COUNT(DISTINCT CASE WHEN a.status = 'alpa' THEN a.id END)::int as total_mangkir,
+        COALESCE(SUM(CASE WHEN o.status = 'approved' THEN o.duration_hours ELSE 0 END), 0)::numeric as total_lembur_jam
+      FROM hrm_divisions d
+      JOIN hrm_profiles p ON p.division_id = d.id AND p.is_active = true
+      LEFT JOIN hrm_attendances a ON a.user_id = p.id AND EXTRACT(YEAR FROM a.attendance_date) = $1
+      LEFT JOIN hrm_overtime_records o ON o.user_id = p.id AND EXTRACT(YEAR FROM o.date) = $1 AND o.status = 'approved'
+      GROUP BY d.id, d.name, d.code
+      ORDER BY total_members DESC;
+    `;
+    const divMatrixRes = await pool.query(divMatrixSql, [targetYear]);
+
+    // 3. Day of Week Critical Pattern (Pola Hari Lapangan)
+    const dayPatternSql = `
+      SELECT 
+        TO_CHAR(attendance_date, 'Day') as day_name,
+        EXTRACT(DOW FROM attendance_date)::int as day_index,
+        COUNT(DISTINCT CASE WHEN status IN ('hadir', 'terlambat') THEN id END)::int as total_hadir,
+        COUNT(DISTINCT CASE WHEN status = 'terlambat' THEN id END)::int as total_terlambat,
+        COUNT(DISTINCT CASE WHEN status = 'alpa' THEN id END)::int as total_mangkir
+      FROM hrm_attendances
+      WHERE EXTRACT(YEAR FROM attendance_date) = $1
+      GROUP BY day_name, day_index
+      ORDER BY day_index ASC;
+    `;
+    const dayPatternRes = await pool.query(dayPatternSql, [targetYear]);
+
+    // 4. Overall Health Metric & KPI Cards
+    const totalEmployeesRes = await pool.query('SELECT COUNT(*)::int as count FROM hrm_profiles WHERE is_active = true;');
+    const totalEmployees = totalEmployeesRes.rows[0]?.count || 0;
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const todayAttRes = await pool.query(`
+      SELECT 
+        COUNT(DISTINCT CASE WHEN status IN ('hadir', 'terlambat') THEN user_id END)::int as hadir,
+        COUNT(DISTINCT CASE WHEN status = 'hadir' THEN user_id END)::int as tepat_waktu,
+        COUNT(DISTINCT CASE WHEN status = 'terlambat' THEN user_id END)::int as terlambat
+      FROM hrm_attendances
+      WHERE attendance_date = $1;
+    `, [todayStr]);
+
+    const todayHadir = todayAttRes.rows[0]?.hadir || 0;
+    const todayTepat = todayAttRes.rows[0]?.tepat_waktu || 0;
+    const todayLate = todayAttRes.rows[0]?.terlambat || 0;
+    const todayAttendanceRate = totalEmployees > 0 ? Math.round((todayHadir / totalEmployees) * 100) : 0;
+    const todayPunctualityRate = todayHadir > 0 ? Math.round((todayTepat / todayHadir) * 100) : 100;
+
+    res.json({
+      success: true,
+      data: {
+        targetYear,
+        targetMonth,
+        kpis: {
+          totalEmployees,
+          todayHadir,
+          todayTepat,
+          todayLate,
+          todayAttendanceRate,
+          todayPunctualityRate,
+        },
+        monthlyTrends: trendRes.rows,
+        divisionMatrix: divMatrixRes.rows,
+        dayPatterns: dayPatternRes.rows,
+      }
+    });
+  } catch (err) {
+    console.error('Executive radar analytics error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });

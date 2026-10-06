@@ -20,10 +20,20 @@ import {
   Wallet,
   CreditCard,
   DollarSign,
+  Search,
+  Filter,
+  AlertTriangle,
+  Sparkles,
+  ChevronRight,
+  Printer,
+  Calendar,
+  Layers,
+  Activity,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Link } from 'react-router-dom';
 import {
@@ -43,18 +53,57 @@ import {
 
 export const HrmPimpinanDashboard: React.FC = () => {
   const { user } = useHrmAuth();
+  const currentYear = new Date().getFullYear();
+  const [selectedYear, setSelectedYear] = useState<number>(currentYear);
+
+  // Basic States
   const [divisions, setDivisions] = useState(hrmService.getDivisions());
   const [users, setUsers] = useState(hrmService.getUsers());
   const [todayAttendances, setTodayAttendances] = useState(hrmService.getAttendances(getTodayDateStr()));
   const [pendingLeaves, setPendingLeaves] = useState(
     hrmService.getLeaves().filter((l) => l.status === 'pending')
   );
+  const [activeBreachCount, setActiveBreachCount] = useState(0);
 
-  const [timeframe, setTimeframe] = useState<'7' | '14' | '30'>('7');
-  const [trendData, setTrendData] = useState<any[]>([]);
-  const [divisionAnalytics, setDivisionAnalytics] = useState<any[]>([]);
-  const [overtimeAnalytics, setOvertimeAnalytics] = useState(hrmService.getOvertimeAnalytics());
+  // Executive Radar Analytics State from Database
+  const [radarData, setRadarData] = useState<any>(null);
+  const [loadingRadar, setLoadingRadar] = useState(false);
+
+  // Field Recap Roster State (Individual drill-down)
+  const [rosterData, setRosterData] = useState<any[]>([]);
+  const [rosterDivisionFilter, setRosterDivisionFilter] = useState<string>('all');
+  const [rosterSearch, setRosterSearch] = useState<string>('');
+  const [loadingRoster, setLoadingRoster] = useState(false);
+
+  // Financial aggregates
   const [salaryProfiles, setSalaryProfiles] = useState(hrmService.getSalaryProfiles());
+  const [overtimeAnalytics, setOvertimeAnalytics] = useState(hrmService.getOvertimeAnalytics());
+
+  const loadExecutiveData = async () => {
+    setLoadingRadar(true);
+    try {
+      const res = await hrmService.getExecutiveRadar({ year: selectedYear });
+      if (res && res.success && res.data) {
+        setRadarData(res.data);
+      }
+    } catch (e) {
+      console.warn('Failed to load executive radar:', e);
+    } finally {
+      setLoadingRadar(false);
+    }
+
+    setLoadingRoster(true);
+    try {
+      const recapRes = await hrmService.getFieldRecap({ period: 'year' });
+      if (recapRes && recapRes.success && recapRes.data?.roster) {
+        setRosterData(recapRes.data.roster);
+      }
+    } catch (e) {
+      console.warn('Failed to load roster:', e);
+    } finally {
+      setLoadingRoster(false);
+    }
+  };
 
   useEffect(() => {
     setDivisions(hrmService.getDivisions());
@@ -64,12 +113,11 @@ export const HrmPimpinanDashboard: React.FC = () => {
 
     const violations = hrmService.getPerimeterViolations();
     setActiveBreachCount(violations.filter((v) => v.status === 'active').length);
-
-    setTrendData(hrmService.getAttendanceTrend(Number(timeframe)));
-    setDivisionAnalytics(hrmService.getDivisionAnalytics());
     setOvertimeAnalytics(hrmService.getOvertimeAnalytics());
-    
-    // Live synchronization with database
+
+    loadExecutiveData();
+
+    // Live sync salary profiles
     api.get<{ success: boolean; data: any[] }>('/payroll/profiles')
       .then((res) => {
         if (res && res.success && Array.isArray(res.data)) {
@@ -91,24 +139,20 @@ export const HrmPimpinanDashboard: React.FC = () => {
             effectiveDate: '',
           }));
           setSalaryProfiles(mapped);
-        } else {
-          setSalaryProfiles(hrmService.getSalaryProfiles());
         }
       })
-      .catch(() => {
-        setSalaryProfiles(hrmService.getSalaryProfiles());
-      });
-  }, [timeframe]);
+      .catch(() => {});
+  }, [selectedYear]);
 
-  const [activeBreachCount, setActiveBreachCount] = useState(0);
+  // KPIs
+  const totalEmployees = radarData?.kpis?.totalEmployees ?? users.length;
+  const todayHadir = radarData?.kpis?.todayHadir ?? todayAttendances.length;
+  const todayTepat = radarData?.kpis?.todayTepat ?? todayAttendances.filter((a) => a.status === 'hadir').length;
+  const todayLate = radarData?.kpis?.todayLate ?? todayAttendances.filter((a) => a.status === 'terlambat').length;
+  const attendanceRate = radarData?.kpis?.todayAttendanceRate ?? (totalEmployees > 0 ? Math.round((todayHadir / totalEmployees) * 100) : 0);
+  const onTimeRateToday = radarData?.kpis?.todayPunctualityRate ?? (todayHadir > 0 ? Math.round((todayTepat / todayHadir) * 100) : 100);
 
-  const totalEmployees = users.length;
-  const totalPresentToday = todayAttendances.length;
-  const todayLate = todayAttendances.filter((a) => a.status === 'terlambat').length;
-  const attendanceRate = totalEmployees > 0 ? Math.round((totalPresentToday / totalEmployees) * 100) : 0;
-  const onTimeRateToday = totalPresentToday > 0 ? Math.round(((totalPresentToday - todayLate) / totalPresentToday) * 100) : 100;
-
-  // Financial aggregates for Pimpinan / Executive Board
+  // Financial Formatting
   const fmtRp = (n: number) =>
     new Intl.NumberFormat('id-ID', {
       style: 'currency',
@@ -121,38 +165,71 @@ export const HrmPimpinanDashboard: React.FC = () => {
     : users.length * 4045050;
   const approvedOvertimeBudget = overtimeAnalytics.approvedPay || 0;
   const estimatedBpjs = Math.round(totalBaseSalary * 0.04);
-  const estimatedTaxPph21 = Math.round(totalBaseSalary * 0.025);
   const estimatedTotalPayroll = totalBaseSalary + approvedOvertimeBudget + estimatedBpjs;
+
+  // Filtered Roster for individual drilldown
+  const filteredRoster = rosterData.filter((r) => {
+    const matchDiv = rosterDivisionFilter === 'all' || r.division_id === rosterDivisionFilter || r.division_name === rosterDivisionFilter;
+    const matchSearch = !rosterSearch.trim() ||
+      r.full_name?.toLowerCase().includes(rosterSearch.toLowerCase()) ||
+      r.nip?.toLowerCase().includes(rosterSearch.toLowerCase()) ||
+      r.division_name?.toLowerCase().includes(rosterSearch.toLowerCase());
+    return matchDiv && matchSearch;
+  });
+
+  // Watchlist & Top Performers
+  const watchlist = [...rosterData]
+    .sort((a, b) => (Number(b.total_mangkir) * 10 + Number(b.total_terlambat)) - (Number(a.total_mangkir) * 10 + Number(a.total_terlambat)))
+    .filter((r) => Number(r.total_mangkir) > 0 || Number(r.total_terlambat) > 1)
+    .slice(0, 4);
+
+  const topPerformers = [...rosterData]
+    .sort((a, b) => Number(b.tepat_waktu) - Number(a.tepat_waktu))
+    .filter((r) => Number(r.total_mangkir) === 0)
+    .slice(0, 4);
 
   return (
     <div className="space-y-6">
-      {/* Pimpinan Header Card - Clean & Uniform */}
-      <div className="bg-card border border-border rounded-2xl p-6 md:p-7 text-foreground shadow-sm">
+      {/* Pimpinan / Dirut Executive Header Card */}
+      <div className="bg-gradient-to-br from-card via-card to-primary/5 border border-border rounded-2xl p-6 md:p-7 text-foreground shadow-sm">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium border border-primary/20">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-semibold border border-primary/20">
               <Briefcase className="w-3.5 h-3.5" />
-              <span>Portal Eksekutif & Direksi Pimpinan</span>
+              <span>Portal Eksekutif Direktur Utama & Pimpinan FRP</span>
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Ikhtisar Eksekutif & Produktivitas Organisasi
+            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
+              Dashboard Analisis Kinerja & Radar Eksekutif
             </h1>
-            <p className="text-muted-foreground text-sm max-w-xl">
-              Pantau laporan kedisiplinan tingkat makro, efisiensi kerja per departemen, dan persetujuan kebijakan cuti.
+            <p className="text-muted-foreground text-xs md:text-sm max-w-2xl">
+              Tolak ukur progres kinerja karyawan menyeluruh, pola operasional seluruh divisi dan per individu secara realtime untuk penentuan kebijakan strategis.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <Select value={String(selectedYear)} onValueChange={(v) => setSelectedYear(Number(v))}>
+              <SelectTrigger className="h-9 text-xs w-[120px] rounded-xl font-semibold border-border">
+                <Calendar className="w-3.5 h-3.5 mr-1.5 text-primary" />
+                <SelectValue placeholder="Tahun" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="2026">Tahun 2026</SelectItem>
+                <SelectItem value="2025">Tahun 2025</SelectItem>
+                <SelectItem value="2024">Tahun 2024</SelectItem>
+              </SelectContent>
+            </Select>
+
             <Link to="/admin/approval">
-              <Button className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium shadow-sm rounded-xl gap-1.5">
+              <Button className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold shadow-sm rounded-xl gap-1.5 h-9">
                 <FileCheck2 className="w-3.5 h-3.5" />
-                Persetujuan Cuti ({pendingLeaves.length})
+                Persetujuan Direksi ({pendingLeaves.length})
               </Button>
             </Link>
+
             <Link to="/admin/laporan">
-              <Button variant="outline" className="border-border hover:bg-muted text-foreground text-xs rounded-xl gap-1.5">
+              <Button variant="outline" className="border-border hover:bg-muted text-foreground text-xs font-semibold rounded-xl gap-1.5 h-9">
                 <FileSpreadsheet className="w-3.5 h-3.5 text-primary" />
-                Laporan Lengkap & Cetak
+                Laporan & Cetak
               </Button>
             </Link>
           </div>
@@ -168,33 +245,33 @@ export const HrmPimpinanDashboard: React.FC = () => {
             </div>
             <div>
               <p className="font-bold text-rose-950 dark:text-rose-100 text-sm">
-                Radar Integritas: {activeBreachCount} Karyawan Terdeteksi Meninggalkan Radius Divisi
+                Radar Integritas: {activeBreachCount} Karyawan Terdeteksi Di Luar Radius Penugasan
               </p>
               <p className="text-rose-800 dark:text-rose-300 text-xs mt-0.5">
-                Sistem mengunci otomatis akses kepulangan presensi dan mencatat insiden ini ke dalam rapor kedisiplinan kinerja tahunan.
+                Sistem mendeteksi deviasi posisi GPS dari seluruh pos penugasan aktif dan mencatatnya ke audit trail kedisiplinan.
               </p>
             </div>
           </div>
-          <Link to="/monitoring">
+          <Link to="/admin/monitoring">
             <Button size="sm" variant="destructive" className="rounded-xl text-xs h-8 px-3 font-semibold shrink-0 gap-1.5 shadow-xs">
               <ShieldAlert className="w-3.5 h-3.5" />
-              Lihat di Live Monitoring
+              Buka Radar Monitoring
             </Button>
           </Link>
         </div>
       )}
 
       {/* KPI Cards - 5-Column Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
         <Card className="border-border bg-card rounded-xl shadow-sm">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-medium text-muted-foreground">Tingkat Kehadiran</p>
+              <p className="text-xs font-medium text-muted-foreground">Tingkat Kehadiran Hari Ini</p>
               <Target className="w-4 h-4 text-primary" />
             </div>
             <p className="text-2xl font-bold text-foreground mt-1.5">{attendanceRate}%</p>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              {totalPresentToday} dari {totalEmployees} Staf
+              {todayHadir} dari {totalEmployees} Personil
             </p>
           </CardContent>
         </Card>
@@ -202,12 +279,12 @@ export const HrmPimpinanDashboard: React.FC = () => {
         <Card className="border-border bg-card rounded-xl shadow-sm">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-medium text-muted-foreground">Ketepatan Waktu</p>
+              <p className="text-xs font-medium text-muted-foreground">Rasio Ketepatan Waktu</p>
               <Award className="w-4 h-4 text-primary" />
             </div>
-            <p className="text-2xl font-bold text-foreground mt-1.5">{onTimeRateToday}%</p>
+            <p className="text-2xl font-bold text-emerald-600 mt-1.5">{onTimeRateToday}%</p>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              {todayLate} Keterlambatan hari ini
+              {todayLate} Terlambat hari ini
             </p>
           </CardContent>
         </Card>
@@ -215,12 +292,12 @@ export const HrmPimpinanDashboard: React.FC = () => {
         <Card className="border-border bg-card rounded-xl shadow-sm">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-medium text-muted-foreground">Departemen / Divisi</p>
+              <p className="text-xs font-medium text-muted-foreground">Unit Kerja / Divisi</p>
               <Building2 className="w-4 h-4 text-primary" />
             </div>
             <p className="text-2xl font-bold text-foreground mt-1.5">{divisions.length} Unit</p>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              Seluruh unit kerja aktif
+              Terpantau aktif di sistem
             </p>
           </CardContent>
         </Card>
@@ -228,76 +305,78 @@ export const HrmPimpinanDashboard: React.FC = () => {
         <Card className="border-border bg-card rounded-xl shadow-sm">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-medium text-muted-foreground">Permohonan Cuti</p>
+              <p className="text-xs font-medium text-muted-foreground">Permohonan Cuti & SPL</p>
               <FileCheck2 className="w-4 h-4 text-primary" />
             </div>
-            <p className="text-2xl font-bold text-foreground mt-1.5">{pendingLeaves.length} Berkas</p>
+            <p className="text-2xl font-bold text-amber-600 mt-1.5">{pendingLeaves.length} Berkas</p>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              Menunggu konfirmasi
+              Menunggu keputusan
             </p>
           </CardContent>
         </Card>
 
         <Card className={`border-border bg-card rounded-xl shadow-sm transition-colors ${activeBreachCount > 0 ? 'border-rose-500/40 bg-rose-500/5' : ''}`}>
-          <Link to="/monitoring">
+          <Link to="/admin/monitoring">
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-medium text-muted-foreground">Pelanggaran Perimeter</p>
+                <p className="text-xs font-medium text-muted-foreground">Pelanggaran Area</p>
                 <ShieldAlert className={`w-4 h-4 ${activeBreachCount > 0 ? 'text-rose-600 animate-pulse' : 'text-muted-foreground'}`} />
               </div>
               <p className={`text-2xl font-bold font-mono mt-1.5 ${activeBreachCount > 0 ? 'text-rose-600' : 'text-foreground'}`}>
                 {activeBreachCount} Kasus
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                Checkout dinonaktifkan
+                Monitoring perimeter pos
               </p>
             </CardContent>
           </Link>
         </Card>
       </div>
 
-      {/* Main Analytical Chart: Attendance Trends with Rate */}
+      {/* GRAFIK 1: TREN MULTI-BULAN (12 BULAN KOMPARATIF SEPANJANG TAHUN) */}
       <Card className="border-border bg-card rounded-xl shadow-sm">
         <CardHeader className="pb-2">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
+              <CardTitle className="text-base font-bold text-foreground flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-primary" />
-                Tren Produktivitas & Tingkat Kehadiran Eksekutif
+                Tren Kinerja 12 Bulan (Januari - Desember {selectedYear})
               </CardTitle>
               <CardDescription className="text-xs">
-                Pergerakan persentase kehadiran tepat waktu karyawan per hari.
+                Perbandingan volume kehadiran tepat waktu, keterlambatan, alpa/mangkir, dan jam lembur per bulan.
               </CardDescription>
             </div>
-
             <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Rentang:</span>
-              <Select value={timeframe} onValueChange={(val: any) => setTimeframe(val)}>
-                <SelectTrigger className="h-8 text-xs w-[130px] rounded-xl">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="7">7 Hari Terakhir</SelectItem>
-                  <SelectItem value="14">14 Hari Terakhir</SelectItem>
-                  <SelectItem value="30">30 Hari Terakhir</SelectItem>
-                </SelectContent>
-              </Select>
+              <Badge variant="outline" className="text-[11px] font-mono border-border bg-muted/40">
+                Tahun Buku {selectedYear}
+              </Badge>
             </div>
           </div>
         </CardHeader>
 
         <CardContent className="pt-2">
-          <div className="h-[270px] w-full">
+          <div className="h-[280px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <AreaChart
+                data={radarData?.monthlyTrends || []}
+                margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+              >
                 <defs>
-                  <linearGradient id="pimpinanGradient" x1="0" y1="0" x2="0" y2="1">
+                  <linearGradient id="hadirGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#0d9488" stopOpacity={0.35} />
                     <stop offset="95%" stopColor="#0d9488" stopOpacity={0.0} />
                   </linearGradient>
+                  <linearGradient id="lateGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.0} />
+                  </linearGradient>
+                  <linearGradient id="alpaGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#e11d48" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#e11d48" stopOpacity={0.0} />
+                  </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.6} />
-                <XAxis dataKey="displayDate" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <XAxis dataKey="month_name" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                 <Tooltip
                   contentStyle={{
@@ -307,113 +386,310 @@ export const HrmPimpinanDashboard: React.FC = () => {
                     fontSize: '12px',
                   }}
                 />
-                <Area
-                  type="monotone"
-                  dataKey="hadir"
-                  name="Tepat Waktu"
-                  stroke="#0d9488"
-                  strokeWidth={2.5}
-                  fillOpacity={1}
-                  fill="url(#pimpinanGradient)"
-                />
-                <Area
-                  type="monotone"
-                  dataKey="terlambat"
-                  name="Terlambat"
-                  stroke="#f59e0b"
-                  strokeWidth={2}
-                  fillOpacity={0.1}
-                  fill="#f59e0b"
-                />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }} />
+                <Area type="monotone" dataKey="hadir" name="Tepat Waktu" stroke="#0d9488" strokeWidth={2.5} fill="url(#hadirGrad)" />
+                <Area type="monotone" dataKey="terlambat" name="Terlambat" stroke="#f59e0b" strokeWidth={2} fill="url(#lateGrad)" />
+                <Area type="monotone" dataKey="mangkir" name="Mangkir (Alpa)" stroke="#e11d48" strokeWidth={2} fill="url(#alpaGrad)" />
+                <Line type="monotone" dataKey="lembur_jam" name="Jam Lembur" stroke="#3b82f6" strokeWidth={2} dot={false} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </CardContent>
       </Card>
 
-      {/* Division Performance Breakdown & Comparison */}
+      {/* DUA GRAFIK KOMPARASI: MATRIKS DIVISI & DETEKSI POLA HARI MINGGUAN */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Division On-Time Rate Bars */}
+        {/* Matriks Komparatif Divisi */}
         <Card className="border-border bg-card rounded-xl shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-bold text-foreground flex items-center gap-2">
               <Building2 className="w-4 h-4 text-primary" />
-              Tingkat Kedisiplinan per Divisi (Bulan Ini)
+              Matriks Kinerja Komparatif Antar Divisi ({selectedYear})
             </CardTitle>
             <CardDescription className="text-xs">
-              Persentase kehadiran tepat waktu karyawan pada masing-masing unit kerja.
+              Perbandingan tingkat kedisiplinan hadir, pelanggaran alpa, dan beban lembur tiap divisi.
             </CardDescription>
           </CardHeader>
-
-          <CardContent className="space-y-4">
-            {divisionAnalytics.map((d) => (
-              <div key={d.id} className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-semibold text-foreground">{d.name} ({d.code})</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground">{d.employeeCount} Karyawan</span>
-                    <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
-                      {d.onTimeRate}% Disiplin
-                    </Badge>
-                  </div>
-                </div>
-                <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary rounded-full transition-all duration-500"
-                    style={{ width: `${d.onTimeRate}%` }}
+          <CardContent className="pt-2">
+            <div className="h-[250px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={radarData?.divisionMatrix || []} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.6} />
+                  <XAxis dataKey="division_code" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#ffffff',
+                      borderRadius: '12px',
+                      border: '1px solid #e2e8f0',
+                      fontSize: '12px',
+                    }}
                   />
-                </div>
-              </div>
-            ))}
+                  <Legend iconType="circle" wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }} />
+                  <Bar dataKey="total_hadir" name="Total Hadir" fill="#0d9488" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="total_terlambat" name="Terlambat" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="total_mangkir" name="Alpa/Mangkir" fill="#e11d48" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </CardContent>
         </Card>
 
-        {/* Executive Action Directives Card */}
-        <Card className="border-border bg-card rounded-xl shadow-sm flex flex-col justify-between">
-          <CardHeader>
-            <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-              <Award className="w-4 h-4 text-primary" />
-              Rekomendasi Kebijakan & Catatan Pimpinan
+        {/* Deteksi Pola Hari Lapangan (Day of Week Critical Pattern) */}
+        <Card className="border-border bg-card rounded-xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <Activity className="w-4 h-4 text-amber-500" />
+              Deteksi Pola Hari Lapangan (Pola Keterlambatan & Alpa)
             </CardTitle>
             <CardDescription className="text-xs">
-              Analisis otomatis sistem berdasarkan data presensi terkini.
+              Membaca pola hari apa yang paling rawan terjadi pelanggaran jam masuk atau ketidakhadiran.
             </CardDescription>
           </CardHeader>
-
-          <CardContent className="space-y-3 text-xs">
-            <div className="p-3 bg-muted/40 border border-border rounded-xl space-y-1">
-              <p className="font-semibold text-foreground">Kedisiplinan Tertinggi:</p>
-              <p className="text-muted-foreground">
-                Divisi dengan tingkat ketepatan waktu terbaik adalah{' '}
-                <strong className="text-foreground">
-                  {divisionAnalytics[0]?.name || 'Teknologi Informasi'}
-                </strong>{' '}
-                dengan rasio kepatuhan{' '}
-                <span className="text-primary font-bold">
-                  {divisionAnalytics[0]?.onTimeRate || 100}%
-                </span>.
-              </p>
-            </div>
-
-            <div className="p-3 bg-muted/40 border border-border rounded-xl space-y-1">
-              <p className="font-semibold text-foreground">Pemantauan Pengajuan Izin:</p>
-              <p className="text-muted-foreground">
-                Terdapat <strong className="text-foreground">{pendingLeaves.length} permohonan cuti</strong> yang menunggu verifikasi pimpinan. Pastikan ketersediaan staf sebelum menyetujui jadwal cuti.
-              </p>
-            </div>
-
-            <div className="pt-2">
-              <Link to="/admin/laporan">
-                <Button className="w-full bg-primary hover:bg-primary/90 text-primary-foreground text-xs rounded-xl gap-2 font-medium">
-                  <FileSpreadsheet className="w-4 h-4" /> Buka Laporan Lengkap & Cetak Dokumen
-                </Button>
-              </Link>
+          <CardContent className="pt-2">
+            <div className="h-[250px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={radarData?.dayPatterns || []} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.6} />
+                  <XAxis dataKey="day_name" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#ffffff',
+                      borderRadius: '12px',
+                      border: '1px solid #e2e8f0',
+                      fontSize: '12px',
+                    }}
+                  />
+                  <Legend iconType="circle" wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }} />
+                  <Bar dataKey="total_terlambat" name="Terlambat" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="total_mangkir" name="Mangkir (Alpa)" fill="#e11d48" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Executive Financial & Payroll Overview Section */}
+      {/* WATCHLIST PEMBINAAN & PERSONIL TELADAN */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Watchlist Pembinaan */}
+        <Card className="border-border bg-card rounded-xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-bold text-foreground flex items-center gap-2 text-rose-600">
+              <AlertTriangle className="w-4 h-4" />
+              Watchlist Evaluasi & Pembinaan Kedisiplinan
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Personil dengan frekuensi mangkir atau keterlambatan tertinggi yang memerlukan arahan Direksi.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2.5 pt-2">
+            {watchlist.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-4 text-center">
+                Seluruh karyawan menunjukkan tingkat kedisiplinan yang memuaskan.
+              </p>
+            ) : (
+              watchlist.map((w) => (
+                <div key={w.user_id} className="p-2.5 bg-rose-500/5 border border-rose-500/20 rounded-xl flex items-center justify-between text-xs">
+                  <div>
+                    <p className="font-semibold text-foreground">{w.full_name}</p>
+                    <p className="text-[10.5px] text-muted-foreground font-mono">{w.nip} • {w.division_name}</p>
+                  </div>
+                  <div className="text-right">
+                    <Badge variant="destructive" className="text-[10px]">
+                      {w.total_mangkir > 0 ? `${w.total_mangkir} Alpa` : `${w.total_terlambat}x Telat`}
+                    </Badge>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">{w.total_late_minutes || 0} Menit telat</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Personil Paling Disiplin */}
+        <Card className="border-border bg-card rounded-xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-bold text-foreground flex items-center gap-2 text-emerald-600">
+              <Sparkles className="w-4 h-4" />
+              Personil Teladan & Kepatuhan Terbaik
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Karyawan dengan rekor kehadiran tepat waktu tertinggi tanpa catatan mangkir.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2.5 pt-2">
+            {topPerformers.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-4 text-center">Belum ada data rekapan.</p>
+            ) : (
+              topPerformers.map((t) => (
+                <div key={t.user_id} className="p-2.5 bg-emerald-500/5 border border-emerald-500/20 rounded-xl flex items-center justify-between text-xs">
+                  <div>
+                    <p className="font-semibold text-foreground">{t.full_name}</p>
+                    <p className="text-[10.5px] text-muted-foreground font-mono">{t.nip} • {t.division_name}</p>
+                  </div>
+                  <div className="text-right">
+                    <Badge className="bg-emerald-600 text-white text-[10px]">
+                      {t.tepat_waktu} Sesi Tepat
+                    </Badge>
+                    <p className="text-[10px] text-emerald-700 dark:text-emerald-400 mt-0.5">0 Alpa • Prima</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* REKAPAN KINERJA MENYELURUH PER INDIVIDU KARYAWAN (INDIVIDUAL DRILL-DOWN) */}
+      <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
+        <CardHeader className="border-b border-border bg-muted/20">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <CardTitle className="text-base font-bold text-foreground flex items-center gap-2">
+                <Users className="w-4 h-4 text-primary" />
+                Rekapan Data & Progres Kinerja Per Individu Karyawan
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Data komprehensif kehadiran, alpa, izin, dan lembur seluruh personil lintas divisi sepanjang tahun {selectedYear}.
+              </CardDescription>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <Select value={rosterDivisionFilter} onValueChange={setRosterDivisionFilter}>
+                <SelectTrigger className="h-8 text-xs rounded-xl w-[140px]">
+                  <SelectValue placeholder="Semua Divisi" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Divisi</SelectItem>
+                  {divisions.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Cari nama / NIP..."
+                  value={rosterSearch}
+                  onChange={(e) => setRosterSearch(e.target.value)}
+                  className="h-8 text-xs pl-8 rounded-xl w-[160px]"
+                />
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs text-foreground">
+            <thead className="bg-muted/40 border-b border-border uppercase text-[11px] text-muted-foreground font-medium tracking-wider">
+              <tr>
+                <th className="py-3 px-4">Nama & NIP</th>
+                <th className="py-3 px-4">Divisi</th>
+                <th className="py-3 px-4">Kehadiran</th>
+                <th className="py-3 px-4">Keterlambatan</th>
+                <th className="py-3 px-4">Mangkir (Alpa)</th>
+                <th className="py-3 px-4">Cuti & Sakit</th>
+                <th className="py-3 px-4">Lembur (SPL)</th>
+                <th className="py-3 px-4 text-right">Status Kepatuhan</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filteredRoster.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center text-muted-foreground">
+                    Tidak ada data personil ditemukan.
+                  </td>
+                </tr>
+              ) : (
+                filteredRoster.map((r) => {
+                  const hadir = Number(r.total_hadir || 0);
+                  const tepat = Number(r.tepat_waktu || 0);
+                  const telat = Number(r.total_terlambat || 0);
+                  const alpa = Number(r.total_mangkir || 0);
+                  const cuti = Number(r.total_cuti || 0);
+                  const sakit = Number(r.total_sakit || 0);
+                  const otHours = Number(r.total_lembur_hours || 0);
+                  const punctuality = hadir > 0 ? Math.round((tepat / hadir) * 100) : 100;
+
+                  return (
+                    <tr key={r.user_id} className="hover:bg-muted/30 transition-colors">
+                      <td className="py-3 px-4">
+                        <p className="font-semibold text-foreground">{r.full_name}</p>
+                        <p className="text-[11px] text-muted-foreground font-mono">{r.nip}</p>
+                      </td>
+                      <td className="py-3 px-4">
+                        <p className="font-medium text-foreground">{r.division_name || 'Operasional'}</p>
+                        <p className="text-[10px] text-muted-foreground capitalize">{r.role_name || 'Staf'}</p>
+                      </td>
+                      <td className="py-3 px-4 font-mono">
+                        <span className="font-semibold text-emerald-600">{tepat} Tepat</span>
+                        <span className="text-[10px] text-muted-foreground block">dari {hadir} hadir</span>
+                      </td>
+                      <td className="py-3 px-4 font-mono">
+                        {telat > 0 ? (
+                          <div>
+                            <span className="font-semibold text-amber-600">{telat}x</span>
+                            <span className="text-[10px] text-muted-foreground block">({r.total_late_minutes || 0} mnt)</span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">0x</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
+                        {alpa > 0 ? (
+                          <Badge variant="destructive" className="text-[10px] font-bold">
+                            {alpa} Hari Alpa
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-[10px]">Nihil</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 font-mono text-[11px]">
+                        <span>{cuti} Cuti</span>
+                        <span className="text-muted-foreground block text-[10px]">{sakit} Sakit</span>
+                      </td>
+                      <td className="py-3 px-4 font-mono text-[11px]">
+                        {otHours > 0 ? (
+                          <div>
+                            <span className="font-semibold text-blue-600">{otHours} Jam</span>
+                            <span className="text-[10px] text-muted-foreground block">
+                              Rp {Number(r.total_lembur_comp || 0).toLocaleString('id-ID')}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground text-[10px]">0 Jam</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        {alpa > 1 ? (
+                          <Badge variant="outline" className="bg-rose-500/10 text-rose-600 border-rose-500/20 text-[10px]">
+                            Perlu Pembinaan
+                          </Badge>
+                        ) : punctuality >= 90 ? (
+                          <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px]">
+                            {punctuality}% Disiplin
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20 text-[10px]">
+                            {punctuality}% Waspada
+                          </Badge>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* EXECUTIVE FINANCIAL & PAYROLL OVERVIEW */}
       <Card className="border-border bg-card rounded-xl shadow-sm">
         <CardHeader className="pb-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">

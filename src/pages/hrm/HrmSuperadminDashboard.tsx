@@ -17,12 +17,14 @@ import {
   Award,
   Upload,
   ShieldAlert,
+  Activity,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Link } from 'react-router-dom';
+import { HrmPimpinanDashboard } from './HrmPimpinanDashboard';
 import {
   AreaChart,
   Area,
@@ -41,6 +43,7 @@ import {
 
 export const HrmSuperadminDashboard: React.FC = () => {
   const { user } = useHrmAuth();
+  const [viewMode, setViewMode] = useState<'admin' | 'executive'>('admin');
   const [userCount, setUserCount] = useState(0);
   const [roleCount, setRoleCount] = useState(0);
   const [divisionCount, setDivisionCount] = useState(0);
@@ -95,6 +98,27 @@ export const HrmSuperadminDashboard: React.FC = () => {
     { name: 'Belum Hadir', value: Math.max(totalEmployees - todayAttCount, 0), color: '#cbd5e1' }, // slate
   ];
 
+  if (viewMode === 'executive') {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between p-3.5 bg-card border border-border rounded-xl">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setViewMode('admin')}
+            className="rounded-xl text-xs gap-1.5 font-semibold h-8"
+          >
+            ← Kembali ke Pusat Kendali Superadmin
+          </Button>
+          <div className="flex items-center gap-2">
+            <Badge className="bg-emerald-600 text-white text-xs">Radar Eksekutif Direksi Aktif</Badge>
+          </div>
+        </div>
+        <HrmPimpinanDashboard />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Superadmin Header Card - Clean & Uniform */}
@@ -114,6 +138,12 @@ export const HrmSuperadminDashboard: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={() => setViewMode('executive')}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-sm rounded-xl gap-1.5 h-9"
+            >
+              <Activity className="w-3.5 h-3.5" /> Radar Analisis Direksi
+            </Button>
             <Link to="/admin/karyawan">
               <Button className="bg-primary hover:bg-primary/90 text-primary-foreground font-medium text-xs shadow-sm rounded-xl gap-1.5 h-9">
                 <Users className="w-3.5 h-3.5" /> Daftarkan Karyawan

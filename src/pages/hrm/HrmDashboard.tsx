@@ -16,7 +16,7 @@ export const HrmDashboard: React.FC = () => {
   if (['admin', 'hrd'].includes(cleanRole) || cleanRole.includes('admin') || cleanRole.includes('hrd')) {
     return <HrmHrdDashboard />;
   }
-  if (cleanRole === 'pimpinan') {
+  if (cleanRole === 'pimpinan' || cleanRole.includes('pimpinan') || cleanRole === 'dirut' || cleanRole.includes('dirut')) {
     return <HrmPimpinanDashboard />;
   }
   if (cleanRole === 'keuangan') {

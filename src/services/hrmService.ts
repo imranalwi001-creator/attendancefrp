@@ -4806,4 +4806,36 @@ export const hrmService = {
       return { success: false, error: err.message || 'Gagal memproses persetujuan Korlap' };
     }
   },
+
+  getFieldRecap: async (params?: {
+    period?: 'current_month' | 'last_month' | 'year' | 'ytd' | 'tahunan';
+    divisionId?: string;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<{ success: boolean; data?: { summary: any; roster: any[] }; error?: string }> => {
+    try {
+      const query = new URLSearchParams(params as any).toString();
+      const res = await api.get<{ success: boolean; data?: { summary: any; roster: any[] }; error?: string }>(
+        `/analytics/field-recap?${query}`
+      );
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Gagal memuat data rekapan lapangan' };
+    }
+  },
+
+  getExecutiveRadar: async (params?: {
+    year?: number;
+    month?: number;
+  }): Promise<{ success: boolean; data?: any; error?: string }> => {
+    try {
+      const query = new URLSearchParams(params as any).toString();
+      const res = await api.get<{ success: boolean; data?: any; error?: string }>(
+        `/analytics/executive-radar?${query}`
+      );
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Gagal memuat executive radar analytics' };
+    }
+  },
 };

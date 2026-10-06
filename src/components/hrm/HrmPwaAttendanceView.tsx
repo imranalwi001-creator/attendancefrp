@@ -42,7 +42,11 @@ import {
   Filter,
   CheckCheck,
   Zap,
+  ShieldCheck,
+  Briefcase,
+  Users,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { biometricService, BiometricMatchResult } from '@/services/biometricService';
 import { livenessEngine } from '@/services/livenessEngine';
@@ -1998,6 +2002,129 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <span className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900" />
               </div>
             </div>
+
+            {/* ─── ROLE-ADAPTIVE SUPERVISORY & EXECUTIVE ACTION BANNERS ─── */}
+            {(() => {
+              const rClean = (user?.roleName || user?.role || '').toLowerCase();
+              const isKorlapRole = rClean.includes('korlap') || rClean.includes('koordinator');
+              const isK3Role = rClean.includes('k3') || rClean.includes('hse') || rClean.includes('keselamatan');
+              const isAdminRole = rClean.includes('admin') || rClean.includes('hrd');
+              const isDirutOrPimpinan = rClean.includes('pimpinan') || rClean.includes('dirut') || rClean.includes('superadmin');
+
+              if (isDirutOrPimpinan) {
+                return (
+                  <div className="p-3 bg-gradient-to-r from-purple-500/10 via-indigo-500/5 to-transparent border border-purple-500/30 rounded-2xl flex items-center justify-between gap-2.5 text-xs shadow-xs">
+                    <div className="min-w-0">
+                      <div className="font-bold text-purple-950 dark:text-purple-200 flex items-center gap-1.5 truncate">
+                        <Briefcase className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                        <span>Portal Eksekutif: Direktur Utama & Pimpinan</span>
+                      </div>
+                      <p className="text-[10px] text-purple-800 dark:text-purple-300 mt-0.5 truncate">
+                        Persetujuan Tier 2 & radar analitik kinerja organisasi.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Link to="/dashboard">
+                        <Button size="sm" className="h-7.5 px-2.5 text-[11px] bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-xs">
+                          Radar Direksi
+                        </Button>
+                      </Link>
+                      <Link to="/admin/approval">
+                        <Button size="sm" variant="outline" className="h-7.5 px-2 text-[11px] border-purple-500/40 text-purple-700 dark:text-purple-300 rounded-xl">
+                          Approval
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                );
+              }
+
+              if (isKorlapRole) {
+                return (
+                  <div className="p-3 bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-transparent border border-emerald-500/30 rounded-2xl flex items-center justify-between gap-2.5 text-xs shadow-xs">
+                    <div className="min-w-0">
+                      <div className="font-bold text-emerald-950 dark:text-emerald-200 flex items-center gap-1.5 truncate">
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>Otoritas Lapangan: Korlap</span>
+                      </div>
+                      <p className="text-[10px] text-emerald-800 dark:text-emerald-300 mt-0.5 truncate">
+                        Persetujuan cuti/SPL tim (First-Responder) & rekap pos.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Link to="/admin/approval">
+                        <Button size="sm" className="h-7.5 px-2.5 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs">
+                          Approval Hub
+                        </Button>
+                      </Link>
+                      <Link to="/admin/approval?tab=recap">
+                        <Button size="sm" variant="outline" className="h-7.5 px-2 text-[11px] border-emerald-500/40 text-emerald-700 dark:text-emerald-300 rounded-xl">
+                          Rekap Tim
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                );
+              }
+
+              if (isK3Role) {
+                return (
+                  <div className="p-3 bg-gradient-to-r from-amber-500/10 via-yellow-500/5 to-transparent border border-amber-500/30 rounded-2xl flex items-center justify-between gap-2.5 text-xs shadow-xs">
+                    <div className="min-w-0">
+                      <div className="font-bold text-amber-950 dark:text-amber-200 flex items-center gap-1.5 truncate">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>Otoritas Pengawas: Keselamatan Kerja & K3</span>
+                      </div>
+                      <p className="text-[10px] text-amber-800 dark:text-amber-300 mt-0.5 truncate">
+                        Validasi izin sakit, kebugaran staf & persetujuan SPL.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Link to="/admin/approval">
+                        <Button size="sm" className="h-7.5 px-2.5 text-[11px] bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-xs">
+                          Approval Hub
+                        </Button>
+                      </Link>
+                      <Link to="/admin/approval?tab=recap">
+                        <Button size="sm" variant="outline" className="h-7.5 px-2 text-[11px] border-amber-500/40 text-amber-700 dark:text-amber-300 rounded-xl">
+                          Rekap Tim
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                );
+              }
+
+              if (isAdminRole) {
+                return (
+                  <div className="p-3 bg-gradient-to-r from-sky-500/10 via-blue-500/5 to-transparent border border-sky-500/30 rounded-2xl flex items-center justify-between gap-2.5 text-xs shadow-xs">
+                    <div className="min-w-0">
+                      <div className="font-bold text-sky-950 dark:text-sky-200 flex items-center gap-1.5 truncate">
+                        <Users className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                        <span>Otoritas Pengawas: Admin Operasional</span>
+                      </div>
+                      <p className="text-[10px] text-sky-800 dark:text-sky-300 mt-0.5 truncate">
+                        Pusat verifikasi berkas permohonan staf & rekapitulasi.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Link to="/admin/approval">
+                        <Button size="sm" className="h-7.5 px-2.5 text-[11px] bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl shadow-xs">
+                          Approval Hub
+                        </Button>
+                      </Link>
+                      <Link to="/admin/approval?tab=recap">
+                        <Button size="sm" variant="outline" className="h-7.5 px-2 text-[11px] border-sky-500/40 text-sky-700 dark:text-sky-300 rounded-xl">
+                          Rekap Tim
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                );
+              }
+
+              return null;
+            })()}
 
             {/* ─── LINGKARAN KAMERA BIOMETRIK (CENTERPIECE PERSIS LAMPIRAN 2 - FIXED SIZING) ─── */}
             <div className="flex flex-col items-center justify-center py-1">

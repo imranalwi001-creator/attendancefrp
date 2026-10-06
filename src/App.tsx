@@ -103,11 +103,11 @@ export const App: React.FC = () => {
                   }
                 />
 
-                {/* Admin / HRD / Pimpinan / Keuangan Management Routes */}
+                {/* Admin / HRD / Pimpinan / Dirut / Keuangan / Pengawas / Korlap / K3 Management Routes */}
                 <Route
                   path="/admin/approval"
                   element={
-                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu']}>
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'pengawas', 'korlap', 'k3', 'kepala_regu']}>
                       <HrmApprovalPage />
                     </HrmProtectedRoute>
                   }
@@ -116,7 +116,7 @@ export const App: React.FC = () => {
                 <Route
                   path="/admin/monitoring"
                   element={
-                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu']}>
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'pengawas', 'korlap', 'k3', 'kepala_regu']}>
                       <HrmLiveMonitoringPage />
                     </HrmProtectedRoute>
                   }
@@ -125,7 +125,7 @@ export const App: React.FC = () => {
                 <Route
                   path="/admin/laporan"
                   element={
-                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'keuangan', 'pengawas', 'korlap', 'kepala_regu']}>
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'keuangan', 'pengawas', 'korlap', 'k3', 'kepala_regu']}>
                       <HrmReportsPage />
                     </HrmProtectedRoute>
                   }
@@ -171,7 +171,7 @@ export const App: React.FC = () => {
                 <Route
                   path="/admin/payroll"
                   element={
-                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'keuangan', 'pimpinan']}>
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'keuangan', 'pimpinan', 'dirut']}>
                       <HrmPayrollPage />
                     </HrmProtectedRoute>
                   }

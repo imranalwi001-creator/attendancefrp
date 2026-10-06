@@ -50,20 +50,60 @@ export const HrmApprovalPage: React.FC = () => {
   const [shiftSwaps, setShiftSwaps] = useState<ShiftSwapRecord[]>([]);
   const [loadingSwaps, setLoadingSwaps] = useState(false);
 
-  // User role checking (Korlap, Admin, K3, Danru, Superadmin)
+  // User role checking (Korlap, Admin, K3, Danru, Superadmin, Dirut, Pimpinan)
   const userRoleName = (user?.roleName || user?.role || '').toLowerCase();
   const isSuperAdmin = userRoleName.includes('superadmin');
+  const isDirut = userRoleName.includes('dirut');
+  const isPimpinan = isSuperAdmin || isDirut || userRoleName.includes('pimpinan');
   const isKorlap = isSuperAdmin || userRoleName.includes('korlap') || userRoleName.includes('koordinator');
   const isDanru = isSuperAdmin || userRoleName.includes('danru') || userRoleName.includes('regu') || userRoleName.includes('pengawas');
   const isK3 = isSuperAdmin || userRoleName.includes('k3') || userRoleName.includes('hse') || userRoleName.includes('keselamatan');
   const isAdmin = isSuperAdmin || userRoleName.includes('admin') || userRoleName.includes('hrd');
-  const canApprove = isSuperAdmin || isKorlap || isDanru || isK3 || isAdmin;
+  const canApprove = isSuperAdmin || isPimpinan || isKorlap || isDanru || isK3 || isAdmin;
 
-  // Recap Filter States
+  // Cek apakah pemohon adalah Pejabat Pengawas (Korlap / Admin / K3)
+  const isSupervisorApplicant = (userId: string, userNip?: string, forwardedToPimpinan?: boolean) => {
+    if (forwardedToPimpinan) return true;
+    const applicant = users.find((u) => u.id === userId || (userNip && u.nip === userNip));
+    const roleCode = (applicant?.role || applicant?.roleName || '').toLowerCase();
+    if (['korlap', 'admin', 'k3', 'koordinator'].includes(roleCode) || roleCode.includes('korlap') || roleCode.includes('k3')) {
+      return true;
+    }
+    const knownSupervisorNips = ['frp 07065', 'fr.07.066', 'fr07065', 'fr07066', 'adm001', 'emp008'];
+    if (userNip && knownSupervisorNips.includes(userNip.toLowerCase().trim())) return true;
+    return false;
+  };
+
+  // Recap Filter States (Log Transaksi Berkas)
   const [recapTypeFilter, setRecapTypeFilter] = useState<string>('all');
   const [recapStatusFilter, setRecapStatusFilter] = useState<string>('all');
   const [recapMonthFilter, setRecapMonthFilter] = useState<'current' | 'all'>('current');
   const [recapSearch, setRecapSearch] = useState('');
+
+  // Field Team Performance Recap (Kehadiran, Terlambat, Mangkir, Cuti, Sakit, Lembur dari API)
+  const [fieldRecapPeriod, setFieldRecapPeriod] = useState<'current_month' | 'last_month' | 'year'>('current_month');
+  const [fieldRecapDivision, setFieldRecapDivision] = useState<string>('all');
+  const [fieldRecapSearch, setFieldRecapSearch] = useState<string>('');
+  const [fieldRecapData, setFieldRecapData] = useState<{ summary: any; roster: any[] } | null>(null);
+  const [loadingFieldRecap, setLoadingFieldRecap] = useState(false);
+  const [divisions, setDivisions] = useState(hrmService.getDivisions());
+
+  const loadFieldRecap = async () => {
+    setLoadingFieldRecap(true);
+    try {
+      const res = await hrmService.getFieldRecap({
+        period: fieldRecapPeriod,
+        divisionId: fieldRecapDivision !== 'all' ? fieldRecapDivision : undefined,
+      });
+      if (res && res.success && res.data) {
+        setFieldRecapData(res.data);
+      }
+    } catch (e) {
+      console.warn('Failed to load field recap:', e);
+    } finally {
+      setLoadingFieldRecap(false);
+    }
+  };
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -77,6 +117,13 @@ export const HrmApprovalPage: React.FC = () => {
       setActiveTab('recap');
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    if (activeTab === 'recap') {
+      loadFieldRecap();
+    }
+  }, [activeTab, fieldRecapPeriod, fieldRecapDivision]);
+
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('pending');
   const [searchQuery, setSearchQuery] = useState('');
@@ -732,11 +779,24 @@ export const HrmApprovalPage: React.FC = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredLeaves.map((l) => (
+                  filteredLeaves.map((l) => {
+                    const isSup = isSupervisorApplicant(l.userId, l.userNip, (l as any).forwardedToPimpinan || (l as any).forwarded_to_pimpinan);
+                    const canCurrentApproveThis = isSup ? (isPimpinan || isDirut || isSuperAdmin) : canApprove;
+
+                    return (
                     <tr key={l.id} className="hover:bg-muted/30">
                       <td className="py-3 px-4">
                         <p className="font-semibold text-foreground">{l.userName}</p>
                         <p className="text-[11px] text-muted-foreground font-mono">{l.userNip} • {l.divisionName}</p>
+                        {isSup ? (
+                          <Badge variant="outline" className="mt-1 bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[9.5px] rounded-md font-semibold flex items-center gap-1 w-fit">
+                            👑 Pejabat Pengawas (Tier 2 Direksi)
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="mt-1 bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/30 text-[9px] rounded-md flex items-center gap-1 w-fit">
+                            ⚡ First-Responder: Korlap / Admin / K3
+                          </Badge>
+                        )}
                       </td>
                       <td className="py-3 px-4 font-medium text-foreground uppercase text-[11px]">
                         {l.leaveType.replace('_', ' ')}
@@ -783,25 +843,36 @@ export const HrmApprovalPage: React.FC = () => {
                       </td>
                       <td className="py-3 px-4 text-right">
                         {l.status === 'pending' ? (
-                          <div className="flex items-center justify-end gap-1">
-                            <Button
-                              size="sm"
-                              onClick={() => handleOpenProcess(l, 'approved')}
-                              className="h-8 w-8 p-0 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors"
-                              title="Setujui Pengajuan"
-                            >
-                              <CheckCircle2 className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleOpenProcess(l, 'rejected')}
-                              className="h-8 w-8 p-0 text-destructive border-destructive/20 hover:bg-destructive/10 rounded-lg transition-colors"
-                              title="Tolak Pengajuan"
-                            >
-                              <XCircle className="w-4 h-4" />
-                            </Button>
-                          </div>
+                          canCurrentApproveThis ? (
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                size="sm"
+                                onClick={() => handleOpenProcess(l, 'approved')}
+                                className="h-8 w-8 p-0 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors"
+                                title={isSup ? "Setujui Tingkat Direksi" : "Setujui Pengajuan (First-Responder)"}
+                              >
+                                <CheckCircle2 className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleOpenProcess(l, 'rejected')}
+                                className="h-8 w-8 p-0 text-destructive border-destructive/20 hover:bg-destructive/10 rounded-lg transition-colors"
+                                title="Tolak Pengajuan"
+                              >
+                                <XCircle className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-end gap-0.5">
+                              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30">
+                                Wewenang Direksi
+                              </Badge>
+                              <span className="text-[9px] text-muted-foreground text-right">
+                                Menunggu Dirut / Pimpinan
+                              </span>
+                            </div>
+                          )
                         ) : (
                           <span className="text-[11px] text-muted-foreground italic">
                             Selesai oleh {l.approvedByName || 'Approver'}
@@ -809,7 +880,8 @@ export const HrmApprovalPage: React.FC = () => {
                         )}
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -841,11 +913,24 @@ export const HrmApprovalPage: React.FC = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredOvertime.map((o) => (
+                  filteredOvertime.map((o) => {
+                    const isSup = isSupervisorApplicant(o.userId, o.userNip, (o as any).forwardedToPimpinan || (o as any).forwarded_to_pimpinan);
+                    const canCurrentApproveThis = isSup ? (isPimpinan || isDirut || isSuperAdmin) : canApprove;
+
+                    return (
                     <tr key={o.id} className="hover:bg-muted/30">
                       <td className="py-3 px-4">
                         <p className="font-semibold text-foreground">{o.userName}</p>
                         <p className="text-[11px] text-muted-foreground font-mono">{o.userNip} • {o.divisionName}</p>
+                        {isSup ? (
+                          <Badge variant="outline" className="mt-1 bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[9.5px] rounded-md font-semibold flex items-center gap-1 w-fit">
+                            👑 Pejabat Pengawas (Tier 2 Direksi)
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="mt-1 bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/30 text-[9px] rounded-md flex items-center gap-1 w-fit">
+                            ⚡ First-Responder: Korlap / Admin / K3
+                          </Badge>
+                        )}
                       </td>
                       <td className="py-3 px-4 font-mono text-[11px]">
                         <p className="text-foreground font-medium">{o.date}</p>
@@ -903,25 +988,36 @@ export const HrmApprovalPage: React.FC = () => {
                       </td>
                       <td className="py-3 px-4 text-right">
                         {o.status === 'pending' ? (
-                          <div className="flex items-center justify-end gap-1">
-                            <Button
-                              size="sm"
-                              onClick={() => handleOpenOtProcess(o, 'approved')}
-                              className="h-8 w-8 p-0 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors"
-                              title="Setujui Lembur"
-                            >
-                              <CheckCircle2 className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleOpenOtProcess(o, 'rejected')}
-                              className="h-8 w-8 p-0 text-destructive border-destructive/20 hover:bg-destructive/10 rounded-lg transition-colors"
-                              title="Tolak Lembur"
-                            >
-                              <XCircle className="w-4 h-4" />
-                            </Button>
-                          </div>
+                          canCurrentApproveThis ? (
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                size="sm"
+                                onClick={() => handleOpenOtProcess(o, 'approved')}
+                                className="h-8 w-8 p-0 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors"
+                                title={isSup ? "Setujui Lembur (Wewenang Direksi)" : "Setujui Lembur (First-Responder)"}
+                              >
+                                <CheckCircle2 className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleOpenOtProcess(o, 'rejected')}
+                                className="h-8 w-8 p-0 text-destructive border-destructive/20 hover:bg-destructive/10 rounded-lg transition-colors"
+                                title="Tolak Lembur"
+                              >
+                                <XCircle className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-end gap-0.5">
+                              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30">
+                                Wewenang Direksi
+                              </Badge>
+                              <span className="text-[9px] text-muted-foreground text-right">
+                                Menunggu Dirut / Pimpinan
+                              </span>
+                            </div>
+                          )
                         ) : o.status === 'approved' ? (
                           <div className="flex items-center justify-end gap-1">
                             {o.paymentStatus !== 'included_in_payroll' && (
@@ -954,7 +1050,8 @@ export const HrmApprovalPage: React.FC = () => {
                         )}
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -1174,51 +1271,310 @@ export const HrmApprovalPage: React.FC = () => {
           </Card>
         </div>
       ) : (
-        /* ─── REKAP REALTIME SELURUH KARYAWAN (CUTI, LEMBUR, IZIN, IZIN DARURAT) ─── */
-        <div className="space-y-4">
-          {/* KPI Summary Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <Card className="p-3.5 bg-card border-border rounded-xl">
-              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wider">Total Rekap Bulan Ini</p>
-              <p className="text-xl font-bold text-foreground mt-1">{recapSummary.totalThisMonth} <span className="text-xs font-normal text-muted-foreground">Pengajuan</span></p>
-              <p className="text-[10.5px] text-amber-600 font-semibold mt-0.5">{recapSummary.pendingTotal} Menunggu Approval</p>
+        /* ─── REKAP KINERJA TIM LAPANGAN & BERKAS REALTIME (KORLAP, ADMIN, K3) ─── */
+        <div className="space-y-6">
+          {/* Header Penjelasan Pengawasan Lapangan */}
+          <div className="p-4 bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-transparent border border-emerald-500/20 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Portal Pengawas: Korlap, Admin & K3</span>
+              </div>
+              <h2 className="text-base font-bold text-foreground">
+                Rekapan Kinerja, Kehadiran, Mangkir & Lembur Tim Lapangan
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Monitoring menyeluruh progres kedisiplinan dan kepatuhan jam kerja per individu karyawan ({fieldRecapPeriod === 'last_month' ? 'Bulan Lalu' : fieldRecapPeriod === 'year' ? 'Akumulasi Tahunan' : 'Bulan Berjalan Live'}).
+              </p>
+            </div>
+
+            {/* Filter Toolbar untuk Rekap Lapangan */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex rounded-xl bg-muted/60 p-0.5 border border-border">
+                <button
+                  type="button"
+                  onClick={() => setFieldRecapPeriod('current_month')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    fieldRecapPeriod === 'current_month'
+                      ? 'bg-card text-foreground shadow-xs font-bold border border-border/80'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Bulan Berjalan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFieldRecapPeriod('last_month')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    fieldRecapPeriod === 'last_month'
+                      ? 'bg-card text-foreground shadow-xs font-bold border border-border/80'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Bulan Lalu
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFieldRecapPeriod('year')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    fieldRecapPeriod === 'year'
+                      ? 'bg-card text-foreground shadow-xs font-bold border border-border/80'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Tahunan (YTD)
+                </button>
+              </div>
+
+              <Select value={fieldRecapDivision} onValueChange={setFieldRecapDivision}>
+                <SelectTrigger className="h-9 text-xs rounded-xl w-[150px]">
+                  <SelectValue placeholder="Semua Divisi" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Divisi</SelectItem>
+                  {divisions.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* KPI Summary Cards Lapangan */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <Card className="p-3 bg-card border-border rounded-xl">
+              <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Total Personil</p>
+              <p className="text-xl font-bold text-foreground mt-1">
+                {fieldRecapData?.summary?.totalEmployees ?? users.length} <span className="text-xs font-normal text-muted-foreground">Staf</span>
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">Aktif di sistem</p>
             </Card>
 
-            <Card className="p-3.5 bg-card border-border rounded-xl">
-              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wider">Cuti & Izin Disetujui</p>
-              <p className="text-xl font-bold text-emerald-600 mt-1">{recapSummary.approvedLeaves} <span className="text-xs font-normal text-muted-foreground">Berkas</span></p>
-              <p className="text-[10.5px] text-muted-foreground mt-0.5">Termasuk Cuti Tahunan & Sakit</p>
+            <Card className="p-3 bg-card border-border rounded-xl">
+              <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Tepat Waktu</p>
+              <p className="text-xl font-bold text-emerald-600 mt-1">
+                {fieldRecapData?.summary?.totalTepatWaktu ?? 0} <span className="text-xs font-normal text-muted-foreground">Sesi</span>
+              </p>
+              <p className="text-[10px] text-emerald-700 dark:text-emerald-400 mt-0.5">
+                dari {fieldRecapData?.summary?.totalHadir ?? 0} Hadir
+              </p>
             </Card>
 
-            <Card className="p-3.5 bg-card border-border rounded-xl">
-              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wider">Izin Darurat</p>
-              <p className="text-xl font-bold text-rose-600 mt-1">{recapSummary.emergencyLeaves} <span className="text-xs font-normal text-muted-foreground">Kasus</span></p>
-              <p className="text-[10.5px] text-rose-500 font-semibold mt-0.5">Self-Service Pulang Cepat</p>
+            <Card className="p-3 bg-card border-border rounded-xl">
+              <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Terlambat</p>
+              <p className="text-xl font-bold text-amber-600 mt-1">
+                {fieldRecapData?.summary?.totalTerlambat ?? 0} <span className="text-xs font-normal text-muted-foreground">Kali</span>
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">Pelanggaran jam</p>
             </Card>
 
-            <Card className="p-3.5 bg-card border-border rounded-xl">
-              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wider">Lembur Disetujui (SPL)</p>
-              <p className="text-xl font-bold text-blue-600 mt-1">{recapSummary.approvedOvertimes} <span className="text-xs font-normal text-muted-foreground">SPL ({recapSummary.totalOtHours} Jam)</span></p>
-              <p className="text-[10.5px] text-muted-foreground mt-0.5">Siap masuk slip payroll</p>
+            <Card className="p-3 bg-card border-border rounded-xl">
+              <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Mangkir / Alpa</p>
+              <p className="text-xl font-bold text-rose-600 mt-1">
+                {fieldRecapData?.summary?.totalMangkir ?? 0} <span className="text-xs font-normal text-muted-foreground">Hari</span>
+              </p>
+              <p className="text-[10px] text-rose-500 font-semibold mt-0.5">Tanpa izin sah</p>
+            </Card>
+
+            <Card className="p-3 bg-card border-border rounded-xl">
+              <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Cuti & Sakit</p>
+              <p className="text-xl font-bold text-sky-600 mt-1">
+                {(fieldRecapData?.summary?.totalCuti ?? 0) + (fieldRecapData?.summary?.totalSakit ?? 0)} <span className="text-xs font-normal text-muted-foreground">Hari</span>
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                {fieldRecapData?.summary?.totalCuti ?? 0} Cuti / {fieldRecapData?.summary?.totalSakit ?? 0} Sakit
+              </p>
+            </Card>
+
+            <Card className="p-3 bg-card border-border rounded-xl">
+              <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Lembur (SPL)</p>
+              <p className="text-xl font-bold text-blue-600 mt-1">
+                {fieldRecapData?.summary?.totalLemburHours ?? 0} <span className="text-xs font-normal text-muted-foreground">Jam</span>
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">Disetujui sah</p>
             </Card>
           </div>
 
-          {/* Filter Bar */}
-          <Card className="p-3.5 bg-card border-border rounded-xl space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="relative flex-1">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Cari karyawan berdasarkan nama, NIP, atau keterangan..."
-                  value={recapSearch}
-                  onChange={(e) => setRecapSearch(e.target.value)}
-                  className="pl-9 h-9 text-xs rounded-xl"
-                />
+          {/* Search Toolbar Roster Lapangan */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Cari personil lapangan berdasarkan Nama, NIP, atau Divisi..."
+                value={fieldRecapSearch}
+                onChange={(e) => setFieldRecapSearch(e.target.value)}
+                className="pl-9 h-9 text-xs rounded-xl"
+              />
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Menampilkan {fieldRecapData?.roster?.filter((r) => !fieldRecapSearch || r.full_name?.toLowerCase().includes(fieldRecapSearch.toLowerCase()) || r.nip?.toLowerCase().includes(fieldRecapSearch.toLowerCase())).length ?? 0} personil
+            </div>
+          </div>
+
+          {/* TABEL ROSTER KINERJA PERSONIL LAPANGAN */}
+          <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
+            <div className="p-3.5 bg-muted/30 border-b border-border flex items-center justify-between">
+              <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-primary" />
+                Roster Rekapan Kinerja Individu Lapangan ({fieldRecapPeriod === 'last_month' ? 'Bulan Lalu' : fieldRecapPeriod === 'year' ? 'Tahunan' : 'Bulan Berjalan'})
+              </span>
+              {loadingFieldRecap && (
+                <span className="text-[11px] text-muted-foreground animate-pulse">
+                  Sinkronisasi database live...
+                </span>
+              )}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-foreground">
+                <thead className="bg-muted/40 border-b border-border uppercase text-[11px] text-muted-foreground font-medium tracking-wider">
+                  <tr>
+                    <th className="py-3 px-4">Personil</th>
+                    <th className="py-3 px-4">Divisi & Peran</th>
+                    <th className="py-3 px-4">Kehadiran</th>
+                    <th className="py-3 px-4">Keterlambatan</th>
+                    <th className="py-3 px-4">Mangkir (Alpa)</th>
+                    <th className="py-3 px-4">Cuti / Sakit</th>
+                    <th className="py-3 px-4">Lembur (SPL)</th>
+                    <th className="py-3 px-4 text-right">Indeks Disiplin</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {loadingFieldRecap && !fieldRecapData ? (
+                    <tr>
+                      <td colSpan={8} className="py-8 text-center text-muted-foreground">
+                        Memuat data rekapan kinerja lapangan...
+                      </td>
+                    </tr>
+                  ) : (fieldRecapData?.roster || []).filter((r) =>
+                      !fieldRecapSearch ||
+                      r.full_name?.toLowerCase().includes(fieldRecapSearch.toLowerCase()) ||
+                      r.nip?.toLowerCase().includes(fieldRecapSearch.toLowerCase()) ||
+                      r.division_name?.toLowerCase().includes(fieldRecapSearch.toLowerCase())
+                    ).length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-8 text-center text-muted-foreground">
+                        Tidak ada data kinerja personil yang cocok dengan filter pencarian.
+                      </td>
+                    </tr>
+                  ) : (
+                    (fieldRecapData?.roster || [])
+                      .filter((r) =>
+                        !fieldRecapSearch ||
+                        r.full_name?.toLowerCase().includes(fieldRecapSearch.toLowerCase()) ||
+                        r.nip?.toLowerCase().includes(fieldRecapSearch.toLowerCase()) ||
+                        r.division_name?.toLowerCase().includes(fieldRecapSearch.toLowerCase())
+                      )
+                      .map((row) => {
+                        const totalHadir = Number(row.total_hadir || 0);
+                        const tepatWaktu = Number(row.tepat_waktu || 0);
+                        const terlambat = Number(row.total_terlambat || 0);
+                        const mangkir = Number(row.total_mangkir || 0);
+                        const cuti = Number(row.total_cuti || 0);
+                        const sakit = Number(row.total_sakit || 0);
+                        const lemburJam = Number(row.total_lembur_hours || 0);
+                        const lemburComp = Number(row.total_lembur_comp || 0);
+
+                        const punctualityRate = totalHadir > 0 ? Math.round((tepatWaktu / totalHadir) * 100) : 100;
+
+                        return (
+                          <tr key={row.user_id} className="hover:bg-muted/30 transition-colors">
+                            <td className="py-3 px-4">
+                              <p className="font-semibold text-foreground">{row.full_name}</p>
+                              <p className="text-[11px] text-muted-foreground font-mono">{row.nip}</p>
+                            </td>
+
+                            <td className="py-3 px-4">
+                              <span className="font-medium text-foreground">{row.division_name || 'Umum'}</span>
+                              <span className="text-[10px] text-muted-foreground block capitalize">{row.role_name || 'Karyawan'}</span>
+                            </td>
+
+                            <td className="py-3 px-4 font-mono text-[11px]">
+                              <span className="font-semibold text-emerald-600">{tepatWaktu} Tepat</span>
+                              <span className="text-muted-foreground block text-[10px]">dari {totalHadir} hadir</span>
+                            </td>
+
+                            <td className="py-3 px-4 font-mono text-[11px]">
+                              {terlambat > 0 ? (
+                                <div>
+                                  <span className="font-semibold text-amber-600">{terlambat} Kali</span>
+                                  <span className="text-[10px] text-muted-foreground block">({row.total_late_minutes || 0} mnt)</span>
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground text-[10px]">0 Kali</span>
+                              )}
+                            </td>
+
+                            <td className="py-3 px-4">
+                              {mangkir > 0 ? (
+                                <Badge variant="destructive" className="text-[10px] font-bold">
+                                  {mangkir} Hari Alpa
+                                </Badge>
+                              ) : (
+                                <span className="text-muted-foreground text-[10px]">Nihil</span>
+                              )}
+                            </td>
+
+                            <td className="py-3 px-4 font-mono text-[11px]">
+                              <span className="text-foreground">{cuti} Cuti</span>
+                              <span className="text-muted-foreground block text-[10px]">{sakit} Sakit</span>
+                            </td>
+
+                            <td className="py-3 px-4 font-mono text-[11px]">
+                              {lemburJam > 0 ? (
+                                <div>
+                                  <span className="font-semibold text-blue-600">{lemburJam} Jam</span>
+                                  <span className="text-[10px] text-muted-foreground block">
+                                    Rp {lemburComp.toLocaleString('id-ID')}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground text-[10px]">0 Jam</span>
+                              )}
+                            </td>
+
+                            <td className="py-3 px-4 text-right">
+                              {mangkir > 2 ? (
+                                <Badge variant="outline" className="bg-rose-500/10 text-rose-600 border-rose-500/20 text-[10px]">
+                                  Perlu Pembinaan
+                                </Badge>
+                              ) : punctualityRate >= 90 ? (
+                                <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px]">
+                                  {punctualityRate}% Prima
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20 text-[10px]">
+                                  {punctualityRate}% Waspada
+                                </Badge>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          {/* Sub-section: Audit Trail Log Pengajuan Berkas Cuti & SPL */}
+          <div className="pt-4 border-t border-border space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
+                  <FileSpreadsheet className="w-4 h-4 text-primary" />
+                  Audit Trail Berkas Pengajuan Cuti, Izin & SPL Lembur
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Riwayat rinci verifikasi dokumen permohonan individual yang diajukan staf.
+                </p>
               </div>
 
+              {/* Filter Log Berkas */}
               <div className="flex items-center gap-2 flex-wrap">
                 <Select value={recapTypeFilter} onValueChange={setRecapTypeFilter}>
-                  <SelectTrigger className="h-9 text-xs rounded-xl w-[150px]">
+                  <SelectTrigger className="h-8 text-xs rounded-xl w-[140px]">
                     <SelectValue placeholder="Jenis Pengajuan" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1232,7 +1588,7 @@ export const HrmApprovalPage: React.FC = () => {
                 </Select>
 
                 <Select value={recapStatusFilter} onValueChange={setRecapStatusFilter}>
-                  <SelectTrigger className="h-9 text-xs rounded-xl w-[140px]">
+                  <SelectTrigger className="h-8 text-xs rounded-xl w-[130px]">
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1242,30 +1598,8 @@ export const HrmApprovalPage: React.FC = () => {
                     <SelectItem value="rejected">❌ Ditolak</SelectItem>
                   </SelectContent>
                 </Select>
-
-                <div className="flex rounded-xl bg-muted/60 p-0.5 border border-border">
-                  <button
-                    type="button"
-                    onClick={() => setRecapMonthFilter('current')}
-                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
-                      recapMonthFilter === 'current' ? 'bg-card text-foreground shadow-xs font-bold' : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    Bulan Ini
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRecapMonthFilter('all')}
-                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
-                      recapMonthFilter === 'all' ? 'bg-card text-foreground shadow-xs font-bold' : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    Semua
-                  </button>
-                </div>
               </div>
             </div>
-          </Card>
 
           {/* Table Data Rekap Realtime */}
           <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
@@ -1414,6 +1748,7 @@ export const HrmApprovalPage: React.FC = () => {
             </div>
           </Card>
         </div>
+      </div>
       )}
 
       {/* Leave Decision Dialog */}
