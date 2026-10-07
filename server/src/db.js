@@ -504,6 +504,31 @@ export async function initDb() {
         ('field_officer_late_tolerance', '15')
       ON CONFLICT (key) DO NOTHING;
 
+      -- ─── 15b. PENGATURAN PAYROLL & PEMOTONGAN KETERLAMBATAN ───
+      CREATE TABLE IF NOT EXISTS hrm_payroll_settings (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        salary_calculation_day INT DEFAULT 25,
+        payment_day INT DEFAULT 1,
+        working_days_per_month INT DEFAULT 22,
+        late_deduction_per_minute NUMERIC(10,2) DEFAULT 1000,
+        absence_deduction_per_day NUMERIC(10,2) DEFAULT 155000,
+        default_tax_rate NUMERIC(5,2) DEFAULT 0,
+        bpjs_kesehatan_employee NUMERIC(5,2) DEFAULT 1,
+        bpjs_kesehatan_employer NUMERIC(5,2) DEFAULT 4,
+        bpjs_ketenagakerjaan_employee NUMERIC(5,2) DEFAULT 3,
+        bpjs_ketenagakerjaan_employer NUMERIC(5,2) DEFAULT 3.7,
+        include_overtime_in_payroll BOOLEAN DEFAULT true,
+        is_late_deduction_enabled BOOLEAN DEFAULT false,
+        currency VARCHAR(10) DEFAULT 'IDR',
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      ALTER TABLE hrm_payroll_settings ADD COLUMN IF NOT EXISTS is_late_deduction_enabled BOOLEAN DEFAULT false;
+
+      INSERT INTO hrm_payroll_settings (id, is_late_deduction_enabled)
+      SELECT gen_random_uuid(), false
+      WHERE NOT EXISTS (SELECT 1 FROM hrm_payroll_settings);
+
       -- ─── 16. DIVISI K3 & ROLE K3 (KESELAMATAN & KESEHATAN KERJA) ───
       INSERT INTO hrm_divisions (code, name, description)
       SELECT 'K3', 'Keselamatan & Kesehatan Kerja (K3 & HSE)', 'Keselamatan, Kesehatan Kerja dan Lingkungan Lapangan'

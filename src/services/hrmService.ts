@@ -104,6 +104,7 @@ const DEFAULT_PAYROLL_SETTINGS: PayrollSettings = {
   bpjsKetenagakerjaanEmployee: 3,
   bpjsKetenagakerjaanEmployer: 3.7,
   includeOvertimeInPayroll: true,
+  isLateDeductionEnabled: false,
   currency: 'IDR',
 };
 
@@ -4476,7 +4477,9 @@ export const hrmService = {
     const grossIncome = baseSalary + fixedAllowances + otherTotal + overtimePay;
 
     // ── Deductions ──
-    const lateDeduction = totalLateMinutes * settings.lateDeductionPerMinute;
+    const lateDeduction = settings.isLateDeductionEnabled === true
+      ? totalLateMinutes * settings.lateDeductionPerMinute
+      : 0;
     const absenceDeduction = absentCount * settings.absenceDeductionPerDay;
     const bpjsKesehatan = Math.round((settings.bpjsKesehatanEmployee / 100) * baseSalary);
     const bpjsKetenagakerjaan = Math.round((settings.bpjsKetenagakerjaanEmployee / 100) * baseSalary);

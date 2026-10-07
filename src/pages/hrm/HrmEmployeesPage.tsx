@@ -1408,7 +1408,14 @@ export const HrmEmployeesPage: React.FC = () => {
                     <Select value={shiftId} onValueChange={setShiftId}>
                       <SelectTrigger className="text-xs rounded-xl"><SelectValue placeholder="Pilih Shift" /></SelectTrigger>
                       <SelectContent>
-                        {shifts.map((s) => (<SelectItem key={s.id} value={s.id}>{s.name} ({s.startTime}–{s.endTime})</SelectItem>))}
+                        {shifts.map((s) => {
+                          const label = s.name.includes('(') ? s.name : `${s.name} (${s.startTime}–${s.endTime} WITA)`;
+                          return (
+                            <SelectItem key={s.id} value={s.id}>
+                              {label}
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
                   </div>

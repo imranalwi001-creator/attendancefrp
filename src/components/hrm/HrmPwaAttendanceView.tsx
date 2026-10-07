@@ -425,25 +425,67 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     try {
       await hrmService.syncWithBackend().catch(() => null);
 
-      // 1. Shift
+      // 1. Shift Sinkron Database
       const shifts = hrmService.getShifts();
-      const baseShift = shifts.find((s) => s.id === user.shiftId) || shifts[0] || null;
-      let effectiveShift = baseShift ? { ...baseShift } : null;
-      if (effectiveShift && (user.customStartTime || user.customEndTime || user.lateToleranceMinutes !== undefined)) {
+      const baseShift =
+        shifts.find((s) => s.id === user.shiftId) ||
+        shifts.find((s) => s.name === user.shiftName) ||
+        shifts[0] ||
+        null;
+      let effectiveShift: Shift | null = baseShift ? { ...baseShift } : null;
+
+      if (!effectiveShift && user.shiftName) {
+        effectiveShift = {
+          id: user.shiftId || 'shift-db',
+          code: 'SHF',
+          name: user.shiftName,
+          startTime: user.shiftStartTime || '07:30',
+          endTime: user.shiftEndTime || '16:30',
+          lateToleranceMinutes: user.lateToleranceMinutes ?? 15,
+        };
+      } else if (effectiveShift && user.shiftName) {
+        effectiveShift.name = user.shiftName;
+      }
+
+      if (effectiveShift) {
+        if (user.shiftStartTime) effectiveShift.startTime = user.shiftStartTime;
+        if (user.shiftEndTime) effectiveShift.endTime = user.shiftEndTime;
         if (user.customStartTime) effectiveShift.startTime = user.customStartTime;
         if (user.customEndTime) effectiveShift.endTime = user.customEndTime;
         if (user.lateToleranceMinutes !== undefined) effectiveShift.lateToleranceMinutes = user.lateToleranceMinutes;
-        effectiveShift.name = `Shift Khusus (${effectiveShift.startTime} - ${effectiveShift.endTime} WITA)`;
       }
       setUserShift(effectiveShift);
 
-      // 2. Attendance Hari Ini
+      // 2. Attendance Hari Ini (Tarik langsung dari PostgreSQL via /api/attendances/today)
       const todayStr = getTodayDateStr();
-      const userAtts = hrmService.getAttendances().filter((a) => a.userId === user.id);
-      setAttendancesHistory(userAtts);
+      let todayAtt: AttendanceRecord | undefined = undefined;
 
-      const todayAtt = userAtts.find((a) => a.date === todayStr || a.attendanceDate === todayStr);
-      setTodayAttendance(todayAtt);
+      try {
+        const todayRes = await fetch(`/api/attendances/today?userId=${encodeURIComponent(user.id)}`);
+        if (todayRes.ok) {
+          const todayData = await todayRes.json();
+          if (todayData.success && todayData.attendance) {
+            todayAtt = todayData.attendance;
+          }
+        }
+      } catch (err) {
+        console.warn('[PWA] Gagal fetch today attendance, fallback ke local cache:', err);
+      }
+
+      const userAtts = hrmService.getAttendances().filter((a) => a.userId === user.id);
+      if (todayAtt) {
+        const existingIdx = userAtts.findIndex((a) => a.id === todayAtt?.id || a.date === todayStr);
+        if (existingIdx >= 0) {
+          userAtts[existingIdx] = { ...userAtts[existingIdx], ...todayAtt };
+        } else {
+          userAtts.unshift(todayAtt);
+        }
+      } else {
+        todayAtt = userAtts.find((a) => a.date === todayStr || a.attendanceDate === todayStr);
+      }
+
+      setAttendancesHistory(userAtts);
+      setTodayAttendance(todayAtt || null);
 
       if (todayAtt?.isOnBreak && todayAtt.breakStartTime) {
         setIsBreakActive(true);
@@ -583,14 +625,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       return;
     }
 
-    if (activePosts && activePosts.length > 0) {
-      // Dynamic GPS Accuracy buffer (up to 100m tolerance when mobile GPS is wide indoors)
-      const accuracyBuffer = Math.min(Math.max(0, (accuracy - 30) * 0.5), 100);
+    // Dynamic GPS Accuracy buffer (toleransi radius saat sinyal GPS melar di dalam ruangan)
+    const accuracyBuffer = Math.min(Math.max(0, (accuracy - 20) * 0.6), 80);
+    // Hysteresis buffer: Jika sebelumnya sudah terdeteksi di lokasi ('inside'), beri toleransi ekstra 35m agar tidak flapping
+    const hysteresisBonus = locationStatus === 'inside' ? 35 : 0;
 
+    if (activePosts && activePosts.length > 0) {
       // Multi-Titik Bank Pos evaluation (Titik A, B, C, ...)
       const postsWithDist = activePosts.map((p) => {
         const d = geofenceService.calculateDistance(coords, { latitude: p.latitude, longitude: p.longitude });
-        const r = (p.radiusMeters || 250) + accuracyBuffer;
+        const r = (p.radiusMeters || 250) + accuracyBuffer + hysteresisBonus;
         return { ...p, distance: d, radius: r, isInside: d <= r };
       });
 
@@ -613,11 +657,48 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       return;
     }
 
-    // Fallback: single assigned office
+    // Evaluasi lokasi fallback: kantor penugasan dan 6 preset pos resmi PT FRP
+    const candidateOffices: { name: string; lat: number; lng: number; radius: number }[] = [];
     if (fallbackOffice) {
-      const evalResult = geofenceService.evaluateGeofence(coords, fallbackOffice);
-      setDistanceToOffice(evalResult.distanceMeters);
-      setLocationStatus(evalResult.isInside ? 'inside' : 'outside');
+      candidateOffices.push({
+        name: fallbackOffice.name,
+        lat: fallbackOffice.latitude,
+        lng: fallbackOffice.longitude,
+        radius: fallbackOffice.radiusMeters || 150,
+      });
+    }
+
+    // Masukkan preset resmi PT FRP sebagai kandidat valid
+    for (const preset of FIELD_SENTINEL_6_POST_PRESETS) {
+      if (!candidateOffices.some((c) => Math.abs(c.lat - preset.latitude) < 0.0001 && Math.abs(c.lng - preset.longitude) < 0.0001)) {
+        candidateOffices.push({
+          name: preset.name,
+          lat: preset.latitude,
+          lng: preset.longitude,
+          radius: preset.radiusMeters || 250,
+        });
+      }
+    }
+
+    if (candidateOffices.length > 0) {
+      const officeChecks = candidateOffices.map((cand) => {
+        const d = geofenceService.calculateDistance(coords, { latitude: cand.lat, longitude: cand.lng });
+        const allowedR = cand.radius + accuracyBuffer + hysteresisBonus;
+        return { ...cand, distance: d, isInside: d <= allowedR };
+      });
+
+      const matchedInside = officeChecks.find((c) => c.isInside);
+      if (matchedInside) {
+        setDistanceToOffice(Math.round(matchedInside.distance));
+        setLocationStatus('inside');
+        setAssignedPostName(matchedInside.name);
+        return;
+      }
+
+      const nearestOffice = officeChecks.sort((a, b) => a.distance - b.distance)[0];
+      setDistanceToOffice(Math.round(nearestOffice.distance));
+      setLocationStatus('outside');
+      if (nearestOffice?.name) setAssignedPostName(nearestOffice.name);
     } else {
       setLocationStatus('inside');
     }
@@ -668,6 +749,27 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           altitude: pos.coords.altitude,
           speed: pos.coords.speed,
           isMockLocation: Boolean((pos.coords as any).isMock),
+        }).then((res) => {
+          if (res?.triggerVibration && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+            try {
+              navigator.vibrate([400, 200, 400, 200, 800]);
+            } catch (_) {}
+          }
+          if (res?.shouldPromptSelfie) {
+            toast.success(
+              `📍 Tiba di ${res.arrivedPostName || 'Pos Tugas'}! Harap segera lakukan Foto Selfie Presensi di lokasi.`,
+              {
+                duration: 12000,
+                action: {
+                  label: '📸 Ambil Foto',
+                  onClick: () => {
+                    setScanMode('clock_in');
+                    setIsCameraActive(true);
+                  },
+                },
+              }
+            );
+          }
         }).catch(() => null);
       }
     };
@@ -1207,7 +1309,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return closest;
   };
 
-  // Watermark Stamping pada Canvas (Forensic Pixel Stamping - Ukuran Sedang & Jelas Terbaca)
+  // Watermark Stamping pada Canvas (Forensic Pixel Stamping - Ukuran Besar, Jelas Terbaca, & Profesional)
   const applyWatermark = (canvas: HTMLCanvasElement, matchScore?: number) => {
     const ctx = canvas.getContext('2d');
     if (!ctx || !user) return;
@@ -1217,61 +1319,102 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     // Deteksi apakah sedang dalam mode Spot-Check Lapor Wajah Darurat atas Instruksi Pimpinan
     const isSpotCheck = isSpotCheckAction || spotCheckModalOpen || Boolean(spotCheckData);
     const detectedFrp = detectMatchingFRPPost(currentCoords);
+    const isOnCall = actionType === 'emergency_on_call' || actionType === 'emergency_on_call_out';
 
-    // Normalisasi skala ukuran sedang (medium) agar pas di berbagai resolusi layar HP & kamera
-    const scale = Math.min(Math.max(w / 800, 0.9), 1.25);
+    // Skala dinamis adaptif berbasis resolusi kamera (baseline 380px pada layar HP potret)
+    const minDim = Math.min(w, h);
+    const isLandscape = w > h;
+    const scale = isLandscape ? Math.max(h / 460, 1.35) : Math.max(minDim / 380, 1.45);
 
-    // Dark Gradient Bar di bagian bawah (tinggi proporsional ~190px * scale)
-    const barHeight = Math.round(190 * scale);
+    // Ketinggian banner proporsional (~235px * scale) untuk menampung teks besar & lega
+    const barHeight = Math.round(235 * scale);
     const grad = ctx.createLinearGradient(0, h - barHeight, 0, h);
-    grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    grad.addColorStop(0.18, 'rgba(15, 23, 42, 0.94)');
+    grad.addColorStop(0, 'rgba(15, 23, 42, 0)');
+    grad.addColorStop(0.12, 'rgba(15, 23, 42, 0.93)');
     grad.addColorStop(1, 'rgba(15, 23, 42, 0.99)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, h - barHeight, w, barHeight);
 
-    const isOnCall = actionType === 'emergency_on_call' || actionType === 'emergency_on_call_out';
+    // Evaluasi Pos Realtime
+    let postDisplay = assignedPostName || 'Kantor FRP';
+    let isSahDiPos = true;
+    if (isOnCall || isMobileOnlineOfficer(user)) {
+      postDisplay = assignedPostName || 'Area Mobile / Online Remote (WFA Sah)';
+      isSahDiPos = true;
+    } else if (detectedFrp) {
+      if (detectedFrp.isWithinRadius) {
+        postDisplay = `${detectedFrp.name} [${detectedFrp.code}] (${detectedFrp.distance}m • DALAM RADIUS)`;
+        isSahDiPos = true;
+      } else {
+        postDisplay = `${detectedFrp.name} [${detectedFrp.code}] (${detectedFrp.distance}m • RADIUS ${detectedFrp.radiusMeters}m)`;
+        isSahDiPos = false;
+      }
+    }
 
-    // Top Status Accent Line (Biru jika on-call, Hijau jika dalam pos, Amber jika spot check)
-    ctx.fillStyle = isSpotCheck ? '#f59e0b' : isOnCall ? '#3b82f6' : '#10b981';
-    ctx.fillRect(0, h - barHeight + Math.round(20 * scale), w, Math.max(3 * scale, 3));
+    // Top Status Accent Glow Line (Biru on-call, Hijau dalam pos, Rose luar radius, Amber spot-check)
+    const accentColor = isSpotCheck ? '#f59e0b' : isOnCall ? '#3b82f6' : (isSahDiPos ? '#10b981' : '#f43f5e');
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(0, h - barHeight + Math.round(16 * scale), w, Math.max(4, Math.round(4 * scale)));
 
-    // Header badge (Top Left)
-    const badgeW = Math.min(w - 24, Math.round(560 * scale));
-    const badgeH = Math.round(34 * scale);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
-    ctx.fillRect(16, 16, badgeW, badgeH);
-    ctx.strokeStyle = isSpotCheck ? '#f59e0b' : isOnCall ? '#3b82f6' : '#10b981';
-    ctx.lineWidth = Math.max(2 * scale, 2);
-    ctx.strokeRect(16, 16, badgeW, badgeH);
+    // ─────────────────────────────────────────────────────────────────────────────
+    // HEADER BADGE (Top Header Capsule - Besar, Tebal, & Tajam)
+    // ─────────────────────────────────────────────────────────────────────────────
+    const badgePadX = Math.round(18 * scale);
+    const badgeH = Math.round(40 * scale);
+    const badgeY = Math.round(18 * scale);
+    const badgeX = Math.round(18 * scale);
+    const badgeW = Math.min(w - badgeX * 2, Math.round(580 * scale));
+    const badgeRadius = Math.round(10 * scale);
 
-    ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
-    ctx.fillStyle = isSpotCheck ? '#fbbf24' : isOnCall ? '#60a5fa' : '#10b981';
-    ctx.fillText(
-      isSpotCheck
-        ? `🛡️ PT FRP • 1 BUKTI SELFIE REALTIME • 1:1 SCORE: ${matchScore || 98}%`
-        : isOnCall
-        ? `⚡ PT FRP • ${actionType === 'emergency_on_call' ? 'MULAI ON-CALL DUTY' : 'SELESAI ON-CALL DUTY'} • 1:1 SCORE: ${matchScore || 98}%`
-        : `🛡️ PT FRP • ${actionType === 'clock_in' ? 'CLOCK-IN (MASUK)' : 'CLOCK-OUT (PULANG)'} • 1:1 SCORE: ${matchScore || 98}%`,
-      24,
-      16 + Math.round(22 * scale)
-    );
+    // Draw Rounded Badge Background
+    ctx.save();
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+    ctx.strokeStyle = accentColor;
+    ctx.lineWidth = Math.max(2.5, Math.round(2.5 * scale));
+    if (typeof ctx.roundRect === 'function') {
+      ctx.beginPath();
+      ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeRadius);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+      ctx.strokeRect(badgeX, badgeY, badgeW, badgeH);
+    }
 
-    // Text rows in bottom banner - UKURAN SEDANG, TAJAM, KONTRAS TINGGI
-    const paddingX = Math.round(18 * scale);
+    // Header Text - Bold & High Contrast
+    ctx.font = `bold ${Math.round(13.5 * scale)}px system-ui, -apple-system, sans-serif`;
+    ctx.fillStyle = accentColor;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = Math.round(3 * scale);
+    const headerTitle = isSpotCheck
+      ? `🛡️ PT FAWWAZ RESKI PERWIRA • 1 BUKTI SELFIE REALTIME • 1:1 SCORE: ${matchScore || 98}%`
+      : isOnCall
+      ? `⚡ PT FAWWAZ RESKI PERWIRA • ${actionType === 'emergency_on_call' ? 'ON-CALL MASUK' : 'ON-CALL PULANG'} • 1:1 SCORE: ${matchScore || 98}%`
+      : `🛡️ PT FAWWAZ RESKI PERWIRA • ${actionType === 'clock_in' ? 'CLOCK-IN (MASUK)' : 'CLOCK-OUT (PULANG)'} • 1:1 SCORE: ${matchScore || 98}%`;
+    ctx.fillText(headerTitle, badgeX + badgePadX, badgeY + Math.round(25 * scale));
+    ctx.restore();
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // BOTTOM FORENSIC INFORMATION CARD - BESAR, BOLD, & SANGAT TERBACA
+    // ─────────────────────────────────────────────────────────────────────────────
+    const paddingX = Math.round(22 * scale);
     let startY = h - barHeight + Math.round(48 * scale);
-    const lineGap = Math.round(30 * scale);
+    const lineGap = Math.round(37 * scale);
 
-    // Line 1: Employee Name & NIP & Division
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+    ctx.shadowBlur = Math.round(5 * scale);
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 1;
+
+    // Line 1: Nama Karyawan (Font Besar & Tebal), NIP, & Divisi
     const empName = user.fullName || (user as any).name || 'Karyawan';
     const empNip = user.nip || (user.id ? 'ID: ' + String(user.id).slice(0, 8) : 'FRP');
     const empDiv = user.divisionName || (user as any).division_name || 'Petugas Lapangan';
-    ctx.font = `bold ${Math.round(16 * scale)}px system-ui, sans-serif`;
+    ctx.font = `bold ${Math.round(17.5 * scale)}px system-ui, -apple-system, sans-serif`;
     ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = 'rgba(0,0,0,0.85)';
-    ctx.shadowBlur = 3;
     ctx.fillText(
-      `👤 ${empName} (${empNip}) • ${empDiv}`,
+      `👤 ${empName} [${empNip}] • ${empDiv}`,
       paddingX,
       startY
     );
@@ -1279,23 +1422,23 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     // Line 2: Shift atau Instruksi Lapor Realtime
     startY += lineGap;
     if (isSpotCheck) {
-      ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
-      ctx.fillStyle = '#fcd34d'; // Amber light
+      ctx.font = `bold ${Math.round(14 * scale)}px system-ui, -apple-system, sans-serif`;
+      ctx.fillStyle = '#fcd34d'; // Amber bright
       ctx.fillText(`🚨 INSTRUKSI PIMPINAN: BUKTI 1 SELFIE REALTIME LAPORAN WAJAH`, paddingX, startY);
     } else if (isOnCall) {
-      ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
+      ctx.font = `bold ${Math.round(14 * scale)}px system-ui, -apple-system, sans-serif`;
       ctx.fillStyle = '#93c5fd'; // Light blue
-      ctx.fillText(`⚡ STATUS: TUGAS DARURAT ONLINE (ON-CALL REMOTE WFA)`, paddingX, startY);
+      ctx.fillText(`⚡ STATUS: TUGAS DARURAT ONLINE (ON-CALL REMOTE WFA SAH)`, paddingX, startY);
     } else {
       const cleanShiftName = userShift?.name || 'Shift Reguler';
       const shiftHoursStr = `${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA`;
       const shiftText = cleanShiftName.includes('(') ? `⏰ Shift: ${cleanShiftName}` : `⏰ Shift: ${cleanShiftName} (${shiftHoursStr})`;
-      ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`;
+      ctx.font = `bold ${Math.round(14 * scale)}px system-ui, -apple-system, sans-serif`;
       ctx.fillStyle = '#fbbf24'; // Amber / Gold
       ctx.fillText(shiftText, paddingX, startY);
     }
 
-    // Line 3: Tanggal dan Waktu WITA REALTIME (Hingga Detik)
+    // Line 3: Tanggal dan Waktu Server Realtime (Hingga Detik)
     startY += lineGap;
     const now = new Date();
     const dateFormatted = now.toLocaleDateString('id-ID', {
@@ -1305,42 +1448,27 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       year: 'numeric',
     });
     const timeFormatted = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\./g, ':');
-    ctx.font = `bold ${Math.round(14 * scale)}px ui-monospace, SFMono-Regular, monospace`;
-    ctx.fillStyle = '#e2e8f0'; // Slate light
+    ctx.font = `bold ${Math.round(15 * scale)}px ui-monospace, SFMono-Regular, monospace`;
+    ctx.fillStyle = '#f8fafc'; // Crisp pure white
     ctx.fillText(`🕒 WAKTU REALTIME: ${dateFormatted} • ${timeFormatted} WITA`, paddingX, startY);
 
     // Line 4: Lokasi Realtime 6 Titik Pos FRP / Jaringan Mobile
     startY += lineGap;
-    let postDisplay = assignedPostName || 'Kantor FRP';
-    let isSahDiPos = true;
-    if (isOnCall || isMobileOnlineOfficer(user)) {
-      postDisplay = assignedPostName || 'Area Mobile / Online Remote (Matching/Pusat/Cafe/Rumah)';
-      isSahDiPos = true;
-    } else if (detectedFrp) {
-      if (detectedFrp.isWithinRadius) {
-        postDisplay = `${detectedFrp.name} [${detectedFrp.code}] (${detectedFrp.distance}m)`;
-        isSahDiPos = true;
-      } else {
-        postDisplay = `${detectedFrp.name} [${detectedFrp.code}] (${detectedFrp.distance}m - Radius ${detectedFrp.radiusMeters}m)`;
-        isSahDiPos = false;
-      }
-    }
-    const locLine = isOnCall ? `📍 AREA/JARINGAN: ${postDisplay}` : `📍 POS REALTIME: ${postDisplay}`;
-    ctx.font = `bold ${Math.round(14 * scale)}px system-ui, sans-serif`;
+    const locLine = isOnCall ? `📍 AREA TUGAS: ${postDisplay}` : `📍 POS REALTIME: ${postDisplay}`;
+    ctx.font = `bold ${Math.round(14.5 * scale)}px system-ui, -apple-system, sans-serif`;
     ctx.fillStyle = isSahDiPos ? '#34d399' : '#fb7185'; // Emerald or Rose
     ctx.fillText(locLine, paddingX, startY);
 
-    // Line 5: GPS Realtime & Akurasi
-    startY += lineGap - Math.round(4 * scale);
+    // Line 5: GPS Realtime, Akurasi & Anti-Spoof Security Stamp
+    startY += lineGap - Math.round(2 * scale);
     const coordsStr = currentCoords
-      ? `📡 GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 10}m) • ${isOnCall ? '🌐 KONEKSI ONLINE TERVERIFIKASI' : (isSahDiPos ? '✅ SAH DI POS TUGAS' : '⚠️ DI LUAR RADIUS')}`
-      : `📡 GPS: Sinyal Aktif • Pos Terdata`;
-    ctx.font = `bold ${Math.round(12 * scale)}px ui-monospace, SFMono-Regular, monospace`;
-    ctx.fillStyle = '#94a3b8'; // Slate 400
+      ? `📡 GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 10}m) • ${isOnCall ? '🌐 KONEKSI ONLINE SAH' : (isSahDiPos ? '✅ SAH DI POS TUGAS' : '⚠️ DI LUAR RADIUS')} • 🔒 ANTI-TAMPER`
+      : `📡 GPS: Sinyal Aktif • Pos Terdata • 🔒 ANTI-TAMPER`;
+    ctx.font = `bold ${Math.round(12.5 * scale)}px ui-monospace, SFMono-Regular, monospace`;
+    ctx.fillStyle = '#cbd5e1'; // Slate 300
     ctx.fillText(coordsStr, paddingX, startY);
 
-    // Reset shadow
-    ctx.shadowBlur = 0;
+    ctx.restore();
   };
 
   // Capture Photo & Submit to PostgreSQL
@@ -1969,13 +2097,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           {/* Row 1: Time, Title / Action, Close Button */}
           <div className="flex items-center justify-between">
             {/* Left: Live Time & Indicator */}
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/10 text-xs font-mono font-medium text-emerald-300 shadow-sm">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/90 backdrop-blur-md border border-emerald-500/30 text-xs sm:text-sm font-mono font-bold text-emerald-300 shadow-md">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
               <span>{currentTime.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WITA</span>
             </div>
 
             {/* Center: Mode / Action Badge */}
-            <div className="text-[11px] font-bold tracking-wider uppercase text-white/95 px-3 py-1 rounded-full bg-slate-900/80 border border-slate-700/60 backdrop-blur-md shadow-sm">
+            <div className="text-xs sm:text-sm font-black tracking-wider uppercase text-white px-3.5 py-1.5 rounded-full bg-slate-900/90 border border-slate-700/80 backdrop-blur-md shadow-md">
               {isSpotCheckAction || spotCheckModalOpen
                 ? '🚨 SPOT-CHECK PIMPINAN'
                 : actionType === 'emergency_on_call'
@@ -1991,10 +2119,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             <button
               type="button"
               onClick={closeLiveCamera}
-              className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 active:scale-90 backdrop-blur-md flex items-center justify-center text-white transition-all border border-white/15 shadow-sm"
+              className="w-9 h-9 rounded-full bg-white/20 hover:bg-white/30 active:scale-90 backdrop-blur-md flex items-center justify-center text-white transition-all border border-white/20 shadow-md"
               title="Tutup Kamera"
             >
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
           </div>
 
@@ -2004,44 +2132,44 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               type="button"
               onClick={() => evaluateRealLocation(true)}
               disabled={isRefreshingGps}
-              className={`flex-1 py-1 px-3 rounded-xl border backdrop-blur-md flex items-center justify-between text-[11px] font-medium transition-all ${
+              className={`flex-1 py-1.5 px-3.5 rounded-xl border backdrop-blur-md flex items-center justify-between text-xs sm:text-sm font-bold transition-all shadow-md ${
                 locationStatus === 'inside'
-                  ? 'bg-emerald-950/65 border-emerald-500/40 text-emerald-300'
+                  ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
                   : locationStatus === 'outside'
-                  ? 'bg-rose-950/65 border-rose-500/40 text-rose-300'
-                  : 'bg-slate-900/65 border-slate-700/50 text-slate-300'
+                  ? 'bg-rose-950/80 border-rose-500/50 text-rose-300'
+                  : 'bg-slate-900/80 border-slate-700/60 text-slate-200'
               }`}
               title="Ketuk untuk Perbarui Sinyal GPS"
             >
-              <div className="flex items-center gap-1.5 truncate">
-                <MapPin className={`w-3.5 h-3.5 shrink-0 ${locationStatus === 'inside' ? 'text-emerald-400' : locationStatus === 'outside' ? 'text-rose-400' : 'text-cyan-400'}`} />
+              <div className="flex items-center gap-2 truncate">
+                <MapPin className={`w-4 h-4 shrink-0 ${locationStatus === 'inside' ? 'text-emerald-400' : locationStatus === 'outside' ? 'text-rose-400' : 'text-cyan-400'}`} />
                 <span className="truncate">{assignedPostName || 'Mendeteksi Pos Tugas...'}</span>
                 {distanceToOffice !== null && (
-                  <span className="text-[10px] opacity-75 shrink-0 font-mono">({distanceToOffice}m)</span>
+                  <span className="text-[11px] sm:text-xs opacity-85 shrink-0 font-mono">({distanceToOffice}m)</span>
                 )}
               </div>
-              <div className="flex items-center gap-1 shrink-0 ml-2 text-[10px] text-white/70">
+              <div className="flex items-center gap-1.5 shrink-0 ml-2 text-xs font-mono text-white/80">
                 <span>±{coordsAccuracy ? Math.round(coordsAccuracy) : 10}m</span>
-                <RotateCw className={`w-3 h-3 ${isRefreshingGps ? 'animate-spin text-cyan-400' : 'opacity-70 hover:opacity-100'}`} />
+                <RotateCw className={`w-3.5 h-3.5 ${isRefreshingGps ? 'animate-spin text-cyan-400' : 'opacity-70 hover:opacity-100'}`} />
               </div>
             </button>
 
             {/* Segmented Mode Switch: Auto vs Manual */}
-            <div className="flex items-center bg-black/60 p-0.5 rounded-xl border border-white/15 backdrop-blur-md shrink-0">
+            <div className="flex items-center bg-black/70 p-1 rounded-xl border border-white/20 backdrop-blur-md shrink-0">
               <button
                 type="button"
                 onClick={() => {
                   setScanMode('auto');
                   setAutoCaptureProgress(0);
                 }}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1 ${
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
                   scanMode === 'auto'
                     ? 'bg-emerald-500 text-white shadow-md'
-                    : 'text-white/60 hover:text-white'
+                    : 'text-white/70 hover:text-white'
                 }`}
                 title="Scan Otomatis saat Wajah Terkunci"
               >
-                <Zap className="w-3 h-3" />
+                <Zap className="w-3.5 h-3.5" />
                 <span>Auto</span>
               </button>
               <button
@@ -2052,14 +2180,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   greenSinceRef.current = null;
                   isTriggeringAutoRef.current = false;
                 }}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1 ${
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
                   scanMode === 'manual'
                     ? 'bg-emerald-500 text-white shadow-md'
-                    : 'text-white/60 hover:text-white'
+                    : 'text-white/70 hover:text-white'
                 }`}
                 title="Jepret Manual Kapan Saja"
               >
-                <Camera className="w-3 h-3" />
+                <Camera className="w-3.5 h-3.5" />
                 <span>Manual</span>
               </button>
             </div>
@@ -2156,27 +2284,49 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         </div>
 
         {/* ─── BOTTOM CONTROL DECK & UNIFIED HUD ─── */}
-        <div className="relative pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3 px-6 flex flex-col items-center bg-gradient-to-t from-black/95 via-black/80 to-transparent z-30 space-y-3">
-          {/* Unified High-Tech Status Pill */}
+        <div className="relative pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2.5 px-4 sm:px-6 flex flex-col items-center bg-gradient-to-t from-black/95 via-black/85 to-transparent z-30 space-y-2.5">
+          {/* Live Forensic Metadata Card (Preview Informasi Lokasi & Jam) */}
+          <div className="w-full max-w-sm px-3.5 py-2 rounded-2xl bg-slate-900/85 backdrop-blur-xl border border-white/15 text-slate-200 text-xs shadow-xl flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <p className="font-bold text-white text-xs truncate">
+                👤 {user?.fullName || 'Karyawan'} <span className="text-emerald-400 font-mono">[{user?.nip || 'FRP'}]</span>
+              </p>
+              <p className="text-[11px] text-slate-300 truncate">
+                📍 {assignedPostName || 'Pos Tugas Terdaftar'}
+              </p>
+            </div>
+            <div className="text-right shrink-0">
+              <span className="font-mono font-bold text-xs text-emerald-300 block">
+                {currentTime.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WITA
+              </span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-md ${
+                locationStatus === 'inside' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+              }`}>
+                {locationStatus === 'inside' ? '✓ DALAM POS' : '⚠️ LUAR RADIUS'}
+              </span>
+            </div>
+          </div>
+
+          {/* Unified High-Tech Status Pill - Font Besar & Jelas Terbaca */}
           <div
-            className={`px-4 py-2 rounded-full backdrop-blur-xl border shadow-xl flex items-center gap-2.5 text-xs font-semibold transition-all duration-300 ${
+            className={`px-4 sm:px-5 py-2 rounded-full backdrop-blur-xl border shadow-xl flex items-center gap-2.5 text-xs sm:text-sm font-bold transition-all duration-300 ${
               liveFaceStatus.isGreen
-                ? 'bg-emerald-950/90 border-emerald-400/80 text-emerald-200 shadow-[0_0_20px_rgba(16,185,129,0.35)]'
+                ? 'bg-emerald-950/95 border-emerald-400 text-emerald-100 shadow-[0_0_20px_rgba(16,185,129,0.4)]'
                 : liveFaceStatus.detected
-                ? 'bg-cyan-950/90 border-cyan-400/60 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.25)]'
-                : 'bg-slate-900/90 border-slate-700/70 text-slate-300'
+                ? 'bg-cyan-950/95 border-cyan-400/80 text-cyan-100 shadow-[0_0_15px_rgba(6,182,212,0.3)]'
+                : 'bg-slate-900/95 border-slate-700 text-slate-200'
             }`}
           >
             {liveFaceStatus.isGreen ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400 shrink-0" />
             ) : liveFaceStatus.detected ? (
-              <Loader2 className="w-4 h-4 text-cyan-400 animate-spin shrink-0" />
+              <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 animate-spin shrink-0" />
             ) : (
-              <ScanFace className="w-4 h-4 text-slate-400 shrink-0" />
+              <ScanFace className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400 shrink-0" />
             )}
-            <span>{liveFaceStatus.message}</span>
+            <span className="leading-snug">{liveFaceStatus.message}</span>
             {masterDescriptor && masterDescriptor.length === 128 && (
-              <Badge className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[9px] px-1.5 py-0 font-mono">
+              <Badge className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] sm:text-xs px-2 py-0.5 font-mono">
                 DB 1:1
               </Badge>
             )}
@@ -2300,16 +2450,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       {/* ─── GRADIENT HEADER ATAS (PERSIS LAMPIRAN 2) ─── */}
       <header className="bg-gradient-to-r from-[#14532D] via-[#0F766E] to-[#0284C7] text-white pt-[max(0.85rem,env(safe-area-inset-top))] pb-5 px-4 shadow-md">
         {/* Title Bar: Logo + PT. FAWWAZ RESKI PERWIRA Branding + Notification Bell + Actions */}
-        <div className="flex items-center justify-between gap-2 px-1">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm p-0.5 flex items-center justify-center shrink-0 border border-white/30 shadow-xs">
-              <img src={defaultAvatar} alt="Logo FRP" className="w-full h-full object-contain rounded-full" />
+        <div className="flex items-center justify-between gap-3 px-1">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="w-9 h-9 rounded-full bg-white p-0.5 flex items-center justify-center shrink-0 border border-white/80 shadow-md">
+              <img src={defaultAvatar} alt="Logo PT FRP" className="w-full h-full object-contain rounded-full" />
             </div>
-            <div className="min-w-0">
-              <h1 className="text-xs sm:text-sm font-black tracking-wide uppercase text-white drop-shadow-xs truncate">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-xs sm:text-sm font-black tracking-wide uppercase text-white drop-shadow-md whitespace-nowrap overflow-hidden text-ellipsis">
                 PT. FAWWAZ RESKI PERWIRA
               </h1>
-              <p className="text-[9px] text-emerald-200/90 font-medium tracking-tight truncate">
+              <p className="text-[9.5px] text-emerald-100/90 font-medium tracking-tight truncate">
                 Sistem Presensi & Operasional
               </p>
             </div>
@@ -2364,29 +2514,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               title="Segarkan / Perbarui Aplikasi"
             >
               <RotateCw className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (onSwitchToDesktop) {
-                  onSwitchToDesktop();
-                } else {
-                  localStorage.removeItem('hrm_pwa_mode');
-                  window.location.href = '/dashboard';
-                }
-              }}
-              className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 backdrop-blur-sm flex items-center justify-center text-white transition-all active:scale-90"
-              title="Kembali ke Mode Web Portal"
-            >
-              <Globe className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setLogoutDialogOpen(true)}
-              className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 backdrop-blur-sm flex items-center justify-center text-white transition-all active:scale-90"
-              title="Keluar dari Akun"
-            >
-              <LogOut className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
@@ -3018,48 +3145,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             )}
 
-            {/* Sub-Actions: Istirahat 1 Jam, Izin Darurat, dan Jadwal Shift */}
-            <div className="flex items-center justify-between gap-2 pt-1 text-xs">
-              {/* Tombol Istirahat 1 Jam */}
-              <button
-                type="button"
-                onClick={handleToggleBreak}
-                disabled={!hasClockedIn || hasClockedOut}
-                className={`flex-1 py-2 px-2.5 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-[11px] font-semibold ${
-                  isBreakActive
-                    ? 'bg-amber-500 text-white border-amber-600 animate-pulse'
-                    : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100'
-                }`}
-              >
-                <Coffee className="w-3.5 h-3.5" />
-                <span className="truncate">
-                  {isBreakActive
-                    ? `Istirahat: ${Math.floor(breakTimer / 60)}m ${breakTimer % 60}s`
-                    : 'Istirahat 1 Jam'}
-                </span>
-              </button>
 
-              {/* Tombol Izin Pulang Darurat */}
-              <button
-                type="button"
-                onClick={() => setEmergencyModalOpen(true)}
-                disabled={!hasClockedIn || hasClockedOut}
-                className="flex-1 py-2 px-2.5 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 hover:bg-rose-100 flex items-center justify-center gap-1.5 transition-all text-[11px] font-semibold"
-              >
-                <AlertOctagon className="w-3.5 h-3.5 text-rose-600" />
-                <span className="truncate">Izin Darurat</span>
-              </button>
-
-              {/* Tombol Jadwal Shift Bulan Berjalan */}
-              <button
-                type="button"
-                onClick={() => setScheduleModalOpen(true)}
-                className="flex-1 py-2 px-2.5 rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 flex items-center justify-center gap-1.5 transition-all text-[11px] font-semibold"
-              >
-                <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
-                <span className="truncate">Jadwal Roster</span>
-              </button>
-            </div>
 
             {/* ─── WIDGET ANALYTICS PROGRES KEHADIRAN REALTIME (HALLMARK ANTI-SLOP) ─── */}
             <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
@@ -3303,8 +3389,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             </div>
 
-            {/* Quick Action Tiles (3 Opsi) */}
-            <div className="grid grid-cols-3 gap-2">
+            {/* Quick Action Tiles (4 Opsi: Cuti, Lembur, Izin Darurat, dan Jadwal Roster) */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               <div
                 onClick={() => setLeaveModalOpen(true)}
                 className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-center space-y-1 cursor-pointer hover:border-emerald-500 transition-all active:scale-95 group shadow-xs"
@@ -3336,6 +3422,17 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
                 <p className="text-[11px] font-bold text-slate-900 dark:text-white">Izin Darurat</p>
                 <p className="text-[9.5px] text-rose-600 font-semibold">Self-Service</p>
+              </div>
+
+              <div
+                onClick={() => setScheduleModalOpen(true)}
+                className="p-3 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/60 text-center space-y-1 cursor-pointer hover:border-indigo-500 transition-all active:scale-95 group shadow-xs"
+              >
+                <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                  <CalendarDays className="w-4 h-4" />
+                </div>
+                <p className="text-[11px] font-bold text-slate-900 dark:text-white">Jadwal Roster</p>
+                <p className="text-[9.5px] text-indigo-600 font-semibold">Kalender Shift</p>
               </div>
             </div>
 
@@ -3500,6 +3597,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <p className="text-[10px] text-slate-400 uppercase font-semibold">Divisi & Peran</p>
                 <p className="text-xs font-bold text-slate-800 dark:text-white">{user?.divisionName || 'Operasional Lapangan'} • {user?.roleName || user?.role || 'Karyawan'}</p>
               </div>
+              <div>
+                <p className="text-[10px] text-slate-400 uppercase font-semibold">Jadwal Shift Kerja (Database)</p>
+                <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                  {userShift?.name || user?.shiftName || 'Day Shift'} ({userShift?.startTime || '07:30'} – {userShift?.endTime || '16:30'} WITA)
+                </p>
+              </div>
 
               {/* Master Face Biometric Card */}
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
@@ -3521,18 +3624,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
                   {masterDescriptor && masterDescriptor.length === 128
-                    ? '128-D Feature Vector biometrik wajah Anda aktif di database PostgreSQL.'
-                    : 'Wajah Anda belum terdaftar. Registrasikan 3-sudut agar presensi wajah aktif secara presisi.'}
+                    ? '128-D Feature Vector biometrik wajah Anda aktif dan terverifikasi di server presensi.'
+                    : 'Wajah Anda belum terdaftar. Hubungi Superadmin atau registrasikan wajah Anda agar presensi wajah aktif.'}
                 </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setEnrollModalOpen(true)}
-                  className="w-full rounded-xl text-xs gap-1.5 border-emerald-600/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 font-bold"
-                >
-                  <ScanFace className="w-3.5 h-3.5" />
-                  {masterDescriptor && masterDescriptor.length === 128 ? 'Perbarui Wajah Master' : 'Daftarkan Wajah Sekarang'}
-                </Button>
+                {(!masterDescriptor || masterDescriptor.length !== 128) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setEnrollModalOpen(true)}
+                    className="w-full rounded-xl text-xs gap-1.5 border-emerald-600/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 font-bold"
+                  >
+                    <ScanFace className="w-3.5 h-3.5" />
+                    Daftarkan Wajah Sekarang
+                  </Button>
+                )}
               </div>
 
               {/* Perangkat Terdaftar Binding */}

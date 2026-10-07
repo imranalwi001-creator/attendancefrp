@@ -54,10 +54,12 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const query = `
       SELECT p.*, r.name as role_code, r.label as role_label, d.name as division_title,
+             s.name as shift_name, s.start_time as shift_start_time, s.end_time as shift_end_time,
              sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme
       FROM hrm_profiles p
       LEFT JOIN hrm_roles r ON p.role_id = r.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
       LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
       WHERE (LOWER(p.email) = $1 OR LOWER(p.nip) = $1) AND p.is_active = true
       LIMIT 1;
@@ -520,7 +522,7 @@ app.get('/api/sync/bootstrap', async (req, res) => {
         FROM hrm_attendances a
         LEFT JOIN hrm_profiles p ON a.user_id = p.id
         LEFT JOIN hrm_divisions d ON p.division_id = d.id
-        ORDER BY a.attendance_date DESC, a.clock_in DESC LIMIT 25
+        ORDER BY a.attendance_date DESC, a.clock_in DESC LIMIT 500
       `),
       pool.query(`
         SELECT l.*, 
@@ -1995,6 +1997,9 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
       second: '2-digit'
     }) + ' WITA';
 
+    let shouldPromptSelfie = false;
+    let arrivedPost = null;
+
     if (postsRes.rows.length > 0) {
       // Multi-Titik evaluation: check against ALL saved posts
       const postsWithDist = postsRes.rows.map(p => {
@@ -2008,6 +2013,7 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
 
       if (insidePost) {
         // 🟢 EMPLOYEE IS INSIDE ONE OF THE REGISTERED POSTS (Titik A / B / C)
+        arrivedPost = insidePost;
         isOutOfBounds = false;
         targetLocationName = `${insidePost.post_name} [${insidePost.post_code}]`;
         allowedRadius = insidePost.radius;
@@ -2016,6 +2022,16 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
 
         // Check if just arrived at this post
         if (prof.current_active_post_id !== insidePost.id) {
+          const isSpecialDutyOfficer = [
+            'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+            '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
+            '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+          ].includes(validUserId)
+          || ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes((prof.email || '').toLowerCase())
+          || ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FRP07065', 'FR07066', 'FRP07046'].includes((prof.nip || '').trim());
+
+          shouldPromptSelfie = isSpecialDutyOfficer;
+
           await pool.query(
             `UPDATE hrm_profiles SET
                current_active_post_id = $1,
@@ -2026,6 +2042,22 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
              WHERE id = $3;`,
             [insidePost.id, insidePost.post_name, validUserId]
           );
+
+          // 📲 NOTIFIKASI WHATSAPP KE PETUGAS LAPANGAN KHUSUS (ASLAM, SAMSI, TAKDIR)
+          if (isSpecialDutyOfficer && prof.phone) {
+            const officerArrivalWa =
+`📍 *NOTIFIKASI TUGAS LAPANGAN PT FRP*
+
+Halo *${prof.full_name}*, sistem mendeteksi Anda telah tiba di *${insidePost.post_name}* [${insidePost.post_code}].
+Waktu: ${witaTimeStr}
+
+📸 *INSTRUKSI PIMPINAN:*
+Silakan segera buka aplikasi presensi dan lakukan *FOTO SELFIE VERIFIKASI WAJAH DI LOKASI POS* untuk mengonfirmasi kehadiran Anda di pos tugas ini. Terima kasih!`;
+            await sendWhatsAppAlert({
+              phone: prof.phone,
+              message: officerArrivalWa
+            }).catch(e => console.error('[WhatsApp Officer Arrival Error]:', e.message));
+          }
 
           // 📲 TRIGGER AUTOMATIC SYSTEM & WHATSAPP ALERT TO PIMPINAN & SUPERADMIN
           const arrivalTitle = `📍 ${prof.full_name} Tiba di ${insidePost.post_name}`;
@@ -2168,6 +2200,10 @@ Mohon segera pantau posisi petugas melalui menu Live Monitoring HRM.`;
       distanceFromTarget: distance,
       allowedRadius,
       targetLocationName,
+      arrivedPostId: arrivedPost?.id || null,
+      arrivedPostName: arrivedPost?.post_name || null,
+      triggerVibration: Boolean(shouldPromptSelfie),
+      shouldPromptSelfie: Boolean(shouldPromptSelfie),
       message: isOutOfBounds
         ? `Perhatian: Anda berada ${excessDist}m di luar seluruh radius pos resmi.`
         : `Posisi terpantau valid di dalam area kerja: ${targetLocationName}.`
@@ -2733,6 +2769,89 @@ app.get('/api/apk/latest-info', (req, res) => {
 });
 
 // ─── 13. PAYROLL & SLIP GAJI RESMI PT. FAWWAZ RESKI PERWIRA ───────────────────
+app.get('/api/payroll/settings', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM hrm_payroll_settings LIMIT 1');
+    if (result.rows.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          salaryCalculationDay: 25,
+          paymentDay: 1,
+          workingDaysPerMonth: 22,
+          lateDeductionPerMinute: 1000,
+          absenceDeductionPerDay: 155000,
+          defaultTaxRate: 0,
+          bpjsKesehatanEmployee: 1,
+          bpjsKesehatanEmployer: 4,
+          bpjsKetenagakerjaanEmployee: 3,
+          bpjsKetenagakerjaanEmployer: 3.7,
+          includeOvertimeInPayroll: true,
+          isLateDeductionEnabled: false,
+          currency: 'IDR'
+        }
+      });
+    }
+    const r = result.rows[0];
+    res.json({
+      success: true,
+      data: {
+        id: r.id,
+        salaryCalculationDay: r.cutoff_date || r.salary_calculation_day || 25,
+        paymentDay: r.payment_date || r.payment_day || 1,
+        workingDaysPerMonth: 22,
+        lateDeductionPerMinute: parseFloat(r.late_deduction_per_minute || 1000),
+        absenceDeductionPerDay: parseFloat(r.absence_deduction_per_day || 155000),
+        defaultTaxRate: parseFloat(r.default_tax_rate || 5),
+        bpjsKesehatanEmployee: parseFloat(r.bpjs_kesehatan_employee || 1),
+        bpjsKesehatanEmployer: parseFloat(r.bpjs_kesehatan_employer || 4),
+        bpjsKetenagakerjaanEmployee: parseFloat(r.bpjs_ketenagakerjaan_employee || 3),
+        bpjsKetenagakerjaanEmployer: parseFloat(r.bpjs_ketenagakerjaan_employer || 5.7),
+        includeOvertimeInPayroll: true,
+        isLateDeductionEnabled: r.is_late_deduction_enabled === true,
+        currency: 'IDR'
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/payroll/settings', async (req, res) => {
+  const settings = req.body;
+  try {
+    const isLateDeduction = settings.isLateDeductionEnabled === true;
+    await pool.query(`
+      UPDATE hrm_payroll_settings SET
+        cutoff_date = COALESCE($1, cutoff_date),
+        payment_date = COALESCE($2, payment_date),
+        late_deduction_per_minute = COALESCE($3, late_deduction_per_minute),
+        absence_deduction_per_day = COALESCE($4, absence_deduction_per_day),
+        default_tax_rate = COALESCE($5, default_tax_rate),
+        bpjs_kesehatan_employee = COALESCE($6, bpjs_kesehatan_employee),
+        bpjs_kesehatan_employer = COALESCE($7, bpjs_kesehatan_employer),
+        bpjs_ketenagakerjaan_employee = COALESCE($8, bpjs_ketenagakerjaan_employee),
+        bpjs_ketenagakerjaan_employer = COALESCE($9, bpjs_ketenagakerjaan_employer),
+        is_late_deduction_enabled = $10,
+        updated_at = NOW()
+    `, [
+      settings.salaryCalculationDay,
+      settings.paymentDay,
+      settings.lateDeductionPerMinute,
+      settings.absenceDeductionPerDay,
+      settings.defaultTaxRate,
+      settings.bpjsKesehatanEmployee,
+      settings.bpjsKesehatanEmployer,
+      settings.bpjsKetenagakerjaanEmployee,
+      settings.bpjsKetenagakerjaanEmployer,
+      isLateDeduction
+    ]);
+    res.json({ success: true, message: 'Pengaturan payroll berhasil disimpan' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/payroll/periods', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -3526,6 +3645,84 @@ app.post('/api/settings/break-policy', async (req, res) => {
     );
     res.json({ success: true, message: 'Pengaturan jam istirahat berhasil diperbarui' });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/attendances/today - Ambil data presensi hari ini untuk karyawan secara realtime & akurat
+app.get('/api/attendances/today', async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ success: false, error: 'User ID wajib disertakan' });
+  }
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query(
+        'SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1',
+        [userId]
+      );
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    const query = `
+      SELECT a.*, p.full_name as user_name, p.nip as user_nip, p.avatar_url as user_avatar,
+             COALESCE(d.name, p.division_name, 'Umum') as division_name
+      FROM hrm_attendances a
+      LEFT JOIN hrm_profiles p ON a.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      WHERE a.user_id = $1 AND a.attendance_date = CURRENT_DATE
+      ORDER BY a.clock_in DESC NULLS LAST, a.created_at DESC
+      LIMIT 1;
+    `;
+    const result = await pool.query(query, [validUserId]);
+    if (result.rows.length === 0) {
+      return res.json({ success: true, attendance: null });
+    }
+    const a = result.rows[0];
+    const attDate = a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '';
+    const attendance = {
+      id: a.id,
+      userId: a.user_id,
+      userName: a.user_name || undefined,
+      userNip: a.user_nip || undefined,
+      userAvatar: a.user_avatar || undefined,
+      divisionName: a.division_name || undefined,
+      date: attDate,
+      attendanceDate: attDate,
+      clockIn: a.clock_in ? a.clock_in.substring(0, 5) : null,
+      clockOut: a.clock_out ? a.clock_out.substring(0, 5) : null,
+      photoIn: a.photo_in,
+      photoOut: a.photo_out,
+      clockInPhoto: a.photo_in,
+      clockOutPhoto: a.photo_out,
+      clockInLat: parseFloat(a.lat_in) || undefined,
+      clockInLong: parseFloat(a.long_in) || undefined,
+      clockOutLat: parseFloat(a.lat_out) || undefined,
+      clockOutLong: parseFloat(a.long_out) || undefined,
+      status: a.status,
+      workMode: a.work_mode || 'onsite',
+      lateMinutes: a.late_minutes || 0,
+      earlyLeavingMinutes: a.early_leaving_minutes || 0,
+      workDurationMinutes: a.work_duration_minutes || 0,
+      isLocked: a.is_locked === true,
+      notes: a.notes,
+      biometricScore: a.biometric_score != null ? parseFloat(a.biometric_score) : undefined,
+      biometricMatch: a.biometric_match != null ? a.biometric_match : undefined,
+      geofenceDistance: a.geofence_distance_meters != null ? parseFloat(a.geofence_distance_meters) : undefined,
+      geofenceValid: a.geofence_valid != null ? a.geofence_valid : undefined,
+      isOnBreak: a.is_on_break === true,
+      breakStartTime: a.break_start_time,
+      breakEndTime: a.break_end_time,
+      breakDurationMinutes: a.break_duration_minutes || 0,
+      isEarlyLeave: a.is_early_leave === true,
+      earlyLeaveCategory: a.early_leave_category,
+      earlyLeaveReason: a.early_leave_reason,
+      createdAt: a.created_at,
+    };
+    res.json({ success: true, attendance });
+  } catch (err) {
+    console.error('Error fetching today attendance:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });

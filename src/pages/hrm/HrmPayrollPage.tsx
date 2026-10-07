@@ -782,7 +782,7 @@ const SimulatorPanel: React.FC<{ settings: PayrollSettings }> = ({ settings }) =
   const bpjsK = Math.round((settings.bpjsKesehatanEmployee / 100) * base);
   const bpjsT = Math.round((settings.bpjsKetenagakerjaanEmployee / 100) * base);
   const pph = Math.round((settings.defaultTaxRate / 100) * (gross - bpjsK - bpjsT));
-  const lateDed = late * settings.lateDeductionPerMinute;
+  const lateDed = settings.isLateDeductionEnabled === true ? late * settings.lateDeductionPerMinute : 0;
   const absDed = absent * settings.absenceDeductionPerDay;
   const net = Math.max(0, gross - bpjsK - bpjsT - pph - lateDed - absDed);
 
@@ -1950,26 +1950,59 @@ export const HrmPayrollPage: React.FC = () => {
                   Tarif pemotongan otomatis per menit keterlambatan dan hari ketidakhadiran (alfa).
                 </CardDescription>
               </CardHeader>
-              <CardContent className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                {[
-                  ['Pot. per Menit Terlambat', 'lateDeductionPerMinute'],
-                  ['Pot. per Hari Alfa', 'absenceDeductionPerDay'],
-                ].map(([label, key]) => (
-                  <div key={key} className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">{label}</Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">Rp</span>
-                      <Input
-                        type="number"
-                        className="pl-9 rounded-xl text-xs h-9 font-mono"
-                        value={settingsForm[key as keyof PayrollSettings] as number}
-                        onChange={(e) =>
-                          setSettingsForm((f) => ({ ...f, [key]: Number(e.target.value) }))
-                        }
-                      />
+              <CardContent className="p-4 sm:p-5 space-y-4">
+                {/* Toggle Aktifkan / Nonaktifkan Pemotongan Gaji Keterlambatan */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-border/80 bg-muted/40">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs font-bold text-foreground">
+                        Aktifkan Pemotongan Gaji Keterlambatan
+                      </Label>
+                      {settingsForm.isLateDeductionEnabled ? (
+                        <span className="px-2 py-0.5 text-[10px] font-bold bg-rose-500/10 text-rose-600 rounded-md border border-rose-300/40">
+                          Aktif (Potong Gaji)
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 text-[10px] font-bold bg-emerald-500/10 text-emerald-600 rounded-md border border-emerald-300/40">
+                          Nonaktif (Hanya Rekap Evaluasi)
+                        </span>
+                      )}
                     </div>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      {settingsForm.isLateDeductionEnabled
+                        ? 'Sistem akan memotong nominal gaji pokok secara otomatis berdasarkan menit keterlambatan saat slip digenerate.'
+                        : 'Standar PT FRP saat ini: Menit keterlambatan tetap dihitung untuk laporan visual kinerja ke Dirut & Pimpinan, TANPA memotong nominal gaji karyawan.'}
+                    </p>
                   </div>
-                ))}
+                  <Switch
+                    checked={settingsForm.isLateDeductionEnabled === true}
+                    onCheckedChange={(val) =>
+                      setSettingsForm((f) => ({ ...f, isLateDeductionEnabled: val }))
+                    }
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  {[
+                    ['Pot. per Menit Terlambat', 'lateDeductionPerMinute'],
+                    ['Pot. per Hari Alfa', 'absenceDeductionPerDay'],
+                  ].map(([label, key]) => (
+                    <div key={key} className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">{label}</Label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">Rp</span>
+                        <Input
+                          type="number"
+                          className="pl-9 rounded-xl text-xs h-9 font-mono"
+                          value={settingsForm[key as keyof PayrollSettings] as number}
+                          onChange={(e) =>
+                            setSettingsForm((f) => ({ ...f, [key]: Number(e.target.value) }))
+                          }
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
 

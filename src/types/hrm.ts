@@ -593,6 +593,7 @@ export interface PayrollSettings {
   bpjsKetenagakerjaanEmployee: number; // % JHT karyawan (2%)
   bpjsKetenagakerjaanEmployer: number; // % JHT employer (3.7%)
   includeOvertimeInPayroll: boolean; // Auto-include approved OT
+  isLateDeductionEnabled?: boolean;  // Toggle potongan gaji keterlambatan oleh Superadmin
   currency: string;                  // 'IDR'
 }
 

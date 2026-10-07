@@ -506,7 +506,7 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
 
       {/* ─── FORENSIC FACE PHOTO PREVIEW MODAL ─── */}
       <Dialog open={Boolean(previewPhoto)} onOpenChange={(open) => !open && setPreviewPhoto(null)}>
-        <DialogContent className="max-w-md bg-card border-border rounded-2xl p-0 overflow-hidden shadow-2xl">
+        <DialogContent className="max-w-lg sm:max-w-xl bg-card border-border rounded-2xl p-0 overflow-hidden shadow-2xl">
           <DialogHeader className="p-4 pb-2 border-b border-border/60">
             <DialogTitle className="text-base font-bold text-foreground flex items-center justify-between">
               <span className="flex items-center gap-2">
@@ -523,37 +523,21 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
           </DialogHeader>
 
           <div className="p-4 space-y-3">
-            <div className="relative aspect-4/3 w-full bg-black rounded-xl overflow-hidden border border-border shadow-inner flex items-center justify-center">
+            <div className="relative w-full max-h-[70vh] bg-black/95 rounded-2xl overflow-hidden border border-border shadow-inner flex items-center justify-center p-1">
               {loadingPhoto ? (
-                <div className="flex flex-col items-center justify-center gap-2 p-6 text-center text-slate-300">
-                  <div className="w-7 h-7 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                <div className="flex flex-col items-center justify-center gap-2 p-12 text-center text-slate-300">
+                  <div className="w-8 h-8 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
                   <p className="text-xs font-medium">Mengunduh foto verifikasi wajah dari server...</p>
                 </div>
               ) : previewPhoto?.url ? (
                 <img
                   src={previewPhoto.url}
                   alt="Bukti Foto Presensi"
-                  className="w-full h-full object-cover"
+                  className="w-full h-auto max-h-[68vh] object-contain rounded-xl"
                 />
               ) : (
-                <p className="text-muted-foreground text-xs">Foto tidak tersedia di server</p>
+                <p className="text-muted-foreground text-xs py-12">Foto tidak tersedia di server</p>
               )}
-
-              {/* Watermark overlay preview */}
-              <div className="absolute bottom-2 left-2 right-2 bg-black/60 backdrop-blur-xs text-white p-2 rounded-lg text-[10px] font-mono leading-tight space-y-0.5">
-                <p className="font-bold flex items-center gap-1 text-emerald-400">
-                  <ShieldCheck className="w-3 h-3" />
-                  VERIFIKASI BIOMETRIK RESMI PT. FAWWAZ RESKI PERWIRA
-                </p>
-                <p className="text-slate-200">
-                  🕒 {previewPhoto?.date} • {previewPhoto?.time} WITA
-                </p>
-                {previewPhoto?.geofenceDistance != null && (
-                  <p className="text-slate-300">
-                    📍 Jarak Kantor: {Math.round(previewPhoto.geofenceDistance)}m ({previewPhoto.geofenceValid !== false ? 'Dalam Radius' : 'Luar Perimeter'})
-                  </p>
-                )}
-              </div>
             </div>
 
             {/* Forensic Detail Badges */}

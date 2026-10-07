@@ -29,6 +29,10 @@ export interface LocationPingResult {
   distanceFromTarget: number;
   allowedRadius: number;
   targetLocationName: string;
+  arrivedPostId?: string | null;
+  arrivedPostName?: string | null;
+  triggerVibration?: boolean;
+  shouldPromptSelfie?: boolean;
   message?: string;
 }
 

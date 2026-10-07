@@ -758,47 +758,94 @@ export const HrmEmployeeDashboard: React.FC = () => {
     const h = canvas.height;
     const deviceFp = hrmService.getDeviceFingerprint();
 
-    const grad = ctx.createLinearGradient(0, h - 120, 0, h);
-    grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    grad.addColorStop(0.3, 'rgba(15, 23, 42, 0.88)');
-    grad.addColorStop(1, 'rgba(15, 23, 42, 0.98)');
+    // Responsive scaling based on canvas resolution (baseline 380px)
+    const minDim = Math.min(w, h);
+    const isLandscape = w > h;
+    const scale = isLandscape ? Math.max(h / 460, 1.35) : Math.max(minDim / 380, 1.45);
+
+    const barHeight = Math.round(230 * scale);
+    const grad = ctx.createLinearGradient(0, h - barHeight, 0, h);
+    grad.addColorStop(0, 'rgba(15, 23, 42, 0)');
+    grad.addColorStop(0.15, 'rgba(15, 23, 42, 0.93)');
+    grad.addColorStop(1, 'rgba(15, 23, 42, 0.99)');
     ctx.fillStyle = grad;
-    ctx.fillRect(0, h - 120, w, 120);
+    ctx.fillRect(0, h - barHeight, w, barHeight);
+
+    // Accent Line
+    ctx.fillStyle = '#10b981';
+    ctx.fillRect(0, h - barHeight + Math.round(16 * scale), w, Math.max(4, Math.round(4 * scale)));
 
     // Top Security Badge
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-    ctx.fillRect(14, 14, 430, 32);
+    const badgePadX = Math.round(18 * scale);
+    const badgeH = Math.round(40 * scale);
+    const badgeY = Math.round(18 * scale);
+    const badgeX = Math.round(18 * scale);
+    const badgeW = Math.min(w - badgeX * 2, Math.round(580 * scale));
+    const badgeRadius = Math.round(10 * scale);
 
-    ctx.font = 'bold 11px monospace';
-    ctx.fillStyle = '#10b981';
+    ctx.save();
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = Math.max(2.5, Math.round(2.5 * scale));
+    if (typeof ctx.roundRect === 'function') {
+      ctx.beginPath();
+      ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeRadius);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+      ctx.strokeRect(badgeX, badgeY, badgeW, badgeH);
+    }
+
+    ctx.font = `bold ${Math.round(13.5 * scale)}px system-ui, -apple-system, sans-serif`;
+    ctx.fillStyle = '#34d399';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = Math.round(3 * scale);
     const bioText = biometricConfidence != null ? ` • BIOMETRIC: ${biometricConfidence}% MATCH` : '';
-    const geoText = geofenceEval ? ` • GEOFENCE: ${Math.round(geofenceEval.distanceMeters)}m (${geofenceEval.zone.toUpperCase()})` : '';
-    ctx.fillText(`🛡️ DUAL-SHIELD GATE • ${actionType === 'clock_in' ? 'CLOCK-IN' : 'CLOCK-OUT'}${bioText}${geoText}`, 22, 34);
+    const geoText = geofenceEval ? ` • ${Math.round(geofenceEval.distanceMeters)}m` : '';
+    ctx.fillText(`🛡️ PT FRP • ${actionType === 'clock_in' ? 'CLOCK-IN' : 'CLOCK-OUT'}${bioText}${geoText}`, badgeX + badgePadX, badgeY + Math.round(25 * scale));
+    ctx.restore();
 
-    // Employee Info
-    ctx.font = 'bold 16px sans-serif';
+    // Text rows in bottom banner
+    const paddingX = Math.round(22 * scale);
+    let startY = h - barHeight + Math.round(48 * scale);
+    const lineGap = Math.round(37 * scale);
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+    ctx.shadowBlur = Math.round(5 * scale);
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 1;
+
+    // Line 1: Employee Info
+    ctx.font = `bold ${Math.round(17.5 * scale)}px system-ui, -apple-system, sans-serif`;
     ctx.fillStyle = '#ffffff';
-    ctx.fillText(`${user.fullName} (${user.nip}) • ${user.divisionName || 'Pusat'}`, 18, h - 70);
+    ctx.fillText(`👤 ${user.fullName} [${user.nip}] • ${user.divisionName || 'Pusat'}`, paddingX, startY);
 
-    // Atomic Time
-    const timeStr = new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'medium' });
-    ctx.font = '12px monospace';
-    ctx.fillStyle = '#cbd5e1';
-    ctx.fillText(`🕒 ${timeStr} WIB`, 18, h - 46);
+    // Line 2: Atomic Time
+    startY += lineGap;
+    const timeStr = new Date().toLocaleString('id-ID', { dateStyle: 'full', timeStyle: 'medium' });
+    ctx.font = `bold ${Math.round(15 * scale)}px ui-monospace, SFMono-Regular, monospace`;
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillText(`🕒 WAKTU REALTIME: ${timeStr} WITA`, paddingX, startY);
 
-    // Geofence & Anti-Spoof coordinates
+    // Line 3: Geofence & Anti-Spoof coordinates
+    startY += lineGap;
     const locStr = currentCoords
-      ? `📍 GPS: ${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)} (${distanceToOffice ? `${Math.round(distanceToOffice)}m` : 'Area OK'} - ${geofenceEval?.cardinalDirection || 'Pusat'})`
+      ? `📍 GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (${distanceToOffice ? `${Math.round(distanceToOffice)}m` : 'Area OK'} - ${geofenceEval?.cardinalDirection || 'Pusat'})`
       : '📍 GPS: Area Terverifikasi';
-    ctx.fillStyle = isMockSuspected ? '#f87171' : '#34d399';
-    ctx.fillText(locStr, 18, h - 22);
+    ctx.font = `bold ${Math.round(14.5 * scale)}px system-ui, -apple-system, sans-serif`;
+    ctx.fillStyle = isMockSuspected ? '#fb7185' : '#34d399';
+    ctx.fillText(locStr, paddingX, startY);
 
-    ctx.font = '11px monospace';
-    ctx.fillStyle = '#94a3b8';
-    ctx.textAlign = 'right';
+    // Line 4: Device Integrity Stamp
+    startY += lineGap - Math.round(2 * scale);
+    ctx.font = `bold ${Math.round(12.5 * scale)}px ui-monospace, SFMono-Regular, monospace`;
+    ctx.fillStyle = '#cbd5e1';
     const spoofLabel = isMockSuspected ? 'MOCK_ALERT' : 'GPS_HW_OK';
-    ctx.fillText(`ANTI-SPOOF: ${spoofLabel} • DEV: ${(deviceFp || '').slice(0, 10)}`, w - 18, h - 22);
-    ctx.textAlign = 'left';
+    ctx.fillText(`📡 ANTI-SPOOF: ${spoofLabel} • DEV: ${(deviceFp || '').slice(0, 10)} • 🔒 SHA-256 ANTI-TAMPER`, paddingX, startY);
+
+    ctx.restore();
   };
 
   // Start or switch camera stream with specified facingMode and multi-level fallback

@@ -53,3 +53,6 @@ New Text Document.txt
 *.apk
 public/downloads/
 server/public/downloads/
+*.tar.gz
+mobile/android/build/
+mobile/android/.gradle/
