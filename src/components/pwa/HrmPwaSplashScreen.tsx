@@ -35,7 +35,7 @@ export const HrmPwaSplashScreen: React.FC<HrmPwaSplashScreenProps> = ({ onFinish
       // Animasi progress bar bertahap 0 -> 100%
       let currentProgress = 0;
       const interval = setInterval(() => {
-        currentProgress += Math.floor(Math.random() * 8) + 4;
+        currentProgress += Math.floor(Math.random() * 8) + 5;
         if (currentProgress >= 100) {
           currentProgress = 100;
           setProgress(100);
@@ -48,8 +48,8 @@ export const HrmPwaSplashScreen: React.FC<HrmPwaSplashScreenProps> = ({ onFinish
             setTimeout(() => {
               setVisible(false);
               if (onFinish) onFinish();
-            }, 600);
-          }, 350);
+            }, 500);
+          }, 300);
         } else {
           setProgress(currentProgress);
           if (currentProgress > 70) {
@@ -60,9 +60,22 @@ export const HrmPwaSplashScreen: React.FC<HrmPwaSplashScreenProps> = ({ onFinish
             setStatusText('Menginisialisasi modul...');
           }
         }
-      }, 70);
+      }, 60);
 
-      return () => clearInterval(interval);
+      // Hard safety timer: pastikan splash screen hilang dalam 2.5 detik apa pun yang terjadi
+      const safetyTimer = setTimeout(() => {
+        clearInterval(interval);
+        setFadingOut(true);
+        setTimeout(() => {
+          setVisible(false);
+          if (onFinish) onFinish();
+        }, 300);
+      }, 2500);
+
+      return () => {
+        clearInterval(interval);
+        clearTimeout(safetyTimer);
+      };
     } else {
       if (onFinish) onFinish();
     }
@@ -77,6 +90,7 @@ export const HrmPwaSplashScreen: React.FC<HrmPwaSplashScreenProps> = ({ onFinish
       }`}
       style={{
         background: 'radial-gradient(circle at 50% 45%, #0b3438 0%, #062225 45%, #041416 100%)',
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
       }}
     >
       {/* ─── GRID BACKGROUND FUTURISTIK PERSIS LAMPIRAN 4 ─── */}
@@ -118,19 +132,32 @@ export const HrmPwaSplashScreen: React.FC<HrmPwaSplashScreenProps> = ({ onFinish
               />
             </div>
             {/* Badge Tahun / Versi di Bawah Logo */}
-            <span className="mt-1 text-[10px] font-mono font-bold tracking-widest text-teal-300/90 uppercase">
+            <span
+              className="mt-1 text-[10px] font-mono font-bold tracking-widest text-teal-300/90 uppercase"
+              style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}
+            >
               2026
             </span>
           </div>
         </div>
 
-        {/* ─── BRANDING: NAMA PT. FAWWAZ RESKI PERWIRA (BERADA TEPAT DI TENGAH SIMETRIS TANPA LOGO SAMPING) ─── */}
+        {/* ─── BRANDING: NAMA PT. FAWWAZ RESKI PERWIRA (BERADA TEPAT DI TENGAH SIMETRIS TANPA LOGO SAMPING, FONT MONOSPACE SAMA DENGAN TEKS BAWAH) ─── */}
         <div className="mt-8 flex flex-col items-center justify-center text-center space-y-2 px-4 w-full max-w-sm mx-auto">
-          <h1 className="text-xl sm:text-2xl font-black tracking-wider text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.8)] text-center leading-snug">
+          <h1
+            className="text-xl sm:text-2xl font-black tracking-wider text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.8)] text-center leading-snug font-mono"
+            style={{
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+            }}
+          >
             {settings?.appName || 'PT. FAWWAZ RESKI PERWIRA'}
           </h1>
 
-          <p className="text-[11px] font-semibold tracking-widest text-teal-200/80 uppercase text-center">
+          <p
+            className="text-[11px] font-semibold tracking-widest text-teal-200/80 uppercase text-center font-mono"
+            style={{
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+            }}
+          >
             Sistem Informasi Presensi & Manajemen SDM
           </p>
         </div>

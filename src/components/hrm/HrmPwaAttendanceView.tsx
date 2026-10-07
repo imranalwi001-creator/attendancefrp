@@ -2698,8 +2698,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       {/* ─── PWA SPLASH SCREEN ANIMASI PERSIS LAMPIRAN 4 ─── */}
       <HrmPwaSplashScreen forceShow={showSplashPreview} onFinish={() => setShowSplashPreview(false)} />
 
-      {/* ─── GRADIENT HEADER ATAS (PERSIS LAMPIRAN 2) ─── */}
-      <header className="bg-gradient-to-r from-[#14532D] via-[#0F766E] to-[#0284C7] text-white pt-[max(0.85rem,env(safe-area-inset-top))] pb-5 px-4 shadow-md">
+      {/* ─── GRADIENT HEADER ATAS (DARK TEAL THEME) ─── */}
+      <header className="bg-gradient-to-r from-[#062225] via-[#0b3438] to-[#0f766e] text-white pt-[max(0.85rem,env(safe-area-inset-top))] pb-5 px-4 shadow-md">
         {/* Title Bar: Logo + PT. FAWWAZ RESKI PERWIRA Branding + Notification Bell + Actions */}
         <div className="flex items-center justify-between gap-3 px-1">
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
