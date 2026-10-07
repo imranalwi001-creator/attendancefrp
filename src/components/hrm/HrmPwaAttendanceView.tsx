@@ -68,6 +68,7 @@ import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { emergencyAlertService } from '@/services/emergencyAlertAudioService';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
 import { HrmFieldAuthorityMobileModal } from '@/components/hrm/HrmFieldAuthorityMobileModal';
+import { HrmPwaSplashScreen } from '@/components/pwa/HrmPwaSplashScreen';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -83,6 +84,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   // Active Bottom Tab: 'beranda' | 'riwayat' | 'aktivitas' | 'akun'
   const [activeTab, setActiveTab] = useState<'beranda' | 'riwayat' | 'aktivitas' | 'akun'>('beranda');
+
+  // PWA Splash Screen Preview State
+  const [showSplashPreview, setShowSplashPreview] = useState(false);
 
   // Real-time Clock
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
@@ -2302,6 +2306,29 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     !hasClockedOut &&
     (!isBeforeShiftEndTime || hasApprovedEmergencyLeave || isFieldSpecial);
 
+  // Aksi Cerdas Gabungan Masuk & Pulang di Tombol Tengah Menu Bawah
+  const handleCenterAttendanceClick = () => {
+    if (!hasClockedIn) {
+      if (!isClockInAllowed) {
+        toast.error(clockInDisabledReason || 'Presensi masuk belum memenuhi syarat lokasi/shift.');
+        return;
+      }
+      openLiveCamera('clock_in');
+    } else if (!hasClockedOut) {
+      if (!isClockOutAllowed) {
+        if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave && !isFieldSpecial) {
+          toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
+        } else {
+          toast.error('Belum memenuhi syarat untuk absen pulang.');
+        }
+        return;
+      }
+      openLiveCamera('clock_out');
+    } else {
+      toast.info(`Presensi hari ini telah lengkap: Masuk ${todayAttendance?.clockIn?.substring(0, 5) || '-'} WITA • Pulang ${todayAttendance?.clockOut?.substring(0, 5) || '-'} WITA.`);
+    }
+  };
+
   // ─────────────────────────────────────────────────────────────────────────────
   // 1. TAMPILAN FULLSCREEN LIVE CAMERA (PERSIS LAMPIRAN 3)
   // ─────────────────────────────────────────────────────────────────────────────
@@ -2668,6 +2695,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   // ─────────────────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-[#14532D] text-foreground flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
+      {/* ─── PWA SPLASH SCREEN ANIMASI PERSIS LAMPIRAN 4 ─── */}
+      <HrmPwaSplashScreen forceShow={showSplashPreview} onFinish={() => setShowSplashPreview(false)} />
+
       {/* ─── GRADIENT HEADER ATAS (PERSIS LAMPIRAN 2) ─── */}
       <header className="bg-gradient-to-r from-[#14532D] via-[#0F766E] to-[#0284C7] text-white pt-[max(0.85rem,env(safe-area-inset-top))] pb-5 px-4 shadow-md">
         {/* Title Bar: Logo + PT. FAWWAZ RESKI PERWIRA Branding + Notification Bell + Actions */}
@@ -2687,18 +2717,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Tombol Pasang PWA ke Layar HP jika dibuka lewat peramban browser */}
-            {!isStandaloneApp && (
-              <button
-                type="button"
-                onClick={handleTriggerPwaInstall}
-                className="relative w-8 h-8 rounded-full bg-emerald-500 hover:bg-emerald-400 text-white flex items-center justify-center transition-all active:scale-90 shadow-md animate-pulse"
-                title="Pasang Aplikasi ke Layar Utama HP"
-              >
-                <Smartphone className="w-3.5 h-3.5" />
-              </button>
-            )}
-
             {/* Lonceng Notifikasi Realtime Pengajuan */}
             <button
               type="button"
@@ -2745,27 +2763,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         {/* ─── TAB 1: BERANDA PRESENSI UTAMA ─── */}
         {activeTab === 'beranda' && (
           <div className="space-y-4 animate-in fade-in duration-200">
-            {/* Banner Pasang PWA jika dibuka lewat browser */}
-            {!isStandaloneApp && (
-              <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white rounded-2xl p-3 flex items-center justify-between gap-2.5 shadow-md border border-emerald-400/40">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center shrink-0">
-                    <Smartphone className="w-4 h-4 text-white" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-extrabold text-xs text-white truncate">Pasang Aplikasi di Layar HP</p>
-                    <p className="text-[10px] text-emerald-100 truncate">Akses presensi instan tanpa buka browser</p>
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  onClick={handleTriggerPwaInstall}
-                  className="h-8 px-3 bg-white text-emerald-900 hover:bg-emerald-50 text-[11px] font-black rounded-xl shrink-0 shadow-xs active:scale-95"
-                >
-                  Pasang PWA
-                </Button>
-              </div>
-            )}
 
             {/* Greeting & Identity Section */}
             <div className="flex items-center justify-between gap-3 pt-1">
@@ -3137,28 +3134,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
               )}
 
-              {/* Action Buttons: Vibration Pulse + Roadside Emergency */}
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <Button
-                  size="sm"
-                  type="button"
-                  onClick={triggerStrongVibrationReminder}
-                  className="h-8 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-xl gap-1.5 font-semibold active:scale-95 transition-all shadow-xs"
-                >
-                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Uji Getar Reminder</span>
-                </Button>
-
-                <Button
-                  size="sm"
-                  type="button"
-                  onClick={() => setTravelModalOpen(true)}
-                  className="h-8 text-xs bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700 text-white rounded-xl gap-1.5 font-bold active:scale-95 transition-all shadow-xs"
-                >
-                  <Wrench className="w-3.5 h-3.5" />
-                  <span>Lapor Kendala Jalan</span>
-                </Button>
-              </div>
             </div>
 
             {/* ─── KARTU RINGKASAN WAKTU PRESENSI HARI INI (REALTIME DATABASE STATUS) ─── */}
@@ -3723,8 +3698,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             </div>
 
-            {/* Quick Action Tiles (4 Opsi: Cuti, Lembur, Izin Darurat, dan Jadwal Roster) */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            {/* Quick Action Tiles (5 Opsi: Cuti, Lembur, Izin Darurat, Kendala Jalan, dan Jadwal Roster) */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
               <div
                 onClick={() => setLeaveModalOpen(true)}
                 className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-center space-y-1 cursor-pointer hover:border-emerald-500 transition-all active:scale-95 group shadow-xs"
@@ -3758,9 +3733,21 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <p className="text-[9.5px] text-rose-600 font-semibold">Self-Service</p>
               </div>
 
+              {/* Lapor Kendala Jalan Resmi di Menu Aktivitas */}
+              <div
+                onClick={() => setTravelModalOpen(true)}
+                className="p-3 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 border border-amber-300/80 dark:border-amber-700/60 text-center space-y-1 cursor-pointer hover:border-amber-500 transition-all active:scale-95 group shadow-xs"
+              >
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform shadow-xs">
+                  <Wrench className="w-4 h-4" />
+                </div>
+                <p className="text-[11px] font-bold text-slate-900 dark:text-white truncate">Kendala Jalan</p>
+                <p className="text-[9.5px] text-amber-700 dark:text-amber-300 font-semibold">Lapor Darurat</p>
+              </div>
+
               <div
                 onClick={() => setScheduleModalOpen(true)}
-                className="p-3 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/60 text-center space-y-1 cursor-pointer hover:border-indigo-500 transition-all active:scale-95 group shadow-xs"
+                className="p-3 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/60 text-center space-y-1 cursor-pointer hover:border-indigo-500 transition-all active:scale-95 group shadow-xs col-span-2 sm:col-span-1"
               >
                 <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
                   <CalendarDays className="w-4 h-4" />
@@ -3999,6 +3986,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </Button>
               </div>
 
+              {/* Tombol Preview Splash Screen PWA (Lampiran 4) */}
+              <div className="pt-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowSplashPreview(true)}
+                  className="w-full rounded-xl text-xs gap-1.5 border-teal-500/40 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-950/40 font-bold"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-teal-500" />
+                  Pratinjau Splash Screen PWA (PT FRP)
+                </Button>
+              </div>
+
               <div className="pt-1">
                 <Button
                   size="sm"
@@ -4026,8 +4026,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         )}
       </main>
 
-      {/* ─── BOTTOM NAVIGATION BAR NATIVE (4 TABS PERSIS LAMPIRAN 2) ─── */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-slate-950/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800 px-3 py-2 flex items-center justify-around shadow-[0_-4px_20px_rgba(0,0,0,0.06)] pb-[max(0.6rem,env(safe-area-inset-bottom))]">
+      {/* ─── BOTTOM NAVIGATION BAR NATIVE DENGAN TOMBOL MASUK/PULANG DI TENGAH (PERSIS PERMINTAAN USER) ─── */}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-slate-950/95 backdrop-blur-md border-t border-slate-200/80 dark:border-slate-800 px-2 py-1 flex items-center justify-between shadow-[0_-4px_25px_rgba(0,0,0,0.08)] pb-[max(0.6rem,env(safe-area-inset-bottom))]">
         {/* Tab 1: BERANDA */}
         <button
           type="button"
@@ -4053,6 +4053,53 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           <span className="text-[10px] mt-1 tracking-tight">RIWAYAT</span>
           {activeTab === 'riwayat' && <span className="w-6 h-0.5 bg-emerald-600 rounded-full mt-0.5" />}
         </button>
+
+        {/* ─── TOMBOL TENGAH: GABUNGAN MASUK & PULANG (ICON MENU ELEVATED) ─── */}
+        <div className="flex flex-col items-center justify-center -mt-7 shrink-0 px-1 relative z-50">
+          <button
+            type="button"
+            onClick={handleCenterAttendanceClick}
+            className={`relative w-14 h-14 rounded-full flex flex-col items-center justify-center text-white shadow-xl transition-all duration-300 active:scale-90 border-4 border-white dark:border-slate-950 ${
+              !hasClockedIn
+                ? 'bg-gradient-to-tr from-emerald-600 via-teal-600 to-emerald-500 shadow-emerald-500/40 ring-4 ring-emerald-500/20 hover:scale-105'
+                : !hasClockedOut
+                ? 'bg-gradient-to-tr from-rose-600 via-orange-600 to-amber-600 shadow-rose-500/40 ring-4 ring-rose-500/20 hover:scale-105'
+                : 'bg-gradient-to-tr from-slate-700 via-slate-800 to-slate-900 shadow-slate-900/40 border-slate-700 hover:scale-105'
+            }`}
+            title={
+              !hasClockedIn
+                ? 'Presensi Masuk Sekarang'
+                : !hasClockedOut
+                ? 'Presensi Pulang Sekarang'
+                : 'Presensi Lengkap'
+            }
+          >
+            {/* Animasi Halo Glow jika belum absen masuk atau belum absen pulang */}
+            {(!hasClockedIn || !hasClockedOut) && (
+              <span className={`absolute inset-0 rounded-full animate-ping opacity-25 pointer-events-none ${
+                !hasClockedIn ? 'bg-emerald-400' : 'bg-rose-400'
+              }`} />
+            )}
+
+            {!hasClockedIn ? (
+              <Clock className="w-6 h-6 drop-shadow-sm text-white" />
+            ) : !hasClockedOut ? (
+              <LogOut className="w-6 h-6 drop-shadow-sm text-white" />
+            ) : (
+              <CheckCircle2 className="w-6 h-6 drop-shadow-sm text-emerald-300" />
+            )}
+          </button>
+          
+          <span className={`text-[9.5px] font-black tracking-wider uppercase mt-1 drop-shadow-xs ${
+            !hasClockedIn
+              ? 'text-emerald-700 dark:text-emerald-400'
+              : !hasClockedOut
+              ? 'text-rose-600 dark:text-rose-400'
+              : 'text-slate-500 dark:text-slate-400'
+          }`}>
+            {!hasClockedIn ? 'MASUK' : !hasClockedOut ? 'PULANG' : 'SELESAI'}
+          </span>
+        </div>
 
         {/* Tab 3: AKTIVITAS */}
         <button
@@ -5121,25 +5168,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             </div>
 
-            {/* Rekomendasi Solusi Terbaik Dinamis */}
-            <div className="p-3 rounded-2xl bg-gradient-to-r from-amber-500/10 via-orange-500/5 to-transparent border border-amber-500/30 text-amber-900 dark:text-amber-200 space-y-1">
-              <div className="flex items-center gap-1.5 font-bold text-[11px] text-amber-800 dark:text-amber-300">
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Rekomendasi & Langkah Darurat FRP:</span>
-              </div>
-              <p className="text-[11px] leading-relaxed opacity-90">
-                {travelIncidentType === 'ban_bocor' &&
-                  '1. Segera tepikan kendaraan di bahu jalan yang aman. 2. Nyalakan lampu darurat jika malam hari. 3. Hubungi atau cari jasa tambal ban terdekat. Diberikan toleransi tambahan 45 menit tanpa potongan/SP.'}
-                {travelIncidentType === 'kehabisan_bensin' &&
-                  '1. Pindahkan kendaraan ke trotoar/area aman. 2. Beli BBM di Pertashop/SPBU terdekat atau hubungi rekan kerja terdekat untuk bantuan darurat. Diberikan toleransi tambahan 30 menit.'}
-                {travelIncidentType === 'motor_rusak' &&
-                  '1. Jangan paksa starter berkali-kali. 2. Bawa ke bengkel darurat terdekat atau panggil montir. Simpan bukti nota perbaikan. Diberikan toleransi tambahan 60 menit.'}
-                {travelIncidentType === 'kecelakaan_ringan' &&
-                  '1. Prioritaskan pertolongan pertama (P3K) dan keselamatan fisik Anda. 2. Hubungi keluarga/atasan langsung jika butuh penjemputan darurat. Diberikan dispensasi penuh.'}
-                {travelIncidentType === 'cuaca_ekstrem' &&
-                  '1. Berteduh di bangunan kokoh dan aman. 2. Jauhi pohon rindang besar dan tiang listrik. Diberikan toleransi cuaca 60 menit.'}
-              </p>
-            </div>
 
             {/* Foto Bukti Kejadian (Camera / File) */}
             <div className="space-y-1.5">
