@@ -70,6 +70,7 @@ import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal'
 import { HrmFieldAuthorityMobileModal } from '@/components/hrm/HrmFieldAuthorityMobileModal';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import defaultAvatar from '@/assets/logo.png';
 
