@@ -3919,9 +3919,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <p className="text-xs font-bold text-slate-800 dark:text-white">{user?.divisionName || 'Operasional Lapangan'} • {user?.roleName || user?.role || 'Karyawan'}</p>
               </div>
               <div>
-                <p className="text-[10px] text-slate-400 uppercase font-semibold">Jadwal Shift Kerja (Database)</p>
+                <p className="text-[10px] text-slate-400 uppercase font-semibold">Jadwal</p>
                 <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                  {userShift?.name || user?.shiftName || 'Day Shift'} ({userShift?.startTime || '07:30'} – {userShift?.endTime || '16:30'} WITA)
+                  {(() => {
+                    const rawName = userShift?.name || user?.shiftName || '';
+                    if (rawName && rawName.includes('(') && rawName.includes(')')) {
+                      return rawName;
+                    }
+                    const startTime = userShift?.startTime || user?.shiftStartTime || '07:30';
+                    const endTime = userShift?.endTime || user?.shiftEndTime || '16:30';
+                    const name = rawName || 'Shift Reguler';
+                    return `${name} (${startTime} – ${endTime} WITA)`;
+                  })()}
                 </p>
               </div>
 
@@ -3986,18 +3995,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </Button>
               </div>
 
-              {/* Tombol Preview Splash Screen PWA (Lampiran 4) */}
-              <div className="pt-1">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setShowSplashPreview(true)}
-                  className="w-full rounded-xl text-xs gap-1.5 border-teal-500/40 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-950/40 font-bold"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-teal-500" />
-                  Pratinjau Splash Screen PWA (PT FRP)
-                </Button>
-              </div>
+
 
               <div className="pt-1">
                 <Button

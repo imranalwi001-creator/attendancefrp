@@ -72,6 +72,7 @@ export default defineConfig(({ mode }) => {
         display: "standalone",
         orientation: "portrait-primary",
         scope: "/",
+        id: "/?pwa=v2_darkteal_clean",
         start_url: "/?source=pwa",
         icons: [
           { src: "/pwa-192x192.png", sizes: "192x192", type: "image/png", purpose: "any" },

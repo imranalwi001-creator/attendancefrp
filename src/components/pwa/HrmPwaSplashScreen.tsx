@@ -121,19 +121,16 @@ export const HrmPwaSplashScreen: React.FC<HrmPwaSplashScreenProps> = ({ onFinish
           {/* Soft inner glow ring */}
           <div className="absolute inset-6 rounded-full bg-teal-400/10 blur-md pointer-events-none" />
 
-          {/* Kotak App Icon Persegi di Tengah Lingkaran (Mirip Icon Kolabo 2026 di Lampiran 4) */}
-          <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-2xl bg-gradient-to-b from-slate-900/90 to-slate-950/95 p-3 flex flex-col items-center justify-center border border-teal-400/40 shadow-[0_0_35px_rgba(20,184,166,0.35)] backdrop-blur-md">
-            {/* Logo Monogram */}
-            <div className="w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center">
-              <img
-                src={settings?.logoUrl || defaultLogo}
-                alt="Logo FRP"
-                className="w-full h-full object-contain filter drop-shadow-[0_2px_10px_rgba(45,212,191,0.5)]"
-              />
-            </div>
-            {/* Badge Tahun / Versi di Bawah Logo */}
+          {/* Logo Menyatu Tanpa Bingkai Kotak, Tetap Tajam & Jelas dengan Aksen Glow Halus */}
+          <div className="relative z-10 flex flex-col items-center justify-center pointer-events-none">
+            <img
+              src={settings?.logoUrl || defaultLogo}
+              alt="Logo FRP"
+              className="w-24 h-24 sm:w-28 sm:h-28 object-contain filter drop-shadow-[0_0_24px_rgba(45,212,191,0.7)]"
+            />
+            {/* Badge Tahun di Bawah Logo */}
             <span
-              className="mt-1 text-[10px] font-mono font-bold tracking-widest text-teal-300/90 uppercase"
+              className="mt-2 text-[11px] font-mono font-bold tracking-widest text-teal-300/95 uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]"
               style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}
             >
               2026

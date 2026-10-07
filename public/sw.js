@@ -1,5 +1,5 @@
 // HRM Attendance System Service Worker (PWA)
-const CACHE_NAME = 'hrm-pwa-v20261007-darkteal-v7';
+const CACHE_NAME = 'hrm-pwa-v20261007-clean-v8';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
