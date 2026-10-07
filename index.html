@@ -12,11 +12,11 @@
     <meta name="twitter:description" content="Sistem Informasi Presensi & Manajemen SDM Mandiri">
     <meta name="twitter:card" content="summary">
     <meta property="og:type" content="website">
-    <meta name="theme-color" content="#0d9488">
+    <meta name="theme-color" content="#062225">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="HRM Presensi">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="PT FRP">
     <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="shortcut icon" type="image/png" href="/logo.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
@@ -48,7 +48,7 @@
         }
 
         // FORCE CACHE PURGE & SERVICE WORKER UPDATE ON NEW BUILD
-        var PURGE_TAG = 'hrm_deploy_v20261005_lampiran2_fixed';
+        var PURGE_TAG = 'hrm_deploy_v20261007_pwa_splash_kolabo_style_v5';
         try {
           localStorage.removeItem('hrm_force_desktop_mode');
           if (localStorage.getItem('hrm_deploy_tag') !== PURGE_TAG) {
@@ -104,14 +104,46 @@
   </head>
   <body class="bg-background text-foreground antialiased min-h-screen">
     <div id="root">
-      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; color: #334155; padding: 20px;">
-        <div style="width: 44px; height: 44px; border: 3px solid #e2e8f0; border-top-color: #0d9488; border-radius: 50%; animation: hrm-spin 0.8s linear infinite; margin-bottom: 16px;"></div>
-        <p style="font-weight: 600; font-size: 15px; margin: 0 0 6px 0; color: #0f172a;">Memuat HRM Attendance System...</p>
-        <p style="font-size: 12px; margin: 0; color: #64748b;">Menghubungkan sesi & menyiapkan antarmuka...</p>
-        <div id="hrm-critical-error" style="display: none; margin-top: 16px; max-width: 480px; padding: 12px 16px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; color: #b91c1c; font-size: 12px; font-family: monospace; white-space: pre-wrap; word-break: break-word;"></div>
+      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: radial-gradient(circle at 50% 45%, #0b3438 0%, #062225 45%, #041416 100%); color: #ffffff; padding: 20px; position: relative; overflow: hidden; user-select: none;">
+        <!-- Grid Tech Pattern Persis Lampiran 4 -->
+        <div style="position: absolute; inset: 0; pointer-events: none; opacity: 0.18; background-image: linear-gradient(to right, rgba(45, 212, 191, 0.2) 1px, transparent 1px), linear-gradient(to bottom, rgba(45, 212, 191, 0.2) 1px, transparent 1px); background-size: 40px 40px;"></div>
+
+        <!-- Central Glowing Radar Rings -->
+        <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 220px; height: 220px; margin-bottom: 28px;">
+          <div style="position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(45, 212, 191, 0.3); animation: hrm-spin 10s linear infinite;"></div>
+          <div style="position: absolute; inset: 8px; border-radius: 50%; border: 2px solid transparent; border-top-color: rgba(94, 234, 212, 0.9); border-right-color: rgba(94, 234, 212, 0.3); animation: hrm-spin 3.5s linear infinite;"></div>
+          
+          <!-- App Icon Box with Logo & 2026 -->
+          <div style="position: relative; width: 100px; height: 100px; border-radius: 20px; background: linear-gradient(to bottom, rgba(15, 23, 42, 0.95), rgba(2, 6, 23, 0.98)); display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid rgba(45, 212, 191, 0.45); box-shadow: 0 0 35px rgba(20, 184, 166, 0.4); padding: 8px;">
+            <img src="/logo.png" alt="Logo" style="width: 52px; height: 52px; object-fit: contain; filter: drop-shadow(0 2px 8px rgba(45, 212, 191, 0.6));" />
+            <span style="font-size: 10px; font-weight: 700; font-family: monospace; color: #5eead4; margin-top: 4px; letter-spacing: 2px;">2026</span>
+          </div>
+        </div>
+
+        <!-- Branding PT FRP -->
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px; z-index: 10;">
+          <div style="width: 36px; height: 36px; border-radius: 10px; background: rgba(45, 212, 191, 0.15); border: 1px solid rgba(45, 212, 191, 0.4); display: flex; align-items: center; justify-content: center;">
+            <img src="/logo.png" alt="Logo" style="width: 24px; height: 24px; object-fit: contain;" />
+          </div>
+          <h1 style="font-size: 20px; font-weight: 900; letter-spacing: 0.5px; color: #ffffff; margin: 0; text-shadow: 0 2px 10px rgba(0,0,0,0.8);">PT. FAWWAZ RESKI PERWIRA</h1>
+        </div>
+        <p style="font-size: 11px; color: rgba(204, 251, 241, 0.7); margin: 0 0 32px 0; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 500;">Sistem Presensi & Operasional</p>
+
+        <!-- Progress Bar Loading -->
+        <div style="width: 200px; height: 5px; border-radius: 10px; background: rgba(2, 6, 23, 0.8); border: 1px solid rgba(45, 212, 191, 0.3); overflow: hidden; padding: 1px; margin-bottom: 12px; z-index: 10;">
+          <div style="height: 100%; border-radius: 10px; background: linear-gradient(to right, #2dd4bf, #5eead4, #67e8f9); box-shadow: 0 0 10px rgba(45, 212, 191, 0.8); animation: hrm-progress 2.2s ease-in-out infinite;"></div>
+        </div>
+
+        <!-- Status Text -->
+        <p style="font-size: 12px; color: rgba(204, 251, 241, 0.85); font-family: monospace; letter-spacing: 0.5px; margin: 0; z-index: 10;">Synchronizing workspace</p>
+
+        <div id="hrm-critical-error" style="display: none; margin-top: 16px; max-width: 480px; padding: 12px 16px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; color: #b91c1c; font-size: 12px; font-family: monospace; white-space: pre-wrap; word-break: break-word; z-index: 20;"></div>
         <style>
-          @keyframes hrm-spin {
-            to { transform: rotate(360deg); }
+          @keyframes hrm-spin { to { transform: rotate(360deg); } }
+          @keyframes hrm-progress {
+            0% { width: 5%; }
+            50% { width: 65%; }
+            100% { width: 100%; }
           }
         </style>
       </div>

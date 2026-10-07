@@ -1,13 +1,13 @@
 {
-  "name": "HRM Attendance System",
-  "short_name": "HRM Presensi",
-  "description": "Sistem Presensi & Manajemen SDM Mandiri Tanpa Browser",
+  "name": "PT. FAWWAZ RESKI PERWIRA",
+  "short_name": "PT FRP",
+  "description": "Sistem Informasi Presensi & Manajemen SDM Mandiri PT FRP",
   "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#14532D",
-  "theme_color": "#14532D",
+  "background_color": "#062225",
+  "theme_color": "#062225",
   "categories": ["business", "productivity", "utilities"],
   "icons": [
     {

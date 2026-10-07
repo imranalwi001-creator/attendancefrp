@@ -10,6 +10,7 @@ import { ThemeProvider } from 'next-themes';
 import { HrmAuthProvider } from '@/contexts/HrmAuthContext';
 import { HrmProtectedRoute } from '@/components/hrm/HrmProtectedRoute';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { HrmPwaSplashScreen } from '@/components/pwa/HrmPwaSplashScreen';
 
 // HRM Pages
 import { HrmLogin } from '@/pages/hrm/HrmLogin';
@@ -54,6 +55,8 @@ export const App: React.FC = () => {
           <Sonner />
           <HrmAuthProvider>
             <ErrorBoundary>
+              {/* PWA Initial Launch Splash Screen (Lampiran 4) */}
+              <HrmPwaSplashScreen />
               <BrowserRouter>
               <Routes>
                 {/* Root directs to Login if not logged in, or Dashboard if logged in */}
