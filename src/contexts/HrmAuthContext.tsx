@@ -53,7 +53,11 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
               const p = JSON.parse(latestSaved);
               const freshUsers = hrmService.getUsers();
               const f = freshUsers.find((u) => u.id === p.id || u.nip?.toLowerCase() === p.nip?.toLowerCase());
-              if (f) setUser(f);
+              if (f) {
+                setUser(f);
+                sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(f));
+                localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(f));
+              }
             } catch {}
           }
         })

@@ -1,5 +1,5 @@
 // HRM Attendance System Service Worker (PWA)
-const CACHE_NAME = 'hrm-pwa-v1';
+const CACHE_NAME = 'hrm-pwa-v2-live-geofence';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',

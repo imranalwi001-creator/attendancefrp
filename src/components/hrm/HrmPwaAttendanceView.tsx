@@ -678,6 +678,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       } else if (user.divisionLatitude && user.divisionLongitude && !isNaN(Number(user.divisionLatitude)) && !isNaN(Number(user.divisionLongitude))) {
         // Prioritas Utama: Koordinat Divisi Sinkron Database PostgreSQL
         const divName = user.divisionLocationName || user.divisionName || 'Gedung Divisi';
+        const divAddress = user.divisionAddress || user.address || user.divisionLocationName || 'Area Lokasi Divisi';
         officeLoc = {
           id: user.divisionId || 'div-loc',
           name: divName,
@@ -685,7 +686,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           longitude: Number(user.divisionLongitude),
           radiusMeters: Number(user.divisionRadiusMeters) || 50,
           locationName: divName,
-          address: user.divisionLocationName || user.address || 'Area Lokasi Divisi',
+          address: divAddress,
+          allowedPosts: Array.isArray(user.divisionAllowedPosts) ? user.divisionAllowedPosts : [],
         };
         setAssignedPostName(divName);
       } else {
@@ -694,9 +696,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           officeLoc = divLoc;
           setAssignedPostName(divLoc.name);
         } else {
-          const allOffices = hrmService.getOffices();
-          officeLoc = allOffices[0] || null;
-          setAssignedPostName(officeLoc?.name || 'Kantor Pusat PT FRP');
+          const defaultOffice = hrmService.getOfficeLocation();
+          officeLoc = defaultOffice;
+          setAssignedPostName(defaultOffice?.name || 'Kantor Pusat PT FRP');
         }
       }
       setAssignedOffice(officeLoc);
@@ -783,32 +785,47 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
 
     // Evaluasi lokasi: kantor penugasan/divisi (Prioritas Utama Database), allowed posts divisi, dan pos resmi
-    const candidateOffices: { name: string; lat: number; lng: number; radius: number; isPrimary?: boolean }[] = [];
-    if (fallbackOffice) {
+    const candidateOffices: { name: string; lat: number; lng: number; radius: number; isPrimary?: boolean; address?: string }[] = [];
+    
+    // Pastikan target utama terdefinisi: dari fallbackOffice, assignedOffice, atau langsung dari user.divisionLatitude/Longitude
+    const targetOffice = fallbackOffice || assignedOffice || (user?.divisionLatitude && user?.divisionLongitude ? {
+      id: user.divisionId || 'div-loc',
+      name: user.divisionLocationName || user.divisionName || 'Gedung Divisi',
+      latitude: Number(user.divisionLatitude),
+      longitude: Number(user.divisionLongitude),
+      radiusMeters: Number(user.divisionRadiusMeters) || 50,
+      locationName: user.divisionLocationName || user.divisionName || 'Gedung Divisi',
+      address: user.divisionAddress || user.address || user.divisionLocationName || 'Area Lokasi Divisi',
+      allowedPosts: Array.isArray(user.divisionAllowedPosts) ? user.divisionAllowedPosts : [],
+    } : null);
+
+    if (targetOffice && typeof targetOffice.latitude === 'number' && typeof targetOffice.longitude === 'number' && !isNaN(targetOffice.latitude) && !isNaN(targetOffice.longitude)) {
       candidateOffices.push({
-        name: fallbackOffice.name,
-        lat: fallbackOffice.latitude,
-        lng: fallbackOffice.longitude,
-        radius: fallbackOffice.radiusMeters || 50,
+        name: targetOffice.name,
+        lat: targetOffice.latitude,
+        lng: targetOffice.longitude,
+        radius: targetOffice.radiusMeters || 50,
+        address: targetOffice.address,
         isPrimary: true,
       });
 
       // Masukkan juga allowedPosts dari divisi/posisi pegawai jika ada
-      if (fallbackOffice.allowedPosts && Array.isArray(fallbackOffice.allowedPosts)) {
-        for (const ap of fallbackOffice.allowedPosts) {
+      if (targetOffice.allowedPosts && Array.isArray(targetOffice.allowedPosts)) {
+        for (const ap of targetOffice.allowedPosts) {
           if (!candidateOffices.some((c) => Math.abs(c.lat - ap.latitude) < 0.0001 && Math.abs(c.lng - ap.longitude) < 0.0001)) {
             candidateOffices.push({
               name: ap.name,
               lat: ap.latitude,
               lng: ap.longitude,
               radius: ap.radiusMeters || 50,
+              address: ap.description || targetOffice.address,
             });
           }
         }
       }
     }
 
-    // Masukkan preset resmi PT FRP sebagai kandidat alternatif
+    // Masukkan preset resmi PT FRP sebagai kandidat alternatif (hanya dicocokkan jika berada di dalam radius)
     for (const preset of FIELD_SENTINEL_6_POST_PRESETS) {
       if (!candidateOffices.some((c) => Math.abs(c.lat - preset.latitude) < 0.0001 && Math.abs(c.lng - preset.longitude) < 0.0001)) {
         candidateOffices.push({
@@ -838,11 +855,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       // 🔴 Jika pegawai berada di luar radius:
       // Prioritaskan selalu target utama (divisi / penugasan resmi karyawan dari database)
-      // JANGAN timpa nama lokasi dengan preset random (seperti Matching Bontoa)!
-      const primaryTarget = officeChecks.find((c) => c.isPrimary) || officeChecks[0];
-      setDistanceToOffice(Math.round(primaryTarget.distance));
+      // JANGAN PERNAH timpa nama lokasi dengan preset random (seperti Matching Bontoa)!
+      const primaryTarget = candidateOffices.find((c) => c.isPrimary) || candidateOffices[0];
+      const dist = primaryTarget ? geofenceService.calculateDistance(coords, { latitude: primaryTarget.lat, longitude: primaryTarget.lng }) : 0;
+      setDistanceToOffice(Math.round(dist));
       setLocationStatus('outside');
-      setAssignedPostName(primaryTarget.name);
+      setAssignedPostName(primaryTarget?.name || 'Area Pos Kerja');
     } else {
       setLocationStatus('inside');
     }
@@ -3203,25 +3221,37 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               {/* Location Description */}
               <div className="space-y-0.5 flex-1 min-w-0">
                 <h3 className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                  {assignedPostName || (bankPosts.length > 0 ? `${bankPosts.length} Pos Lapangan Terdaftar` : 'PT. FAWWAZ RESKI PERWIRA')}
+                  {assignedPostName || assignedOffice?.name || (bankPosts.length > 0 ? `${bankPosts.length} Pos Lapangan Terdaftar` : 'PT. FAWWAZ RESKI PERWIRA')}
                 </h3>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
                   {bankPosts.length > 0
                     ? `${bankPosts.length} Pos Terdaftar • Sah Absen di Seluruh Pos`
-                    : assignedOffice?.address || 'Jl. Perwira No. 01, Area Pos Penugasan'}
+                    : (assignedOffice?.address || user?.divisionAddress || user?.divisionLocationName || 'Area Lokasi Penugasan Resmi')}
                 </p>
+
+                {/* Indikator Koordinat Realtime & Target Database */}
+                <div className="text-[9.5px] text-slate-400 font-mono flex items-center gap-1.5 flex-wrap pt-0.5">
+                  <span className="text-slate-500 dark:text-slate-400">
+                    Target: {assignedOffice ? `${assignedOffice.latitude?.toFixed(5)}, ${assignedOffice.longitude?.toFixed(5)} (R: ${assignedOffice.radiusMeters || 50}m)` : 'Memuat target...'}
+                  </span>
+                  {currentCoords && (
+                    <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                      • GPS: {currentCoords.lat.toFixed(5)}, {currentCoords.lng.toFixed(5)} (±{Math.round(coordsAccuracy || 0)}m)
+                    </span>
+                  )}
+                </div>
 
                 {/* Status Badge */}
                 <div className="pt-0.5">
                   {locationStatus === 'inside' ? (
                     <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-emerald-600 dark:text-emerald-400">
                       <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                      LOKASI: SESUAI POS KERJA
+                      LOKASI: SESUAI POS KERJA {distanceToOffice !== null ? `(${Math.round(distanceToOffice)}m)` : ''}
                     </span>
                   ) : locationStatus === 'outside' ? (
                     <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-rose-600 dark:text-rose-400">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      DILUAR RADIUS ({Math.round(distanceToOffice || 0)}m)
+                      DILUAR RADIUS ({Math.round(distanceToOffice || 0)}m dari {assignedPostName || 'Pos Tugas'})
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 text-[10.5px] font-medium text-amber-600 dark:text-amber-400">
