@@ -1347,23 +1347,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       return;
     }
 
-    // Pengecualian Petugas Lapangan Khusus Pimpinan & Petugas Distribusi Online Mobile
-    const isExemptOfficer = isSpecialDutyOfficer(user);
-
-    const distToOgs = currentCoords
-      ? geofenceService.calculateDistance(currentCoords, { latitude: -4.787904, longitude: 119.613399 })
-      : 9999;
-    const isAtOgs = distToOgs <= 250;
-
-    if (!isExemptOfficer && isAtOgs && actionType === 'clock_in') {
-      toast.error('Presensi Masuk Ditolak! Titik Pos OGS khusus disetel hanya untuk Ceklok Pulang (Presensi Keluar). Silakan lakukan presensi masuk di titik kantor divisi Anda.');
-      isCapturingRef.current = false;
-      setIsCapturing(false);
-      isTriggeringAutoRef.current = false;
-      setAutoCaptureProgress(0);
-      return;
-    }
-
     isCapturingRef.current = true;
     setIsCapturing(true);
 
@@ -1375,6 +1358,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const toastLoadingId = toast.loading('Memproses verifikasi wajah & mencatat presensi...', { duration: 10000 });
 
     try {
+      // Pengecualian Petugas Lapangan Khusus Pimpinan & Petugas Distribusi Online Mobile
+      const isExemptOfficer = isSpecialDutyOfficer(user);
+
+      const distToOgs = currentCoords
+        ? geofenceService.calculateDistance(currentCoords, { latitude: -4.787904, longitude: 119.613399 })
+        : 9999;
+      const isAtOgs = distToOgs <= 250;
+
+      if (!isExemptOfficer && isAtOgs && actionType === 'clock_in') {
+        toast.dismiss(toastLoadingId);
+        toast.error('Presensi Masuk Ditolak! Titik Pos OGS khusus disetel hanya untuk Ceklok Pulang (Presensi Keluar). Silakan lakukan presensi masuk di titik kantor divisi Anda.');
+        return;
+      }
+
       // Optimal resolution (max 1280 wide) to ensure lightweight base64 payload (< 200KB)
       const rawW = videoRef.current.videoWidth || 1280;
       const rawH = videoRef.current.videoHeight || 720;
@@ -1408,10 +1405,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       if (masterDescriptor && masterDescriptor.length === 128) {
         let liveDesc: number[] | null = null;
         try {
-          // Ambil descriptor dari frame video aktif secara non-blocking (< 1.5 detik timeout)
+          // Ambil descriptor dari static canvas secara non-blocking (< 3.5 detik timeout)
           liveDesc = await Promise.race([
-            biometricService.extractFaceDescriptor(videoRef.current).catch(() => null),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+            biometricService.extractFaceDescriptor(canvas).catch(() => null),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500)),
           ]);
         } catch {
           liveDesc = null;
@@ -1420,10 +1417,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         if (!liveDesc || !Array.isArray(liveDesc) || liveDesc.length !== 128) {
           toast.dismiss(toastLoadingId);
           toast.error('Wajah tidak terdeteksi jelas pada kamera! Harap pastikan wajah menghadap lurus ke kamera dan berada di area berpenerangan cukup.');
-          isCapturingRef.current = false;
-          setIsCapturing(false);
-          isTriggeringAutoRef.current = false;
-          setAutoCaptureProgress(0);
           return;
         }
 
@@ -1431,10 +1424,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         if (!match.isMatch && match.confidence < 75) {
           toast.dismiss(toastLoadingId);
           toast.error(`Presensi Ditolak! Wajah tidak cocok dengan data master biometrik ${user.fullName} (${match.confidence}% Kemiripan). Pastikan tidak diwakilkan orang lain.`);
-          isCapturingRef.current = false;
-          setIsCapturing(false);
-          isTriggeringAutoRef.current = false;
-          setAutoCaptureProgress(0);
           return;
         }
 

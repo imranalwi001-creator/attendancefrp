@@ -56,6 +56,31 @@ export class GeofenceService {
   }
 
   /**
+   * Universal distance calculator in meters supporting either coordinate objects ({ lat, lng } or { latitude, longitude })
+   * or standard 4 numeric parameters (lat1, lon1, lat2, lon2).
+   */
+  public calculateDistance(
+    p1OrLat1: { lat?: number; latitude?: number; lng?: number; longitude?: number } | number,
+    p2OrLon1: { lat?: number; latitude?: number; lng?: number; longitude?: number } | number,
+    lat2?: number,
+    lon2?: number
+  ): number {
+    if (typeof p1OrLat1 === 'number' && typeof p2OrLon1 === 'number' && typeof lat2 === 'number' && typeof lon2 === 'number') {
+      return this.calculateDistanceMeters(p1OrLat1, p2OrLon1, lat2, lon2);
+    }
+    const c1 = p1OrLat1 as any;
+    const c2 = p2OrLon1 as any;
+    if (!c1 || !c2) return 999999;
+    const lat1 = Number(c1.lat !== undefined ? c1.lat : c1.latitude);
+    const lon1 = Number(c1.lng !== undefined ? c1.lng : c1.longitude);
+    const targetLat = Number(c2.lat !== undefined ? c2.lat : c2.latitude);
+    const targetLon = Number(c2.lng !== undefined ? c2.lng : c2.longitude);
+
+    if (isNaN(lat1) || isNaN(lon1) || isNaN(targetLat) || isNaN(targetLon)) return 999999;
+    return this.calculateDistanceMeters(lat1, lon1, targetLat, targetLon);
+  }
+
+  /**
    * Ray-Casting Algorithm (Jordan Curve Theorem / Even-Odd Rule)
    * Determines if a coordinate is strictly inside an arbitrary polygon boundary
    */
