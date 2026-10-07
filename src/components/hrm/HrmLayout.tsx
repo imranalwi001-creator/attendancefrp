@@ -57,21 +57,50 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   const normalizeRole = (r?: string) => (r || '').toLowerCase().replace(/[\s_-]/g, '');
   const currentRole = normalizeRole(role);
 
+  const isManagementRole = [
+    'superadmin',
+    'admin',
+    'hrd',
+    'pimpinan',
+    'dirut',
+    'keuangan',
+    'pengawas',
+    'korlap',
+    'k3',
+    'kepala_regu',
+    'kepalaregu',
+  ].some((r) => currentRole.includes(r));
+
   // Standalone PWA Mode Detection (Lampiran 2 & 3 eksklusif untuk PWA terinstall)
   const isPwaStandalone = React.useMemo(() => {
     if (typeof window === 'undefined') return false;
     const urlParams = new URLSearchParams(window.location.search);
-    return Boolean(
+    const isStandaloneWindow = Boolean(
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as any).standalone === true ||
-      document.referrer.includes('android-app://') ||
-      urlParams.get('source') === 'pwa' ||
-      urlParams.get('mode') === 'app' ||
-      localStorage.getItem('hrm_pwa_mode') === 'true'
+      document.referrer.includes('android-app://')
     );
+    const isExplicitPwaParam = urlParams.get('source') === 'pwa' || urlParams.get('mode') === 'app';
+    const isMobile = typeof window !== 'undefined' && (window.innerWidth <= 768 || /android|iphone|ipad|ipod/i.test(navigator.userAgent));
+    const isStoredPwaMode = localStorage.getItem('hrm_pwa_mode') === 'true' && isMobile;
+
+    return isStandaloneWindow || isExplicitPwaParam || isStoredPwaMode;
   }, []);
 
-  if (isPwaStandalone && (location.pathname === '/presensi' || location.pathname === '/dashboard')) {
+  // Auto-cleanup stale hrm_pwa_mode flag if opened on regular desktop browser tab
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth > 1024) {
+      if (!window.matchMedia('(display-mode: standalone)').matches && !(window.navigator as any).standalone) {
+        if (localStorage.getItem('hrm_pwa_mode') === 'true') {
+          localStorage.removeItem('hrm_pwa_mode');
+        }
+      }
+    }
+  }, []);
+
+  // Manajemen / Administrator WAJIB selalu mendapatkan menu navigasi lengkap (sidebar/topbar/mobile nav).
+  // Hanya bypass layout jika BUKAN role manajemen dan sedang membuka presensi PWA mandiri.
+  if (!isManagementRole && isPwaStandalone && (location.pathname === '/presensi' || location.pathname === '/dashboard')) {
     return <div className="min-h-screen bg-[#14532D] text-foreground">{children}</div>;
   }
 

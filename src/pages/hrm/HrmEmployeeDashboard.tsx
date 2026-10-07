@@ -77,14 +77,16 @@ export const HrmEmployeeDashboard: React.FC = () => {
   const isPwaStandalone = React.useMemo(() => {
     if (typeof window === 'undefined') return false;
     const urlParams = new URLSearchParams(window.location.search);
-    return Boolean(
+    const isStandaloneWindow = Boolean(
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as any).standalone === true ||
-      document.referrer.includes('android-app://') ||
-      urlParams.get('source') === 'pwa' ||
-      urlParams.get('mode') === 'app' ||
-      localStorage.getItem('hrm_pwa_mode') === 'true'
+      document.referrer.includes('android-app://')
     );
+    const isExplicitPwaParam = urlParams.get('source') === 'pwa' || urlParams.get('mode') === 'app';
+    const isMobile = typeof window !== 'undefined' && (window.innerWidth <= 768 || /android|iphone|ipad|ipod/i.test(navigator.userAgent));
+    const isStoredPwaMode = localStorage.getItem('hrm_pwa_mode') === 'true' && isMobile;
+
+    return isStandaloneWindow || isExplicitPwaParam || isStoredPwaMode;
   }, []);
 
   if (isPwaStandalone) {
