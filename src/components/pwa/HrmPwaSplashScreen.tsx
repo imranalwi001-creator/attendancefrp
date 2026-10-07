@@ -90,10 +90,10 @@ export const HrmPwaSplashScreen: React.FC<HrmPwaSplashScreenProps> = ({ onFinish
       }`}
       style={{
         background: 'radial-gradient(circle at 50% 45%, #0b3438 0%, #062225 45%, #041416 100%)',
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+        fontFamily: "'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       }}
     >
-      {/* ─── GRID BACKGROUND FUTURISTIK PERSIS LAMPIRAN 4 ─── */}
+      {/* ─── GRID BACKGROUND FUTURISTIK ─── */}
       <div
         className="absolute inset-0 pointer-events-none opacity-20"
         style={{
@@ -108,76 +108,63 @@ export const HrmPwaSplashScreen: React.FC<HrmPwaSplashScreenProps> = ({ onFinish
       {/* Ambient radial glow di tengah */}
       <div className="absolute w-96 h-96 rounded-full bg-teal-500/15 blur-3xl pointer-events-none" />
 
-      {/* ─── ELEMEN UTAMA TENGAH (LINGKARAN GLOW + KOTAK LOGO PERSIS LAMPIRAN 4) ─── */}
+      {/* ─── ELEMEN UTAMA TENGAH ─── */}
       <div className="relative z-10 flex flex-col items-center justify-center">
         {/* Lingkaran Luar dengan Radar Glowing Ring */}
-        <div className="relative flex items-center justify-center w-52 h-52 sm:w-60 sm:h-60">
-          {/* Cincin Luar Berputar Halus (Rotating Glow Ring) */}
-          <div className="absolute inset-0 rounded-full border border-teal-400/30 animate-[spin_10s_linear_infinite]" />
+        <div className="relative flex items-center justify-center w-56 h-56 sm:w-64 sm:h-64">
+          {/* Cincin Luar Berputar Halus */}
+          <div className="absolute inset-0 rounded-full border border-teal-400/35 animate-[spin_10s_linear_infinite]" />
           
-          {/* Cincin Kedua dengan Dash Gradient (Aksen Radar Persis Lampiran 4) */}
-          <div className="absolute inset-2 rounded-full border-2 border-transparent border-t-teal-300/80 border-r-teal-300/30 animate-[spin_4s_linear_infinite]" />
+          {/* Cincin Kedua dengan Dash Gradient */}
+          <div className="absolute inset-2 rounded-full border-2 border-transparent border-t-teal-300/90 border-r-teal-300/40 animate-[spin_4s_linear_infinite]" />
           
           {/* Soft inner glow ring */}
-          <div className="absolute inset-6 rounded-full bg-teal-400/10 blur-md pointer-events-none" />
+          <div className="absolute inset-6 rounded-full bg-teal-400/15 blur-md pointer-events-none" />
 
-          {/* Logo Menyatu Tanpa Bingkai Kotak, Tetap Tajam & Jelas dengan Aksen Glow Halus */}
+          {/* Logo Menyatu Tanpa Bingkai Kotak, Tetap Tajam & Jelas dengan Aksen Glow */}
           <div className="relative z-10 flex flex-col items-center justify-center pointer-events-none">
             <img
               src={settings?.logoUrl || defaultLogo}
               alt="Logo FRP"
-              className="w-24 h-24 sm:w-28 sm:h-28 object-contain filter drop-shadow-[0_0_24px_rgba(45,212,191,0.7)]"
+              className="w-28 h-28 sm:w-32 sm:h-32 object-contain filter drop-shadow-[0_0_24px_rgba(45,212,191,0.75)]"
             />
             {/* Badge Tahun di Bawah Logo */}
-            <span
-              className="mt-2 text-[11px] font-mono font-bold tracking-widest text-teal-300/95 uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]"
-              style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}
-            >
+            <span className="mt-2 text-xs sm:text-sm font-bold tracking-widest text-teal-300 uppercase drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)]">
               2026
             </span>
           </div>
         </div>
 
-        {/* ─── BRANDING: NAMA PT. FAWWAZ RESKI PERWIRA (BERADA TEPAT DI TENGAH SIMETRIS TANPA LOGO SAMPING, FONT MONOSPACE SAMA DENGAN TEKS BAWAH) ─── */}
-        <div className="mt-8 flex flex-col items-center justify-center text-center space-y-2 px-4 w-full max-w-sm mx-auto">
-          <h1
-            className="text-xl sm:text-2xl font-black tracking-wider text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.8)] text-center leading-snug font-mono"
-            style={{
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-            }}
-          >
+        {/* ─── BRANDING: NAMA PT. FAWWAZ RESKI PERWIRA (UKURAN STANDAR & FONT ANTI-SLOP) ─── */}
+        <div className="mt-8 flex flex-col items-center justify-center text-center space-y-2 px-4 w-full max-w-md mx-auto">
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white drop-shadow-[0_2px_14px_rgba(0,0,0,0.85)] text-center leading-snug">
             {settings?.appName || 'PT. FAWWAZ RESKI PERWIRA'}
           </h1>
 
-          <p
-            className="text-[11px] font-semibold tracking-widest text-teal-200/80 uppercase text-center font-mono"
-            style={{
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-            }}
-          >
+          <p className="text-xs sm:text-sm font-semibold tracking-wider text-teal-100 uppercase text-center">
             Sistem Informasi Presensi & Manajemen SDM
           </p>
         </div>
 
-        {/* ─── PROGRESS BAR LOADING PERSIS LAMPIRAN 4 ─── */}
+        {/* ─── PROGRESS BAR LOADING ─── */}
         <div className="mt-10 flex flex-col items-center space-y-3">
           {/* Progress Track */}
-          <div className="w-48 sm:w-56 h-1.5 rounded-full bg-slate-900/80 border border-teal-500/30 overflow-hidden p-0.5">
+          <div className="w-52 sm:w-60 h-2 rounded-full bg-slate-900/85 border border-teal-500/40 overflow-hidden p-0.5">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-teal-400 via-emerald-300 to-cyan-300 shadow-[0_0_10px_rgba(45,212,191,0.8)] transition-all duration-150 ease-out"
+              className="h-full rounded-full bg-gradient-to-r from-teal-400 via-emerald-300 to-cyan-300 shadow-[0_0_12px_rgba(45,212,191,0.85)] transition-all duration-150 ease-out"
               style={{ width: `${progress}%` }}
             />
           </div>
 
-          {/* Status Text (Persis "Synchronizing workspace" di Lampiran 4) */}
-          <p className="text-xs font-mono tracking-wide text-teal-200/80 font-medium">
+          {/* Status Text (Ukuran Standar) */}
+          <p className="text-sm tracking-normal text-teal-100 font-medium">
             {statusText}
           </p>
         </div>
       </div>
 
       {/* Footer subtle brand */}
-      <div className="absolute bottom-6 text-[10px] text-teal-100/40 font-mono tracking-widest uppercase">
+      <div className="absolute bottom-6 text-xs text-teal-100/60 font-medium tracking-wider uppercase">
         Enterprise PWA Edition • Encrypted Security
       </div>
     </div>

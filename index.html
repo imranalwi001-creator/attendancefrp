@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>HRM Attendance System</title>
     <meta name="description" content="Sistem Informasi Presensi & Manajemen SDM Mandiri">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap">
     <meta property="og:title" content="HRM Attendance System">
     <meta name="twitter:title" content="HRM Attendance System">
     <meta property="og:description" content="Sistem Informasi Presensi & Manajemen SDM Mandiri">
@@ -48,7 +50,7 @@
         }
 
         // FORCE CACHE PURGE & SERVICE WORKER UPDATE ON NEW BUILD
-        var PURGE_TAG = 'hrm_deploy_v20261007_borderless_logo_v8';
+        var PURGE_TAG = 'hrm_deploy_v20261008_plus_jakarta_sans_v9';
         try {
           localStorage.removeItem('hrm_force_desktop_mode');
           if (localStorage.getItem('hrm_deploy_tag') !== PURGE_TAG) {
@@ -113,36 +115,36 @@
   </head>
   <body class="antialiased min-h-screen" style="background: radial-gradient(circle at 50% 45%, #0b3438 0%, #062225 45%, #041416 100%) !important; background-color: #062225 !important;">
     <div id="root">
-      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; background: radial-gradient(circle at 50% 45%, #0b3438 0%, #062225 45%, #041416 100%); color: #ffffff; padding: 20px; position: relative; overflow: hidden; user-select: none;">
-        <!-- Grid Tech Pattern Persis Lampiran 4 -->
-        <div style="position: absolute; inset: 0; pointer-events: none; opacity: 0.18; background-image: linear-gradient(to right, rgba(45, 212, 191, 0.2) 1px, transparent 1px), linear-gradient(to bottom, rgba(45, 212, 191, 0.2) 1px, transparent 1px); background-size: 40px 40px;"></div>
+      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: radial-gradient(circle at 50% 45%, #0b3438 0%, #062225 45%, #041416 100%); color: #ffffff; padding: 24px; position: relative; overflow: hidden; user-select: none;">
+        <!-- Grid Tech Pattern -->
+        <div style="position: absolute; inset: 0; pointer-events: none; opacity: 0.16; background-image: linear-gradient(to right, rgba(45, 212, 191, 0.2) 1px, transparent 1px), linear-gradient(to bottom, rgba(45, 212, 191, 0.2) 1px, transparent 1px); background-size: 40px 40px;"></div>
 
         <!-- Central Glowing Radar Rings -->
-        <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 220px; height: 220px; margin-bottom: 28px;">
-          <div style="position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(45, 212, 191, 0.3); animation: hrm-spin 10s linear infinite;"></div>
-          <div style="position: absolute; inset: 8px; border-radius: 50%; border: 2px solid transparent; border-top-color: rgba(94, 234, 212, 0.9); border-right-color: rgba(94, 234, 212, 0.3); animation: hrm-spin 3.5s linear infinite;"></div>
-          <div style="position: absolute; inset: 24px; border-radius: 50%; background: rgba(45, 212, 191, 0.12); filter: blur(14px); pointer-events: none;"></div>
+        <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 230px; height: 230px; margin-bottom: 30px;">
+          <div style="position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid rgba(45, 212, 191, 0.35); animation: hrm-spin 10s linear infinite;"></div>
+          <div style="position: absolute; inset: 10px; border-radius: 50%; border: 2.5px solid transparent; border-top-color: rgba(94, 234, 212, 0.95); border-right-color: rgba(94, 234, 212, 0.4); animation: hrm-spin 3.5s linear infinite;"></div>
+          <div style="position: absolute; inset: 26px; border-radius: 50%; background: rgba(45, 212, 191, 0.14); filter: blur(16px); pointer-events: none;"></div>
           
           <!-- Logo Menyatu Tanpa Bingkai Kotak, Tetap Tajam & Jelas -->
           <div style="position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10;">
-            <img src="/logo.png" alt="Logo" style="width: 102px; height: 102px; object-fit: contain; filter: drop-shadow(0 0 24px rgba(45, 212, 191, 0.7));" />
-            <span style="font-size: 11px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; color: #5eead4; margin-top: 8px; letter-spacing: 2px; text-shadow: 0 2px 4px rgba(0,0,0,0.8);">2026</span>
+            <img src="/logo.png" alt="Logo" style="width: 108px; height: 108px; object-fit: contain; filter: drop-shadow(0 0 24px rgba(45, 212, 191, 0.75));" />
+            <span style="font-size: 13px; font-weight: 700; font-family: 'Plus Jakarta Sans', 'Inter', sans-serif; color: #5eead4; margin-top: 8px; letter-spacing: 2.5px; text-shadow: 0 2px 6px rgba(0,0,0,0.8);">2026</span>
           </div>
         </div>
 
-        <!-- Branding PT FRP Berada Tepat di Tengah Simetris (Font Monospace Sama dengan Teks Bawah) -->
-        <div style="text-align: center; margin-bottom: 28px; z-index: 10; width: 100%; max-width: 360px; padding: 0 16px;">
-          <h1 style="font-size: 20px; font-weight: 900; letter-spacing: 1px; color: #ffffff; margin: 0 0 6px 0; text-align: center; text-shadow: 0 2px 12px rgba(0,0,0,0.8); line-height: 1.25; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace !important;">PT. FAWWAZ RESKI PERWIRA</h1>
-          <p style="font-size: 11px; color: rgba(204, 251, 241, 0.85); margin: 0; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 600; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace !important;">Sistem Informasi Presensi & Manajemen SDM</p>
+        <!-- Branding PT FRP Berada Tepat di Tengah Simetris (Ukuran Standar & Font Anti-Slop Plus Jakarta Sans) -->
+        <div style="text-align: center; margin-bottom: 32px; z-index: 10; width: 100%; max-width: 380px; padding: 0 16px;">
+          <h1 style="font-size: 26px; font-weight: 800; letter-spacing: 0.2px; color: #ffffff; margin: 0 0 8px 0; text-align: center; text-shadow: 0 2px 14px rgba(0,0,0,0.85); line-height: 1.25; font-family: 'Plus Jakarta Sans', 'Inter', sans-serif !important;">PT. FAWWAZ RESKI PERWIRA</h1>
+          <p style="font-size: 13px; color: #ccfbf1; margin: 0; letter-spacing: 0.8px; text-transform: uppercase; font-weight: 600; text-align: center; font-family: 'Plus Jakarta Sans', 'Inter', sans-serif !important;">Sistem Informasi Presensi & Manajemen SDM</p>
         </div>
 
         <!-- Progress Bar Loading -->
-        <div style="width: 200px; height: 5px; border-radius: 10px; background: rgba(2, 6, 23, 0.8); border: 1px solid rgba(45, 212, 191, 0.3); overflow: hidden; padding: 1px; margin-bottom: 12px; z-index: 10;">
-          <div style="height: 100%; border-radius: 10px; background: linear-gradient(to right, #2dd4bf, #5eead4, #67e8f9); box-shadow: 0 0 10px rgba(45, 212, 191, 0.8); animation: hrm-progress 2.2s ease-in-out infinite;"></div>
+        <div style="width: 220px; height: 6px; border-radius: 9999px; background: rgba(2, 6, 23, 0.85); border: 1px solid rgba(45, 212, 191, 0.4); overflow: hidden; padding: 1px; margin-bottom: 14px; z-index: 10;">
+          <div style="height: 100%; border-radius: 9999px; background: linear-gradient(to right, #2dd4bf, #5eead4, #67e8f9); box-shadow: 0 0 12px rgba(45, 212, 191, 0.85); animation: hrm-progress 2.2s ease-in-out infinite;"></div>
         </div>
 
-        <!-- Status Text -->
-        <p style="font-size: 12px; color: rgba(204, 251, 241, 0.85); font-family: monospace; letter-spacing: 0.5px; margin: 0; z-index: 10;">Synchronizing workspace</p>
+        <!-- Status Text (Ukuran Standar & Font Plus Jakarta Sans) -->
+        <p style="font-size: 13.5px; color: #ccfbf1; font-family: 'Plus Jakarta Sans', 'Inter', sans-serif !important; letter-spacing: 0.2px; font-weight: 500; margin: 0; z-index: 10;">Synchronizing workspace</p>
 
         <div id="hrm-critical-error" style="display: none; margin-top: 16px; max-width: 480px; padding: 12px 16px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; color: #b91c1c; font-size: 12px; font-family: monospace; white-space: pre-wrap; word-break: break-word; z-index: 20;"></div>
         <style>
