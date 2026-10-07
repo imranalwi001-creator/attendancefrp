@@ -33,6 +33,7 @@ import { api } from './apiClient';
 import { payrollTaxEngine } from './payrollTaxEngine';
 import { GenerationResult, DEFAULT_SHIFTS as ROSTER_DEFAULT_SHIFTS } from './rosterSchedulerService';
 import { notifyUserWithAudioAndVibe } from './soundVibrationService';
+import { geofenceService } from './geofenceService';
 
 const STORAGE_KEYS = {
   ROLES: 'hrm_roles',
