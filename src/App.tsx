@@ -28,6 +28,13 @@ import { HrmPayrollPage } from '@/pages/hrm/HrmPayrollPage';
 import { HrmKioskPage } from '@/pages/hrm/HrmKioskPage';
 import { HrmMobileEnrollPage } from '@/pages/hrm/HrmMobileEnrollPage';
 import { HrmSuperadminDashboard } from '@/pages/hrm/HrmSuperadminDashboard';
+import { HrmPresensiPage } from '@/pages/hrm/HrmPresensiPage';
+import { HrmLemburPage } from '@/pages/hrm/HrmLemburPage';
+import { HrmShiftPage } from '@/pages/hrm/HrmShiftPage';
+import { HrmCutiPage } from '@/pages/hrm/HrmCutiPage';
+import { HrmKinerjaPage } from '@/pages/hrm/HrmKinerjaPage';
+import { HrmPelanggaranPage } from '@/pages/hrm/HrmPelanggaranPage';
+import { HrmAnalyticsPage } from '@/pages/hrm/HrmAnalyticsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -183,7 +190,7 @@ export const App: React.FC = () => {
                   path="/admin/presensi"
                   element={
                     <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd']}>
-                      <HrmSuperadminDashboard initialTab="presensi" />
+                      <HrmPresensiPage />
                     </HrmProtectedRoute>
                   }
                 />
@@ -191,7 +198,7 @@ export const App: React.FC = () => {
                   path="/admin/lembur"
                   element={
                     <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'keuangan', 'pimpinan']}>
-                      <HrmSuperadminDashboard initialTab="lembur" />
+                      <HrmLemburPage />
                     </HrmProtectedRoute>
                   }
                 />
@@ -199,7 +206,7 @@ export const App: React.FC = () => {
                   path="/admin/shift"
                   element={
                     <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'korlap']}>
-                      <HrmSuperadminDashboard initialTab="shift" />
+                      <HrmShiftPage />
                     </HrmProtectedRoute>
                   }
                 />
@@ -207,7 +214,7 @@ export const App: React.FC = () => {
                   path="/admin/cuti"
                   element={
                     <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan']}>
-                      <HrmSuperadminDashboard initialTab="cuti" />
+                      <HrmCutiPage />
                     </HrmProtectedRoute>
                   }
                 />
@@ -215,7 +222,7 @@ export const App: React.FC = () => {
                   path="/admin/izin-cuti"
                   element={
                     <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan']}>
-                      <HrmSuperadminDashboard initialTab="cuti" />
+                      <HrmCutiPage />
                     </HrmProtectedRoute>
                   }
                 />
@@ -223,7 +230,7 @@ export const App: React.FC = () => {
                   path="/admin/kinerja"
                   element={
                     <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut']}>
-                      <HrmSuperadminDashboard initialTab="kinerja" />
+                      <HrmKinerjaPage />
                     </HrmProtectedRoute>
                   }
                 />
@@ -231,7 +238,7 @@ export const App: React.FC = () => {
                   path="/admin/pelanggaran"
                   element={
                     <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan']}>
-                      <HrmSuperadminDashboard initialTab="pelanggaran" />
+                      <HrmPelanggaranPage />
                     </HrmProtectedRoute>
                   }
                 />
@@ -239,7 +246,7 @@ export const App: React.FC = () => {
                   path="/admin/analytics"
                   element={
                     <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'keuangan']}>
-                      <HrmSuperadminDashboard initialTab="analytics" />
+                      <HrmAnalyticsPage />
                     </HrmProtectedRoute>
                   }
                 />

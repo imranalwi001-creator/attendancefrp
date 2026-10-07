@@ -8,7 +8,9 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { toast } from 'sonner';
+import { DatePicker } from '@/components/ui/date-picker';
+import { HrmEmployeeSearchInput } from '@/components/hrm/HrmEmployeeSearchInput';
+import { customNotify } from '@/lib/customNotification';
 import {
   Clock,
   CheckCircle2,
@@ -129,14 +131,14 @@ export const HrmPresensiManagementTab: React.FC = () => {
       });
 
       if (res.success) {
-        toast.success('Data presensi berhasil dikoreksi dan disinkronkan ke PostgreSQL & PWA Karyawan.');
+        customNotify.success('Presensi Dikoreksi', 'Data presensi berhasil dikoreksi dan disinkronkan ke PostgreSQL & PWA Karyawan.');
         setCorrectModalOpen(false);
         loadData();
       } else {
-        toast.error(res.error || 'Gagal menyimpan koreksi presensi');
+        customNotify.error('Koreksi Gagal', res.error || 'Gagal menyimpan koreksi presensi');
       }
     } catch (err: any) {
-      toast.error('Terjadi kesalahan sistem saat menyimpan');
+      customNotify.error('Kesalahan Sistem', 'Terjadi kesalahan sistem saat menyimpan');
     } finally {
       setIsSubmitting(false);
     }
@@ -144,7 +146,7 @@ export const HrmPresensiManagementTab: React.FC = () => {
 
   const handleSaveManualEntry = async () => {
     if (!manualUserId) {
-      toast.error('Pilih karyawan terlebih dahulu');
+      customNotify.warning('Karyawan Belum Dipilih', 'Silakan pilih karyawan terlebih dahulu');
       return;
     }
     setIsSubmitting(true);
@@ -160,15 +162,15 @@ export const HrmPresensiManagementTab: React.FC = () => {
       });
 
       if (res.success) {
-        toast.success('Data presensi manual berhasil dicatat di database.');
+        customNotify.success('Presensi Manual Tersimpan', 'Data presensi manual berhasil dicatat di database.');
         setManualModalOpen(false);
         setManualNotes('');
         loadData();
       } else {
-        toast.error(res.error || 'Gagal menyimpan presensi manual');
+        customNotify.error('Gagal Simpan Presensi', res.error || 'Gagal menyimpan presensi manual');
       }
     } catch (err: any) {
-      toast.error('Terjadi kesalahan saat memproses');
+      customNotify.error('Kesalahan Server', 'Terjadi kesalahan saat memproses data presensi');
     } finally {
       setIsSubmitting(false);
     }
@@ -307,11 +309,10 @@ export const HrmPresensiManagementTab: React.FC = () => {
             </div>
 
             <div>
-              <Input
-                type="date"
+              <DatePicker
                 value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="h-9 text-xs rounded-xl"
+                onChange={(dateStr) => setSelectedDate(dateStr || getTodayDateStr())}
+                placeholder="Pilih Tanggal Presensi"
               />
             </div>
 
@@ -561,28 +562,21 @@ export const HrmPresensiManagementTab: React.FC = () => {
           <div className="space-y-4 py-2 text-xs">
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Pilih Karyawan</Label>
-              <Select value={manualUserId} onValueChange={setManualUserId}>
-                <SelectTrigger className="h-9 text-xs rounded-xl">
-                  <SelectValue placeholder="Pilih Karyawan..." />
-                </SelectTrigger>
-                <SelectContent className="max-h-56">
-                  {users.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      {u.fullName || u.name} ({u.nip || '-'})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <HrmEmployeeSearchInput
+                value={manualUserId}
+                onSelect={(uid) => setManualUserId(uid)}
+                users={users}
+                placeholder="Cari nama, NIP, atau divisi karyawan..."
+              />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Tanggal</Label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={manualDate}
-                  onChange={(e) => setManualDate(e.target.value)}
-                  className="h-9 text-xs rounded-xl"
+                  onChange={(dateStr) => setManualDate(dateStr || getTodayDateStr())}
+                  placeholder="Pilih tanggal"
                 />
               </div>
               <div className="space-y-1.5">

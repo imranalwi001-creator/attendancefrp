@@ -31,13 +31,6 @@ import { Progress } from '@/components/ui/progress';
 import { Link, useSearchParams } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { HrmPimpinanDashboard } from './HrmPimpinanDashboard';
-import { HrmPresensiManagementTab } from '@/components/hrm/superadmin/HrmPresensiManagementTab';
-import { HrmLemburManagementTab } from '@/components/hrm/superadmin/HrmLemburManagementTab';
-import { HrmShiftManagementTab } from '@/components/hrm/superadmin/HrmShiftManagementTab';
-import { HrmCutiManagementTab } from '@/components/hrm/superadmin/HrmCutiManagementTab';
-import { HrmKinerjaManagementTab } from '@/components/hrm/superadmin/HrmKinerjaManagementTab';
-import { HrmPelanggaranManagementTab } from '@/components/hrm/superadmin/HrmPelanggaranManagementTab';
-import { HrmOverallAnalyticsTab } from '@/components/hrm/superadmin/HrmOverallAnalyticsTab';
 import {
   AreaChart,
   Area,
@@ -54,37 +47,8 @@ import {
   Legend,
 } from 'recharts';
 
-export type SuperadminTabKey =
-  | 'ringkasan'
-  | 'analytics'
-  | 'presensi'
-  | 'lembur'
-  | 'shift'
-  | 'cuti'
-  | 'kinerja'
-  | 'pelanggaran';
-
-interface HrmSuperadminDashboardProps {
-  initialTab?: SuperadminTabKey;
-}
-
-export const HrmSuperadminDashboard: React.FC<HrmSuperadminDashboardProps> = ({ initialTab = 'ringkasan' }) => {
+export const HrmSuperadminDashboard: React.FC = () => {
   const { user } = useHrmAuth();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const queryTab = searchParams.get('tab') as SuperadminTabKey | null;
-  const [activeTab, setActiveTab] = useState<SuperadminTabKey>(queryTab || initialTab);
-
-  useEffect(() => {
-    if (queryTab && queryTab !== activeTab) {
-      setActiveTab(queryTab);
-    }
-  }, [queryTab]);
-
-  const switchTab = (tab: SuperadminTabKey) => {
-    setActiveTab(tab);
-    setSearchParams({ tab });
-  };
-
   const [viewMode, setViewMode] = useState<'admin' | 'executive'>('admin');
   const [userCount, setUserCount] = useState(0);
   const [roleCount, setRoleCount] = useState(0);
@@ -175,7 +139,7 @@ export const HrmSuperadminDashboard: React.FC<HrmSuperadminDashboardProps> = ({ 
               Dashboard Analitik & Monitoring Karyawan
             </h1>
             <p className="text-muted-foreground text-sm max-w-xl">
-              Selamat datang, {user?.fullName}. Pantau progres produktivitas, visualisasi kehadiran harian, perbandingan performa divisi, dan ekspor laporan kepegawaian.
+              Selamat datang, {user?.fullName}. Pantau progres produktivitas, visualisasi kehadiran harian, perbandingan performa divisi, dan kelola operasional SDM secara terpusat.
             </p>
           </div>
 
@@ -191,70 +155,14 @@ export const HrmSuperadminDashboard: React.FC<HrmSuperadminDashboardProps> = ({ 
                 <Users className="w-3.5 h-3.5" /> Daftarkan Karyawan
               </Button>
             </Link>
-            <Link to="/admin/laporan">
-              <Button variant="outline" className="text-xs rounded-xl gap-2 font-medium h-9">
-                <FileSpreadsheet className="w-4 h-4 text-primary" /> Cetak & Rekap
+            <Link to="/admin/analytics">
+              <Button variant="outline" className="text-xs rounded-xl gap-2 font-medium h-9 border-border">
+                <BarChart3 className="w-4 h-4 text-primary" /> Dashboard Analytics
               </Button>
             </Link>
           </div>
         </div>
       </div>
-
-      {/* Superadmin Tab Navigation Bar */}
-      <div className="flex items-center gap-1.5 p-1.5 bg-card border border-border rounded-2xl overflow-x-auto shadow-xs no-scrollbar">
-        {[
-          { key: 'ringkasan', label: 'Ringkasan & Radar', icon: LayoutDashboard },
-          { key: 'analytics', label: 'Dashboard Analytics', icon: BarChart3, badge: 'Multi-Filter' },
-          { key: 'presensi', label: 'Data Presensi', icon: Clock, count: todayAttCount },
-          { key: 'lembur', label: 'Lembur (SPKL)', icon: Briefcase },
-          { key: 'shift', label: 'Data Shift', icon: CalendarClock },
-          { key: 'cuti', label: 'Data Izin / Cuti', icon: CalendarDays, count: pendingLeaveCount },
-          { key: 'kinerja', label: 'Data Kinerja (KPI)', icon: Award },
-          { key: 'pelanggaran', label: 'Data Pelanggaran (SP)', icon: ShieldAlert, count: activeBreachCount },
-        ].map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.key;
-          return (
-            <button
-              key={tab.key}
-              onClick={() => switchTab(tab.key as SuperadminTabKey)}
-              className={cn(
-                'flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer',
-                isActive
-                  ? 'bg-primary text-primary-foreground shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              )}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              <span>{tab.label}</span>
-              {tab.badge && (
-                <span
-                  className={cn(
-                    'text-[10px] px-1.5 py-0.2 rounded-full font-bold',
-                    isActive ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-primary/10 text-primary'
-                  )}
-                >
-                  {tab.badge}
-                </span>
-              )}
-              {tab.count !== undefined && tab.count > 0 && (
-                <span
-                  className={cn(
-                    'text-[10px] px-1.5 py-0.2 rounded-full font-bold',
-                    isActive ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-muted text-foreground'
-                  )}
-                >
-                  {tab.count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Tab 1: Ringkasan & Radar (Original Content) */}
-      {activeTab === 'ringkasan' && (
-        <div className="space-y-6">
           {/* Geofence Perimeter Breach Alert Banner (If Active Violations Detected) */}
       {activeBreachCount > 0 && (
         <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-sm">
@@ -638,29 +546,6 @@ export const HrmSuperadminDashboard: React.FC<HrmSuperadminDashboardProps> = ({ 
           </table>
         </div>
       </Card>
-      </div>
-      )}
-
-      {/* Tab 2: Dashboard Analytics Keseluruhan */}
-      {activeTab === 'analytics' && <HrmOverallAnalyticsTab />}
-
-      {/* Tab 3: Data Presensi */}
-      {activeTab === 'presensi' && <HrmPresensiManagementTab />}
-
-      {/* Tab 4: Lembur (SPKL) */}
-      {activeTab === 'lembur' && <HrmLemburManagementTab />}
-
-      {/* Tab 5: Data Shift */}
-      {activeTab === 'shift' && <HrmShiftManagementTab />}
-
-      {/* Tab 6: Data Izin / Cuti */}
-      {activeTab === 'cuti' && <HrmCutiManagementTab />}
-
-      {/* Tab 7: Data Kinerja (KPI) */}
-      {activeTab === 'kinerja' && <HrmKinerjaManagementTab />}
-
-      {/* Tab 8: Data Pelanggaran (SP) */}
-      {activeTab === 'pelanggaran' && <HrmPelanggaranManagementTab />}
     </div>
   );
 };

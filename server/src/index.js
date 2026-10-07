@@ -2509,6 +2509,152 @@ _1 Bukti selfie realtime berhasil diverifikasi dan tersimpan di radar pengawasan
   }
 });
 
+// ─── 3.B. REPORT TRAVEL INCIDENT (BAN BOCOR, BENSIN HABIS, MOTOR RUSAK) ───
+app.post('/api/field-sentinel/travel-incident', async (req, res) => {
+  const {
+    userId,
+    incidentType,
+    reason,
+    photoUrl,
+    latitude,
+    longitude,
+    accuracy
+  } = req.body;
+
+  if (!userId || !incidentType) {
+    return res.status(400).json({ success: false, error: 'User ID dan jenis kendala perjalanan wajib diisi' });
+  }
+
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    const uRes = await pool.query(
+      `SELECT p.id, p.full_name, p.nip, d.name as division_name, p.phone
+       FROM hrm_profiles p
+       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+       WHERE p.id = $1 LIMIT 1;`,
+      [validUserId]
+    );
+
+    if (uRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+
+    const user = uRes.rows[0];
+
+    const incidentConfigs = {
+      ban_bocor: {
+        label: 'Ban Bocor / Kempes',
+        graceMinutes: 45,
+        recommendation: 'Tepikan kendaraan di bahu jalan yang aman. Nyalakan lampu darurat. Cari tambal ban terdekat atau hubungi rekan untuk bantuan. Diberikan toleransi tambahan 45 menit.'
+      },
+      kehabisan_bensin: {
+        label: 'Kehabisan Bensin',
+        graceMinutes: 30,
+        recommendation: 'Tuntun kendaraan ke trotoar/lokasi aman. Beli bahan bakar di SPBU / Pertashop terdekat atau minta rekan mengantarkan bensin darurat. Diberikan toleransi tambahan 30 menit.'
+      },
+      motor_rusak: {
+        label: 'Kendaraan Mogok / Mesin Rusak',
+        graceMinutes: 60,
+        recommendation: 'Jangan memaksakan starter mesin berulang kali. Cari bengkel resmi/panggilan terdekat. Simpan bukti servis darurat. Diberikan toleransi dispensasi 60 menit.'
+      },
+      kecelakaan_ringan: {
+        label: 'Insiden / Kecelakaan Ringan',
+        graceMinutes: 60,
+        recommendation: 'Prioritaskan pertolongan medis pertama dan keselamatan fisik Anda. Jangan panik, segera hubungi keluarga/pimpinan jika butuh pendampingan. Diberikan dispensasi penuh.'
+      },
+      cuaca_ekstrem: {
+        label: 'Cuaca Ekstrem / Banjir / Pohon Tumbang',
+        graceMinutes: 60,
+        recommendation: 'Berteduh di bangunan kokoh yang aman. Hindari pohon rindang, papan reklame dan genangan air dalam. Diberikan toleransi cuaca 60 menit.'
+      }
+    };
+
+    const config = incidentConfigs[incidentType] || {
+      label: 'Kendala Perjalanan Tak Terduga',
+      graceMinutes: 45,
+      recommendation: 'Jaga keselamatan diri dan segera menuju lokasi tugas setelah kendala teratasi.'
+    };
+
+    await pool.query(
+      `INSERT INTO hrm_field_travel_incidents (
+         user_id, incident_type, reason, photo_url, latitude, longitude, accuracy, grace_period_minutes, status, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'approved', NOW());`,
+      [
+        validUserId,
+        config.label,
+        reason || 'Kendala teknis di perjalanan menuju lokasi kerja',
+        photoUrl || null,
+        latitude ? parseFloat(latitude) : null,
+        longitude ? parseFloat(longitude) : null,
+        accuracy ? parseFloat(accuracy) : null,
+        config.graceMinutes
+      ]
+    );
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    await pool.query(
+      `UPDATE hrm_attendances 
+       SET notes = COALESCE(notes || ' | ', '') || $1
+       WHERE user_id = $2 AND (date = $3 OR attendance_date = $3);`,
+      [`[DISPENSASI PERJALANAN: ${config.label} (+${config.graceMinutes}m)]`, validUserId, todayStr]
+    );
+
+    const witaTimeStr = new Date().toLocaleTimeString('id-ID', {
+      timeZone: 'Asia/Makassar',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    }) + ' WITA';
+
+    const mapsUrl = latitude && longitude ? `https://maps.google.com/?q=${latitude},${longitude}` : 'Koordinat GPS Tercatat';
+
+    const waMessage =
+`🚨 *LAPORAN KENDALA PERJALANAN KARYAWAN PT FRP*
+
+👤 Nama: *${user.full_name}* (${user.nip || 'FRP'})
+🏢 Divisi: *${user.division_name || '-'}*
+⚠️ Kendala: *${config.label}*
+⏰ Waktu: *${witaTimeStr}*
+📝 Keterangan: ${reason || 'Dalam perjalanan ke lokasi tugas'}
+📍 Lokasi GPS: ${mapsUrl} (Akurasi: ${accuracy || 10}m)
+
+🛡️ *STATUS DISPENSASI:*
+Diberikan perpanjangan toleransi *${config.graceMinutes} MENIT* otomatis tanpa potongan gaji atau sanksi kedisiplinan.`;
+
+    await alertLeadershipViaWhatsAppAndSystem({
+      title: `🚨 Laporan Kendala: ${user.full_name} (${config.label})`,
+      message: `Karyawan ${user.full_name} melaporkan kendala ${config.label}. Diberikan toleransi dispensasi ${config.graceMinutes} menit.`,
+      waMessage,
+      link: '/admin/monitoring',
+      metadata: {
+        type: 'travel_incident',
+        userId: validUserId,
+        incidentType,
+        graceMinutes: config.graceMinutes,
+        latitude,
+        longitude,
+        photoUrl
+      }
+    });
+
+    res.json({
+      success: true,
+      label: config.label,
+      graceMinutes: config.graceMinutes,
+      recommendation: config.recommendation,
+      message: `Laporan kendala perjalanan diterima. Anda diberikan toleransi dispensasi keterlambatan ${config.graceMinutes} menit.`
+    });
+  } catch (err) {
+    console.error('Travel incident error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 4. Fetch all active field agents with live radar coordinates & multi-titik bank posts
 app.get('/api/field-sentinel/active-agents', async (req, res) => {
   try {

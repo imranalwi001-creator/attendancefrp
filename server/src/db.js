@@ -483,6 +483,22 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS custom_end_time VARCHAR(10) DEFAULT '16:30',
       ADD COLUMN IF NOT EXISTS late_tolerance_minutes INTEGER DEFAULT 15;
 
+      -- ─── 16. LAPOR KENDALA PERJALANAN & DISPENSASI DARURAT ───
+      CREATE TABLE IF NOT EXISTS hrm_field_travel_incidents (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES hrm_profiles(id) ON DELETE CASCADE,
+        incident_type VARCHAR(100) NOT NULL,
+        reason TEXT,
+        photo_url TEXT,
+        latitude DOUBLE PRECISION,
+        longitude DOUBLE PRECISION,
+        accuracy DOUBLE PRECISION,
+        grace_period_minutes INTEGER DEFAULT 45,
+        status VARCHAR(50) DEFAULT 'approved',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_hrm_travel_incidents_user ON hrm_field_travel_incidents(user_id, created_at);
+
       CREATE TABLE IF NOT EXISTS hrm_system_settings (
         key VARCHAR(100) PRIMARY KEY,
         value TEXT,

@@ -52,9 +52,15 @@ import {
   Loader2,
   ZapOff,
   Compass,
+  Wrench,
+  Fuel,
+  Radio,
+  Bike,
+  Activity,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
+import { customNotify } from '@/lib/customNotification';
 import { biometricService, BiometricMatchResult, parseFaceDescriptor } from '@/services/biometricService';
 import { livenessEngine } from '@/services/livenessEngine';
 import { geofenceService, GeofenceEvaluation } from '@/services/geofenceService';
@@ -175,6 +181,111 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [isSubmittingLeave, setIsSubmittingLeave] = useState(false);
   const [userLeaves, setUserLeaves] = useState<LeaveRequest[]>([]);
   const [leaveProofPhoto, setLeaveProofPhoto] = useState<string>('');
+
+  // ─── TRAVEL INCIDENT & VIBRATION REMINDER STATES ───
+  const [travelModalOpen, setTravelModalOpen] = useState(false);
+  const [travelIncidentType, setTravelIncidentType] = useState<'ban_bocor' | 'kehabisan_bensin' | 'motor_rusak' | 'kecelakaan_ringan' | 'cuaca_ekstrem'>('ban_bocor');
+  const [travelReason, setTravelReason] = useState('');
+  const [travelProofPhoto, setTravelProofPhoto] = useState('');
+  const [isSubmittingTravel, setIsSubmittingTravel] = useState(false);
+  const [activeTravelDispensation, setActiveTravelDispensation] = useState<{
+    label: string;
+    graceMinutes: number;
+    witaTime: string;
+    recommendation: string;
+  } | null>(() => {
+    try {
+      const saved = localStorage.getItem(`hrm_travel_disp_${getTodayDateStr()}`);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return null;
+  });
+
+  const triggerStrongVibrationReminder = () => {
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      navigator.vibrate([400, 200, 400, 200, 600, 200, 800]);
+    }
+    customNotify.warning(
+      '🔔 Pengingat Shift & Lokasi FRP',
+      `Segera berada di pos tugas resmi sebelum batas toleransi keterlambatan berakhir!`
+    );
+  };
+
+  const handleCaptureTravelProof = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.min(img.width, 1024);
+        canvas.height = Math.round((canvas.width / img.width) * img.height);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+          ctx.fillRect(0, canvas.height - 44, canvas.width, 44);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 12px sans-serif';
+          const witaNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA';
+          ctx.fillText(`🚨 KENDALA PERJALANAN FRP • ${user?.fullName || 'Petugas'} (${user?.nip || '-'})`, 10, canvas.height - 26);
+          ctx.font = '10px sans-serif';
+          ctx.fillText(`WAKTU: ${witaNow} • GPS: ${currentCoords ? `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)}` : 'Terdeteksi'} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 10}m)`, 10, canvas.height - 10);
+          setTravelProofPhoto(canvas.toDataURL('image/jpeg', 0.85));
+        }
+      };
+      img.src = evt.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSubmitTravelIncident = async () => {
+    if (!user?.id) return;
+    setIsSubmittingTravel(true);
+    try {
+      const res = await fetch('/api/field-sentinel/travel-incident', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          incidentType: travelIncidentType,
+          reason: travelReason,
+          photoUrl: travelProofPhoto,
+          latitude: currentCoords?.lat,
+          longitude: currentCoords?.lng,
+          accuracy: coordsAccuracy,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const dispensationObj = {
+          label: data.label,
+          graceMinutes: data.graceMinutes,
+          witaTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+          recommendation: data.recommendation,
+        };
+        setActiveTravelDispensation(dispensationObj);
+        try {
+          localStorage.setItem(`hrm_travel_disp_${getTodayDateStr()}`, JSON.stringify(dispensationObj));
+        } catch (_) {}
+
+        customNotify.success(
+          'Laporan Diterima',
+          `Dispensasi toleransi ${data.graceMinutes} menit telah diaktifkan otomatis. Notifikasi darurat diteruskan ke WhatsApp Pimpinan.`
+        );
+        setTravelModalOpen(false);
+        setTravelReason('');
+        setTravelProofPhoto('');
+      } else {
+        customNotify.error('Gagal Mengirim', data.error || 'Terjadi kesalahan sistem');
+      }
+    } catch (err: any) {
+      customNotify.error('Gagal Melapor', err.message);
+    } finally {
+      setIsSubmittingTravel(false);
+    }
+  };
 
   // Notification Bell Drawer & List
   const [notificationsDrawerOpen, setNotificationsDrawerOpen] = useState(false);
@@ -2839,6 +2950,107 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             )}
 
+            {/* ─── PENGINGAT SHIFT & LOKASI TUGAS LAPANGAN DENGAN VIBRASI BERGETAR KUAT ─── */}
+            <div className="rounded-2xl p-4 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white shadow-xl border border-slate-700/80 space-y-3 relative overflow-hidden">
+              <div className="absolute -right-10 -bottom-10 w-32 h-32 rounded-full bg-emerald-500/10 blur-2xl pointer-events-none" />
+              
+              {/* Header: Running WITA Clock & Shift Badge */}
+              <div className="flex items-center justify-between gap-2 border-b border-slate-700/60 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                    <Radio className="w-4 h-4 animate-pulse" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block">WAKTU REALTIME WITA</span>
+                    <span className="text-sm font-black font-mono text-emerald-300">
+                      {currentTime.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WITA
+                    </span>
+                  </div>
+                </div>
+
+                <Badge className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold py-0.5 px-2">
+                  {userShift?.name || 'Shift Operasional'}
+                </Badge>
+              </div>
+
+              {/* Employee & Shift Details Grid */}
+              <div className="grid grid-cols-2 gap-2.5 text-xs">
+                <div className="space-y-0.5">
+                  <span className="text-[10px] text-slate-400 font-medium">Petugas Karyawan:</span>
+                  <p className="font-bold text-white truncate">{user?.fullName || user?.name || '-'}</p>
+                  <p className="text-[10px] font-mono text-slate-400">NIP: {user?.nip || '-'}</p>
+                </div>
+
+                <div className="space-y-0.5">
+                  <span className="text-[10px] text-slate-400 font-medium">Divisi / Unit Kerja:</span>
+                  <p className="font-bold text-emerald-300 truncate">{user?.divisionName || user?.division || 'Operasional'}</p>
+                  <p className="text-[10px] text-slate-400">Status: {isSpecialDutyOfficer ? 'Petugas Lapangan Khusus' : 'Reguler'}</p>
+                </div>
+
+                <div className="space-y-0.5">
+                  <span className="text-[10px] text-slate-400 font-medium">Jadwal Masuk & Pulang:</span>
+                  <p className="font-bold text-white font-mono text-[11px]">
+                    {userShift?.startTime || '07:30'} - {userShift?.endTime || '16:30'} WITA
+                  </p>
+                  <p className="text-[10px] text-amber-300 font-medium">
+                    Toleransi: {userShift?.lateToleranceMinutes || 15} Menit
+                  </p>
+                </div>
+
+                <div className="space-y-0.5">
+                  <span className="text-[10px] text-slate-400 font-medium">Lokasi Ceklok Masuk/Pulang:</span>
+                  <p className="font-bold text-slate-200 text-[11px] truncate" title={assignedPostName || 'Bank Pos Resmi'}>
+                    {assignedPostName || 'Pos Resmi FRP'}
+                  </p>
+                  <p className="text-[10px] font-medium flex items-center gap-1">
+                    <span className={`w-1.5 h-1.5 rounded-full ${locationStatus === 'inside' ? 'bg-emerald-400' : 'bg-rose-400 animate-ping'}`} />
+                    <span className={locationStatus === 'inside' ? 'text-emerald-400 font-bold' : 'text-rose-400 font-semibold'}>
+                      {locationStatus === 'inside' ? 'Di Radius Pos' : `Di Luar Area (${distanceToOffice || 0}m)`}
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Dispensasi Perjalanan Aktif (Jika Ada) */}
+              {activeTravelDispensation && (
+                <div className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Bike className="w-4 h-4 text-amber-400 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-bold truncate">Dispensasi: {activeTravelDispensation.label}</p>
+                      <p className="text-[10px] text-amber-200/90 truncate">Toleransi tambahan +{activeTravelDispensation.graceMinutes}m aktif (Lapor: {activeTravelDispensation.witaTime} WITA)</p>
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="border-amber-400 text-amber-300 text-[9px] shrink-0 font-bold">
+                    Bebas Sanksi
+                  </Badge>
+                </div>
+              )}
+
+              {/* Action Buttons: Vibration Pulse + Roadside Emergency */}
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <Button
+                  size="sm"
+                  type="button"
+                  onClick={triggerStrongVibrationReminder}
+                  className="h-8 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-xl gap-1.5 font-semibold active:scale-95 transition-all shadow-xs"
+                >
+                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Uji Getar Reminder</span>
+                </Button>
+
+                <Button
+                  size="sm"
+                  type="button"
+                  onClick={() => setTravelModalOpen(true)}
+                  className="h-8 text-xs bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700 text-white rounded-xl gap-1.5 font-bold active:scale-95 transition-all shadow-xs"
+                >
+                  <Wrench className="w-3.5 h-3.5" />
+                  <span>Lapor Kendala Jalan</span>
+                </Button>
+              </div>
+            </div>
+
             {/* ─── KARTU RINGKASAN WAKTU PRESENSI HARI INI (REALTIME DATABASE STATUS) ─── */}
             <div className={`rounded-2xl p-3.5 border transition-all ${
               hasClockedIn
@@ -4742,6 +4954,137 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           }
         }}
       />
+
+      {/* ─── MODAL LAPOR KENDALA PERJALANAN (EMERGENCY ROADSIDE DISPENSATION) ─── */}
+      <Dialog open={travelModalOpen} onOpenChange={setTravelModalOpen}>
+        <DialogContent className="max-w-md p-4 sm:p-6 rounded-3xl bg-card border-border">
+          <DialogHeader className="space-y-1">
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-rose-500/10 text-rose-600 flex items-center justify-center shrink-0">
+                <Wrench className="w-4 h-4" />
+              </div>
+              <span>Lapor Kendala Perjalanan Menuju Pos</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Laporkan kejadian darurat di perjalanan (ban bocor, bensin habis, motor mogok). Sistem otomatis memberikan toleransi dispensasi keterlambatan tanpa sanksi.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3.5 py-2 text-xs">
+            {/* Pilihan Jenis Kendala */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">Jenis Kendala yang Dialami:</label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { id: 'ban_bocor', label: '🏍️ Ban Bocor / Kempes', grace: '45m' },
+                  { id: 'kehabisan_bensin', label: '⛽ Kehabisan Bensin', grace: '30m' },
+                  { id: 'motor_rusak', label: '🔧 Motor Mogok / Rusak', grace: '60m' },
+                  { id: 'kecelakaan_ringan', label: '🚑 Kecelakaan Ringan', grace: '60m' },
+                  { id: 'cuaca_ekstrem', label: '🌧️ Cuaca Ekstrem / Banjir', grace: '60m' },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setTravelIncidentType(item.id as any)}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      travelIncidentType === item.id
+                        ? 'border-rose-500 bg-rose-500/10 text-rose-700 dark:text-rose-300 font-bold shadow-xs'
+                        : 'border-border hover:bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    <p className="text-xs truncate">{item.label}</p>
+                    <span className="text-[10px] opacity-80">Toleransi +{item.grace}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Rekomendasi Solusi Terbaik Dinamis */}
+            <div className="p-3 rounded-2xl bg-gradient-to-r from-amber-500/10 via-orange-500/5 to-transparent border border-amber-500/30 text-amber-900 dark:text-amber-200 space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-[11px] text-amber-800 dark:text-amber-300">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Rekomendasi & Langkah Darurat FRP:</span>
+              </div>
+              <p className="text-[11px] leading-relaxed opacity-90">
+                {travelIncidentType === 'ban_bocor' &&
+                  '1. Segera tepikan kendaraan di bahu jalan yang aman. 2. Nyalakan lampu darurat jika malam hari. 3. Hubungi atau cari jasa tambal ban terdekat. Diberikan toleransi tambahan 45 menit tanpa potongan/SP.'}
+                {travelIncidentType === 'kehabisan_bensin' &&
+                  '1. Pindahkan kendaraan ke trotoar/area aman. 2. Beli BBM di Pertashop/SPBU terdekat atau hubungi rekan kerja terdekat untuk bantuan darurat. Diberikan toleransi tambahan 30 menit.'}
+                {travelIncidentType === 'motor_rusak' &&
+                  '1. Jangan paksa starter berkali-kali. 2. Bawa ke bengkel darurat terdekat atau panggil montir. Simpan bukti nota perbaikan. Diberikan toleransi tambahan 60 menit.'}
+                {travelIncidentType === 'kecelakaan_ringan' &&
+                  '1. Prioritaskan pertolongan pertama (P3K) dan keselamatan fisik Anda. 2. Hubungi keluarga/atasan langsung jika butuh penjemputan darurat. Diberikan dispensasi penuh.'}
+                {travelIncidentType === 'cuaca_ekstrem' &&
+                  '1. Berteduh di bangunan kokoh dan aman. 2. Jauhi pohon rindang besar dan tiang listrik. Diberikan toleransi cuaca 60 menit.'}
+              </p>
+            </div>
+
+            {/* Foto Bukti Kejadian (Camera / File) */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">Foto Bukti Kendala (Watermark Otomatis):</label>
+              {travelProofPhoto ? (
+                <div className="relative rounded-2xl overflow-hidden border border-border">
+                  <img src={travelProofPhoto} alt="Bukti Kendala" className="w-full h-36 object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => setTravelProofPhoto('')}
+                    className="absolute top-2 right-2 p-1.5 rounded-full bg-black/70 text-white hover:bg-black"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <label className="flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed border-border hover:border-primary/50 cursor-pointer bg-muted/20">
+                  <Camera className="w-6 h-6 text-primary mb-1" />
+                  <span className="text-xs font-semibold text-foreground">Ambil Foto Bukti Kamera</span>
+                  <span className="text-[10px] text-muted-foreground">Otomatis dibubuhi watermark GPS & WITA</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleCaptureTravelProof}
+                    className="hidden"
+                  />
+                </label>
+              )}
+            </div>
+
+            {/* Keterangan Tambahan */}
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold text-muted-foreground">Keterangan Lokasi / Kondisi (Opsional):</label>
+              <Input
+                value={travelReason}
+                onChange={(e) => setTravelReason(e.target.value)}
+                placeholder="Contoh: Ban belakang bocor kena paku di Jl. Poros..."
+                className="h-8 text-xs rounded-xl"
+              />
+            </div>
+
+            {/* GPS Status Indicator */}
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground px-1">
+              <span className="flex items-center gap-1">
+                <MapPin className="w-3 h-3 text-emerald-500" />
+                <span>GPS: {currentCoords ? `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)}` : 'Mendeteksi...'}</span>
+              </span>
+              <span>Akurasi: ±{coordsAccuracy ? Math.round(coordsAccuracy) : 10}m</span>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setTravelModalOpen(false)} className="rounded-xl text-xs">
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSubmitTravelIncident}
+              disabled={isSubmittingTravel}
+              className="rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700 text-white font-bold text-xs"
+            >
+              {isSubmittingTravel ? 'Mengirim...' : 'Kirim Laporan Darurat'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

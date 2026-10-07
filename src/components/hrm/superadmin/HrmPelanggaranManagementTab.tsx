@@ -8,7 +8,9 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { toast } from 'sonner';
+import { DatePicker } from '@/components/ui/date-picker';
+import { HrmEmployeeSearchInput } from '@/components/hrm/HrmEmployeeSearchInput';
+import { customNotify } from '@/lib/customNotification';
 import {
   ShieldAlert,
   AlertTriangle,
@@ -113,14 +115,14 @@ export const HrmPelanggaranManagementTab: React.FC = () => {
       });
 
       if (res.success) {
-        toast.success(`Surat Peringatan (${spType.toUpperCase()}) berhasil diterbitkan dan disinkronkan ke database.`);
+        customNotify.success('Sanksi SP Terbit', `Surat Peringatan (${spType.toUpperCase()}) berhasil diterbitkan dan disinkronkan ke database.`);
         setModalOpen(false);
         loadData();
       } else {
-        toast.error(res.error || 'Gagal menerbitkan sanksi pelanggaran');
+        customNotify.error('Gagal Terbitkan SP', res.error || 'Gagal menerbitkan sanksi pelanggaran');
       }
     } catch (err: any) {
-      toast.error('Terjadi kesalahan saat memproses data');
+      customNotify.error('Kesalahan Sistem', 'Terjadi kesalahan saat memproses data');
     } finally {
       setIsSubmitting(false);
     }
@@ -134,13 +136,13 @@ export const HrmPelanggaranManagementTab: React.FC = () => {
         newStatus === 'revoked' ? 'Sanksi dicabut oleh Superadmin' : 'Status diperbarui'
       );
       if (res.success) {
-        toast.success('Status sanksi pelanggaran berhasil diperbarui.');
+        customNotify.success('Status Diperbarui', 'Status sanksi pelanggaran berhasil diperbarui.');
         loadData();
       } else {
-        toast.error(res.error || 'Gagal memperbarui status sanksi');
+        customNotify.error('Gagal Perbarui', res.error || 'Gagal memperbarui status sanksi');
       }
     } catch (err: any) {
-      toast.error('Terjadi kesalahan sistem');
+      customNotify.error('Kesalahan Sistem', 'Terjadi kesalahan sistem');
     }
   };
 
@@ -149,13 +151,13 @@ export const HrmPelanggaranManagementTab: React.FC = () => {
     try {
       const res = await hrmService.deleteDisciplinaryRecord(id);
       if (res.success) {
-        toast.success('Surat peringatan berhasil dihapus.');
+        customNotify.success('SP Dihapus', 'Surat peringatan berhasil dihapus.');
         loadData();
       } else {
-        toast.error(res.error || 'Gagal menghapus');
+        customNotify.error('Gagal Hapus', res.error || 'Gagal menghapus');
       }
     } catch (err: any) {
-      toast.error('Gagal menghapus');
+      customNotify.error('Gagal Hapus', 'Terjadi kesalahan saat menghapus');
     }
   };
 
@@ -520,18 +522,12 @@ export const HrmPelanggaranManagementTab: React.FC = () => {
           <div className="space-y-4 py-2 text-xs">
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Pilih Karyawan</Label>
-              <Select value={userId} onValueChange={setUserId}>
-                <SelectTrigger className="h-9 text-xs rounded-xl">
-                  <SelectValue placeholder="Pilih Karyawan..." />
-                </SelectTrigger>
-                <SelectContent className="max-h-56">
-                  {users.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      {u.fullName || u.name} ({u.nip || '-'})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <HrmEmployeeSearchInput
+                value={userId}
+                onSelect={(uid) => setUserId(uid)}
+                users={users}
+                placeholder="Cari nama, NIP, atau divisi karyawan..."
+              />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -563,20 +559,18 @@ export const HrmPelanggaranManagementTab: React.FC = () => {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Tanggal Terbit</Label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={violationDate}
-                  onChange={(e) => setViolationDate(e.target.value)}
-                  className="h-9 text-xs rounded-xl"
+                  onChange={(d) => setViolationDate(d || getTodayDateStr())}
+                  placeholder="Pilih tanggal terbit"
                 />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Masa Berlaku Hingga</Label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={validUntil}
-                  onChange={(e) => setValidUntil(e.target.value)}
-                  className="h-9 text-xs rounded-xl"
+                  onChange={(d) => setValidUntil(d || '')}
+                  placeholder="Pilih masa berlaku"
                 />
               </div>
             </div>

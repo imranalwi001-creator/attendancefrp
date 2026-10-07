@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
-import { toast } from 'sonner';
+import { MonthPicker } from '@/components/ui/month-picker';
+import { customNotify } from '@/lib/customNotification';
 import {
   Award,
   TrendingUp,
@@ -263,11 +264,9 @@ export const HrmKinerjaManagementTab: React.FC = () => {
             </div>
 
             <div>
-              <Input
-                type="month"
+              <MonthPicker
                 value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
-                className="h-9 text-xs rounded-xl"
+                onChange={(m) => setSelectedMonth(m)}
               />
             </div>
 
