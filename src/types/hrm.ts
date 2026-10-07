@@ -13,6 +13,8 @@ export interface AppSettings {
   breakPolicyEnabled?: boolean;
   breakDurationMinutes?: number;
   breakAllowOutside?: boolean;
+  breakStartTime?: string; // Default '12:00' WITA
+  breakEndTime?: string;   // Default '13:00' WITA
 }
 
 // ─── COMPANY PROFILE ─────────────────────────────────────────────────────────
@@ -705,8 +707,11 @@ export interface OvertimeSettings {
   minDurationMinutes: number;      // Durasi minimum agar terhitung lembur (misal 30 menit)
   roundingMinutes: number;         // Pembulatan menit (misal per 30 menit)
   maxDailyHours: number;           // Batas maksimal jam lembur per hari (misal 4 jam)
+  maxWeeklyHours?: number;         // Batas maksimal jam lembur per minggu (PP 35/2021: 18 jam)
   autoDetectFromClockOut: boolean; // Deteksi otomatis dari presensi pulang
   requireApproval: boolean;        // Wajib persetujuan atasan/HRD sebelum cair
+  allowEmergencyOvertime?: boolean; // Izinkan lembur darurat instan tanpa menunggu approval
+  payoutCutoffRule?: string;       // Rekap berjalan, pencairan bulan depan
 }
 
 export type OvertimeStatus = 'pending' | 'approved' | 'rejected';
@@ -745,6 +750,10 @@ export interface OvertimeRecord {
   actualEndTime?: string;
   completionNotes?: string;
   completionPhotos?: string[];
+  isEmergency?: boolean;      // True jika lembur pekerjaan darurat / on-call
+  isSubstituteOvertime?: boolean; // True jika lembur karena menggantikan karyawan libur/cuti
+  substituteForUserId?: string;   // ID karyawan yang digantikan
+  substituteForUserName?: string; // Nama karyawan yang digantikan
   createdAt: string;
 }
 

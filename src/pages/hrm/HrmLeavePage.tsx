@@ -53,6 +53,9 @@ export const HrmLeavePage: React.FC = () => {
   const [endDate, setEndDate] = useState('');
   const [reason, setReason] = useState('');
   const [attachmentUrl, setAttachmentUrl] = useState('');
+  const [substituteId, setSubstituteId] = useState('');
+  const [substituteName, setSubstituteName] = useState('');
+  const [substituteNip, setSubstituteNip] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -63,7 +66,11 @@ export const HrmLeavePage: React.FC = () => {
   const [otEndTime, setOtEndTime] = useState('20:00');
   const [otTask, setOtTask] = useState('');
   const [otIsWeekend, setOtIsWeekend] = useState(false);
+  const [isEmergencyOt, setIsEmergencyOt] = useState(false);
   const [otFormError, setOtFormError] = useState<string | null>(null);
+
+  // Users for Substitute Recommendations
+  const [allUsers, setAllUsers] = useState<import('@/types/hrm').UserProfile[]>([]);
 
   // Attachment Preview Modal
   const [previewAttachment, setPreviewAttachment] = useState<string | null>(null);
@@ -73,6 +80,7 @@ export const HrmLeavePage: React.FC = () => {
     if (!user) return;
     setLeaves(hrmService.getUserLeaves(user.id));
     setOvertimes(hrmService.getUserOvertimeRecords(user.id));
+    setAllUsers(hrmService.getUsers());
   };
 
   useEffect(() => {
@@ -95,6 +103,9 @@ export const HrmLeavePage: React.FC = () => {
     setEndDate(today);
     setReason('');
     setAttachmentUrl('');
+    setSubstituteId('');
+    setSubstituteName('');
+    setSubstituteNip('');
     setFormError(null);
     setModalOpen(true);
   };
@@ -131,6 +142,10 @@ export const HrmLeavePage: React.FC = () => {
       setFormError('Alasan pengajuan wajib diisi');
       return;
     }
+    if (!substituteId) {
+      setFormError('Sesuai prosedur anti-kekosongan pos pengawasan, Karyawan Pengganti wajib dipilih.');
+      return;
+    }
 
     try {
       hrmService.createLeaveRequest({
@@ -140,11 +155,14 @@ export const HrmLeavePage: React.FC = () => {
         endDate,
         reason: reason.trim(),
         attachmentUrl: attachmentUrl.trim() || undefined,
+        substituteId,
+        substituteName,
+        substituteNip,
       });
 
       setModalOpen(false);
-      setSuccessMessage('Pengajuan izin/cuti berhasil dikirim dan menunggu persetujuan atasan.');
-      setTimeout(() => setSuccessMessage(null), 5000);
+      setSuccessMessage('Pengajuan izin/cuti berhasil dikirim! Karyawan pengganti tercatat dan notifikasi telah dikirimkan ke Korlap, Pimpinan, dan Dirut.');
+      setTimeout(() => setSuccessMessage(null), 6000);
       loadData();
     } catch (err: any) {
       setFormError(err.message || 'Gagal mengirim pengajuan.');
@@ -157,6 +175,7 @@ export const HrmLeavePage: React.FC = () => {
     setOtEndTime('20:00');
     setOtTask('');
     setOtIsWeekend(false);
+    setIsEmergencyOt(false);
     setOtFormError(null);
     setOtModalOpen(true);
   };
@@ -198,15 +217,20 @@ export const HrmLeavePage: React.FC = () => {
         durationMinutes: otCalc.durationMinutes,
         durationHours: otCalc.durationHours,
         isWeekendHoliday: otIsWeekend,
-        hourlyRate: userOvertimeRate,       // ← tarif resmi per karyawan
+        hourlyRate: userOvertimeRate,
         rateMultiplier: otCalc.rateMultiplier,
         totalPay: otCalc.totalPay,
         taskDescription: otTask.trim(),
+        isEmergency: isEmergencyOt,
       });
 
       setOtModalOpen(false);
-      setSuccessMessage(`Pengajuan lembur (SPL) berhasil dikirim! Tarif resmi: Rp ${userOvertimeRate.toLocaleString('id-ID')}/jam. Menunggu verifikasi atasan.`);
-      setTimeout(() => setSuccessMessage(null), 7000);
+      if (isEmergencyOt) {
+        setSuccessMessage(`⚡ Lembur Darurat berhasil dimulai seketika! Notifikasi siaga telah diteruskan ke Korlap, Admin, K3, Pimpinan, Dirut, dan Superadmin. Hak uang lembur akan direkap di bulan berjalan dan dibayarkan bulan depan.`);
+      } else {
+        setSuccessMessage(`Pengajuan lembur (SPL) berhasil dikirim! Menunggu verifikasi atasan.`);
+      }
+      setTimeout(() => setSuccessMessage(null), 8000);
       loadData();
     } catch (err: any) {
       setOtFormError(err.message || 'Gagal mengirim pengajuan lembur.');
@@ -582,6 +606,54 @@ export const HrmLeavePage: React.FC = () => {
               </div>
             </div>
 
+            {/* ─── KARYAWAN PENGGANTI (ZERO VACANCY RULE) ─── */}
+            <div className="space-y-1.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold text-amber-950 dark:text-amber-200 flex items-center gap-1.5">
+                  🛡️ Karyawan Pengganti Pos (Wajib Prosedur)
+                </Label>
+                <span className="text-[10px] bg-amber-500/20 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded-full font-semibold">
+                  Zero Vacancy
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Pekerjaan tidak boleh terbengkalai. Pilih rekan kerja yang direkomendasikan sistem untuk bertugas sementara. Jika rekan yang dipilih sedang libur, otomatis dihitung <strong>lembur</strong> saat disetujui.
+              </p>
+              <Select
+                value={substituteId}
+                onValueChange={(val) => {
+                  setSubstituteId(val);
+                  const found = allUsers.find((u) => u.id === val);
+                  if (found) {
+                    setSubstituteName(found.fullName);
+                    setSubstituteNip(found.nip);
+                  }
+                }}
+              >
+                <SelectTrigger className="text-xs rounded-xl bg-card border-border mt-1">
+                  <SelectValue placeholder="-- Pilih Karyawan Pengganti --" />
+                </SelectTrigger>
+                <SelectContent className="max-h-60">
+                  {allUsers
+                    .filter((u) => u.id !== user?.id)
+                    .sort((a, b) => {
+                      const aSameDiv = a.divisionId === user?.divisionId ? -1 : 1;
+                      const bSameDiv = b.divisionId === user?.divisionId ? -1 : 1;
+                      return aSameDiv - bSameDiv;
+                    })
+                    .map((emp) => {
+                      const isSameDiv = emp.divisionId === user?.divisionId;
+                      return (
+                        <SelectItem key={emp.id} value={emp.id} className="text-xs">
+                          {emp.fullName} ({emp.nip}) • {emp.divisionName || 'Operasional'}
+                          {isSameDiv ? ' ★ Rekomendasi 1 Divisi' : ''}
+                        </SelectItem>
+                      );
+                    })}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="space-y-1">
               <Label className="text-xs font-semibold">Alasan / Keterangan Lengkap</Label>
               <Textarea
@@ -786,6 +858,25 @@ export const HrmLeavePage: React.FC = () => {
                 className="text-xs rounded-xl"
                 required
               />
+            </div>
+
+            {/* Opsi Lembur Darurat (On-Call Tanpa Menunggu Approval Tertulis) */}
+            <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/25 space-y-1.5">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isEmergencyOt}
+                  onChange={(e) => setIsEmergencyOt(e.target.checked)}
+                  className="w-4 h-4 accent-primary rounded cursor-pointer"
+                />
+                <span className="font-bold text-xs text-blue-950 dark:text-blue-200 flex items-center gap-1">
+                  <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                  Pekerjaan Lembur Darurat (On-Call Langsung)
+                </span>
+              </label>
+              <p className="text-[10.5px] text-muted-foreground leading-relaxed pl-6">
+                Aktifkan jika pekerjaan darurat/mendesak. Lembur langsung aktif tanpa menunggu approval tertulis sebelumnya. Notifikasi darurat seketika dikirim ke <strong>Korlap, Admin, K3, Pimpinan, Dirut, dan Superadmin</strong>, dan tercatat di database untuk perekapan gaji lembur bulan depan.
+              </p>
             </div>
 
             <DialogFooter className="gap-2 sm:gap-0 pt-2">

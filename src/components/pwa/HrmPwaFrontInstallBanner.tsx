@@ -213,28 +213,18 @@ export const HrmPwaFrontInstallBanner: React.FC = () => {
                 <HelpCircle className="w-3.5 h-3.5" />
                 <span>Petunjuk Cara Pasang di HP</span>
               </button>
-
-              <a
-                href="/downloads/hrm_attendance_app.apk"
-                download="hrm_attendance_app.apk"
-                className="text-[11px] font-bold text-teal-300 hover:text-white flex items-center gap-1 bg-white/10 hover:bg-white/20 px-2.5 py-1 rounded-lg border border-white/15 transition-all"
-                title="Download file APK Android resmi (27MB)"
-              >
-                <FileDown className="w-3.5 h-3.5" />
-                <span>Download APK (.apk)</span>
-              </a>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ─── MODAL DIALOG PANDUAN LENGKAP INSTALASI PWA & APK ─── */}
+      {/* ─── MODAL DIALOG PANDUAN LENGKAP INSTALASI PWA ─── */}
       <Dialog open={showGuideModal} onOpenChange={setShowGuideModal}>
         <DialogContent className="max-w-md rounded-3xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-base font-bold flex items-center gap-2 text-foreground">
               <Smartphone className="w-5 h-5 text-emerald-600" />
-              Panduan Pasang Aplikasi HRM
+              Panduan Pasang Aplikasi HRM (PWA)
             </DialogTitle>
             <DialogDescription className="text-xs">
               Pilih tipe HP Anda untuk melihat cara pasang agar ikon HRM langsung muncul di layar utama:
@@ -264,17 +254,6 @@ export const HrmPwaFrontInstallBanner: React.FC = () => {
               }`}
             >
               iPhone (Safari)
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveGuideTab('apk')}
-              className={`flex-1 py-1.5 rounded-lg transition-all text-center truncate ${
-                activeGuideTab === 'apk'
-                  ? 'bg-card text-emerald-700 dark:text-emerald-400 shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              File APK (.apk)
             </button>
           </div>
 
@@ -347,33 +326,6 @@ export const HrmPwaFrontInstallBanner: React.FC = () => {
                     Selesai! Ikon aplikasi <b>HRM Presensi</b> langsung siap dibuka dari layar utama iPhone Anda.
                   </li>
                 </ol>
-              </div>
-            </div>
-          )}
-
-          {/* Tab 3: File APK Android (.apk) */}
-          {activeGuideTab === 'apk' && (
-            <div className="space-y-3 text-xs">
-              <div className="bg-muted/40 p-3.5 rounded-2xl border border-border space-y-2.5">
-                <p className="font-bold text-foreground flex items-center gap-1.5">
-                  📦 Unduh File Instalasi Android Langsung (APK):
-                </p>
-                <p className="text-muted-foreground leading-relaxed text-[11.5px]">
-                  Jika peramban Anda membatasi PWA, Anda dapat langsung mengunduh dan menginstal berkas paket aplikasi resmi Android PT. FRP (.apk berukuran ~27 MB).
-                </p>
-                <a
-                  href="/downloads/hrm_attendance_app.apk"
-                  download="hrm_attendance_app.apk"
-                  className="block w-full"
-                >
-                  <Button className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-xs gap-2 h-11">
-                    <FileDown className="w-4 h-4" />
-                    <span>Download hrm_attendance_app.apk (27 MB)</span>
-                  </Button>
-                </a>
-                <p className="text-[10px] text-muted-foreground italic">
-                  * Setelah download selesai, buka file pada bar notifikasi HP dan pilih "Install". Jika diminta, izinkan pemasangan aplikasi dari sumber ini.
-                </p>
               </div>
             </div>
           )}

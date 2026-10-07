@@ -307,6 +307,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   breakPolicyEnabled: true,
   breakDurationMinutes: 60,
   breakAllowOutside: true,
+  breakStartTime: '12:00',
+  breakEndTime: '13:00',
 };
 
 const DEFAULT_USERS: UserProfile[] = [
@@ -438,8 +440,11 @@ const DEFAULT_OVERTIME_SETTINGS: OvertimeSettings = {
   minDurationMinutes: 30,
   roundingMinutes: 30,
   maxDailyHours: 4,
+  maxWeeklyHours: 18,
   autoDetectFromClockOut: true,
   requireApproval: true,
+  allowEmergencyOvertime: true,
+  payoutCutoffRule: 'Bulan berjalan direkap dan dibayarkan pada payroll bulan berikutnya',
 };
 
 // Initial Seed Overtime Records for instant realistic reports
@@ -3304,6 +3309,9 @@ export const hrmService = {
     endDate: string;
     reason: string;
     attachmentUrl?: string;
+    substituteId?: string;
+    substituteName?: string;
+    substituteNip?: string;
   }): LeaveRequest => {
     const user = hrmService.getUsers().find((u) => u.id === req.userId);
     if (!user) throw new Error('Pengguna tidak ditemukan');
@@ -3313,7 +3321,7 @@ export const hrmService = {
     }
 
     if (!req.attachmentUrl || !req.attachmentUrl.trim()) {
-      throw new Error('Semua pengajuan cuti, izin, dan izin darurat WAJIB melampirkan foto bukti pendukung');
+      throw new Error('Semua pengajuan cuti, izin, dan sakit WAJIB melampirkan foto bukti pendukung');
     }
 
     const start = new Date(req.startDate);
@@ -3335,6 +3343,9 @@ export const hrmService = {
       reason: req.reason,
       attachmentUrl: req.attachmentUrl,
       status: 'pending',
+      substituteId: req.substituteId,
+      substituteName: req.substituteName,
+      substituteNip: req.substituteNip,
       createdAt: new Date().toISOString(),
     };
 
@@ -3351,17 +3362,21 @@ export const hrmService = {
       totalDays,
       reason: req.reason,
       attachmentUrl: req.attachmentUrl,
+      substituteId: req.substituteId,
+      substituteName: req.substituteName,
+      substituteNip: req.substituteNip,
     }).catch((err) => {
       console.warn('[HRM] Warning syncing leave request to backend:', err);
     });
 
-    // Dispatch real-time alert with sound & vibration to Korlap, Pimpinan, Admin, Superadmin, Keuangan
+    // Dispatch real-time alert to Dirut, Pimpinan, Superadmin, Korlap, Admin, K3
     const typeLabel = req.leaveType.replace('_', ' ').toUpperCase();
-    ['korlap', 'admin', 'k3', 'superadmin', 'pimpinan'].forEach((role) => {
+    const subNote = req.substituteName ? ` (Petugas Pengganti: ${req.substituteName})` : '';
+    ['dirut', 'pimpinan', 'superadmin', 'korlap', 'admin', 'k3'].forEach((role) => {
       hrmService.addNotification({
         recipientRole: role,
         title: `📋 Pengajuan ${typeLabel} Baru Masuk`,
-        message: `${user.fullName} (${user.nip} • ${user.divisionName || 'Operasional'}) mengajukan ${totalDays} hari (${req.startDate} s/d ${req.endDate}): "${req.reason}". Segera tinjau & tentukan persetujuan.`,
+        message: `${user.fullName} (${user.nip} • ${user.divisionName || 'Operasional'}) mengajukan ${totalDays} hari (${req.startDate} s/d ${req.endDate}): "${req.reason}"${subNote}. Segera tinjau & tentukan persetujuan.`,
         type: 'leave',
         link: '/admin/approval',
       });
@@ -3428,16 +3443,81 @@ export const hrmService = {
       link: '/riwayat',
     });
 
+    // Jika Karyawan Pengganti disetujui, dan hari tersebut libur/cuti, otomatis hitung sebagai lembur
+    const actualSubId = substituteId || leaves[idx].substituteId;
+    const actualSubName = substituteName || leaves[idx].substituteName;
+    const actualSubNip = substituteNip || leaves[idx].substituteNip;
+
+    if (status === 'approved' && actualSubId) {
+      try {
+        const subUser = hrmService.getUsers().find((u) => u.id === actualSubId);
+        if (subUser) {
+          const otHourlyRate = (subUser as any)?.hourlyOvertimeRate || 25000;
+          const otHours = 8; // Standar 1 shift penggantian pos
+          const totalPay = Math.round(otHours * otHourlyRate * 1.5);
+
+          const autoOtRecord: OvertimeRecord = {
+            id: `ot-sub-${Date.now()}`,
+            userId: subUser.id,
+            userName: subUser.fullName,
+            userNip: subUser.nip,
+            divisionId: subUser.divisionId,
+            divisionName: subUser.divisionName,
+            date: leaves[idx].startDate,
+            startTime: '08:00',
+            endTime: '16:00',
+            durationMinutes: otHours * 60,
+            durationHours: otHours,
+            requestedHours: otHours,
+            approvedHours: otHours,
+            assignedByAdmin: true,
+            isWeekendHoliday: true,
+            hourlyRate: otHourlyRate,
+            rateMultiplier: 1.5,
+            totalPay,
+            taskDescription: `Tugas Pengganti Karyawan (${leaves[idx].userName} - ${leaves[idx].leaveType.replace('_', ' ').toUpperCase()}) agar pos tidak kosong.`,
+            status: 'approved',
+            paymentStatus: 'unpaid',
+            approvedBy: approverId,
+            approvedByName: approver?.fullName || 'Korlap / Admin',
+            approvalNotes: 'Otomatis dihitung lembur karena menggantikan rekan kerja pada jadwal libur/off-duty.',
+            isSubstituteOvertime: true,
+            substituteForUserId: leaves[idx].userId,
+            substituteForUserName: leaves[idx].userName,
+            createdAt: new Date().toISOString(),
+          };
+
+          const ots = hrmService.getOvertimeRecords();
+          ots.unshift(autoOtRecord);
+          localStorage.setItem(STORAGE_KEYS.OVERTIME_RECORDS, JSON.stringify(ots));
+          window.dispatchEvent(new Event('hrm_overtime_updated'));
+        }
+      } catch (otSubErr) {
+        console.warn('[HRM] Substitute overtime auto-generation note:', otSubErr);
+      }
+    }
+
     // If substitute assigned, send notification to designated substitute employee
-    if (status === 'approved' && substituteId) {
+    if (status === 'approved' && actualSubId) {
       hrmService.addNotification({
-        userId: substituteId,
-        title: '📋 Tugas Pengganti Pos Dinas (Backfill)',
-        message: `Anda ditugaskan oleh ${approver?.fullName || 'Korlap'} untuk menggantikan tugas pos ${leaves[idx].userName} (${leaves[idx].divisionName}) pada periode ${leaves[idx].startDate} s/d ${leaves[idx].endDate}. Pekerjaan pos harus tetap berjalan lancar.`,
+        userId: actualSubId,
+        title: '📋 Tugas Pengganti Pos Dinas (Dihitung Lembur)',
+        message: `Anda ditugaskan oleh ${approver?.fullName || 'Korlap'} untuk menggantikan tugas pos ${leaves[idx].userName} (${leaves[idx].divisionName}) pada periode ${leaves[idx].startDate} s/d ${leaves[idx].endDate}. Tugas ini dihitung sebagai lembur resmi.`,
         type: 'assignment',
         link: '/riwayat',
       });
     }
+
+    // Broadcast hasil keputusan persetujuan ke Dirut, Pimpinan, Superadmin, Korlap
+    ['dirut', 'pimpinan', 'superadmin', 'korlap'].forEach((role) => {
+      hrmService.addNotification({
+        recipientRole: role,
+        title: `📢 Keputusan Pengajuan: ${leaves[idx].userName} (${statusText})`,
+        message: `Pengajuan ${leaves[idx].leaveType.replace('_', ' ')} ${leaves[idx].userName} telah ${statusText.toUpperCase()} oleh ${approver?.fullName || 'Atasan'}.${subText}${notes ? ' Catatan: ' + notes : ''}`,
+        type: status === 'approved' ? 'success' : 'warning',
+        link: '/admin/approval',
+      });
+    });
 
     // Play chime and vibrate on device
     notifyUserWithAudioAndVibe(
@@ -3465,9 +3545,9 @@ export const hrmService = {
       approverId,
       approverName: approver?.fullName || 'Atasan / HRD',
       notes,
-      substituteId,
-      substituteName,
-      substituteNip,
+      substituteId: actualSubId,
+      substituteName: actualSubName,
+      substituteNip: actualSubNip,
     }).catch((err) => {
       console.warn('[HRM] Warning syncing leave status to backend:', err);
     });
@@ -3718,17 +3798,38 @@ export const hrmService = {
     const settings = hrmService.getOvertimeSettings();
     const records = hrmService.getOvertimeRecords();
 
+    const isEmergency = Boolean(data.isEmergency);
     const newRecord: OvertimeRecord = {
       ...data,
       id: `ot-${Date.now()}`,
-      status: data.status || (settings.requireApproval ? 'pending' : 'approved'),
+      status: isEmergency ? 'approved' : data.status || (settings.requireApproval ? 'pending' : 'approved'),
       paymentStatus: data.paymentStatus || 'unpaid',
+      approvalNotes: isEmergency ? 'Lembur Pekerjaan Darurat (On-Call Otomatis Disetujui Sistem)' : (data as any).approvalNotes,
       createdAt: new Date().toISOString(),
     };
 
     records.unshift(newRecord);
     localStorage.setItem(STORAGE_KEYS.OVERTIME_RECORDS, JSON.stringify(records));
     window.dispatchEvent(new Event('hrm_overtime_updated'));
+
+    // Push to backend database asynchronously
+    api.post('/overtimes', newRecord).catch((err) => {
+      console.warn('[HRM] Warning syncing overtime to backend:', err);
+    });
+
+    if (isEmergency) {
+      // Broadcast instant urgent alert to 6 roles: Korlap, Admin, K3, Pimpinan, Dirut, Superadmin
+      ['korlap', 'admin', 'k3', 'pimpinan', 'dirut', 'superadmin'].forEach((role) => {
+        hrmService.addNotification({
+          recipientRole: role,
+          title: '🚨 PEKERJAAN LEMBUR DARURAT (ON-CALL)',
+          message: `Karyawan ${data.userName} (${data.userNip} • ${data.divisionName || 'Operasional'}) bertugas LEMBUR DARURAT pada ${data.date} (${data.startTime} - ${data.endTime}, ${data.durationHours} Jam). Pekerjaan: "${data.taskDescription}". Tercatat di database untuk perekapan payroll bulan berjalan.`,
+          type: 'warning',
+          link: '/admin/approval?tab=lembur',
+        });
+      });
+    }
+
     return newRecord;
   },
 

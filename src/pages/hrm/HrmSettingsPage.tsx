@@ -234,6 +234,8 @@ export const HrmSettingsPage: React.FC = () => {
         breakPolicyEnabled: appSettings.breakPolicyEnabled !== false,
         breakDurationMinutes: Number(appSettings.breakDurationMinutes) || 60,
         breakAllowOutside: appSettings.breakAllowOutside !== false,
+        breakStartTime: appSettings.breakStartTime || '12:00',
+        breakEndTime: appSettings.breakEndTime || '13:00',
       };
       hrmService.updateAppSettings(updated);
       setAppSettings(updated);
@@ -245,6 +247,8 @@ export const HrmSettingsPage: React.FC = () => {
           enabled: updated.breakPolicyEnabled,
           durationMinutes: updated.breakDurationMinutes,
           allowOutside: updated.breakAllowOutside,
+          startTime: updated.breakStartTime,
+          endTime: updated.breakEndTime,
         }),
       }).catch(() => null);
 
@@ -1243,7 +1247,42 @@ export const HrmSettingsPage: React.FC = () => {
                   />
                 </div>
 
-                {/* Input Durasi */}
+                {/* Input Jam Jadwal Istirahat Dinamis */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-foreground">
+                      Jam Mulai Istirahat (WITA)
+                    </Label>
+                    <Input
+                      type="time"
+                      value={appSettings.breakStartTime || '12:00'}
+                      onChange={(e) => setAppSettings({ ...appSettings, breakStartTime: e.target.value })}
+                      className="text-xs rounded-xl font-mono"
+                      required
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Waktu tombol istirahat mulai otomatis aktif di aplikasi presensi karyawan.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-foreground">
+                      Jam Selesai Istirahat (WITA)
+                    </Label>
+                    <Input
+                      type="time"
+                      value={appSettings.breakEndTime || '13:00'}
+                      onChange={(e) => setAppSettings({ ...appSettings, breakEndTime: e.target.value })}
+                      className="text-xs rounded-xl font-mono"
+                      required
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Batas akhir jam istirahat resmi (Default: 12.00 - 13.00 WITA).
+                    </p>
+                  </div>
+                </div>
+
+                {/* Input Durasi & Bypass Perimeter */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-xs font-semibold text-foreground">
@@ -1362,11 +1401,20 @@ export const HrmSettingsPage: React.FC = () => {
                     </Select>
                   </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold">Batas Maksimal Lembur per Hari (Jam)</Label>
-                  <Input type="number" min={1} max={12} value={overtimeSettings.maxDailyHours} onChange={(e) => setOvertimeSettings({ ...overtimeSettings, maxDailyHours: Number(e.target.value) })} className="text-xs rounded-xl w-40" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Batas Maksimal Lembur per Hari (Jam)</Label>
+                    <Input type="number" min={1} max={12} value={overtimeSettings.maxDailyHours} onChange={(e) => setOvertimeSettings({ ...overtimeSettings, maxDailyHours: Number(e.target.value) })} className="text-xs rounded-xl" />
+                    <p className="text-[11px] text-muted-foreground">PP 35/2021: Maksimal 4 jam per hari kerja.</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Batas Maksimal Lembur per Minggu (Jam)</Label>
+                    <Input type="number" min={1} max={40} value={overtimeSettings.maxWeeklyHours || 18} onChange={(e) => setOvertimeSettings({ ...overtimeSettings, maxWeeklyHours: Number(e.target.value) })} className="text-xs rounded-xl" />
+                    <p className="text-[11px] text-muted-foreground">PP 35/2021: Maksimal 18 jam per minggu (di luar istirahat mingguan/libur).</p>
+                  </div>
                 </div>
-                <div className="flex flex-col gap-3">
+
+                <div className="flex flex-col gap-3 pt-2">
                   <label className="flex items-center gap-2.5 cursor-pointer group">
                     <input type="checkbox" checked={overtimeSettings.autoDetectFromClockOut} onChange={(e) => setOvertimeSettings({ ...overtimeSettings, autoDetectFromClockOut: e.target.checked })} className="w-4 h-4 accent-primary rounded" />
                     <div>
@@ -1377,10 +1425,28 @@ export const HrmSettingsPage: React.FC = () => {
                   <label className="flex items-center gap-2.5 cursor-pointer group">
                     <input type="checkbox" checked={overtimeSettings.requireApproval} onChange={(e) => setOvertimeSettings({ ...overtimeSettings, requireApproval: e.target.checked })} className="w-4 h-4 accent-primary rounded" />
                     <div>
-                      <p className="text-xs font-semibold text-foreground">Wajib Persetujuan Admin/HRD</p>
-                      <p className="text-[11px] text-muted-foreground">Lembur harus disetujui sebelum uang lembur dapat dicairkan melalui penggajian.</p>
+                      <p className="text-xs font-semibold text-foreground">Wajib Persetujuan Atasan / HRD</p>
+                      <p className="text-[11px] text-muted-foreground">Lembur reguler harus disetujui atasan sebelum uang lembur dicairkan melalui penggajian.</p>
                     </div>
                   </label>
+                  <label className="flex items-center gap-2.5 cursor-pointer group">
+                    <input type="checkbox" checked={overtimeSettings.allowEmergencyOvertime !== false} onChange={(e) => setOvertimeSettings({ ...overtimeSettings, allowEmergencyOvertime: e.target.checked })} className="w-4 h-4 accent-primary rounded" />
+                    <div>
+                      <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                        <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                        Izinkan Lembur Darurat / On-Call Langsung Tanpa Menunggu Approval
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">Karyawan dapat langsung memulai pekerjaan darurat. Notifikasi instan otomatis dikirimkan ke 6 Level: Korlap, Admin, K3, Pimpinan, Dirut, dan Superadmin.</p>
+                    </div>
+                  </label>
+                </div>
+
+                {/* Kebijakan Perekapan & Payroll */}
+                <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl text-xs space-y-1">
+                  <p className="font-bold text-blue-900 dark:text-blue-300">📅 Kebijakan Perekapan & Penggajian Lembur:</p>
+                  <p className="text-[11.5px] text-blue-800 dark:text-blue-200">
+                    Semua pengajuan lembur (baik reguler yang disetujui, penugasan pengganti karyawan libur, maupun lembur darurat) disinkronkan ke basis data pada bulan berjalan, dan <strong>nominal uang lembur akan dibayarkan pada periode penggajian bulan berikutnya</strong>.
+                  </p>
                 </div>
               </CardContent>
             </Card>

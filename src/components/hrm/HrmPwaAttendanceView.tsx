@@ -186,6 +186,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   // Overtime (SPL) Submission Modal States
   const [overtimeModalOpen, setOvertimeModalOpen] = useState(false);
   const [userOvertimeList, setUserOvertimeList] = useState<OvertimeRecord[]>([]);
+  const [userSubstitutions, setUserSubstitutions] = useState<any[]>([]);
   const [otDate, setOtDate] = useState(getTodayDateStr());
   const [otStartTime, setOtStartTime] = useState('17:00');
   const [otEndTime, setOtEndTime] = useState('19:00');
@@ -467,6 +468,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       // 2C. Data Permohonan Lembur Saya
       const myOts = hrmService.getOvertimeRecords().filter((o) => o.userId === user.id);
       setUserOvertimeList(myOts);
+
+      // 2C-2. Data Penugasan Pengganti Karyawan Saya (Relief Duties yang Disetujui)
+      const mySwaps = (typeof hrmService.getShiftSwaps === 'function' ? hrmService.getShiftSwaps() : []).filter(
+        (s: any) => s.substituteId === user.id && s.status === 'approved'
+      );
+      setUserSubstitutions(mySwaps);
 
       // 2D. Notifikasi Realtime Saya
       const myNotifs = hrmService.getNotifications().filter(
@@ -898,16 +905,17 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     );
   }, [todayAttendance, userLeaves]);
 
-  // Status Jam Istirahat Otomatis
+  // Status Jam Istirahat Otomatis (Default 12.00 - 13.00 WITA atau sesuai Konfigurasi Superadmin)
   const isShiftBreakWindow = useMemo(() => {
-    const breakStart = userShift?.breakStartTime || '12:00';
-    const breakEnd = userShift?.breakEndTime || '13:00';
+    const appSettings = hrmService.getAppSettings();
+    const breakStart = appSettings.breakStartTime || userShift?.breakStartTime || '12:00';
+    const breakEnd = appSettings.breakEndTime || userShift?.breakEndTime || '13:00';
     const now = currentTime;
     const curMins = now.getHours() * 60 + now.getMinutes();
     const [bsh, bsm] = breakStart.split(':').map(Number);
     const [beh, bem] = breakEnd.split(':').map(Number);
-    const startMins = bsh * 60 + (bsm || 0);
-    const endMins = beh * 60 + (bem || 0);
+    const startMins = (bsh || 12) * 60 + (bsm || 0);
+    const endMins = (beh || 13) * 60 + (bem || 0);
     return curMins >= startMins && curMins < endMins;
   }, [currentTime, userShift]);
 
@@ -1850,7 +1858,100 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const hasClockedIn = Boolean(todayAttendance?.clockIn);
   const hasClockedOut = Boolean(todayAttendance?.clockOut);
   const isFieldSpecial = isSpecialDutyOfficer(user);
-  const isClockOutAllowed = hasClockedIn && !hasClockedOut && (!isBeforeShiftEndTime || hasApprovedEmergencyLeave || isFieldSpecial);
+
+  // 1. Cuti / Izin / Sakit yang Disetujui Hari Ini
+  const todayDateStr = getTodayDateStr();
+  const activeLeaveToday = useMemo(() => {
+    return userLeaves.find((l) => {
+      if (l.status !== 'approved') return false;
+      const start = (l.startDate || '').split('T')[0];
+      const end = (l.endDate || '').split('T')[0];
+      return todayDateStr >= start && todayDateStr <= end;
+    });
+  }, [userLeaves, todayDateStr]);
+  const hasActiveLeaveToday = Boolean(activeLeaveToday);
+
+  // 2. Kesesuaian Jam Shift Karyawan (Pagi, Siang, Malam)
+  // Contoh: Jika shift 2 (14:00 - 22:00), maka saat jam shift 1 dan 3 tombol masuk dinonaktifkan
+  const isShiftWindowActive = useMemo(() => {
+    if (!userShift?.startTime || !userShift?.endTime) return true;
+    const now = currentTime;
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+
+    const [sH, sM] = userShift.startTime.split(':').map(Number);
+    const startMins = (sH || 0) * 60 + (sM || 0);
+
+    const [eH, eM] = userShift.endTime.split(':').map(Number);
+    const endMins = (eH || 0) * 60 + (eM || 0);
+
+    const isCrossDay = userShift.isCrossDay || endMins < startMins;
+    const openMins = (startMins - 60 + 1440) % 1440; // Terbuka 60 menit sebelum shift
+
+    if (isCrossDay) {
+      if (nowMins >= openMins) return true;
+      if (nowMins < endMins) return true;
+      return false;
+    } else {
+      return nowMins >= openMins && nowMins <= endMins;
+    }
+  }, [currentTime, userShift]);
+
+  // 3. Pengecualian Aktif Di Luar Shift:
+  // Karyawan memiliki pengajuan lembur yang disetujui ATAU bertugas sebagai pengganti karyawan yang disetujui
+  // oleh salah satu dari Korlap, Admin, K3, atau Superadmin
+  const approvedOvertimeToday = useMemo(() => {
+    return userOvertimeList.find(
+      (o) => o.status === 'approved' && (o.date === todayDateStr || (o.createdAt && o.createdAt.startsWith(todayDateStr)))
+    );
+  }, [userOvertimeList, todayDateStr]);
+
+  const approvedSubstituteToday = useMemo(() => {
+    return userSubstitutions.find(
+      (s) => s.status === 'approved' && (s.date === todayDateStr || s.targetDate === todayDateStr)
+    );
+  }, [userSubstitutions, todayDateStr]);
+
+  const hasApprovedOvertimeOrSubstituteToday = Boolean(approvedOvertimeToday || approvedSubstituteToday);
+
+  // Status Pos & Titik Koordinat:
+  const isInsideCoordinates = locationStatus === 'inside' || isFieldSpecial;
+
+  // Syarat Tombol Absen Masuk Aktif:
+  // - Belum pernah absen masuk (!hasClockedIn)
+  // - Terdeteksi di dalam titik koordinat pos/kantor (isInsideCoordinates)
+  // - TIDAK sedang cuti, izin, sakit hari ini (!hasActiveLeaveToday)
+  // - Sesuai shift aktif ATAU memiliki lembur/pengganti disetujui ATAU petugas lapangan khusus
+  const isClockInAllowed =
+    !hasClockedIn &&
+    isInsideCoordinates &&
+    !hasActiveLeaveToday &&
+    (isShiftWindowActive || hasApprovedOvertimeOrSubstituteToday || isFieldSpecial);
+
+  // Keterangan Alasan Non-Aktif Tombol Absen Masuk:
+  const clockInDisabledReason = useMemo(() => {
+    if (hasClockedIn) return `SUDAH ABSEN MASUK (${todayAttendance?.clockIn?.substring(0, 5)})`;
+    if (hasActiveLeaveToday) {
+      const typeLabel = activeLeaveToday?.leaveType?.includes('sakit')
+        ? 'SAKIT'
+        : activeLeaveToday?.leaveType?.includes('izin')
+        ? 'IZIN'
+        : 'CUTI';
+      return `SEDANG ${typeLabel} (DISETUJUI)`;
+    }
+    if (!isInsideCoordinates) return 'DI LUAR RADIUS TITIK POS';
+    if (!isShiftWindowActive && !hasApprovedOvertimeOrSubstituteToday && !isFieldSpecial) {
+      return `DI LUAR JADWAL SHIFT (${userShift?.startTime?.substring(0, 5) || '08:00'} - ${userShift?.endTime?.substring(0, 5) || '17:00'})`;
+    }
+    return null;
+  }, [hasClockedIn, todayAttendance, hasActiveLeaveToday, activeLeaveToday, isInsideCoordinates, isShiftWindowActive, hasApprovedOvertimeOrSubstituteToday, isFieldSpecial, userShift]);
+
+  // Tombol Absen Pulang:
+  // Ketika submit face masuk selesai, tombol absen pulang otomatis NON-AKTIF
+  // dan OTOMATIS AKTIF jika telah masuk jam pulang shift (atau ada izin pulang darurat)
+  const isClockOutAllowed =
+    hasClockedIn &&
+    !hasClockedOut &&
+    (!isBeforeShiftEndTime || hasApprovedEmergencyLeave || isFieldSpecial);
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 1. TAMPILAN FULLSCREEN LIVE CAMERA (PERSIS LAMPIRAN 3)
@@ -2521,7 +2622,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       }
                     }
                     openLiveCamera('clock_out');
-                  } else {
+                  } else if (!hasClockedIn) {
+                    if (!isClockInAllowed) {
+                      toast.error(clockInDisabledReason || 'Presensi masuk belum memenuhi syarat lokasi/shift.');
+                      return;
+                    }
                     openLiveCamera('clock_in');
                   }
                 }}
@@ -2767,22 +2872,55 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             )}
 
-            {/* ─── TOMBOL AKSI PRESISI (DUAL BUTTONS PERSIS LAMPIRAN 2) ─── */}
+            {/* ─── TOMBOL AKSI PRESISI (DUAL BUTTONS CERDAS SESUAI SHIFT & LOKASI) ─── */}
+            {hasApprovedOvertimeOrSubstituteToday && !hasClockedIn && (
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-2 mb-1 flex items-center justify-between text-[11px] text-emerald-800 dark:text-emerald-300">
+                <span className="flex items-center gap-1.5 font-bold">
+                  <Zap className="w-3.5 h-3.5 text-emerald-600 fill-emerald-600" />
+                  {approvedOvertimeToday ? 'Tugas Lembur (SPL) Disetujui' : 'Tugas Pengganti Karyawan Disetujui'}
+                </span>
+                <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-bold">
+                  Presensi Dibuka
+                </span>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3 pt-1">
               {/* Tombol Absen Masuk */}
               <button
                 type="button"
-                disabled={hasClockedIn}
-                onClick={() => openLiveCamera('clock_in')}
+                disabled={!isClockInAllowed && !hasClockedIn}
+                onClick={() => {
+                  if (hasClockedIn) return;
+                  if (!isClockInAllowed) {
+                    toast.error(clockInDisabledReason || 'Presensi masuk belum memenuhi syarat lokasi/shift.');
+                    return;
+                  }
+                  openLiveCamera('clock_in');
+                }}
                 className={`py-3 px-3 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold transition-all shadow-sm ${
-                  !hasClockedIn
-                    ? 'bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white shadow-emerald-600/20'
-                    : 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 opacity-90 cursor-default'
+                  hasClockedIn
+                    ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 opacity-90 cursor-default'
+                    : isClockInAllowed
+                    ? hasApprovedOvertimeOrSubstituteToday
+                      ? 'bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white ring-2 ring-emerald-400 ring-offset-1 shadow-emerald-600/30'
+                      : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white shadow-emerald-600/20'
+                    : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-80'
                 }`}
               >
                 <Clock className="w-4 h-4 shrink-0" />
                 <span className="truncate">
-                  {hasClockedIn ? `MASUK (${todayAttendance?.clockIn?.substring(0, 5) || todayAttendance?.clockIn})` : `ABSEN MASUK (${userShift?.startTime || '08:00'})`}
+                  {hasClockedIn
+                    ? `MASUK (${todayAttendance?.clockIn?.substring(0, 5) || todayAttendance?.clockIn})`
+                    : hasActiveLeaveToday
+                    ? `SEDANG LIBUR`
+                    : !isInsideCoordinates
+                    ? `DI LUAR POS`
+                    : !isShiftWindowActive && !hasApprovedOvertimeOrSubstituteToday && !isFieldSpecial
+                    ? `DI LUAR SHIFT`
+                    : hasApprovedOvertimeOrSubstituteToday
+                    ? `MASUK (LEMBUR)`
+                    : `ABSEN MASUK (${userShift?.startTime || '08:00'})`}
                 </span>
               </button>
 
@@ -4328,17 +4466,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             >
               iPhone (Safari)
             </button>
-            <button
-              type="button"
-              onClick={() => setPwaGuideTab('apk')}
-              className={`flex-1 py-1.5 rounded-lg transition-all text-center truncate ${
-                pwaGuideTab === 'apk'
-                  ? 'bg-card text-emerald-700 dark:text-emerald-400 shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Download APK
-            </button>
           </div>
 
           {pwaGuideTab === 'android' && (
@@ -4365,27 +4492,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <li>Pilih <b>"Tambahkan ke Layar Utama"</b> (<PlusSquare className="w-3.5 h-3.5 inline text-emerald-600" />).</li>
                   <li>Ketuk <b>"Tambah" (Add)</b> di pojok kanan atas.</li>
                 </ol>
-              </div>
-            </div>
-          )}
-
-          {pwaGuideTab === 'apk' && (
-            <div className="space-y-3 text-xs">
-              <div className="bg-muted/40 p-3.5 rounded-2xl border border-border space-y-2.5">
-                <p className="font-bold text-foreground">📦 Unduh File APK Android Resmi:</p>
-                <p className="text-muted-foreground leading-relaxed text-[11.5px]">
-                  File paket installer APK resmi PT. FRP (.apk ~27 MB) untuk HP Android.
-                </p>
-                <a
-                  href="/downloads/hrm_attendance_app.apk"
-                  download="hrm_attendance_app.apk"
-                  className="block w-full"
-                >
-                  <Button className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-xs gap-2 h-11">
-                    <DownloadCloud className="w-4 h-4" />
-                    <span>Download hrm_attendance_app.apk (27 MB)</span>
-                  </Button>
-                </a>
               </div>
             </div>
           )}

@@ -39,7 +39,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { PwaInstallButton } from '@/components/pwa/PwaInstallButton';
-import { ApkDownloadButton } from '@/components/hrm/ApkDownloadModal';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
 import { systemNotificationService } from '@/services/systemNotificationService';
 
@@ -686,7 +685,6 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
 
           <div className="flex items-center gap-3">
             <ThemeToggle variant="dropdown" />
-            <ApkDownloadButton variant="header" />
             <PwaInstallButton variant="header" />
             {renderNotificationBell()}
             <DropdownMenu>
