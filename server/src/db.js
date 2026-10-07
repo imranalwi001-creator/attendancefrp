@@ -572,6 +572,48 @@ export async function initDb() {
 
       ALTER TABLE hrm_overtime_records
       ADD COLUMN IF NOT EXISTS forwarded_to_pimpinan BOOLEAN DEFAULT false;
+
+      -- ─── 18. DISCIPLINARY & SURAT PERINGATAN (SP 1, 2, 3) ───
+      CREATE TABLE IF NOT EXISTS hrm_disciplinary_records (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES hrm_profiles(id) ON DELETE CASCADE,
+        sp_type VARCHAR(30) NOT NULL, -- 'tegoran_lisan', 'sp1', 'sp2', 'sp3'
+        letter_number VARCHAR(100),
+        violation_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        violation_type VARCHAR(100) NOT NULL, -- 'perimeter_breach', 'late_accumulation', 'alpha_consecutive', 'sop_violation', 'other'
+        description TEXT NOT NULL,
+        sanction TEXT,
+        issued_by UUID REFERENCES hrm_profiles(id) ON DELETE SET NULL,
+        issued_by_name VARCHAR(150),
+        valid_until DATE,
+        status VARCHAR(30) DEFAULT 'active', -- 'active', 'expired', 'revoked'
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_disciplinary_user ON hrm_disciplinary_records(user_id, status);
+
+      -- ─── 19. EMPLOYEE KPI & PERFORMANCE APPRAISAL ───
+      CREATE TABLE IF NOT EXISTS hrm_employee_kpi (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES hrm_profiles(id) ON DELETE CASCADE,
+        period_month VARCHAR(10) NOT NULL, -- 'YYYY-MM'
+        attendance_score NUMERIC(5,2) DEFAULT 100.0,
+        operational_score NUMERIC(5,2) DEFAULT 85.0,
+        competency_score NUMERIC(5,2) DEFAULT 85.0,
+        final_score NUMERIC(5,2) DEFAULT 88.0,
+        grade VARCHAR(10) DEFAULT 'A', -- 'A', 'B', 'C', 'D'
+        evaluator_id UUID REFERENCES hrm_profiles(id) ON DELETE SET NULL,
+        evaluator_name VARCHAR(150),
+        feedback TEXT,
+        status VARCHAR(30) DEFAULT 'final', -- 'draft', 'final'
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT uq_user_kpi_month UNIQUE (user_id, period_month)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_employee_kpi_user_period ON hrm_employee_kpi(user_id, period_month);
     `);
 
     console.log('[Database] Schema verification, Biometric, Geofence, Field Sentinel Multi-Posts & Notifications extensions completed.');

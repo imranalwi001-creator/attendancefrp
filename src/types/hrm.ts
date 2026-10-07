@@ -852,3 +852,53 @@ export interface ShiftSwapRecord {
   notes?: string;
   created_at: string;
 }
+
+// ─── DISCIPLINARY & SURAT PERINGATAN (SP 1, 2, 3) ───────────────────────────
+export type SpType = 'tegoran_lisan' | 'sp1' | 'sp2' | 'sp3';
+export type DisciplinaryStatus = 'active' | 'expired' | 'revoked';
+
+export interface DisciplinaryRecord {
+  id: string;
+  userId: string;
+  userName?: string;
+  userNip?: string;
+  divisionName?: string;
+  spType: SpType;
+  letterNumber?: string;
+  violationDate: string;
+  violationType: string;
+  description: string;
+  sanction?: string;
+  issuedBy?: string;
+  issuedByName?: string;
+  validUntil?: string;
+  status: DisciplinaryStatus;
+  notes?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// ─── KPI & PERFORMANCE APPRAISAL ─────────────────────────────────────────────
+export type KpiGrade = 'A' | 'B' | 'C' | 'D';
+export type KpiStatus = 'draft' | 'final';
+
+export interface EmployeeKpiRecord {
+  id: string;
+  userId: string;
+  userName?: string;
+  userNip?: string;
+  divisionName?: string;
+  periodMonth: string; // 'YYYY-MM'
+  attendanceScore: number;
+  operationalScore: number;
+  competencyScore: number;
+  finalScore: number;
+  grade: KpiGrade;
+  evaluatorId?: string;
+  evaluatorName?: string;
+  feedback?: string;
+  status: KpiStatus;
+  createdAt: string;
+  updatedAt?: string;
+}
+

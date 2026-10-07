@@ -490,6 +490,8 @@ app.get('/api/sync/bootstrap', async (req, res) => {
       shiftSwapsRes,
       salaryProfilesRes,
       payrollPeriodsRes,
+      disciplinaryRes,
+      kpiRes,
     ] = await Promise.all([
       pool.query(`
         SELECT p.*, r.name as role_code, r.label as role_label,
@@ -576,6 +578,20 @@ app.get('/api/sync/bootstrap', async (req, res) => {
         ORDER BY p.full_name ASC
       `),
       pool.query('SELECT * FROM hrm_payroll_periods ORDER BY year DESC, month DESC LIMIT 24'),
+      pool.query(`
+        SELECT d.*, p.full_name as user_name, p.nip as user_nip, div.name as division_name
+        FROM hrm_disciplinary_records d
+        LEFT JOIN hrm_profiles p ON d.user_id = p.id
+        LEFT JOIN hrm_divisions div ON p.division_id = div.id
+        ORDER BY d.violation_date DESC, d.created_at DESC LIMIT 200
+      `).catch(() => ({ rows: [] })),
+      pool.query(`
+        SELECT k.*, p.full_name as user_name, p.nip as user_nip, div.name as division_name
+        FROM hrm_employee_kpi k
+        LEFT JOIN hrm_profiles p ON k.user_id = p.id
+        LEFT JOIN hrm_divisions div ON p.division_id = div.id
+        ORDER BY k.period_month DESC, k.final_score DESC LIMIT 200
+      `).catch(() => ({ rows: [] })),
     ]);
 
     const users = usersRes.rows.map(formatUserRow);
@@ -730,6 +746,45 @@ app.get('/api/sync/bootstrap', async (req, res) => {
         shiftSwaps: shiftSwapsRes.rows,
         salaryProfiles: salaryProfilesRes.rows,
         payrollPeriods: payrollPeriodsRes.rows,
+        disciplinary: (disciplinaryRes?.rows || []).map((d) => ({
+          id: d.id,
+          userId: d.user_id,
+          userName: d.user_name || 'Karyawan',
+          userNip: d.user_nip || '',
+          divisionName: d.division_name || '-',
+          spType: d.sp_type,
+          letterNumber: d.letter_number || '',
+          violationDate: d.violation_date ? new Date(d.violation_date).toISOString().split('T')[0] : '',
+          violationType: d.violation_type || 'Kedisiplinan',
+          description: d.description || '',
+          sanction: d.sanction || '',
+          issuedBy: d.issued_by,
+          issuedByName: d.issued_by_name || 'Super Administrator',
+          validUntil: d.valid_until ? new Date(d.valid_until).toISOString().split('T')[0] : '',
+          status: d.status || 'active',
+          notes: d.notes || '',
+          createdAt: d.created_at,
+          updatedAt: d.updated_at,
+        })),
+        kpi: (kpiRes?.rows || []).map((k) => ({
+          id: k.id,
+          userId: k.user_id,
+          userName: k.user_name || 'Karyawan',
+          userNip: k.user_nip || '',
+          divisionName: k.division_name || '-',
+          periodMonth: k.period_month,
+          attendanceScore: Number(k.attendance_score) || 100,
+          operationalScore: Number(k.operational_score) || 85,
+          competencyScore: Number(k.competency_score) || 85,
+          finalScore: Number(k.final_score) || 88,
+          grade: k.grade || 'A',
+          evaluatorId: k.evaluator_id,
+          evaluatorName: k.evaluator_name || 'Super Administrator',
+          feedback: k.feedback || '',
+          status: k.status || 'final',
+          createdAt: k.created_at,
+          updatedAt: k.updated_at,
+        })),
       },
     });
   } catch (err) {
@@ -7923,6 +7978,335 @@ async function enforceEphemeralPhotoRetention() {
     console.error('[Ephemeral Photo Retention] Error during photo purge:', err.message);
   }
 }
+
+// ─── ATTENDANCE MANUAL CORRECTION & CREATION API ────────────────────────────
+app.put('/api/attendances/:id/manual-correct', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, clockIn, clockOut, notes, lateMinutes } = req.body;
+    const query = `
+      UPDATE hrm_attendances
+      SET status = COALESCE($1, status),
+          clock_in = COALESCE($2, clock_in),
+          clock_out = COALESCE($3, clock_out),
+          notes = COALESCE($4, notes),
+          late_minutes = COALESCE($5, late_minutes),
+          is_verified = true,
+          updated_at = NOW()
+      WHERE id = $6
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [status, clockIn, clockOut, notes, lateMinutes, id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
+    }
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Manual attendance correct error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/attendances/manual-entry', async (req, res) => {
+  try {
+    const { userId, attendanceDate, status, clockIn, clockOut, notes, lateMinutes } = req.body;
+    if (!userId || !attendanceDate) {
+      return res.status(400).json({ success: false, error: 'userId dan attendanceDate wajib diisi' });
+    }
+    const query = `
+      INSERT INTO hrm_attendances (user_id, attendance_date, status, clock_in, clock_out, notes, late_minutes, is_verified, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, true, NOW(), NOW())
+      ON CONFLICT (user_id, attendance_date) DO UPDATE
+      SET status = EXCLUDED.status,
+          clock_in = EXCLUDED.clock_in,
+          clock_out = EXCLUDED.clock_out,
+          notes = EXCLUDED.notes,
+          late_minutes = EXCLUDED.late_minutes,
+          is_verified = true,
+          updated_at = NOW()
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [
+      userId,
+      attendanceDate,
+      status || 'hadir',
+      clockIn || '07:30:00',
+      clockOut || '16:30:00',
+      notes || 'Presensi manual divalidasi oleh Superadmin',
+      lateMinutes || 0,
+    ]);
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Manual attendance entry error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── DISCIPLINARY & SURAT PERINGATAN (SP 1, 2, 3) API ───────────────────────
+app.get('/api/disciplinary', async (req, res) => {
+  try {
+    const query = `
+      SELECT d.*, 
+             p.full_name as user_name, 
+             p.nip as user_nip, 
+             div.name as division_name,
+             p.avatar_url as user_avatar
+      FROM hrm_disciplinary_records d
+      LEFT JOIN hrm_profiles p ON d.user_id = p.id
+      LEFT JOIN hrm_divisions div ON p.division_id = div.id
+      ORDER BY d.violation_date DESC, d.created_at DESC;
+    `;
+    const result = await pool.query(query);
+    res.json({
+      success: true,
+      data: result.rows.map((d) => ({
+        id: d.id,
+        userId: d.user_id,
+        userName: d.user_name || 'Karyawan',
+        userNip: d.user_nip || '',
+        divisionName: d.division_name || '-',
+        spType: d.sp_type,
+        letterNumber: d.letter_number || '',
+        violationDate: d.violation_date ? new Date(d.violation_date).toISOString().split('T')[0] : '',
+        violationType: d.violation_type || 'Kedisiplinan',
+        description: d.description || '',
+        sanction: d.sanction || '',
+        issuedBy: d.issued_by,
+        issuedByName: d.issued_by_name || 'Super Administrator',
+        validUntil: d.valid_until ? new Date(d.valid_until).toISOString().split('T')[0] : '',
+        status: d.status || 'active',
+        notes: d.notes || '',
+        createdAt: d.created_at,
+        updatedAt: d.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error('Get disciplinary error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/disciplinary', async (req, res) => {
+  try {
+    const {
+      userId,
+      spType,
+      letterNumber,
+      violationDate,
+      violationType,
+      description,
+      sanction,
+      issuedBy,
+      issuedByName,
+      validUntil,
+      status,
+      notes,
+    } = req.body;
+
+    if (!userId || !spType || !description) {
+      return res.status(400).json({ success: false, error: 'userId, spType, dan description wajib diisi' });
+    }
+
+    const query = `
+      INSERT INTO hrm_disciplinary_records (
+        user_id, sp_type, letter_number, violation_date, violation_type, 
+        description, sanction, issued_by, issued_by_name, valid_until, 
+        status, notes, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [
+      userId,
+      spType,
+      letterNumber || `SP-${Date.now().toString().slice(-4)}/FRP/${new Date().getFullYear()}`,
+      violationDate || new Date().toISOString().split('T')[0],
+      violationType || 'Kedisiplinan',
+      description,
+      sanction || 'Peringatan tertulis',
+      issuedBy || null,
+      issuedByName || 'Super Administrator',
+      validUntil || null,
+      status || 'active',
+      notes || '',
+    ]);
+
+    // Send in-app notification to employee
+    try {
+      await pool.query(
+        `
+        INSERT INTO hrm_notifications (user_id, title, message, type, link, metadata, created_at)
+        VALUES ($1, $2, $3, 'disciplinary', '/riwayat', $4, NOW())
+      `,
+        [
+          userId,
+          `Pemberitahuan Sanksi Kedisiplinan (${spType.toUpperCase()})`,
+          `Anda menerima ${spType.toUpperCase()} terkait: ${description}`,
+          JSON.stringify({ spType, violationDate, letterNumber }),
+        ]
+      );
+    } catch (notifErr) {
+      console.error('Error sending SP notification:', notifErr.message);
+    }
+
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Create disciplinary error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.put('/api/disciplinary/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+    const query = `
+      UPDATE hrm_disciplinary_records
+      SET status = $1,
+          notes = COALESCE($2, notes),
+          updated_at = NOW()
+      WHERE id = $3
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [status, notes, id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Data pelanggaran tidak ditemukan' });
+    }
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Update disciplinary status error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/disciplinary/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM hrm_disciplinary_records WHERE id = $1', [id]);
+    res.json({ success: true, message: 'Data pelanggaran berhasil dihapus' });
+  } catch (err) {
+    console.error('Delete disciplinary error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── KPI & PERFORMANCE APPRAISAL API ─────────────────────────────────────────
+app.get('/api/kpi', async (req, res) => {
+  try {
+    const { month } = req.query;
+    let query = `
+      SELECT k.*, 
+             p.full_name as user_name, 
+             p.nip as user_nip, 
+             div.name as division_name,
+             p.avatar_url as user_avatar
+      FROM hrm_employee_kpi k
+      LEFT JOIN hrm_profiles p ON k.user_id = p.id
+      LEFT JOIN hrm_divisions div ON p.division_id = div.id
+    `;
+    const params = [];
+    if (month) {
+      query += ` WHERE k.period_month = $1`;
+      params.push(month);
+    }
+    query += ` ORDER BY k.period_month DESC, k.final_score DESC;`;
+    const result = await pool.query(query, params);
+    res.json({
+      success: true,
+      data: result.rows.map((k) => ({
+        id: k.id,
+        userId: k.user_id,
+        userName: k.user_name || 'Karyawan',
+        userNip: k.user_nip || '',
+        divisionName: k.division_name || '-',
+        periodMonth: k.period_month,
+        attendanceScore: Number(k.attendance_score) || 100,
+        operationalScore: Number(k.operational_score) || 85,
+        competencyScore: Number(k.competency_score) || 85,
+        finalScore: Number(k.final_score) || 88,
+        grade: k.grade || 'A',
+        evaluatorId: k.evaluator_id,
+        evaluatorName: k.evaluator_name || 'Super Administrator',
+        feedback: k.feedback || '',
+        status: k.status || 'final',
+        createdAt: k.created_at,
+        updatedAt: k.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error('Get KPI error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/kpi', async (req, res) => {
+  try {
+    const {
+      userId,
+      periodMonth,
+      attendanceScore,
+      operationalScore,
+      competencyScore,
+      finalScore,
+      grade,
+      evaluatorId,
+      evaluatorName,
+      feedback,
+      status,
+    } = req.body;
+
+    if (!userId || !periodMonth) {
+      return res.status(400).json({ success: false, error: 'userId dan periodMonth wajib diisi' });
+    }
+
+    const query = `
+      INSERT INTO hrm_employee_kpi (
+        user_id, period_month, attendance_score, operational_score, 
+        competency_score, final_score, grade, evaluator_id, evaluator_name, 
+        feedback, status, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+      ON CONFLICT (user_id, period_month) DO UPDATE
+      SET attendance_score = EXCLUDED.attendance_score,
+          operational_score = EXCLUDED.operational_score,
+          competency_score = EXCLUDED.competency_score,
+          final_score = EXCLUDED.final_score,
+          grade = EXCLUDED.grade,
+          evaluator_id = EXCLUDED.evaluator_id,
+          evaluator_name = EXCLUDED.evaluator_name,
+          feedback = EXCLUDED.feedback,
+          status = EXCLUDED.status,
+          updated_at = NOW()
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [
+      userId,
+      periodMonth,
+      attendanceScore ?? 100,
+      operationalScore ?? 85,
+      competencyScore ?? 85,
+      finalScore ?? 88,
+      grade ?? 'A',
+      evaluatorId || null,
+      evaluatorName || 'Super Administrator',
+      feedback || 'Performa kerja memuaskan dan memenuhi standar operasional.',
+      status || 'final',
+    ]);
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Save KPI error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/kpi/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM hrm_employee_kpi WHERE id = $1', [id]);
+    res.json({ success: true, message: 'Data evaluasi KPI berhasil dihapus' });
+  } catch (err) {
+    console.error('Delete KPI error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // Start Server
 async function start() {

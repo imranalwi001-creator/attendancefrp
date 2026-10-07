@@ -28,6 +28,9 @@ import {
   ShiftSwapRecord,
   SmartSubstituteCandidate,
   EmployeeSchedule,
+  DisciplinaryRecord,
+  DisciplinaryStatus,
+  EmployeeKpiRecord,
 } from '@/types/hrm';
 import { api } from './apiClient';
 import { payrollTaxEngine } from './payrollTaxEngine';
@@ -56,6 +59,8 @@ const STORAGE_KEYS = {
   COMPANY_DOCUMENTS: 'hrm_company_documents',
   PERIMETER_VIOLATIONS: 'hrm_perimeter_violations',
   EMPLOYEE_SCHEDULES: 'hrm_employee_schedules',
+  DISCIPLINARY: 'hrm_disciplinary_records',
+  EMPLOYEE_KPI: 'hrm_employee_kpi',
 };
 
 const DEFAULT_COMPANY_PROFILE: CompanyProfile = {
@@ -875,6 +880,14 @@ export const hrmService = {
           }));
           localStorage.setItem(STORAGE_KEYS.PAYROLL_PERIODS, JSON.stringify(mappedPeriods));
           window.dispatchEvent(new Event('hrm_payroll_periods_updated'));
+        }
+        if (Array.isArray(res.data.disciplinary)) {
+          safeSetJson(STORAGE_KEYS.DISCIPLINARY, res.data.disciplinary);
+          window.dispatchEvent(new Event('hrm_disciplinary_updated'));
+        }
+        if (Array.isArray(res.data.kpi)) {
+          safeSetJson(STORAGE_KEYS.EMPLOYEE_KPI, res.data.kpi);
+          window.dispatchEvent(new Event('hrm_kpi_updated'));
         }
         window.dispatchEvent(new Event('hrm_data_updated'));
         return true;
@@ -5008,6 +5021,135 @@ export const hrmService = {
       return res;
     } catch (err: any) {
       return { success: false, error: err.message || 'Gagal memuat executive radar analytics' };
+    }
+  },
+
+  // ─── DISCIPLINARY & SURAT PERINGATAN (SP 1, 2, 3) ─────────────────────────
+  getDisciplinaryRecords: (): DisciplinaryRecord[] => {
+    return safeGetJson<DisciplinaryRecord[]>(STORAGE_KEYS.DISCIPLINARY, []);
+  },
+
+  addDisciplinaryRecord: async (
+    record: Omit<DisciplinaryRecord, 'id' | 'createdAt'>
+  ): Promise<{ success: boolean; data?: DisciplinaryRecord; error?: string }> => {
+    try {
+      const res = await api.post<{ success: boolean; data: DisciplinaryRecord }>('/disciplinary', record);
+      if (res && res.success && res.data) {
+        const current = safeGetJson<DisciplinaryRecord[]>(STORAGE_KEYS.DISCIPLINARY, []);
+        safeSetJson(STORAGE_KEYS.DISCIPLINARY, [res.data, ...current]);
+        window.dispatchEvent(new Event('hrm_disciplinary_updated'));
+        return { success: true, data: res.data };
+      }
+      return { success: false, error: 'Gagal mencatat sanksi pelanggaran' };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Error server saat mencatat sanksi' };
+    }
+  },
+
+  updateDisciplinaryStatus: async (
+    id: string,
+    status: DisciplinaryStatus,
+    notes?: string
+  ): Promise<{ success: boolean; data?: DisciplinaryRecord; error?: string }> => {
+    try {
+      const res = await api.put<{ success: boolean; data: DisciplinaryRecord }>(`/disciplinary/${id}/status`, { status, notes });
+      if (res && res.success) {
+        const current = safeGetJson<DisciplinaryRecord[]>(STORAGE_KEYS.DISCIPLINARY, []);
+        const updated = current.map((c) => (c.id === id ? { ...c, status, notes: notes || c.notes } : c));
+        safeSetJson(STORAGE_KEYS.DISCIPLINARY, updated);
+        window.dispatchEvent(new Event('hrm_disciplinary_updated'));
+        return { success: true, data: res.data };
+      }
+      return { success: false, error: 'Gagal memperbarui status pelanggaran' };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  deleteDisciplinaryRecord: async (id: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      await api.delete(`/disciplinary/${id}`);
+      const current = safeGetJson<DisciplinaryRecord[]>(STORAGE_KEYS.DISCIPLINARY, []);
+      safeSetJson(STORAGE_KEYS.DISCIPLINARY, current.filter((c) => c.id !== id));
+      window.dispatchEvent(new Event('hrm_disciplinary_updated'));
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  // ─── KPI & PERFORMANCE APPRAISAL ───────────────────────────────────────────
+  getKpiRecords: (month?: string): EmployeeKpiRecord[] => {
+    const list = safeGetJson<EmployeeKpiRecord[]>(STORAGE_KEYS.EMPLOYEE_KPI, []);
+    if (month) return list.filter((k) => k.periodMonth === month);
+    return list;
+  },
+
+  saveKpiRecord: async (
+    kpi: Omit<EmployeeKpiRecord, 'id' | 'createdAt'>
+  ): Promise<{ success: boolean; data?: EmployeeKpiRecord; error?: string }> => {
+    try {
+      const res = await api.post<{ success: boolean; data: EmployeeKpiRecord }>('/kpi', kpi);
+      if (res && res.success && res.data) {
+        const current = safeGetJson<EmployeeKpiRecord[]>(STORAGE_KEYS.EMPLOYEE_KPI, []);
+        const filtered = current.filter((c) => !(c.userId === kpi.userId && c.periodMonth === kpi.periodMonth));
+        safeSetJson(STORAGE_KEYS.EMPLOYEE_KPI, [res.data, ...filtered]);
+        window.dispatchEvent(new Event('hrm_kpi_updated'));
+        return { success: true, data: res.data };
+      }
+      return { success: false, error: 'Gagal menyimpan KPI karyawan' };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  deleteKpiRecord: async (id: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      await api.delete(`/kpi/${id}`);
+      const current = safeGetJson<EmployeeKpiRecord[]>(STORAGE_KEYS.EMPLOYEE_KPI, []);
+      safeSetJson(STORAGE_KEYS.EMPLOYEE_KPI, current.filter((c) => c.id !== id));
+      window.dispatchEvent(new Event('hrm_kpi_updated'));
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  // ─── MANUAL ATTENDANCE CORRECTION & ENTRY ─────────────────────────────────
+  correctAttendance: async (
+    id: string,
+    updates: { status?: AttendanceStatus; clockIn?: string; clockOut?: string; notes?: string; lateMinutes?: number }
+  ): Promise<{ success: boolean; data?: AttendanceRecord; error?: string }> => {
+    try {
+      const res = await api.put<{ success: boolean; data: any }>(`/attendances/${id}/manual-correct`, updates);
+      if (res && res.success) {
+        hrmService.syncWithBackend().catch(() => null);
+        return { success: true, data: res.data };
+      }
+      return { success: false, error: 'Gagal mengoreksi data presensi' };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  addManualAttendance: async (entry: {
+    userId: string;
+    attendanceDate: string;
+    status: AttendanceStatus;
+    clockIn?: string;
+    clockOut?: string;
+    notes?: string;
+    lateMinutes?: number;
+  }): Promise<{ success: boolean; data?: AttendanceRecord; error?: string }> => {
+    try {
+      const res = await api.post<{ success: boolean; data: any }>('/attendances/manual-entry', entry);
+      if (res && res.success) {
+        hrmService.syncWithBackend().catch(() => null);
+        return { success: true, data: res.data };
+      }
+      return { success: false, error: 'Gagal menambah data presensi manual' };
+    } catch (err: any) {
+      return { success: false, error: err.message };
     }
   },
 };

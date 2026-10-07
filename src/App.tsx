@@ -27,6 +27,7 @@ import { HrmSettingsPage } from '@/pages/hrm/HrmSettingsPage';
 import { HrmPayrollPage } from '@/pages/hrm/HrmPayrollPage';
 import { HrmKioskPage } from '@/pages/hrm/HrmKioskPage';
 import { HrmMobileEnrollPage } from '@/pages/hrm/HrmMobileEnrollPage';
+import { HrmSuperadminDashboard } from '@/pages/hrm/HrmSuperadminDashboard';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -173,6 +174,72 @@ export const App: React.FC = () => {
                   element={
                     <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'keuangan', 'pimpinan', 'dirut']}>
                       <HrmPayrollPage />
+                    </HrmProtectedRoute>
+                  }
+                />
+
+                {/* Modul Superadmin Baru: Presensi, Lembur, Shift, Cuti, Kinerja, Pelanggaran & Analytics */}
+                <Route
+                  path="/admin/presensi"
+                  element={
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd']}>
+                      <HrmSuperadminDashboard initialTab="presensi" />
+                    </HrmProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/lembur"
+                  element={
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'keuangan', 'pimpinan']}>
+                      <HrmSuperadminDashboard initialTab="lembur" />
+                    </HrmProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/shift"
+                  element={
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'korlap']}>
+                      <HrmSuperadminDashboard initialTab="shift" />
+                    </HrmProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/cuti"
+                  element={
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan']}>
+                      <HrmSuperadminDashboard initialTab="cuti" />
+                    </HrmProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/izin-cuti"
+                  element={
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan']}>
+                      <HrmSuperadminDashboard initialTab="cuti" />
+                    </HrmProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/kinerja"
+                  element={
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut']}>
+                      <HrmSuperadminDashboard initialTab="kinerja" />
+                    </HrmProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/pelanggaran"
+                  element={
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan']}>
+                      <HrmSuperadminDashboard initialTab="pelanggaran" />
+                    </HrmProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/analytics"
+                  element={
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'keuangan']}>
+                      <HrmSuperadminDashboard initialTab="analytics" />
                     </HrmProtectedRoute>
                   }
                 />

@@ -27,6 +27,10 @@ import {
   Bell,
   CheckCheck,
   ShieldAlert,
+  BarChart3,
+  Briefcase,
+  CalendarClock,
+  Award,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -218,6 +222,48 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       path: '/admin/monitoring',
       icon: UserCheck,
       roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu'],
+    },
+    {
+      label: 'Data Presensi',
+      path: '/admin/presensi',
+      icon: Clock,
+      roles: ['superadmin', 'admin', 'hrd'],
+    },
+    {
+      label: 'Lembur (SPKL)',
+      path: '/admin/lembur',
+      icon: Briefcase,
+      roles: ['superadmin', 'admin', 'hrd', 'keuangan', 'pimpinan'],
+    },
+    {
+      label: 'Data Shift',
+      path: '/admin/shift',
+      icon: CalendarClock,
+      roles: ['superadmin', 'admin', 'hrd', 'korlap'],
+    },
+    {
+      label: 'Data Izin / Cuti',
+      path: '/admin/cuti',
+      icon: CalendarDays,
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan'],
+    },
+    {
+      label: 'Data Kinerja (KPI)',
+      path: '/admin/kinerja',
+      icon: Award,
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut'],
+    },
+    {
+      label: 'Data Pelanggaran (SP)',
+      path: '/admin/pelanggaran',
+      icon: ShieldAlert,
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan'],
+    },
+    {
+      label: 'Dashboard Analytics',
+      path: '/admin/analytics',
+      icon: BarChart3,
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'keuangan'],
     },
     {
       label: 'Rekap & Laporan',
