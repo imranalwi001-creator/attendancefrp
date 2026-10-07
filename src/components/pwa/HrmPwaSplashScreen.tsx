@@ -124,22 +124,13 @@ export const HrmPwaSplashScreen: React.FC<HrmPwaSplashScreenProps> = ({ onFinish
           </div>
         </div>
 
-        {/* ─── BRANDING: LOGO & NAMA PT. FAWWAZ RESKI PERWIRA (PERSIS LAMPIRAN 4) ─── */}
-        <div className="mt-8 flex flex-col items-center text-center space-y-2 px-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-teal-400/20 border border-teal-400/40 p-1 flex items-center justify-center shadow-[0_0_15px_rgba(45,212,191,0.3)]">
-              <img
-                src={settings?.logoUrl || defaultLogo}
-                alt="Logo"
-                className="w-full h-full object-contain"
-              />
-            </div>
-            <h1 className="text-xl sm:text-2xl font-black tracking-wide text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.8)]">
-              {settings?.appName || 'PT. FAWWAZ RESKI PERWIRA'}
-            </h1>
-          </div>
+        {/* ─── BRANDING: NAMA PT. FAWWAZ RESKI PERWIRA (BERADA TEPAT DI TENGAH SIMETRIS TANPA LOGO SAMPING) ─── */}
+        <div className="mt-8 flex flex-col items-center justify-center text-center space-y-2 px-4 w-full max-w-sm mx-auto">
+          <h1 className="text-xl sm:text-2xl font-black tracking-wider text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.8)] text-center leading-snug">
+            {settings?.appName || 'PT. FAWWAZ RESKI PERWIRA'}
+          </h1>
 
-          <p className="text-[11px] font-medium tracking-wider text-teal-200/70 uppercase">
+          <p className="text-[11px] font-semibold tracking-widest text-teal-200/80 uppercase text-center">
             Sistem Informasi Presensi & Manajemen SDM
           </p>
         </div>

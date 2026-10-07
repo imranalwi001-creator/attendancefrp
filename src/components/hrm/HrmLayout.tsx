@@ -104,7 +104,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   // Manajemen / Administrator WAJIB selalu mendapatkan menu navigasi lengkap (sidebar/topbar/mobile nav).
   // Hanya bypass layout jika BUKAN role manajemen dan sedang membuka presensi PWA mandiri.
   if (!isManagementRole && isPwaStandalone && (location.pathname === '/presensi' || location.pathname === '/dashboard')) {
-    return <div className="min-h-screen bg-[#14532D] text-foreground">{children}</div>;
+    return <div className="min-h-screen bg-[#062225] text-foreground">{children}</div>;
   }
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);

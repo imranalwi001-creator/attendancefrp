@@ -48,7 +48,7 @@
         }
 
         // FORCE CACHE PURGE & SERVICE WORKER UPDATE ON NEW BUILD
-        var PURGE_TAG = 'hrm_deploy_v20261007_pwa_splash_kolabo_style_v5';
+        var PURGE_TAG = 'hrm_deploy_v20261007_center_title_v6';
         try {
           localStorage.removeItem('hrm_force_desktop_mode');
           if (localStorage.getItem('hrm_deploy_tag') !== PURGE_TAG) {
@@ -100,9 +100,17 @@
           errBox.textContent = 'Galat Inisialisasi: ' + (e.message || 'Unknown error') + ' (' + (e.filename || 'script') + ':' + (e.lineno || 0) + ')';
         }
       });
-    </script>
+    <style>
+      html, body {
+        background-color: #062225 !important;
+        background: radial-gradient(circle at 50% 45%, #0b3438 0%, #062225 45%, #041416 100%) !important;
+        margin: 0;
+        padding: 0;
+        color: #ffffff;
+      }
+    </style>
   </head>
-  <body class="bg-background text-foreground antialiased min-h-screen">
+  <body class="antialiased min-h-screen" style="background: radial-gradient(circle at 50% 45%, #0b3438 0%, #062225 45%, #041416 100%) !important; background-color: #062225 !important;">
     <div id="root">
       <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: radial-gradient(circle at 50% 45%, #0b3438 0%, #062225 45%, #041416 100%); color: #ffffff; padding: 20px; position: relative; overflow: hidden; user-select: none;">
         <!-- Grid Tech Pattern Persis Lampiran 4 -->
@@ -120,14 +128,11 @@
           </div>
         </div>
 
-        <!-- Branding PT FRP -->
-        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px; z-index: 10;">
-          <div style="width: 36px; height: 36px; border-radius: 10px; background: rgba(45, 212, 191, 0.15); border: 1px solid rgba(45, 212, 191, 0.4); display: flex; align-items: center; justify-content: center;">
-            <img src="/logo.png" alt="Logo" style="width: 24px; height: 24px; object-fit: contain;" />
-          </div>
-          <h1 style="font-size: 20px; font-weight: 900; letter-spacing: 0.5px; color: #ffffff; margin: 0; text-shadow: 0 2px 10px rgba(0,0,0,0.8);">PT. FAWWAZ RESKI PERWIRA</h1>
+        <!-- Branding PT FRP Berada Tepat di Tengah Simetris (Tanpa Logo Samping) -->
+        <div style="text-align: center; margin-bottom: 28px; z-index: 10; width: 100%; max-width: 340px; padding: 0 16px;">
+          <h1 style="font-size: 21px; font-weight: 900; letter-spacing: 0.5px; color: #ffffff; margin: 0 0 6px 0; text-align: center; text-shadow: 0 2px 12px rgba(0,0,0,0.8); line-height: 1.25;">PT. FAWWAZ RESKI PERWIRA</h1>
+          <p style="font-size: 11px; color: rgba(204, 251, 241, 0.8); margin: 0; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 600; text-align: center;">Sistem Informasi Presensi & Manajemen SDM</p>
         </div>
-        <p style="font-size: 11px; color: rgba(204, 251, 241, 0.7); margin: 0 0 32px 0; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 500;">Sistem Presensi & Operasional</p>
 
         <!-- Progress Bar Loading -->
         <div style="width: 200px; height: 5px; border-radius: 10px; background: rgba(2, 6, 23, 0.8); border: 1px solid rgba(45, 212, 191, 0.3); overflow: hidden; padding: 1px; margin-bottom: 12px; z-index: 10;">

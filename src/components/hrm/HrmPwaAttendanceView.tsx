@@ -2694,7 +2694,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   // 2. TAMPILAN BERANDA PWA RESMI (PERSIS LAMPIRAN 2)
   // ─────────────────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#14532D] text-foreground flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
+    <div className="min-h-screen bg-[#062225] text-foreground flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
       {/* ─── PWA SPLASH SCREEN ANIMASI PERSIS LAMPIRAN 4 ─── */}
       <HrmPwaSplashScreen forceShow={showSplashPreview} onFinish={() => setShowSplashPreview(false)} />
 
