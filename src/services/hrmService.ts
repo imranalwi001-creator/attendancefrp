@@ -167,16 +167,16 @@ const DEFAULT_ROLES: Role[] = [
 
 const DEFAULT_DIVISIONS: Division[] = [
   {
-    id: 'div-it',
+    id: '57d11665-183e-44bd-ac41-d95f218c4021',
     code: 'IT',
     name: 'Teknologi Informasi',
     description: 'Tim Pengembang Software & Infrastruktur',
-    leaderName: 'Rian Pratama',
-    locationName: 'Graha IT Tower Lt. 5',
-    address: 'Jl. Jenderal Sudirman Kav. 52-53, Jakarta Selatan',
-    latitude: -6.2250,
-    longitude: 106.8090,
-    radiusMeters: 150,
+    leaderName: 'Ahmad Fauzi',
+    locationName: 'Gedung IT Cyber',
+    address: 'Tamanroja Desa Batara, Minasatene, Pangkep',
+    latitude: -4.78236486,
+    longitude: 119.57192181,
+    radiusMeters: 50,
   },
   {
     id: 'div-fin',
@@ -184,11 +184,11 @@ const DEFAULT_DIVISIONS: Division[] = [
     name: 'Keuangan & Akuntansi',
     description: 'Pengelolaan Kas, Pajak, dan Penggajian',
     leaderName: 'Siti Rahmah',
-    locationName: 'Gedung Finance Center Lt. 3',
-    address: 'Jl. HR Rasuna Said Blok X-5, Jakarta Selatan',
-    latitude: -6.2235,
-    longitude: 106.8310,
-    radiusMeters: 150,
+    locationName: 'Ruang Finansial',
+    address: 'Kantor Pusat PT FRP, Bontoa, Minasatene',
+    latitude: -4.793963,
+    longitude: 119.604337,
+    radiusMeters: 50,
   },
   {
     id: 'div-hrd',
@@ -196,11 +196,11 @@ const DEFAULT_DIVISIONS: Division[] = [
     name: 'Sumber Daya Manusia',
     description: 'Manajemen Pegawai & Rekrutmen',
     leaderName: 'Dimas Wicaksono',
-    locationName: 'Headquarters Graha Lt. 2',
-    address: 'Jl. Jenderal Sudirman Kav. 52-53, Jakarta Selatan',
-    latitude: -6.2250,
-    longitude: 106.8090,
-    radiusMeters: 150,
+    locationName: 'Ruang HR',
+    address: 'Kantor Pusat PT FRP, Bontoa, Minasatene',
+    latitude: -4.793963,
+    longitude: 119.604337,
+    radiusMeters: 50,
   },
   {
     id: 'div-ops',
@@ -208,11 +208,11 @@ const DEFAULT_DIVISIONS: Division[] = [
     name: 'Operasional & Umum',
     description: 'Logistik, Sarana, dan Fasilitas Gudang',
     leaderName: 'Budi Santoso',
-    locationName: 'Depo & Gudang Logistik Pulogadung',
-    address: 'Kawasan Industri Rawa Gelam, Pulogadung, Jakarta Timur',
-    latitude: -6.1950,
-    longitude: 106.9120,
-    radiusMeters: 300,
+    locationName: 'Ruang Operasional',
+    address: 'Kantor Pusat PT FRP, Bontoa, Minasatene',
+    latitude: -4.793963,
+    longitude: 119.604337,
+    radiusMeters: 100,
   },
   {
     id: 'div-mkt',
@@ -296,15 +296,15 @@ const DEFAULT_SHIFTS: Shift[] = [
 ];
 
 const DEFAULT_OFFICE: OfficeLocation = {
-  id: 'office-hq',
-  name: 'Kantor Pusat HRM Graha',
-  address: 'Jl. Jenderal Sudirman Kav. 52-53, Jakarta Selatan',
-  latitude: -6.2250,
-  longitude: 106.8090,
-  radiusMeters: 150,
+  id: '3f85e9dc-bcd3-4eb9-b6d6-4a03df283268',
+  name: 'Kantor Pusat PT FRP',
+  address: 'Bontoa, Minasatene, Pangkajene dan Kepulauan, Sulawesi Selatan',
+  latitude: -4.79396318,
+  longitude: 119.60433745,
+  radiusMeters: 50,
   isActive: true,
-  bssidWhitelist: '00:14:22:01:23:45, a4:2b:b0:c1:d2:e3',
-  wifiSsid: 'OFFICE_CORP_5G',
+  bssidWhitelist: '',
+  wifiSsid: '',
 };
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -1198,6 +1198,36 @@ export const hrmService = {
     }
   },
 
+  fetchDivisions: async (): Promise<Division[]> => {
+    try {
+      const res = await api.get<{ success: boolean; data: any[] }>('/divisions');
+      if (res && res.success && Array.isArray(res.data)) {
+        const mapped: Division[] = res.data.map((d: any) => ({
+          id: d.id,
+          code: d.code,
+          name: d.name,
+          description: d.description || '',
+          leaderName: d.leaderName || '',
+          locationName: d.locationName || d.location_name || '',
+          address: d.address || '',
+          latitude: typeof d.latitude === 'number' ? d.latitude : parseFloat(d.latitude),
+          longitude: typeof d.longitude === 'number' ? d.longitude : parseFloat(d.longitude),
+          radiusMeters: d.radiusMeters || d.radius_meters || 50,
+          allowedPosts: d.allowedPosts || d.allowed_posts || [],
+          polygonCoords: d.polygonCoords || d.polygon_coords || null,
+        }));
+        if (mapped.length > 0) {
+          localStorage.setItem(STORAGE_KEYS.DIVISIONS, JSON.stringify(mapped));
+          window.dispatchEvent(new Event('hrm_data_updated'));
+          return mapped;
+        }
+      }
+    } catch (e) {
+      console.warn('[HRM] Error fetching live divisions from backend:', e);
+    }
+    return hrmService.getDivisions();
+  },
+
   getDivisionLocation: (divisionId?: string): {
     name: string;
     address: string;
@@ -1212,14 +1242,21 @@ export const hrmService = {
       return { ...office, allowedPosts: [] };
     }
     const divisions = hrmService.getDivisions();
-    const div = divisions.find((d) => d.id === divisionId);
-    if (div && typeof div.latitude === 'number' && typeof div.longitude === 'number') {
+    const target = divisionId.trim().toLowerCase();
+    const div = divisions.find((d) =>
+      d.id === divisionId ||
+      d.code?.toLowerCase() === target ||
+      d.name?.toLowerCase() === target ||
+      d.name?.toLowerCase().includes(target) ||
+      target.includes(d.name?.toLowerCase())
+    );
+    if (div && typeof div.latitude === 'number' && typeof div.longitude === 'number' && !isNaN(div.latitude) && !isNaN(div.longitude)) {
       return {
         name: div.locationName || `Lokasi Divisi ${div.name}`,
         address: div.address || office.address,
         latitude: div.latitude,
         longitude: div.longitude,
-        radiusMeters: div.radiusMeters || 150,
+        radiusMeters: div.radiusMeters || 50,
         allowedPosts: div.allowedPosts || [],
       };
     }

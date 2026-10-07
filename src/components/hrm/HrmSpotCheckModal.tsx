@@ -133,20 +133,34 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
       // Stop camera stream once snapped
       stopCamera();
 
-      // Deteksi Realtime 6 Titik Pos Resmi FRP
+      // Deteksi Realtime Pos: Cek Kantor Divisi Pegawai, Bank Pos, & Preset Resmi FRP
       let detectedPost: { code: string; name: string; distance: number; isWithinRadius: boolean } | null = null;
       if (coords) {
-        let minDist = 999999;
-        for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
-          const d = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
-          if (d < minDist) {
-            minDist = d;
-            detectedPost = {
-              code: post.code,
-              name: post.name,
-              distance: Math.round(d),
-              isWithinRadius: d <= post.radiusMeters,
-            };
+        // Cek divisi / lokasi kerja penugasan
+        const divLat = user.assignedLatitude || user.divisionLatitude;
+        const divLng = user.assignedLongitude || user.divisionLongitude;
+        const divRad = user.assignedRadiusMeters || user.divisionRadiusMeters || 50;
+        const divName = user.assignedLocationName || user.divisionLocationName || user.divisionName || 'Kantor Divisi';
+        if (divLat && divLng) {
+          const d = geofenceService.calculateDistance(coords, { latitude: divLat, longitude: divLng });
+          if (d <= divRad + 25) {
+            detectedPost = { code: 'DIVISI', name: divName, distance: Math.round(d), isWithinRadius: true };
+          }
+        }
+
+        if (!detectedPost) {
+          let minDist = 999999;
+          for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
+            const d = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
+            if (d < minDist) {
+              minDist = d;
+              detectedPost = {
+                code: post.code,
+                name: post.name,
+                distance: Math.round(d),
+                isWithinRadius: d <= post.radiusMeters + 25,
+              };
+            }
           }
         }
       }
@@ -154,9 +168,9 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
       // Burn Cryptographic Forensic Watermark
       const targetLocationName = detectedPost?.isWithinRadius
         ? `${detectedPost.name} [${detectedPost.code}]`
-        : (user.assignedLocationName || user.divisionName || 'Pos Tugas Lapangan');
-      const userLat = coords?.lat || user.assignedLatitude || -6.2088;
-      const userLng = coords?.lng || user.assignedLongitude || 106.8456;
+        : (user.assignedLocationName || user.divisionLocationName || user.divisionName || 'Pos Tugas Lapangan');
+      const userLat = coords?.lat || user.assignedLatitude || user.divisionLatitude || -4.793963;
+      const userLng = coords?.lng || user.assignedLongitude || user.divisionLongitude || 119.604337;
 
       const stamped = await burnForensicWatermark({
         imageSrc: rawPhoto,
@@ -199,26 +213,39 @@ export const HrmSpotCheckModal: React.FC<HrmSpotCheckModalProps> = ({
 
       let detectedPost: { code: string; name: string; distance: number; isWithinRadius: boolean } | null = null;
       if (coords) {
-        let minDist = 999999;
-        for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
-          const d = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
-          if (d < minDist) {
-            minDist = d;
-            detectedPost = {
-              code: post.code,
-              name: post.name,
-              distance: Math.round(d),
-              isWithinRadius: d <= post.radiusMeters,
-            };
+        const divLat = user.assignedLatitude || user.divisionLatitude;
+        const divLng = user.assignedLongitude || user.divisionLongitude;
+        const divRad = user.assignedRadiusMeters || user.divisionRadiusMeters || 50;
+        const divName = user.assignedLocationName || user.divisionLocationName || user.divisionName || 'Kantor Divisi';
+        if (divLat && divLng) {
+          const d = geofenceService.calculateDistance(coords, { latitude: divLat, longitude: divLng });
+          if (d <= divRad + 25) {
+            detectedPost = { code: 'DIVISI', name: divName, distance: Math.round(d), isWithinRadius: true };
+          }
+        }
+
+        if (!detectedPost) {
+          let minDist = 999999;
+          for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
+            const d = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
+            if (d < minDist) {
+              minDist = d;
+              detectedPost = {
+                code: post.code,
+                name: post.name,
+                distance: Math.round(d),
+                isWithinRadius: d <= post.radiusMeters + 25,
+              };
+            }
           }
         }
       }
 
       const targetLocationName = detectedPost?.isWithinRadius
         ? `${detectedPost.name} [${detectedPost.code}]`
-        : (user.assignedLocationName || user.divisionName || 'Pos Tugas Lapangan');
-      const userLat = coords?.lat || user.assignedLatitude || -6.2088;
-      const userLng = coords?.lng || user.assignedLongitude || 106.8456;
+        : (user.assignedLocationName || user.divisionLocationName || user.divisionName || 'Pos Tugas Lapangan');
+      const userLat = coords?.lat || user.assignedLatitude || user.divisionLatitude || -4.793963;
+      const userLng = coords?.lng || user.assignedLongitude || user.divisionLongitude || 119.604337;
 
       await fieldSentinelService.submitPatrolCheck({
         userId: user.id,

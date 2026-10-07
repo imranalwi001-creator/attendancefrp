@@ -664,19 +664,32 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           address: matchedPost.description || `Area Pos Lapangan ${matchedPost.postName}`,
         };
         setAssignedPostName(`${matchedPost.postName} [${matchedPost.postCode}]`);
-      } else if (user.assignedLatitude && user.assignedLongitude) {
+      } else if (user.assignedLatitude && user.assignedLongitude && !isNaN(Number(user.assignedLatitude)) && !isNaN(Number(user.assignedLongitude))) {
         officeLoc = {
           id: 'assigned-post',
           name: user.assignedLocationName || 'Pos Lapangan Terdaftar',
-          latitude: user.assignedLatitude,
-          longitude: user.assignedLongitude,
-          radiusMeters: user.assignedRadiusMeters || 250,
+          latitude: Number(user.assignedLatitude),
+          longitude: Number(user.assignedLongitude),
+          radiusMeters: Number(user.assignedRadiusMeters) || 150,
           locationName: user.assignedLocationName || 'Pos Lapangan Terdaftar',
           address: user.assignedLocationName || 'Pos Lapangan Terdaftar',
         };
         setAssignedPostName(user.assignedLocationName || 'Pos Lapangan');
+      } else if (user.divisionLatitude && user.divisionLongitude && !isNaN(Number(user.divisionLatitude)) && !isNaN(Number(user.divisionLongitude))) {
+        // Prioritas Utama: Koordinat Divisi Sinkron Database PostgreSQL
+        const divName = user.divisionLocationName || user.divisionName || 'Gedung Divisi';
+        officeLoc = {
+          id: user.divisionId || 'div-loc',
+          name: divName,
+          latitude: Number(user.divisionLatitude),
+          longitude: Number(user.divisionLongitude),
+          radiusMeters: Number(user.divisionRadiusMeters) || 50,
+          locationName: divName,
+          address: user.divisionLocationName || user.address || 'Area Lokasi Divisi',
+        };
+        setAssignedPostName(divName);
       } else {
-        const divLoc = hrmService.getDivisionLocation(user.divisionId);
+        const divLoc = hrmService.getDivisionLocation(user.divisionId || user.divisionName || (user as any).division);
         if (divLoc) {
           officeLoc = divLoc;
           setAssignedPostName(divLoc.name);
@@ -769,18 +782,33 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       return;
     }
 
-    // Evaluasi lokasi fallback: kantor penugasan dan 6 preset pos resmi PT FRP
-    const candidateOffices: { name: string; lat: number; lng: number; radius: number }[] = [];
+    // Evaluasi lokasi: kantor penugasan/divisi (Prioritas Utama Database), allowed posts divisi, dan pos resmi
+    const candidateOffices: { name: string; lat: number; lng: number; radius: number; isPrimary?: boolean }[] = [];
     if (fallbackOffice) {
       candidateOffices.push({
         name: fallbackOffice.name,
         lat: fallbackOffice.latitude,
         lng: fallbackOffice.longitude,
-        radius: fallbackOffice.radiusMeters || 150,
+        radius: fallbackOffice.radiusMeters || 50,
+        isPrimary: true,
       });
+
+      // Masukkan juga allowedPosts dari divisi/posisi pegawai jika ada
+      if (fallbackOffice.allowedPosts && Array.isArray(fallbackOffice.allowedPosts)) {
+        for (const ap of fallbackOffice.allowedPosts) {
+          if (!candidateOffices.some((c) => Math.abs(c.lat - ap.latitude) < 0.0001 && Math.abs(c.lng - ap.longitude) < 0.0001)) {
+            candidateOffices.push({
+              name: ap.name,
+              lat: ap.latitude,
+              lng: ap.longitude,
+              radius: ap.radiusMeters || 50,
+            });
+          }
+        }
+      }
     }
 
-    // Masukkan preset resmi PT FRP sebagai kandidat valid
+    // Masukkan preset resmi PT FRP sebagai kandidat alternatif
     for (const preset of FIELD_SENTINEL_6_POST_PRESETS) {
       if (!candidateOffices.some((c) => Math.abs(c.lat - preset.latitude) < 0.0001 && Math.abs(c.lng - preset.longitude) < 0.0001)) {
         candidateOffices.push({
@@ -799,6 +827,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         return { ...cand, distance: d, isInside: d <= allowedR };
       });
 
+      // 🟢 Jika pegawai berada di dalam salah satu pos resmi / divisi
       const matchedInside = officeChecks.find((c) => c.isInside);
       if (matchedInside) {
         setDistanceToOffice(Math.round(matchedInside.distance));
@@ -807,10 +836,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         return;
       }
 
-      const nearestOffice = officeChecks.sort((a, b) => a.distance - b.distance)[0];
-      setDistanceToOffice(Math.round(nearestOffice.distance));
+      // 🔴 Jika pegawai berada di luar radius:
+      // Prioritaskan selalu target utama (divisi / penugasan resmi karyawan dari database)
+      // JANGAN timpa nama lokasi dengan preset random (seperti Matching Bontoa)!
+      const primaryTarget = officeChecks.find((c) => c.isPrimary) || officeChecks[0];
+      setDistanceToOffice(Math.round(primaryTarget.distance));
       setLocationStatus('outside');
-      if (nearestOffice?.name) setAssignedPostName(nearestOffice.name);
+      setAssignedPostName(primaryTarget.name);
     } else {
       setLocationStatus('inside');
     }
@@ -1399,12 +1431,71 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
   };
 
-  // Deteksi Realtime Kecocokan Posisi dengan 6 Titik Pos Resmi PT FRP
+  // Deteksi Realtime Kecocokan Posisi: Prioritas Bank Pos, Kantor Divisi Database, & Pos Resmi
   const detectMatchingFRPPost = (coords: { lat: number; lng: number } | null) => {
     if (!coords) return null;
+
+    // 1. Cek jika berada di dalam Bank Pos Terdaftar
+    if (bankPosts && bankPosts.length > 0) {
+      for (const p of bankPosts) {
+        const dist = geofenceService.calculateDistance(coords, { latitude: p.latitude, longitude: p.longitude });
+        const rad = p.radiusMeters || 100;
+        if (dist <= rad + 25) {
+          return {
+            code: p.postCode || 'POS',
+            name: p.postName,
+            distance: Math.round(dist),
+            isWithinRadius: true,
+            radiusMeters: rad,
+          };
+        }
+      }
+    }
+
+    // 2. Cek jika berada di dalam Kantor Divisi Terdaftar (Database)
+    if (assignedOffice) {
+      const dist = geofenceService.calculateDistance(coords, { latitude: assignedOffice.latitude, longitude: assignedOffice.longitude });
+      const rad = assignedOffice.radiusMeters || 50;
+      if (dist <= rad + 25) {
+        return {
+          code: 'DIVISI',
+          name: assignedOffice.name,
+          distance: Math.round(dist),
+          isWithinRadius: true,
+          radiusMeters: rad,
+        };
+      }
+    }
+
+    // 3. Cek jika berada di salah satu dari 6 Preset Resmi PT FRP
+    for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
+      const dist = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
+      if (dist <= post.radiusMeters + 25) {
+        return {
+          code: post.code,
+          name: post.name,
+          distance: Math.round(dist),
+          isWithinRadius: true,
+          radiusMeters: post.radiusMeters,
+        };
+      }
+    }
+
+    // 4. Jika di luar seluruh radius: kembalikan kantor divisi asli pengguna
+    if (assignedOffice) {
+      const dist = geofenceService.calculateDistance(coords, { latitude: assignedOffice.latitude, longitude: assignedOffice.longitude });
+      return {
+        code: 'DIVISI',
+        name: assignedOffice.name,
+        distance: Math.round(dist),
+        isWithinRadius: false,
+        radiusMeters: assignedOffice.radiusMeters || 50,
+      };
+    }
+
+    // Fallback terdekat dari preset hanya jika tidak ada assigned office
     let closest: { code: string; name: string; distance: number; isWithinRadius: boolean; radiusMeters: number } | null = null;
     let minDistance = 999999;
-
     for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
       const dist = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
       if (dist < minDistance) {
@@ -1413,7 +1504,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           code: post.code,
           name: post.name,
           distance: Math.round(dist),
-          isWithinRadius: dist <= post.radiusMeters,
+          isWithinRadius: false,
           radiusMeters: post.radiusMeters,
         };
       }
@@ -2985,7 +3076,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <div className="space-y-0.5">
                   <span className="text-[10px] text-slate-400 font-medium">Divisi / Unit Kerja:</span>
                   <p className="font-bold text-emerald-300 truncate">{user?.divisionName || user?.division || 'Operasional'}</p>
-                  <p className="text-[10px] text-slate-400">Status: {isSpecialDutyOfficer ? 'Petugas Lapangan Khusus' : 'Reguler'}</p>
+                  <p className="text-[10px] text-slate-400">Status: {isSpecialDutyOfficer(user) ? 'Petugas Lapangan Khusus' : 'Reguler'}</p>
                 </div>
 
                 <div className="space-y-0.5">

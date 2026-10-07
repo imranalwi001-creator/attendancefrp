@@ -53,7 +53,15 @@ app.post('/api/auth/login', async (req, res) => {
   const cleanId = identifier.trim().toLowerCase();
   try {
     const query = `
-      SELECT p.*, r.name as role_code, r.label as role_label, d.name as division_title,
+      SELECT p.*, r.name as role_code, r.label as role_label,
+             d.name as division_title,
+             COALESCE(d.name, p.division_name, 'Umum') as resolved_division_name,
+             d.location_name as division_location_name,
+             d.radius_meters as division_radius_meters,
+             d.latitude as division_latitude,
+             d.longitude as division_longitude,
+             d.address as division_address,
+             d.allowed_posts as division_allowed_posts,
              s.name as shift_name, s.start_time as shift_start_time, s.end_time as shift_end_time,
              sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme
       FROM hrm_profiles p
@@ -1993,12 +2001,14 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
     }
 
     const profRes = await pool.query(
-      `SELECT p.id, p.full_name, p.nip, p.phone, p.current_active_post_id, p.current_active_post_name,
+      `SELECT p.id, p.full_name, p.nip, p.phone, p.email, p.current_active_post_id, p.current_active_post_name,
               p.assigned_latitude, p.assigned_longitude, p.assigned_radius_meters, p.assigned_location_name,
-              COALESCE(d.latitude, o.latitude, -6.2088) as fallback_lat,
-              COALESCE(d.longitude, o.longitude, 106.8456) as fallback_lon,
-              COALESCE(d.radius_meters, o.radius_meters, 150) as fallback_radius,
-              COALESCE(d.name, o.name, 'Kantor') as fallback_name
+              COALESCE(d.latitude, o.latitude, -4.793963) as fallback_lat,
+              COALESCE(d.longitude, o.longitude, 119.604337) as fallback_lon,
+              COALESCE(d.radius_meters, o.radius_meters, 50) as fallback_radius,
+              COALESCE(p.assigned_location_name, d.location_name, d.name, o.name, 'Kantor FRP') as fallback_name,
+              d.allowed_posts as div_allowed_posts,
+              p.allowed_posts as user_allowed_posts
        FROM hrm_profiles p
        LEFT JOIN hrm_divisions d ON p.division_id = d.id
        LEFT JOIN hrm_office_locations o ON o.is_active = true
@@ -2213,15 +2223,51 @@ Mohon segera pantau posisi petugas melalui menu Live Monitoring HRM.`;
         }
       }
     } else {
-      // Fallback: single assigned location or division
+      // Single assigned location or division
       const targetLat = prof.assigned_latitude ? parseFloat(prof.assigned_latitude) : parseFloat(prof.fallback_lat);
       const targetLon = prof.assigned_longitude ? parseFloat(prof.assigned_longitude) : parseFloat(prof.fallback_lon);
       allowedRadius = prof.assigned_radius_meters ? parseFloat(prof.assigned_radius_meters) : parseFloat(prof.fallback_radius);
       targetLocationName = prof.assigned_location_name || prof.fallback_name;
 
       distance = calculateHaversineMeters(userLat, userLon, targetLat, targetLon);
-      isOutOfBounds = distance > allowedRadius;
-      excessDist = isOutOfBounds ? Math.round(distance - allowedRadius) : 0;
+      const gpsBuffer = Math.min(Math.max(0, (userAccuracy - 15) * 0.5), 35);
+      const effectiveRadius = allowedRadius + gpsBuffer;
+
+      if (distance <= effectiveRadius) {
+        isOutOfBounds = false;
+        excessDist = 0;
+      } else {
+        // Also check if inside any allowed division posts
+        let allowedPosts = [];
+        try {
+          if (prof.div_allowed_posts) {
+            const pArr = typeof prof.div_allowed_posts === 'string' ? JSON.parse(prof.div_allowed_posts) : prof.div_allowed_posts;
+            if (Array.isArray(pArr)) allowedPosts.push(...pArr);
+          }
+          if (prof.user_allowed_posts) {
+            const pArr = typeof prof.user_allowed_posts === 'string' ? JSON.parse(prof.user_allowed_posts) : prof.user_allowed_posts;
+            if (Array.isArray(pArr)) allowedPosts.push(...pArr);
+          }
+        } catch (_) {}
+
+        const matchedAllowed = allowedPosts.find((ap) => {
+          const d = calculateHaversineMeters(userLat, userLon, parseFloat(ap.latitude), parseFloat(ap.longitude));
+          const r = parseFloat(ap.radiusMeters || ap.radius_meters || 50) + gpsBuffer;
+          return d <= r;
+        });
+
+        if (matchedAllowed) {
+          const d = calculateHaversineMeters(userLat, userLon, parseFloat(matchedAllowed.latitude), parseFloat(matchedAllowed.longitude));
+          distance = Math.round(d);
+          allowedRadius = parseFloat(matchedAllowed.radiusMeters || matchedAllowed.radius_meters || 50);
+          targetLocationName = matchedAllowed.name || matchedAllowed.postName || matchedAllowed.code;
+          isOutOfBounds = false;
+          excessDist = 0;
+        } else {
+          isOutOfBounds = isExcusedFromBreach ? false : true;
+          excessDist = isOutOfBounds ? Math.max(0, Math.round(distance - allowedRadius)) : 0;
+        }
+      }
     }
 
     // Always update last known GPS state
@@ -2296,10 +2342,12 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
 
     const uRes = await pool.query(
       `SELECT p.id, p.full_name, p.nip,
-              COALESCE(p.assigned_latitude, d.latitude, o.latitude, -6.2088) as target_lat,
-              COALESCE(p.assigned_longitude, d.longitude, o.longitude, 106.8456) as target_lon,
-              COALESCE(p.assigned_radius_meters, d.radius_meters, o.radius_meters, 150) as target_radius,
-              COALESCE(p.assigned_location_name, d.name, o.name, 'Kantor') as target_loc_name
+              COALESCE(p.assigned_latitude, d.latitude, o.latitude, -4.793963) as target_lat,
+              COALESCE(p.assigned_longitude, d.longitude, o.longitude, 119.604337) as target_lon,
+              COALESCE(p.assigned_radius_meters, d.radius_meters, o.radius_meters, 50) as target_radius,
+              COALESCE(p.assigned_location_name, d.location_name, d.name, o.name, 'Kantor FRP') as target_loc_name,
+              d.allowed_posts as div_allowed_posts,
+              p.allowed_posts as user_allowed_posts
        FROM hrm_profiles p
        LEFT JOIN hrm_divisions d ON p.division_id = d.id
        LEFT JOIN hrm_office_locations o ON o.is_active = true
@@ -2314,71 +2362,95 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
     const user = uRes.rows[0];
     const uLat = latitude ? parseFloat(latitude) : parseFloat(user.target_lat);
     const uLon = longitude ? parseFloat(longitude) : parseFloat(user.target_lon);
-    let targetLat = parseFloat(user.target_lat);
-    let targetLon = parseFloat(user.target_lon);
-    let targetRad = parseFloat(user.target_radius);
-    let resolvedLocName = locationName || user.target_loc_name || 'Pos Lapangan';
+    const targetLat = parseFloat(user.target_lat);
+    const targetLon = parseFloat(user.target_lon);
+    const targetRad = parseFloat(user.target_radius);
+    const gpsBuffer = Math.min(Math.max(0, ((accuracyMeters ? parseFloat(accuracyMeters) : 5) - 15) * 0.5), 35);
+    let resolvedLocName = user.target_loc_name || locationName || 'Pos Lapangan';
     let distance = 0;
-    let isWithinRadius = true;
+    let isWithinRadius = false;
 
-    // Daftar Titik Pos Resmi FRP (Termasuk Titik Pos Timbangan)
-    const FRP_OFFICIAL_LOCATIONS = [
-      { code: 'KANTOR FRP', name: 'Kantor FRP', lat: -4.794135, lon: 119.604382, radius: 250 },
-      { code: 'KANTOR MATCHING BONTOA', name: 'Matching Bontoa', lat: -4.802450, lon: 119.598640, radius: 250 },
-      { code: 'KANTOR PUSAT', name: 'Kantor Pusat', lat: -4.800089, lon: 119.608477, radius: 250 },
-      { code: 'KANTOR STAFF', name: 'Kantor Staff', lat: -4.789289, lon: 119.612770, radius: 250 },
-      { code: 'PINTU OGS', name: 'Pos OGS', lat: -4.787904, lon: 119.613399, radius: 250 },
-      { code: 'WISMA RUMAH TANGGA', name: 'Wisma Rumah Tangga', lat: -4.792870, lon: 119.608797, radius: 250 },
-      { code: 'TIMBANGAN 2/3', name: 'Timbangan 2/3', lat: -4.783865, lon: 119.615338, radius: 50 },
-      { code: 'TIMBANGAN 4', name: 'Timbangan 4', lat: -4.789666, lon: 119.612852, radius: 50 },
-      { code: 'TIMBANGAN 5', name: 'Timbangan 5', lat: -4.789809, lon: 119.612887, radius: 50 },
-      { code: 'TIMBANBAN 5', name: 'Timbangan 5', lat: -4.789809, lon: 119.612887, radius: 50 },
-    ];
-
-    // Prioritas 1: Cocokkan uLat & uLon dengan salah satu dari Titik Pos Resmi FRP
-    const frpMatches = FRP_OFFICIAL_LOCATIONS.map(p => {
-      const d = calculateHaversineMeters(uLat, uLon, p.lat, p.lon);
-      return { ...p, distance: d, isValid: d <= p.radius };
-    });
-    const matchedFRP = frpMatches.find(p => p.isValid);
-
-    if (matchedFRP) {
-      distance = Math.round(matchedFRP.distance);
+    // 1. Cek Prioritas Utama: Lokasi Kantor Divisi / Penugasan Resmi Karyawan (Dari Database)
+    const targetDist = calculateHaversineMeters(uLat, uLon, targetLat, targetLon);
+    if (targetDist <= (targetRad + gpsBuffer)) {
+      distance = Math.round(targetDist);
       isWithinRadius = true;
-      resolvedLocName = `${matchedFRP.name} [${matchedFRP.code}]`;
+      resolvedLocName = user.target_loc_name;
     } else {
-      // Prioritas 2: Cek bank multi-titik pos penugasan karyawan (hrm_field_assigned_posts)
+      // 2. Cek Bank Multi-Titik Pos Penugasan Karyawan (hrm_field_assigned_posts)
       const fieldPosts = await pool.query(
         'SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true',
         [validUserId]
       );
 
+      let matchedBankPost = null;
       if (fieldPosts.rows.length > 0) {
         const postsWithDist = fieldPosts.rows.map(p => {
           const d = calculateHaversineMeters(uLat, uLon, parseFloat(p.latitude), parseFloat(p.longitude));
-          return { ...p, distance: d, isValid: d <= parseFloat(p.radius_meters) };
+          const r = parseFloat(p.radius_meters) + gpsBuffer;
+          return { ...p, distance: d, isValid: d <= r };
         });
-        const matched = postsWithDist.find(p => p.isValid);
-        if (matched) {
-          distance = Math.round(matched.distance);
-          isWithinRadius = true;
-          resolvedLocName = `${matched.post_name} [${matched.post_code}]`;
-        } else {
-          const nearest = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
-          distance = Math.round(nearest.distance);
-          isWithinRadius = false;
-          resolvedLocName = `${nearest.post_name} [${nearest.post_code}]`;
-        }
+        matchedBankPost = postsWithDist.find(p => p.isValid);
+      }
+
+      if (matchedBankPost) {
+        distance = Math.round(matchedBankPost.distance);
+        isWithinRadius = true;
+        resolvedLocName = `${matchedBankPost.post_name} [${matchedBankPost.post_code}]`;
       } else {
-        // Prioritas 3: Cari pos terdekat dari 6 titik FRP jika tidak di bank pos
-        const nearestFRP = frpMatches.sort((a, b) => a.distance - b.distance)[0];
-        if (nearestFRP) {
-          distance = Math.round(nearestFRP.distance);
-          isWithinRadius = nearestFRP.isValid;
-          resolvedLocName = `${nearestFRP.name} [${nearestFRP.code}]`;
+        // 3. Cek Allowed Posts dari Divisi atau Profil Karyawan
+        let allowedPosts = [];
+        try {
+          if (user.div_allowed_posts) {
+            const pArr = typeof user.div_allowed_posts === 'string' ? JSON.parse(user.div_allowed_posts) : user.div_allowed_posts;
+            if (Array.isArray(pArr)) allowedPosts.push(...pArr);
+          }
+          if (user.user_allowed_posts) {
+            const pArr = typeof user.user_allowed_posts === 'string' ? JSON.parse(user.user_allowed_posts) : user.user_allowed_posts;
+            if (Array.isArray(pArr)) allowedPosts.push(...pArr);
+          }
+        } catch (_) {}
+
+        const matchedAllowed = allowedPosts.find((ap) => {
+          const d = calculateHaversineMeters(uLat, uLon, parseFloat(ap.latitude), parseFloat(ap.longitude));
+          const r = parseFloat(ap.radiusMeters || ap.radius_meters || 50) + gpsBuffer;
+          return d <= r;
+        });
+
+        if (matchedAllowed) {
+          const d = calculateHaversineMeters(uLat, uLon, parseFloat(matchedAllowed.latitude), parseFloat(matchedAllowed.longitude));
+          distance = Math.round(d);
+          isWithinRadius = true;
+          resolvedLocName = matchedAllowed.name || matchedAllowed.postName || matchedAllowed.code;
         } else {
-          distance = calculateHaversineMeters(uLat, uLon, targetLat, targetLon);
-          isWithinRadius = distance <= targetRad;
+          // 4. Cek Titik Pos Resmi FRP (Termasuk Titik Pos Timbangan)
+          const FRP_OFFICIAL_LOCATIONS = [
+            { code: 'KANTOR FRP', name: 'Kantor FRP', lat: -4.794135, lon: 119.604382, radius: 250 },
+            { code: 'KANTOR MATCHING BONTOA', name: 'Matching Bontoa', lat: -4.802450, lon: 119.598640, radius: 250 },
+            { code: 'KANTOR PUSAT', name: 'Kantor Pusat', lat: -4.800089, lon: 119.608477, radius: 250 },
+            { code: 'KANTOR STAFF', name: 'Kantor Staff', lat: -4.789289, lon: 119.612770, radius: 250 },
+            { code: 'PINTU OGS', name: 'Pos OGS', lat: -4.787904, lon: 119.613399, radius: 250 },
+            { code: 'WISMA RUMAH TANGGA', name: 'Wisma Rumah Tangga', lat: -4.792870, lon: 119.608797, radius: 250 },
+            { code: 'TIMBANGAN 2/3', name: 'Timbangan 2/3', lat: -4.783865, lon: 119.615338, radius: 50 },
+            { code: 'TIMBANGAN 4', name: 'Timbangan 4', lat: -4.789666, lon: 119.612852, radius: 50 },
+            { code: 'TIMBANGAN 5', name: 'Timbangan 5', lat: -4.789809, lon: 119.612887, radius: 50 },
+          ];
+
+          const matchedFRP = FRP_OFFICIAL_LOCATIONS.find((p) => {
+            const d = calculateHaversineMeters(uLat, uLon, p.lat, p.lon);
+            return d <= (p.radius + gpsBuffer);
+          });
+
+          if (matchedFRP) {
+            distance = Math.round(calculateHaversineMeters(uLat, uLon, matchedFRP.lat, matchedFRP.lon));
+            isWithinRadius = true;
+            resolvedLocName = `${matchedFRP.name} [${matchedFRP.code}]`;
+          } else {
+            // Pegawai berada di luar seluruh radius: tetap pertahankan target asli divisi/penugasan pegawai!
+            distance = Math.round(targetDist);
+            isWithinRadius = false;
+            resolvedLocName = user.target_loc_name;
+          }
         }
       }
     }
