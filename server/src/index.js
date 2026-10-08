@@ -3734,6 +3734,8 @@ app.post('/api/attendances/clock-out', async (req, res) => {
           }
         }
       }
+    }
+
     // Validasi Biometrik Pulang via InsightFace (Container hrm-face-ai Port 5001)
     let computedClockOutScore = biometricScore;
     let computedClockOutMatch = biometricMatch;
