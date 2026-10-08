@@ -177,7 +177,11 @@ export function checkShiftClockInWindow(shift: Shift | null, currentTime: Date =
   openTimeStr?: string;
 } {
   if (!shift || !shift.startTime || !shift.endTime) {
-    return { isOpen: true };
+    // Menolak akses jika data shift belum termuat dari sistem/database
+    return {
+      isOpen: false,
+      reason: 'Sedang memuat data jadwal shift karyawan...',
+    };
   }
 
   const nowMins = currentTime.getHours() * 60 + currentTime.getMinutes();
@@ -195,28 +199,114 @@ export function checkShiftClockInWindow(shift: Shift | null, currentTime: Date =
   const openTimeStr = `${openHour}:${openMinute} WITA`;
 
   if (isCrossDay) {
-    // Shift malam: misal open 20:30 (1230), start 22:30 (1350), end 07:30 (450)
+    // Shift malam lintas hari: misal open 20:30 (1230), start 22:30 (1350), end 07:30 (450)
     // Sekarang 22:38 (1358) -> nowMins >= openMins (1358 >= 1230) -> TRUE!
     // Sekarang 03:00 (180) -> nowMins < endMins (180 < 450) -> TRUE!
     if (nowMins >= openMins || nowMins < endMins) {
-      return { isOpen: true };
+      return { isOpen: true, openTimeStr };
     }
   } else {
     // Shift biasa: misal open 05:30 (330), start 07:30 (450), end 16:30 (990)
     if (openMins > startMins) {
       if (nowMins >= openMins || nowMins <= endMins) {
-        return { isOpen: true };
+        return { isOpen: true, openTimeStr };
       }
     } else {
       if (nowMins >= openMins && nowMins <= endMins) {
-        return { isOpen: true };
+        return { isOpen: true, openTimeStr };
       }
     }
+  }
+
+  // Jika waktu saat ini sudah lewat jam berakhir shift
+  const isPastEnd = isCrossDay
+    ? (nowMins >= endMins && nowMins < openMins)
+    : (nowMins > endMins || nowMins < openMins);
+
+  if (isPastEnd) {
+    return {
+      isOpen: false,
+      openTimeStr,
+      reason: `Jadwal shift ${shift.name || shift.startTime + ' - ' + shift.endTime} telah berakhir. Presensi masuk berikutnya dibuka pk ${openTimeStr}.`,
+    };
   }
 
   return {
     isOpen: false,
     openTimeStr,
     reason: `Presensi masuk dibuka mulai pk ${openTimeStr} (2 jam sebelum shift ${shift.startTime})`,
+  };
+}
+
+/**
+ * Memeriksa apakah waktu saat ini diizinkan untuk Absen Pulang (Clock-Out).
+ * Memvalidasi apakah jam kepulangan shift telah tiba dan minimum durasi kerja 30 menit telah terpenuhi.
+ */
+export function checkShiftClockOutWindow(
+  shift: Shift | null,
+  clockInTimeStr?: string | null,
+  currentTime: Date = new Date()
+): {
+  isAllowed: boolean;
+  reason?: string;
+  isBeforeEndTime: boolean;
+} {
+  if (!shift || !shift.endTime) {
+    return { isAllowed: true, isBeforeEndTime: false };
+  }
+
+  const nowMins = currentTime.getHours() * 60 + currentTime.getMinutes();
+  const [eH, eM] = shift.endTime.split(':').map(Number);
+  const endMins = (eH || 0) * 60 + (eM || 0);
+
+  const [sH, sM] = (shift.startTime || '07:30').split(':').map(Number);
+  const startMins = (sH || 0) * 60 + (sM || 0);
+  const isCrossDay = Boolean(shift.isCrossDay || endMins < startMins);
+
+  let isBeforeEndTime = false;
+
+  if (isCrossDay) {
+    // Cross day (e.g. 22:30 - 07:30):
+    // Jam 22:30 s/d 23:59 -> belum boleh pulang (isBeforeEndTime = true)
+    // Jam 00:00 s/d 07:29 -> belum boleh pulang (isBeforeEndTime = true)
+    // Jam 07:30 ke atas -> boleh pulang!
+    if (nowMins >= startMins || nowMins < endMins) {
+      isBeforeEndTime = true;
+    }
+  } else {
+    // Regular shift (e.g. 07:30 - 16:30):
+    // Jam 00:00 s/d 16:29 -> belum jam pulang
+    if (nowMins < endMins) {
+      isBeforeEndTime = true;
+    }
+  }
+
+  // Minimum working time guard: setidaknya 30 menit setelah clock-in
+  if (clockInTimeStr) {
+    const [ciH, ciM] = clockInTimeStr.split(':').map(Number);
+    if (!isNaN(ciH) && !isNaN(ciM)) {
+      const ciTotal = ciH * 60 + ciM;
+      const elapsed = nowMins >= ciTotal ? nowMins - ciTotal : (nowMins + 1440) - ciTotal;
+      if (elapsed < 30) {
+        return {
+          isAllowed: false,
+          isBeforeEndTime: true,
+          reason: `Tombol pulang terkunci! Minimal durasi kerja 30 menit setelah ceklok masuk (${clockInTimeStr.substring(0, 5)} WITA).`,
+        };
+      }
+    }
+  }
+
+  if (isBeforeEndTime) {
+    return {
+      isAllowed: false,
+      isBeforeEndTime: true,
+      reason: `Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${shift.endTime.substring(0, 5)} WITA.`,
+    };
+  }
+
+  return {
+    isAllowed: true,
+    isBeforeEndTime: false,
   };
 }

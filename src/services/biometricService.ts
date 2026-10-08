@@ -697,20 +697,20 @@ export class BiometricService {
 
   /**
    * Evaluates 1:1 Biometric Verification with Enterprise False-Acceptance-Rate Calibration
-   * Dual metric: Euclidean Distance (FaceNet benchmark <= 0.58) & Cosine Similarity
+   * Dual metric: Euclidean Distance (FaceNet benchmark <= 0.65 for mobile PWA camera) & Cosine Similarity
    */
   public evaluateBiometricMatch(
     liveDescriptor: number[],
     masterDescriptor: number[],
-    thresholdDistance: number = 0.58
+    thresholdDistance: number = 0.65
   ): BiometricMatchResult {
     const distance = this.calculateEuclideanDistance(liveDescriptor, masterDescriptor);
     const similarity = this.calculateCosineSimilarity(liveDescriptor, masterDescriptor);
 
     // Calibrate Euclidean distance to confidence percentage (0% to 100%)
     // distance <= 0.35 -> 96 - 100%
-    // distance 0.35 - 0.58 -> 80 - 95%
-    // distance > 0.58 -> < 75%
+    // distance 0.35 - 0.65 -> 75 - 95%
+    // distance > 0.65 -> < 60%
     let confidence: number;
     const isMatch = distance <= thresholdDistance;
 
@@ -718,10 +718,10 @@ export class BiometricService {
       if (distance <= 0.35) {
         confidence = Math.round(96 + ((0.35 - distance) / 0.35) * 4);
       } else {
-        confidence = Math.round(80 + ((thresholdDistance - distance) / (thresholdDistance - 0.35)) * 15);
+        confidence = Math.round(75 + ((thresholdDistance - distance) / Math.max(0.01, thresholdDistance - 0.35)) * 20);
       }
     } else {
-      confidence = Math.max(0, Math.round((1 - (distance - thresholdDistance) / 0.5) * 75));
+      confidence = Math.max(0, Math.round((1 - (distance - thresholdDistance) / 0.5) * 60));
     }
     confidence = Math.min(100, Math.max(0, confidence));
 

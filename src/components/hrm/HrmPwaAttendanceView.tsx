@@ -74,7 +74,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import defaultAvatar from '@/assets/logo.png';
-import { resolveEffectiveShift, checkShiftClockInWindow } from '@/lib/hrmShiftResolver';
+import { resolveEffectiveShift, checkShiftClockInWindow, checkShiftClockOutWindow } from '@/lib/hrmShiftResolver';
 import { compressImageFile } from '@/lib/imageCompressor';
 
 interface HrmPwaAttendanceViewProps {
@@ -415,6 +415,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const isTriggeringAutoRef = useRef<boolean>(false);
   const isCapturingRef = useRef<boolean>(false);
   const handleShutterCaptureRef = useRef<() => void>();
+  const autoCaptureCooldownUntilRef = useRef<number>(0);
 
   // Active Real-time Face Detection Loop on Camera Stream (Ultra Fast & Smooth)
   useEffect(() => {
@@ -488,6 +489,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             if (!greenSinceRef.current) {
               greenSinceRef.current = now;
             }
+
+            if (now < autoCaptureCooldownUntilRef.current) {
+              setAutoCaptureProgress(0);
+              return;
+            }
+
             const elapsed = now - greenSinceRef.current;
 
             if (scanMode === 'auto') {
@@ -503,8 +510,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   : '✓ Wajah Terkunci • Menjepret...',
               });
 
-              // Auto-capture otomatis setelah bertahan 700ms
-              if (elapsed >= 700 && !isCapturingRef.current && !isTriggeringAutoRef.current) {
+              // Auto-capture otomatis setelah bertahan 700ms (hanya jika cooldown telah selesai)
+              if (elapsed >= 700 && !isCapturingRef.current && !isTriggeringAutoRef.current && now >= autoCaptureCooldownUntilRef.current) {
                 isTriggeringAutoRef.current = true;
                 greenSinceRef.current = null;
                 setAutoCaptureProgress(100);
@@ -1116,26 +1123,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   // Absen Pulang (Clock-Out) Guard:
   // Harus tidak aktif sebelum shift endTime, kecuali ada izin darurat yang disetujui!
-  const isBeforeShiftEndTime = useMemo(() => {
-    if (!userShift?.endTime) return false;
-    const now = currentTime;
-    const currentTotalMins = now.getHours() * 60 + now.getMinutes();
+  const clockOutWindow = useMemo(() => {
+    return checkShiftClockOutWindow(userShift, todayAttendance?.clockIn, currentTime);
+  }, [userShift, todayAttendance?.clockIn, currentTime]);
 
-    const [endH, endM] = userShift.endTime.split(':').map(Number);
-    const endTotalMins = endH * 60 + (endM || 0);
-
-    const [startH, startM] = (userShift.startTime || '07:30').split(':').map(Number);
-    const startTotalMins = startH * 60 + (startM || 0);
-    const isCrossDay = userShift.isCrossDay || endTotalMins < startTotalMins;
-
-    if (isCrossDay) {
-      if (currentTotalMins >= startTotalMins) return true;
-      if (currentTotalMins < endTotalMins) return true;
-      return false;
-    } else {
-      return currentTotalMins < endTotalMins;
-    }
-  }, [currentTime, userShift]);
+  const isBeforeShiftEndTime = clockOutWindow.isBeforeEndTime;
 
   const hasApprovedEmergencyLeave = useMemo(() => {
     if (todayAttendance?.isEarlyLeave || todayAttendance?.earlyLeaveApproved || todayAttendance?.isRemoteUnlocked) {
@@ -1311,15 +1303,32 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const isSpecialMobile = isMobileOnlineOfficer(user);
     const isOnCallAction = type === 'emergency_on_call' || type === 'emergency_on_call_out';
 
-    // Validasi Geofence sebelum buka kamera (dikecualikan untuk spot check lapor wajah darurat pimpinan, mobile officer, & on-call duty)
-    if (!isSpotCheckAction && !isSpecialMobile && !isOnCallAction && type === 'clock_in' && locationStatus === 'outside') {
-      toast.error('Presensi Masuk diblokir! Anda berada di luar radius kantor/pos tugas.');
-      return;
-    }
-
-    if (!isSpotCheckAction && !isSpecialMobile && !isOnCallAction && type === 'clock_out' && (todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached)) {
-      toast.error('Presensi Pulang Terkunci karena pelanggaran perimeter. Hubungi HRD.');
-      return;
+    // Validasi Ketat Jadwal Shift & Geofence sebelum buka kamera
+    if (!isSpotCheckAction && !isSpecialMobile && !isOnCallAction) {
+      if (type === 'clock_in') {
+        if (!isClockInAllowed) {
+          toast.error(clockInDisabledReason || 'Presensi Masuk belum dibuka untuk jadwal shift Anda.');
+          return;
+        }
+        if (locationStatus === 'outside') {
+          toast.error('Presensi Masuk diblokir! Anda berada di luar radius kantor/pos tugas.');
+          return;
+        }
+      }
+      if (type === 'clock_out') {
+        if (!isClockOutAllowed) {
+          if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave && !isFieldSpecial) {
+            toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
+          } else {
+            toast.error(clockOutDisabledReason || 'Presensi Pulang belum dapat dilakukan.');
+          }
+          return;
+        }
+        if (todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached) {
+          toast.error('Presensi Pulang Terkunci karena pelanggaran perimeter. Hubungi HRD.');
+          return;
+        }
+      }
     }
 
     setActionType(type);
@@ -1710,6 +1719,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         return;
       }
 
+      // Validasi Server-Grade pada tombol shutter sebelum proses citra
+      if (!isExemptOfficer && !isSpotCheckAction && !isOnCallAction) {
+        if (actionType === 'clock_in' && !isClockInAllowed) {
+          toast.dismiss(toastLoadingId);
+          toast.error(clockInDisabledReason || 'Presensi Masuk Ditolak: Di luar jendela jadwal shift.', { id: 'clock-guard' });
+          closeLiveCamera();
+          return;
+        }
+        if (actionType === 'clock_out' && !isClockOutAllowed) {
+          toast.dismiss(toastLoadingId);
+          toast.error(clockOutDisabledReason || 'Presensi Pulang Ditolak: Belum memasuki jam pulang.', { id: 'clock-guard' });
+          closeLiveCamera();
+          return;
+        }
+      }
+
       // Optimal resolution (max 1280 wide) to ensure lightweight base64 payload (< 200KB)
       const rawW = videoRef.current.videoWidth || 1280;
       const rawH = videoRef.current.videoHeight || 720;
@@ -1753,19 +1778,32 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         }
 
         if (!liveDesc || !Array.isArray(liveDesc) || liveDesc.length !== 128) {
+          autoCaptureCooldownUntilRef.current = Date.now() + 3000;
+          greenSinceRef.current = null;
+          isTriggeringAutoRef.current = false;
+          setAutoCaptureProgress(0);
           toast.dismiss(toastLoadingId);
-          toast.error('Wajah tidak terdeteksi jelas pada kamera! Harap pastikan wajah menghadap lurus ke kamera dan berada di area berpenerangan cukup.');
+          toast.error('Wajah tidak terdeteksi jelas pada kamera! Harap pastikan wajah menghadap lurus ke kamera dan berada di area berpenerangan cukup.', { id: 'biometric-match-error' });
           return;
         }
 
-        const match = biometricService.evaluateBiometricMatch(liveDesc, masterDescriptor, 0.58);
-        if (!match.isMatch && match.confidence < 75) {
+        // Benchmark Euclidean Distance 0.65 (standar FaceNet Mobile kamera selfie berbagai kondisi cahaya)
+        const match = biometricService.evaluateBiometricMatch(liveDesc, masterDescriptor, 0.65);
+        if (!match.isMatch && match.confidence < 60) {
+          // Cooldown 3.5 detik agar auto-capture tidak membombardir toast penolakan
+          autoCaptureCooldownUntilRef.current = Date.now() + 3500;
+          greenSinceRef.current = null;
+          isTriggeringAutoRef.current = false;
+          setAutoCaptureProgress(0);
           toast.dismiss(toastLoadingId);
-          toast.error(`Presensi Ditolak! Wajah tidak cocok dengan data master biometrik ${user.fullName} (${match.confidence}% Kemiripan). Pastikan tidak diwakilkan orang lain.`);
+          toast.error(
+            `Presensi Ditolak! Wajah tidak cocok dengan data master biometrik ${user.fullName} (${match.confidence}% Kemiripan). Pastikan pencahayaan cukup terang & tidak diwakilkan orang lain.`,
+            { id: 'biometric-match-error', duration: 4500 }
+          );
           return;
         }
 
-        verifiedConfidence = Math.max(match.confidence, 78);
+        verifiedConfidence = Math.max(match.confidence, 80);
         isVerifiedBiometric = true;
       } else {
         // Karyawan belum mendaftarkan wajah master di database (masih diizinkan absen dengan prompt pendaftaran)
@@ -2267,12 +2305,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   }, [hasClockedIn, todayAttendance, hasActiveLeaveToday, activeLeaveToday, isInsideCoordinates, isShiftWindowActive, hasApprovedOvertimeOrSubstituteToday, isFieldSpecial, userShift, currentTime]);
 
   // Tombol Absen Pulang:
-  // Ketika submit face masuk selesai, tombol absen pulang otomatis NON-AKTIF
-  // dan OTOMATIS AKTIF jika telah masuk jam pulang shift (atau ada izin pulang darurat)
+  // Terkunci sebelum jam pulang shift (kecuali izin darurat atau petugas lapangan khusus)
   const isClockOutAllowed =
     hasClockedIn &&
     !hasClockedOut &&
-    (!isBeforeShiftEndTime || hasApprovedEmergencyLeave || isFieldSpecial);
+    (clockOutWindow.isAllowed || hasApprovedEmergencyLeave || isFieldSpecial);
+
+  const clockOutDisabledReason = useMemo(() => {
+    if (!hasClockedIn) return 'BELUM ABSEN MASUK';
+    if (hasClockedOut) return `SUDAH PULANG (${todayAttendance?.clockOut?.substring(0, 5)})`;
+    if (hasApprovedEmergencyLeave || isFieldSpecial) return null;
+    if (!clockOutWindow.isAllowed) return clockOutWindow.reason || 'BELUM JAM PULANG';
+    return null;
+  }, [hasClockedIn, hasClockedOut, hasApprovedEmergencyLeave, isFieldSpecial, clockOutWindow, todayAttendance]);
 
   // Aksi Cerdas Gabungan Masuk & Pulang di Tombol Tengah Menu Bawah
   const handleCenterAttendanceClick = () => {

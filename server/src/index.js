@@ -1352,7 +1352,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     // 0. Profile & Device Binding Check (1 Karyawan = 1 HP Terdaftar)
     let userProfile = null;
     const userRes = await pool.query(
-      `SELECT id, full_name, email, nip, division_id, device_id, device_model, is_device_bound, face_embedding, allowed_posts, allow_ogs_clock_out FROM hrm_profiles WHERE id = $1`,
+      `SELECT id, full_name, email, nip, division_id, shift_id, custom_start_time, custom_end_time, late_tolerance_minutes, device_id, device_model, is_device_bound, face_embedding, allowed_posts, allow_ogs_clock_out FROM hrm_profiles WHERE id = $1`,
       [userId]
     );
     if (userRes.rows.length > 0) {
@@ -1360,6 +1360,80 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     }
 
     const isExempt = isExemptFieldOfficer(userProfile);
+
+    // Validasi Jam Kerja Shift Karyawan (Server-side Shift Window Guard)
+    if (!isExempt && userProfile) {
+      const otRes = await pool.query(
+        `SELECT id FROM hrm_overtime_records WHERE user_id = $1 AND date = $2 AND status = 'approved' LIMIT 1`,
+        [userId, date]
+      );
+      const subRes = await pool.query(
+        `SELECT id FROM hrm_shift_substitutions WHERE (substitute_user_id = $1 OR user_id = $1) AND (target_date = $2 OR date = $2) AND status = 'approved' LIMIT 1`,
+        [userId, date]
+      );
+
+      const hasApprovedException = (otRes.rows.length > 0) || (subRes.rows.length > 0);
+
+      if (!hasApprovedException) {
+        let shiftStartTime = userProfile.custom_start_time || '07:30';
+        let shiftEndTime = userProfile.custom_end_time || '16:30';
+        let isCrossDay = false;
+
+        if (userProfile.shift_id) {
+          const shiftRes = await pool.query(
+            `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
+            [userProfile.shift_id]
+          );
+          if (shiftRes.rows.length > 0) {
+            const sh = shiftRes.rows[0];
+            shiftStartTime = userProfile.custom_start_time || sh.start_time?.substring(0, 5) || '07:30';
+            shiftEndTime = userProfile.custom_end_time || sh.end_time?.substring(0, 5) || '16:30';
+            isCrossDay = Boolean(sh.is_cross_day);
+          }
+        }
+
+        const [sH, sM] = shiftStartTime.split(':').map(Number);
+        const [eH, eM] = shiftEndTime.split(':').map(Number);
+        const startMins = (sH || 7) * 60 + (sM || 30);
+        const endMins = (eH || 16) * 60 + (eM || 30);
+        if (endMins < startMins) isCrossDay = true;
+
+        let nowMins = 0;
+        if (time && typeof time === 'string') {
+          const [cH, cM] = time.split(':').map(Number);
+          nowMins = (cH || 0) * 60 + (cM || 0);
+        } else {
+          const witaDate = new Date(Date.now() + 8 * 3600000);
+          nowMins = witaDate.getUTCHours() * 60 + witaDate.getUTCMinutes();
+        }
+
+        // Window dibuka 120 menit (2 jam) sebelum jam masuk
+        const openMins = (startMins - 120 + 1440) % 1440;
+        let isShiftOpen = false;
+
+        if (isCrossDay) {
+          if (nowMins >= openMins || nowMins < endMins) {
+            isShiftOpen = true;
+          }
+        } else {
+          if (openMins > startMins) {
+            if (nowMins >= openMins || nowMins <= endMins) isShiftOpen = true;
+          } else {
+            if (nowMins >= openMins && nowMins <= endMins) isShiftOpen = true;
+          }
+        }
+
+        if (!isShiftOpen) {
+          const openH = Math.floor(openMins / 60).toString().padStart(2, '0');
+          const openM = (openMins % 60).toString().padStart(2, '0');
+          return res.status(403).json({
+            success: false,
+            error: `Presensi Masuk Ditolak: Jam saat ini (${time || 'sekarang'} WITA) berada di luar jendela shift kerja resmi (${shiftStartTime} - ${shiftEndTime} WITA). Presensi dibuka mulai pk ${openH}:${openM} WITA.`,
+            code: 'OUTSIDE_SHIFT_WINDOW'
+          });
+        }
+      }
+    }
 
     // Validasi Khusus Pos OGS: Titik Pos OGS (-4.787904, 119.613399) HANYA untuk Ceklok Pulang bagi divisi/karyawan biasa
     // Kecuali 3 Petugas Lapangan Khusus yang 100% dikecualikan (Aslam, Samsi, Takdir)
@@ -3433,11 +3507,95 @@ app.post('/api/attendances/clock-out', async (req, res) => {
     // Ambil info profil karyawan
     let userProfile = null;
     const userRes = await pool.query(
-      `SELECT id, full_name, email, nip, division_id, allowed_posts, allow_ogs_clock_out FROM hrm_profiles WHERE id = $1`,
+      `SELECT id, full_name, email, nip, division_id, shift_id, custom_start_time, custom_end_time, allowed_posts, allow_ogs_clock_out FROM hrm_profiles WHERE id = $1`,
       [userId]
     );
     if (userRes.rows.length > 0) {
       userProfile = userRes.rows[0];
+    }
+
+    const isExempt = isExemptFieldOfficer(userProfile);
+
+    // Validasi Jam Pulang Shift Karyawan (Server-side Clock-Out Enforcement)
+    if (!isExempt && userProfile) {
+      const leaveRes = await pool.query(
+        `SELECT id FROM hrm_leave_requests WHERE user_id = $1 AND leave_type IN ('emergency_leave', 'izin_darurat') AND status = 'approved' AND $2 BETWEEN start_date AND end_date LIMIT 1`,
+        [userId, date]
+      );
+      const attRes = await pool.query(
+        `SELECT clock_in, is_early_leave, early_leave_approved, is_remote_unlocked FROM hrm_attendances WHERE user_id = $1 AND attendance_date = $2 LIMIT 1`,
+        [userId, date]
+      );
+
+      const isEmergencyPermitted = (leaveRes.rows.length > 0) ||
+        (attRes.rows.length > 0 && (attRes.rows[0].is_early_leave || attRes.rows[0].early_leave_approved || attRes.rows[0].is_remote_unlocked));
+
+      if (!isEmergencyPermitted) {
+        let shiftStartTime = userProfile.custom_start_time || '07:30';
+        let shiftEndTime = userProfile.custom_end_time || '16:30';
+        let isCrossDay = false;
+
+        if (userProfile.shift_id) {
+          const shiftRes = await pool.query(
+            `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
+            [userProfile.shift_id]
+          );
+          if (shiftRes.rows.length > 0) {
+            const sh = shiftRes.rows[0];
+            shiftStartTime = userProfile.custom_start_time || sh.start_time?.substring(0, 5) || '07:30';
+            shiftEndTime = userProfile.custom_end_time || sh.end_time?.substring(0, 5) || '16:30';
+            isCrossDay = Boolean(sh.is_cross_day);
+          }
+        }
+
+        const [sH, sM] = shiftStartTime.split(':').map(Number);
+        const [eH, eM] = shiftEndTime.split(':').map(Number);
+        const startMins = (sH || 7) * 60 + (sM || 30);
+        const endMins = (eH || 16) * 60 + (eM || 30);
+        if (endMins < startMins) isCrossDay = true;
+
+        let nowMins = 0;
+        if (time && typeof time === 'string') {
+          const [cH, cM] = time.split(':').map(Number);
+          nowMins = (cH || 0) * 60 + (cM || 0);
+        } else {
+          const witaDate = new Date(Date.now() + 8 * 3600000);
+          nowMins = witaDate.getUTCHours() * 60 + witaDate.getUTCMinutes();
+        }
+
+        let isBeforeEndTime = false;
+        if (isCrossDay) {
+          if (nowMins >= startMins || nowMins < endMins) {
+            isBeforeEndTime = true;
+          }
+        } else {
+          if (nowMins < endMins) {
+            isBeforeEndTime = true;
+          }
+        }
+
+        // Cek durasi kerja minimal 30 menit dari clock_in
+        if (attRes.rows.length > 0 && attRes.rows[0].clock_in) {
+          const [ciH, ciM] = attRes.rows[0].clock_in.split(':').map(Number);
+          const ciTotal = (ciH || 0) * 60 + (ciM || 0);
+          const elapsed = nowMins >= ciTotal ? nowMins - ciTotal : (nowMins + 1440) - ciTotal;
+          if (elapsed < 30) {
+            return res.status(403).json({
+              success: false,
+              error: `Presensi Pulang Ditolak: Durasi kerja minimal 30 menit setelah presensi masuk (${attRes.rows[0].clock_in.substring(0, 5)} WITA).`,
+              code: 'MINIMUM_WORK_DURATION'
+            });
+          }
+        }
+
+        if (isBeforeEndTime) {
+          return res.status(403).json({
+            success: false,
+            error: `Presensi Pulang Ditolak: Belum memasuki jam pulang shift Anda (${shiftEndTime} WITA). Silakan ajukan Izin Darurat jika ada keperluan mendesak.`,
+            code: 'BEFORE_SHIFT_END'
+          });
+        }
+      }
     }
 
     if (latitude && longitude && userId) {
