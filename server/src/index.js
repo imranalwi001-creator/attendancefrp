@@ -1617,19 +1617,41 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       }
     }
 
-    // 3. Biometric Face AI Verification via InsightFace
+    // 3. Biometric Face AI Verification via InsightFace (Container hrm-face-ai Port 5001)
     let computedBiometricScore = biometricScore;
     let computedBiometricMatch = biometricMatch;
 
-    if (userProfile && Array.isArray(userProfile.face_embedding) && userProfile.face_embedding.length > 0 && photo) {
+    // Pastikan master embedding 512D InsightFace tersedia
+    let masterEmbedding = userProfile ? userProfile.face_embedding : null;
+    if (userProfile && (!masterEmbedding || !Array.isArray(masterEmbedding) || masterEmbedding.length === 0) && userProfile.face_enrolled_photo) {
+      try {
+        const extRes = await fetch(`${FACE_AI_URL}/extract-embedding-json`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_base64: userProfile.face_enrolled_photo })
+        });
+        if (extRes.ok) {
+          const extData = await extRes.json();
+          if (extData.success && Array.isArray(extData.embedding) && extData.embedding.length === 512) {
+            masterEmbedding = extData.embedding;
+            await pool.query('UPDATE hrm_profiles SET face_embedding = $1 WHERE id = $2', [masterEmbedding, userProfile.id]);
+            console.log(`[InsightFace AI] Auto-extracted and cached 512D master embedding for ${userProfile.full_name}`);
+          }
+        }
+      } catch (extErr) {
+        console.warn('[BiometricAI] Auto-extraction of master photo failed:', extErr.message);
+      }
+    }
+
+    if (masterEmbedding && Array.isArray(masterEmbedding) && masterEmbedding.length > 0 && photo) {
       try {
         const aiRes = await fetch(`${FACE_AI_URL}/verify-face-json`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             image_base64: photo,
-            master_embedding: userProfile.face_embedding,
-            threshold: 0.70
+            master_embedding: masterEmbedding,
+            threshold: 0.60
           })
         });
 
@@ -1642,11 +1664,12 @@ app.post('/api/attendances/clock-in', async (req, res) => {
             if (!aiData.is_match) {
               return res.status(400).json({
                 success: false,
-                error: `Verifikasi Wajah Gagal: Wajah terdeteksi ${aiData.confidence}% cocok (batas aman min. 70%). Pastikan tidak diwakilkan oleh orang lain dan posisi wajah terang.`,
+                error: `Verifikasi Wajah InsightFace Gagal: Wajah terdeteksi ${aiData.confidence}% cocok (ambang batas aman 60%). Pastikan wajah menghadap lurus ke kamera dan tidak diwakilkan orang lain.`,
                 code: 'BIOMETRIC_MISMATCH',
                 confidence: aiData.confidence
               });
             }
+            console.log(`[InsightFace AI] Clock-in face matched successfully: ${aiData.confidence}% for user ${userProfile.full_name}`);
           }
         }
       } catch (aiErr) {
@@ -3711,6 +3734,57 @@ app.post('/api/attendances/clock-out', async (req, res) => {
           }
         }
       }
+    // Validasi Biometrik Pulang via InsightFace (Container hrm-face-ai Port 5001)
+    let computedClockOutScore = biometricScore;
+    let computedClockOutMatch = biometricMatch;
+
+    let masterEmbeddingOut = userProfile ? userProfile.face_embedding : null;
+    if (userProfile && (!masterEmbeddingOut || !Array.isArray(masterEmbeddingOut) || masterEmbeddingOut.length === 0) && userProfile.face_enrolled_photo) {
+      try {
+        const extRes = await fetch(`${FACE_AI_URL}/extract-embedding-json`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_base64: userProfile.face_enrolled_photo })
+        });
+        if (extRes.ok) {
+          const extData = await extRes.json();
+          if (extData.success && Array.isArray(extData.embedding) && extData.embedding.length === 512) {
+            masterEmbeddingOut = extData.embedding;
+            await pool.query('UPDATE hrm_profiles SET face_embedding = $1 WHERE id = $2', [masterEmbeddingOut, userProfile.id]);
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (masterEmbeddingOut && Array.isArray(masterEmbeddingOut) && masterEmbeddingOut.length > 0 && photo) {
+      try {
+        const aiRes = await fetch(`${FACE_AI_URL}/verify-face-json`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_base64: photo,
+            master_embedding: masterEmbeddingOut,
+            threshold: 0.60
+          })
+        });
+        if (aiRes.ok) {
+          const aiData = await aiRes.json();
+          if (aiData.success) {
+            computedClockOutMatch = aiData.is_match;
+            computedClockOutScore = aiData.confidence;
+            if (!aiData.is_match) {
+              return res.status(400).json({
+                success: false,
+                error: `Verifikasi Wajah Pulang InsightFace Gagal: Wajah terdeteksi ${aiData.confidence}% cocok (ambang batas aman 60%). Pastikan tidak diwakilkan orang lain.`,
+                code: 'BIOMETRIC_MISMATCH',
+                confidence: aiData.confidence
+              });
+            }
+          }
+        }
+      } catch (aiErr) {
+        console.warn('[BiometricAI] Face AI microservice offline on clock-out:', aiErr.message);
+      }
     }
 
     const flagsJson = JSON.stringify(Array.isArray(securityFlags) ? securityFlags : []);
@@ -3741,8 +3815,8 @@ app.post('/api/attendances/clock-out', async (req, res) => {
       workDurationMinutes || 0,
       userId,
       date,
-      biometricScore != null ? biometricScore : null,
-      biometricMatch != null ? biometricMatch : null,
+      computedClockOutScore != null ? computedClockOutScore : (biometricScore != null ? biometricScore : null),
+      computedClockOutMatch != null ? computedClockOutMatch : (biometricMatch != null ? biometricMatch : null),
       serverDistance != null ? serverDistance : geofenceDistance,
       isServerGeofenceValid,
       isMockLocation === true,
@@ -4485,23 +4559,46 @@ app.post('/api/biometrics/enroll', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Format data biometrik wajah tidak valid (harus vektor 128 dimensi)' });
     }
     const descriptorStr = JSON.stringify(validDescriptor);
+
+    // Ekstraksi otomatis vektor 512-dimensi via InsightFace AI Microservice (Port 5001)
+    let aiEmbedding = null;
+    if (enrolledPhoto) {
+      try {
+        const aiRes = await fetch(`${FACE_AI_URL}/extract-embedding-json`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_base64: enrolledPhoto })
+        });
+        if (aiRes.ok) {
+          const aiData = await aiRes.json();
+          if (aiData.success && Array.isArray(aiData.embedding) && aiData.embedding.length === 512) {
+            aiEmbedding = aiData.embedding;
+            console.log(`[Biometrics] InsightFace 512D embedding generated successfully for user ${userId}`);
+          }
+        }
+      } catch (aiErr) {
+        console.warn('[Biometrics] InsightFace extraction warning on enroll:', aiErr.message);
+      }
+    }
+
     const query = `
       UPDATE hrm_profiles SET
         is_face_enrolled = true,
         face_descriptor = $1,
         face_enrolled_photo = COALESCE($2, face_enrolled_photo),
+        face_embedding = COALESCE($3, face_embedding),
         face_enrolled_at = NOW(),
         avatar_url = COALESCE($2, avatar_url),
         updated_at = NOW()
-      WHERE id::text = $3 OR nip = $3 OR LOWER(email) = LOWER($3)
+      WHERE id::text = $4 OR nip = $4 OR LOWER(email) = LOWER($4)
       RETURNING *;
     `;
-    const result = await pool.query(query, [descriptorStr, enrolledPhoto || null, userId]);
+    const result = await pool.query(query, [descriptorStr, enrolledPhoto || null, aiEmbedding, userId]);
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
     }
-    console.log(`[Biometrics] Master face enrolled successfully for user ${userId}`);
-    res.json({ success: true, data: formatUserRow(result.rows[0]), message: 'Wajah master biometrik berhasil didaftarkan' });
+    console.log(`[Biometrics] Master face enrolled successfully for user ${userId} with InsightFace 512D AI`);
+    res.json({ success: true, data: formatUserRow(result.rows[0]), message: 'Wajah master biometrik berhasil didaftarkan (InsightFace 512D)' });
   } catch (err) {
     console.error('Enroll biometrics error:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -8688,12 +8785,47 @@ app.delete('/api/kpi/:id', async (req, res) => {
   }
 });
 
+// Worker: Sinkronisasi 512-dimensi InsightFace Embedding untuk seluruh karyawan terdaftar
+async function syncAllUserBiometricEmbeddings() {
+  try {
+    const res = await pool.query(
+      "SELECT id, full_name, email, face_enrolled_photo FROM hrm_profiles WHERE (face_embedding IS NULL OR array_length(face_embedding, 1) = 0) AND face_enrolled_photo IS NOT NULL AND length(face_enrolled_photo) > 100"
+    );
+    if (res.rows.length === 0) {
+      console.log('[InsightFace AI] Seluruh profil karyawan terdaftar telah memiliki vektor biometrik 512-dimensi.');
+      return;
+    }
+    console.log(`[InsightFace AI] Menemukan ${res.rows.length} profil karyawan yang belum memiliki vektor 512-dimensi. Memproses via hrm-face-ai (port 5001)...`);
+    for (const row of res.rows) {
+      try {
+        const aiRes = await fetch(`${FACE_AI_URL}/extract-embedding-json`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_base64: row.face_enrolled_photo })
+        });
+        if (aiRes.ok) {
+          const data = await aiRes.json();
+          if (data.success && Array.isArray(data.embedding) && data.embedding.length === 512) {
+            await pool.query('UPDATE hrm_profiles SET face_embedding = $1 WHERE id = $2', [data.embedding, row.id]);
+            console.log(`[InsightFace AI] Sukses mengekstrak & menyimpan 512D vektor biometrik untuk ${row.full_name} (${row.email})`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[InsightFace AI] Gagal mengekstrak vektor untuk ${row.email}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.warn('[InsightFace AI] Worker error:', err.message);
+  }
+}
+
 // Start Server
 async function start() {
   try {
     await initDb();
     await seedInitialUsers();
     await enforceEphemeralPhotoRetention();
+    await syncAllUserBiometricEmbeddings();
 
     // Jalankan pembersihan berkala setiap 6 jam
     setInterval(enforceEphemeralPhotoRetention, 6 * 60 * 60 * 1000);
