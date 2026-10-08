@@ -73,7 +73,7 @@ import { HrmPwaAttendanceView } from '@/components/hrm/HrmPwaAttendanceView';
 export const HrmEmployeeDashboard: React.FC = () => {
   const { user, refreshUser } = useHrmAuth();
 
-  // Standalone PWA Mode Detection (Lampiran 2 & 3 eksklusif untuk PWA terinstall)
+  // Standalone PWA & Mobile Device Mode Detection (Menyamakan 100% tampilan browser HP dengan PWA)
   const isPwaStandalone = React.useMemo(() => {
     if (typeof window === 'undefined') return false;
     const urlParams = new URLSearchParams(window.location.search);
@@ -83,10 +83,11 @@ export const HrmEmployeeDashboard: React.FC = () => {
       document.referrer.includes('android-app://')
     );
     const isExplicitPwaParam = urlParams.get('source') === 'pwa' || urlParams.get('mode') === 'app';
-    const isMobile = typeof window !== 'undefined' && (window.innerWidth <= 768 || /android|iphone|ipad|ipod/i.test(navigator.userAgent));
+    const isMobile = typeof window !== 'undefined' && (window.innerWidth <= 768 || /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent));
     const isStoredPwaMode = localStorage.getItem('hrm_pwa_mode') === 'true' && isMobile;
 
-    return isStandaloneWindow || isExplicitPwaParam || isStoredPwaMode;
+    // Jika diakses dari HP (mobile) atau aplikasi terinstall PWA, tampilkan tampilan PWA murni!
+    return isStandaloneWindow || isExplicitPwaParam || isStoredPwaMode || isMobile;
   }, []);
 
   if (isPwaStandalone) {

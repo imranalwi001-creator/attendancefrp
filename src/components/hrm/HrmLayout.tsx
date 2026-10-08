@@ -74,6 +74,11 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     'kepalaregu',
   ].some((r) => currentRole.includes(r));
 
+  const isMobile = React.useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return Boolean(window.innerWidth <= 768 || /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent));
+  }, []);
+
   // Standalone PWA Mode Detection (Lampiran 2 & 3 eksklusif untuk PWA terinstall)
   const isPwaStandalone = React.useMemo(() => {
     if (typeof window === 'undefined') return false;
@@ -84,11 +89,10 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       document.referrer.includes('android-app://')
     );
     const isExplicitPwaParam = urlParams.get('source') === 'pwa' || urlParams.get('mode') === 'app';
-    const isMobile = typeof window !== 'undefined' && (window.innerWidth <= 768 || /android|iphone|ipad|ipod/i.test(navigator.userAgent));
     const isStoredPwaMode = localStorage.getItem('hrm_pwa_mode') === 'true' && isMobile;
 
     return isStandaloneWindow || isExplicitPwaParam || isStoredPwaMode;
-  }, []);
+  }, [isMobile]);
 
   // Auto-cleanup stale hrm_pwa_mode flag if opened on regular desktop browser tab
   useEffect(() => {
@@ -101,9 +105,10 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     }
   }, []);
 
-  // Manajemen / Administrator WAJIB selalu mendapatkan menu navigasi lengkap (sidebar/topbar/mobile nav).
-  // Hanya bypass layout jika BUKAN role manajemen dan sedang membuka presensi PWA mandiri.
-  if (!isManagementRole && isPwaStandalone && (location.pathname === '/presensi' || location.pathname === '/dashboard')) {
+  // Sinkronisasi Sempurna: Tampilan browser HP wajib sama persis 100% dengan tampilan PWA (Lampiran 1 & 2).
+  // Hapus layout shell web (header ganda, bottom nav ganda, install banner) saat membuka presensi atau dashboard di mobile browser.
+  const isAttendanceOrEmployeeView = location.pathname === '/presensi' || (location.pathname === '/dashboard' && !['superadmin'].includes(currentRole));
+  if ((isPwaStandalone || isMobile) && isAttendanceOrEmployeeView) {
     return <div className="min-h-screen bg-[#062225] text-foreground">{children}</div>;
   }
 

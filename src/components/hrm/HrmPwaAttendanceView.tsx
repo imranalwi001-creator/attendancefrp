@@ -74,6 +74,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import defaultAvatar from '@/assets/logo.png';
+import { resolveEffectiveShift, checkShiftClockInWindow } from '@/lib/hrmShiftResolver';
+import { compressImageFile } from '@/lib/imageCompressor';
 
 interface HrmPwaAttendanceViewProps {
   onSwitchToDesktop?: () => void;
@@ -541,39 +543,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     try {
       await hrmService.syncWithBackend().catch(() => null);
 
-      // 1. Shift Sinkron Database
+      // 1. Shift Sinkron Database & Roster Terjadwal Hari Ini (Bulletproof Global Resolver)
       const shifts = hrmService.getShifts();
-      const baseShift =
-        shifts.find((s) => s.id === user.shiftId) ||
-        shifts.find((s) => s.name === user.shiftName) ||
-        shifts[0] ||
-        null;
-      let effectiveShift: Shift | null = baseShift ? { ...baseShift } : null;
-
-      if (!effectiveShift && user.shiftName) {
-        effectiveShift = {
-          id: user.shiftId || 'shift-db',
-          code: 'SHF',
-          name: user.shiftName,
-          startTime: user.shiftStartTime || '07:30',
-          endTime: user.shiftEndTime || '16:30',
-          lateToleranceMinutes: user.lateToleranceMinutes ?? 15,
-        };
-      } else if (effectiveShift && user.shiftName) {
-        effectiveShift.name = user.shiftName;
-      }
-
-      if (effectiveShift) {
-        if (user.shiftStartTime) effectiveShift.startTime = user.shiftStartTime;
-        if (user.shiftEndTime) effectiveShift.endTime = user.shiftEndTime;
-        if (user.customStartTime) effectiveShift.startTime = user.customStartTime;
-        if (user.customEndTime) effectiveShift.endTime = user.customEndTime;
-        if (user.lateToleranceMinutes !== undefined) effectiveShift.lateToleranceMinutes = user.lateToleranceMinutes;
-      }
+      const todayStr = getTodayDateStr();
+      const dailySched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
+      const effectiveShift = resolveEffectiveShift(user, shifts, dailySched);
       setUserShift(effectiveShift);
 
       // 2. Attendance Hari Ini (Tarik langsung dari PostgreSQL via /api/attendances/today)
-      const todayStr = getTodayDateStr();
       let todayAtt: AttendanceRecord | undefined = undefined;
 
       try {
@@ -1964,10 +1941,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       if (actionType === 'clock_in' && userShift?.startTime) {
         const [sH, sM] = userShift.startTime.split(':').map(Number);
         const [cH, cM] = [now.getHours(), now.getMinutes()];
-        const diff = (cH * 60 + cM) - (sH * 60 + sM);
-        if (diff > 0) {
+        const startMins = sH * 60 + sM;
+        let curMins = cH * 60 + cM;
+        const isCrossDay = Boolean(userShift.isCrossDay || (userShift.endTime && userShift.endTime < userShift.startTime));
+
+        let diff = curMins - startMins;
+        if (isCrossDay && curMins < 720 && startMins >= 720) {
+          diff = (curMins + 1440) - startMins;
+        }
+
+        const tolerance = userShift.lateToleranceMinutes ?? 15;
+        if (diff > tolerance) {
           lateMinutes = diff;
           status = 'terlambat';
+        } else {
+          lateMinutes = 0;
+          status = 'hadir';
         }
       }
 
@@ -2162,21 +2151,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
   };
 
-  // Photo File Upload Reader Helper
-  const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>, setter: (url: string) => void) => {
+  // Photo File Upload Reader Helper dengan Kompresi Otomatis Canvas
+  const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>, setter: (url: string) => void) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
-      toast.error('Ukuran file maksimal 8 MB');
-      return;
+    try {
+      toast.loading('Mengompresi gambar dokumen...', { id: 'compress-photo' });
+      const compressedUrl = await compressImageFile(file, 960, 960, 0.72);
+      setter(compressedUrl);
+      toast.success('Foto bukti dokumen siap dilampirkan', { id: 'compress-photo' });
+    } catch (err: any) {
+      toast.error('Gagal memproses gambar: ' + (err.message || 'Format tidak didukung'), { id: 'compress-photo' });
     }
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      if (event.target?.result) {
-        setter(event.target.result as string);
-      }
-    };
-    reader.readAsDataURL(file);
   };
 
   // Password Change
@@ -2224,29 +2210,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   }, [userLeaves, todayDateStr]);
   const hasActiveLeaveToday = Boolean(activeLeaveToday);
 
-  // 2. Kesesuaian Jam Shift Karyawan (Pagi, Siang, Malam)
-  // Contoh: Jika shift 2 (14:00 - 22:00), maka saat jam shift 1 dan 3 tombol masuk dinonaktifkan
+  // 2. Kesesuaian Jam Shift Karyawan (Pagi, Siang, Malam & Lintas Hari)
+  // Mendukung karyawan yang datang lebih cepat (Early Clock-In hingga 120 menit / 2 jam sebelum jam shift)
   const isShiftWindowActive = useMemo(() => {
-    if (!userShift?.startTime || !userShift?.endTime) return true;
-    const now = currentTime;
-    const nowMins = now.getHours() * 60 + now.getMinutes();
-
-    const [sH, sM] = userShift.startTime.split(':').map(Number);
-    const startMins = (sH || 0) * 60 + (sM || 0);
-
-    const [eH, eM] = userShift.endTime.split(':').map(Number);
-    const endMins = (eH || 0) * 60 + (eM || 0);
-
-    const isCrossDay = userShift.isCrossDay || endMins < startMins;
-    const openMins = (startMins - 60 + 1440) % 1440; // Terbuka 60 menit sebelum shift
-
-    if (isCrossDay) {
-      if (nowMins >= openMins) return true;
-      if (nowMins < endMins) return true;
-      return false;
-    } else {
-      return nowMins >= openMins && nowMins <= endMins;
-    }
+    return checkShiftClockInWindow(userShift, currentTime).isOpen;
   }, [currentTime, userShift]);
 
   // 3. Pengecualian Aktif Di Luar Shift:
@@ -2293,10 +2260,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
     if (!isInsideCoordinates) return 'DI LUAR RADIUS TITIK POS';
     if (!isShiftWindowActive && !hasApprovedOvertimeOrSubstituteToday && !isFieldSpecial) {
-      return `DI LUAR JADWAL SHIFT (${userShift?.startTime?.substring(0, 5) || '08:00'} - ${userShift?.endTime?.substring(0, 5) || '17:00'})`;
+      const windowCheck = checkShiftClockInWindow(userShift, currentTime);
+      return windowCheck.reason || `DI LUAR JADWAL SHIFT (${userShift?.startTime?.substring(0, 5) || '08:00'} - ${userShift?.endTime?.substring(0, 5) || '17:00'})`;
     }
     return null;
-  }, [hasClockedIn, todayAttendance, hasActiveLeaveToday, activeLeaveToday, isInsideCoordinates, isShiftWindowActive, hasApprovedOvertimeOrSubstituteToday, isFieldSpecial, userShift]);
+  }, [hasClockedIn, todayAttendance, hasActiveLeaveToday, activeLeaveToday, isInsideCoordinates, isShiftWindowActive, hasApprovedOvertimeOrSubstituteToday, isFieldSpecial, userShift, currentTime]);
 
   // Tombol Absen Pulang:
   // Ketika submit face masuk selesai, tombol absen pulang otomatis NON-AKTIF
@@ -3353,7 +3321,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     : !isInsideCoordinates
                     ? `DI LUAR POS`
                     : !isShiftWindowActive && !hasApprovedOvertimeOrSubstituteToday && !isFieldSpecial
-                    ? `DI LUAR SHIFT`
+                    ? `BELUM BUKA (${checkShiftClockInWindow(userShift, currentTime).openTimeStr || userShift?.startTime || '08:00'})`
                     : hasApprovedOvertimeOrSubstituteToday
                     ? `MASUK (LEMBUR)`
                     : `ABSEN MASUK (${userShift?.startTime || '08:00'})`}
@@ -5073,10 +5041,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             if (actionType === 'clock_in' && userShift?.startTime) {
               const [sH, sM] = userShift.startTime.split(':').map(Number);
               const [cH, cM] = [now.getHours(), now.getMinutes()];
-              const diff = (cH * 60 + cM) - (sH * 60 + sM);
-              if (diff > 0) {
+              const startMins = sH * 60 + sM;
+              let curMins = cH * 60 + cM;
+              const isCrossDay = Boolean(userShift.isCrossDay || (userShift.endTime && userShift.endTime < userShift.startTime));
+
+              let diff = curMins - startMins;
+              if (isCrossDay && curMins < 720 && startMins >= 720) {
+                diff = (curMins + 1440) - startMins;
+              }
+
+              const tolerance = userShift.lateToleranceMinutes ?? 15;
+              if (diff > tolerance) {
                 lateMinutes = diff;
                 status = 'terlambat';
+              } else {
+                lateMinutes = 0;
+                status = 'hadir';
               }
             }
 

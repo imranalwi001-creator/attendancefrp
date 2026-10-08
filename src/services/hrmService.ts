@@ -634,11 +634,25 @@ export const sanitizeAttendanceRecords = (records: any[]): any[] => {
   });
 };
 
+export const sanitizeLeaveRecords = (records: any[]): any[] => {
+  if (!Array.isArray(records)) return [];
+  // Simpan foto bukti lengkap hanya untuk 3 pengajuan paling baru, sisanya buang base64 untuk menghemat kuota
+  return records.slice(0, 40).map((l, idx) => {
+    const clean = { ...l };
+    if (idx >= 3 && typeof clean.attachmentUrl === 'string' && clean.attachmentUrl.startsWith('data:image/')) {
+      clean.attachmentUrl = '[Tersimpan di Cloud PostgreSQL]';
+    }
+    return clean;
+  });
+};
+
 export const safeSetJson = (key: string, data: any): boolean => {
   try {
     let toStore = data;
     if (key === STORAGE_KEYS.ATTENDANCE && Array.isArray(data)) {
       toStore = sanitizeAttendanceRecords(data);
+    } else if (key === STORAGE_KEYS.LEAVES && Array.isArray(data)) {
+      toStore = sanitizeLeaveRecords(data);
     } else if (typeof data === 'object' && data !== null) {
       toStore = stripLargeMedia(data);
     }
@@ -661,15 +675,34 @@ export const safeSetJson = (key: string, data: any): boolean => {
         }
       }
 
-      // 2. Remove temporary or non-critical storage items
+      // 2. Prune local leaves attachments to release storage quota
+      const rawLeaves = localStorage.getItem(STORAGE_KEYS.LEAVES);
+      if (rawLeaves) {
+        try {
+          const parsedLeaves = JSON.parse(rawLeaves);
+          if (Array.isArray(parsedLeaves)) {
+            const strippedLeaves = parsedLeaves.map((l: any, i: number) => ({
+              ...l,
+              attachmentUrl: i === 0 ? l.attachmentUrl : '[Tersimpan di PostgreSQL]',
+            }));
+            localStorage.setItem(STORAGE_KEYS.LEAVES, JSON.stringify(strippedLeaves.slice(0, 20)));
+          }
+        } catch {
+          localStorage.removeItem(STORAGE_KEYS.LEAVES);
+        }
+      }
+
+      // 3. Remove temporary or non-critical storage items
       try {
         localStorage.removeItem(STORAGE_KEYS.PERIMETER_VIOLATIONS);
       } catch {}
 
-      // 3. Retry saving lean payload
+      // 4. Retry saving lean payload
       let fallbackData = data;
       if (key === STORAGE_KEYS.ATTENDANCE && Array.isArray(data)) {
         fallbackData = sanitizeAttendanceRecords(data).slice(0, 15);
+      } else if (key === STORAGE_KEYS.LEAVES && Array.isArray(data)) {
+        fallbackData = sanitizeLeaveRecords(data);
       } else {
         fallbackData = stripLargeMedia(data);
       }
@@ -3401,7 +3434,7 @@ export const hrmService = {
     };
 
     leaves.unshift(newLeave);
-    localStorage.setItem(STORAGE_KEYS.LEAVES, JSON.stringify(leaves));
+    safeSetJson(STORAGE_KEYS.LEAVES, leaves);
     window.dispatchEvent(new Event('hrm_leaves_updated'));
 
     // Push to backend database asynchronously with WA alert
@@ -3479,7 +3512,7 @@ export const hrmService = {
       }
     }
 
-    localStorage.setItem(STORAGE_KEYS.LEAVES, JSON.stringify(leaves));
+    safeSetJson(STORAGE_KEYS.LEAVES, leaves);
     window.dispatchEvent(new Event('hrm_leaves_updated'));
     window.dispatchEvent(new Event('hrm_data_updated'));
 
