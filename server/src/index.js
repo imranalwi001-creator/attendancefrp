@@ -304,7 +304,7 @@ app.post('/api/users/:id/bind-device', async (req, res) => {
   }
 });
 
-// Helper: Safely parse 128-D face descriptor from any format (JSON string, array, or serialized indexed object)
+// Helper: Safely parse 512-D (InsightFace AI) or 128-D face descriptor from any format (JSON string, array, or serialized indexed object)
 function parseDescriptorRow(raw) {
   if (!raw) return null;
   let parsed = raw;
@@ -323,29 +323,12 @@ function parseDescriptorRow(raw) {
     }
   }
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    if (parsed[0] !== undefined || parsed['0'] !== undefined) {
-      const arr = [];
-      for (let i = 0; i < 128; i++) {
-        const val = parsed[i] !== undefined ? parsed[i] : parsed[String(i)];
-        if (typeof val === 'number' && Number.isFinite(val)) {
-          arr.push(val);
-        } else if (typeof val === 'string' && !isNaN(Number(val))) {
-          arr.push(Number(val));
-        } else {
-          break;
-        }
-      }
-      if (arr.length === 128) {
-        parsed = arr;
-      } else {
-        const values = Object.values(parsed).map(Number).filter(Number.isFinite);
-        if (values.length === 128) {
-          parsed = values;
-        }
-      }
+    const values = Object.values(parsed).map(Number).filter(Number.isFinite);
+    if (values.length === 512 || values.length === 128) {
+      parsed = values;
     }
   }
-  if (Array.isArray(parsed) && parsed.length === 128) {
+  if (Array.isArray(parsed) && (parsed.length === 512 || parsed.length === 128)) {
     const cleanNumbers = parsed.map(Number);
     if (cleanNumbers.every(Number.isFinite)) {
       return cleanNumbers;
@@ -1670,13 +1653,14 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       }
     }
 
-    if (masterEmbedding && Array.isArray(masterEmbedding) && masterEmbedding.length > 0 && photo) {
+    const photoToVerify = req.body.cleanPhoto || photo;
+    if (masterEmbedding && Array.isArray(masterEmbedding) && masterEmbedding.length > 0 && photoToVerify) {
       try {
         const aiRes = await fetch(`${FACE_AI_URL}/verify-face-json`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            image_base64: photo,
+            image_base64: photoToVerify,
             master_embedding: masterEmbedding,
             threshold: 0.60
           })
@@ -1697,6 +1681,12 @@ app.post('/api/attendances/clock-in', async (req, res) => {
               });
             }
             console.log(`[InsightFace AI] Clock-in face matched successfully: ${aiData.confidence}% for user ${userProfile.full_name}`);
+          } else {
+            return res.status(400).json({
+              success: false,
+              error: `Wajah tidak terdeteksi oleh AI pada kamera. Harap pastikan seluruh wajah terlihat jelas menghadap kamera dan berada di area berpenerangan cukup.`,
+              code: 'FACE_NOT_DETECTED'
+            });
           }
         }
       } catch (aiErr) {
@@ -3785,13 +3775,14 @@ app.post('/api/attendances/clock-out', async (req, res) => {
       } catch (e) {}
     }
 
-    if (masterEmbeddingOut && Array.isArray(masterEmbeddingOut) && masterEmbeddingOut.length > 0 && photo) {
+    const photoToVerifyOut = req.body.cleanPhoto || photo;
+    if (masterEmbeddingOut && Array.isArray(masterEmbeddingOut) && masterEmbeddingOut.length > 0 && photoToVerifyOut) {
       try {
         const aiRes = await fetch(`${FACE_AI_URL}/verify-face-json`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            image_base64: photo,
+            image_base64: photoToVerifyOut,
             master_embedding: masterEmbeddingOut,
             threshold: 0.60
           })
@@ -3809,6 +3800,12 @@ app.post('/api/attendances/clock-out', async (req, res) => {
                 confidence: aiData.confidence
               });
             }
+          } else {
+            return res.status(400).json({
+              success: false,
+              error: `Wajah tidak terdeteksi oleh AI pada kamera. Harap pastikan seluruh wajah terlihat jelas menghadap kamera dan berada di area berpenerangan cukup.`,
+              code: 'FACE_NOT_DETECTED'
+            });
           }
         }
       } catch (aiErr) {
@@ -4579,18 +4576,15 @@ app.get('/api/geofence/violations', async (req, res) => {
 // ─── 4B. BIOMETRIC FACE ENROLLMENT & IDENTITY MANAGEMENT ───────────────────────
 app.post('/api/biometrics/enroll', async (req, res) => {
   const { userId, faceDescriptor, enrolledPhoto } = req.body;
-  if (!userId || !faceDescriptor) {
-    return res.status(400).json({ success: false, error: 'User ID dan data biometrik wajah wajib disertakan' });
+  if (!userId || (!faceDescriptor && !enrolledPhoto)) {
+    return res.status(400).json({ success: false, error: 'User ID dan foto atau data biometrik wajah wajib disertakan' });
   }
   try {
-    const validDescriptor = parseDescriptorRow(faceDescriptor);
-    if (!validDescriptor || validDescriptor.length !== 128) {
-      return res.status(400).json({ success: false, error: 'Format data biometrik wajah tidak valid (harus vektor 128 dimensi)' });
-    }
-    const descriptorStr = JSON.stringify(validDescriptor);
+    let validDescriptor = faceDescriptor ? parseDescriptorRow(faceDescriptor) : null;
+    let descriptorStr = validDescriptor ? JSON.stringify(validDescriptor) : null;
 
     // Ekstraksi otomatis vektor 512-dimensi via InsightFace AI Microservice (Port 5001)
-    let aiEmbedding = null;
+    let aiEmbedding = (validDescriptor && validDescriptor.length === 512) ? validDescriptor : null;
     if (enrolledPhoto) {
       try {
         const aiRes = await fetch(`${FACE_AI_URL}/extract-embedding-json`, {
@@ -4602,6 +4596,9 @@ app.post('/api/biometrics/enroll', async (req, res) => {
           const aiData = await aiRes.json();
           if (aiData.success && Array.isArray(aiData.embedding) && aiData.embedding.length === 512) {
             aiEmbedding = aiData.embedding;
+            if (!descriptorStr) {
+              descriptorStr = JSON.stringify(aiEmbedding);
+            }
             console.log(`[Biometrics] InsightFace 512D embedding generated successfully for user ${userId}`);
           }
         }
@@ -4613,7 +4610,7 @@ app.post('/api/biometrics/enroll', async (req, res) => {
     const query = `
       UPDATE hrm_profiles SET
         is_face_enrolled = true,
-        face_descriptor = $1,
+        face_descriptor = COALESCE($1, face_descriptor),
         face_enrolled_photo = COALESCE($2, face_enrolled_photo),
         face_embedding = COALESCE($3, face_embedding),
         face_enrolled_at = NOW(),
@@ -4642,6 +4639,7 @@ app.post('/api/biometrics/reset/:userId', async (req, res) => {
         is_face_enrolled = false,
         face_descriptor = NULL,
         face_enrolled_photo = NULL,
+        face_embedding = NULL,
         face_enrolled_at = NULL,
         updated_at = NOW()
       WHERE id::text = $1 OR nip = $1 OR LOWER(email) = LOWER($1)

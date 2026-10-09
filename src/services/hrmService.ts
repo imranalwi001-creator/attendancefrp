@@ -2577,6 +2577,7 @@ export const hrmService = {
     latitude?: number;
     longitude?: number;
     photoUrl?: string;
+    cleanPhoto?: string;
     notes?: string;
     deviceId?: string;
     isMockSuspected?: boolean;
@@ -2763,6 +2764,7 @@ export const hrmService = {
       date: today,
       time: clockInStr,
       photo: data.photoUrl,
+      cleanPhoto: data.cleanPhoto,
       latitude: data.latitude,
       longitude: data.longitude,
       status,
@@ -2791,6 +2793,7 @@ export const hrmService = {
     latitude?: number;
     longitude?: number;
     photoUrl?: string;
+    cleanPhoto?: string;
     notes?: string;
     deviceId?: string;
     isMockSuspected?: boolean;
@@ -2899,6 +2902,7 @@ export const hrmService = {
       date: existing.attendanceDate,
       time: clockOutStr,
       photo: data.photoUrl,
+      cleanPhoto: data.cleanPhoto,
       latitude: data.latitude,
       longitude: data.longitude,
       earlyLeavingMinutes: existing.earlyLeavingMinutes || 0,
@@ -2931,6 +2935,7 @@ export const hrmService = {
     lateMinutes?: number;
     clockInPhoto?: string;
     clockOutPhoto?: string;
+    cleanPhoto?: string;
     latitude?: number;
     longitude?: number;
     locationName?: string;
@@ -2954,6 +2959,7 @@ export const hrmService = {
           latitude: data.latitude,
           longitude: data.longitude,
           photoUrl: data.clockOutPhoto,
+          cleanPhoto: data.cleanPhoto,
           notes: data.notes || (data.locationName ? `[Pos: ${data.locationName}]` : undefined),
           biometricScore: data.biometricConfidence,
           biometricMatch: data.isVerifiedBiometric,
@@ -2983,6 +2989,7 @@ export const hrmService = {
       latitude: data.latitude,
       longitude: data.longitude,
       photoUrl: data.clockInPhoto,
+      cleanPhoto: data.cleanPhoto,
       notes: data.notes || (data.locationName ? `[Pos: ${data.locationName}]` : undefined),
       biometricScore: data.biometricConfidence,
       biometricMatch: data.isVerifiedBiometric,

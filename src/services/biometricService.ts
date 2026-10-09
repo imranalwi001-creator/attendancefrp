@@ -40,10 +40,10 @@ export interface FaceDetectionDetail {
 }
 
 /**
- * Robustly parses and normalizes a 128-dimensional facial biometric descriptor from any format
- * (Array, Float32Array, JSON string, or serialized indexed Object)
+ * Robustly parses and normalizes facial biometric descriptor from any format
+ * Supports both 512-dimensional (InsightFace AI MobileFaceNet) and 128-dimensional (face-api.js) vectors.
  */
-export function parseFaceDescriptor(raw: any, expectedDim: number = 128): number[] | null {
+export function parseFaceDescriptor(raw: any, expectedDim?: number): number[] | null {
   if (!raw) return null;
   let parsed = raw;
 
@@ -70,34 +70,21 @@ export function parseFaceDescriptor(raw: any, expectedDim: number = 128): number
 
   // Handle serialized object format: { "0": 0.12, "1": -0.05, ... }
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    if (parsed[0] !== undefined || parsed['0'] !== undefined) {
-      const arr: number[] = [];
-      for (let i = 0; i < expectedDim; i++) {
-        const val = parsed[i] !== undefined ? parsed[i] : parsed[String(i)];
-        if (typeof val === 'number' && Number.isFinite(val)) {
-          arr.push(val);
-        } else if (typeof val === 'string' && !isNaN(Number(val))) {
-          arr.push(Number(val));
-        } else {
-          break;
-        }
-      }
-      if (arr.length === expectedDim) {
-        parsed = arr;
-      } else {
-        const values = Object.values(parsed).map(Number).filter(Number.isFinite);
-        if (values.length === expectedDim) {
-          parsed = values;
-        }
-      }
+    const values = Object.values(parsed).map(Number).filter(Number.isFinite);
+    if (expectedDim ? values.length === expectedDim : (values.length === 512 || values.length === 128)) {
+      parsed = values;
     }
   }
 
-  if (Array.isArray(parsed) && parsed.length === expectedDim) {
-    const cleanNumbers = parsed.map(Number);
-    const allValid = cleanNumbers.every((n) => Number.isFinite(n));
-    if (allValid) {
-      return cleanNumbers;
+  if (Array.isArray(parsed)) {
+    const len = parsed.length;
+    const isValidDim = expectedDim ? len === expectedDim : (len === 512 || len === 128);
+    if (isValidDim) {
+      const cleanNumbers = parsed.map(Number);
+      const allValid = cleanNumbers.every((n) => Number.isFinite(n));
+      if (allValid) {
+        return cleanNumbers;
+      }
     }
   }
 
@@ -125,7 +112,7 @@ export class BiometricService {
   /**
    * Helper alias for parseFaceDescriptor
    */
-  public parseDescriptor(raw: any, expectedDim: number = 128): number[] | null {
+  public parseDescriptor(raw: any, expectedDim?: number): number[] | null {
     return parseFaceDescriptor(raw, expectedDim);
   }
 
@@ -669,17 +656,21 @@ export class BiometricService {
    * Standard threshold in face-api.js: distance <= 0.58 is a match.
    */
   public calculateEuclideanDistance(vecA: number[], vecB: number[]): number {
-    if (!vecA || !vecB || vecA.length !== 128 || vecB.length !== 128) return 1.0;
+    if (!vecA || !vecB || vecA.length !== vecB.length || vecA.length === 0) return 1.0;
     try {
-      return faceapi.euclideanDistance(vecA, vecB);
-    } catch {
-      let sum = 0;
-      for (let i = 0; i < 128; i++) {
-        const diff = vecA[i] - vecB[i];
-        sum += diff * diff;
+      if (vecA.length === 128) {
+        return faceapi.euclideanDistance(vecA, vecB);
       }
-      return Math.sqrt(sum);
+    } catch {
+      // Fallback manual calculation
     }
+    let sum = 0;
+    const len = vecA.length;
+    for (let i = 0; i < len; i++) {
+      const diff = vecA[i] - vecB[i];
+      sum += diff * diff;
+    }
+    return Math.sqrt(sum);
   }
 
   /**
@@ -687,12 +678,19 @@ export class BiometricService {
    * S = (u . v) / (||u|| ||v||)
    */
   public calculateCosineSimilarity(vecA: number[], vecB: number[]): number {
-    if (!vecA || !vecB || vecA.length !== 128 || vecB.length !== 128) return 0;
+    if (!vecA || !vecB || vecA.length !== vecB.length || vecA.length === 0) return 0;
     let dot = 0;
-    for (let i = 0; i < 128; i++) {
+    let normA = 0;
+    let normB = 0;
+    const len = vecA.length;
+    for (let i = 0; i < len; i++) {
       dot += vecA[i] * vecB[i];
+      normA += vecA[i] * vecA[i];
+      normB += vecB[i] * vecB[i];
     }
-    return Math.max(0, Math.min(1, dot));
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    if (denom === 0) return 0;
+    return Math.max(0, Math.min(1, dot / denom));
   }
 
   /**
