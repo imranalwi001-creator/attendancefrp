@@ -1344,24 +1344,6 @@ function calculateHaversineMeters(lat1, lon1, lat2, lon2) {
   return Math.round(R * c * 10) / 10;
 }
 
-// Helper: 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) yang 100% Bebas Aturan Divisi & Pos OGS
-function isExemptFieldOfficer(user) {
-  if (!user) return false;
-  const email = (user.email || '').toLowerCase().trim();
-  const rawNip = (user.nip || '').trim().toUpperCase();
-  const cleanNip = rawNip.replace(/[\s.]/g, '');
-  const id = (user.id || user.userId || '').toString().toLowerCase();
-
-  const exemptEmails = ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'];
-  const exemptNips = ['FRP07065', 'FR07066', 'FRP07046', 'FR07065', 'FR07046'];
-  const exemptIds = [
-    'ebf10b16-ab2f-4b53-ab22-b3ffc00694db',
-    '2ce41a19-0c65-45d3-913e-a68a02203fe2',
-    '0a49f92e-5733-4b72-947c-7361f9490632'
-  ];
-
-  return exemptEmails.includes(email) || exemptNips.includes(cleanNip) || exemptIds.includes(id);
-}
 
 app.post('/api/attendances/clock-in', async (req, res) => {
   const {
