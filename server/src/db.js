@@ -479,9 +479,12 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS current_active_post_id UUID,
       ADD COLUMN IF NOT EXISTS current_active_post_name VARCHAR(255),
       ADD COLUMN IF NOT EXISTS current_active_post_entered_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS custom_start_time VARCHAR(10) DEFAULT '07:30',
-      ADD COLUMN IF NOT EXISTS custom_end_time VARCHAR(10) DEFAULT '16:30',
+      ADD COLUMN IF NOT EXISTS custom_start_time VARCHAR(10) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS custom_end_time VARCHAR(10) DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS late_tolerance_minutes INTEGER DEFAULT 15;
+
+      ALTER TABLE hrm_profiles ALTER COLUMN custom_start_time DROP DEFAULT;
+      ALTER TABLE hrm_profiles ALTER COLUMN custom_end_time DROP DEFAULT;
 
       -- ─── 16. LAPOR KENDALA PERJALANAN & DISPENSASI DARURAT ───
       CREATE TABLE IF NOT EXISTS hrm_field_travel_incidents (

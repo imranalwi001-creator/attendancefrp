@@ -354,9 +354,44 @@ function parseDescriptorRow(raw) {
   return null;
 }
 
+// Helper: 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) yang 100% Bebas Aturan Divisi & Pos OGS
+function isExemptFieldOfficer(user) {
+  if (!user) return false;
+  const email = (user.email || '').toLowerCase().trim();
+  const rawNip = (user.nip || '').trim().toUpperCase();
+  const cleanNip = rawNip.replace(/[\s.]/g, '');
+  const id = (user.id || user.userId || '').toString().toLowerCase();
+
+  const exemptEmails = ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'];
+  const exemptNips = ['FRP07065', 'FR07066', 'FRP07046', 'FR07065', 'FR07046'];
+  const exemptIds = [
+    'ebf10b16-ab2f-4b53-ab22-b3ffc00694db',
+    '2ce41a19-0c65-45d3-913e-a68a02203fe2',
+    '0a49f92e-5733-4b72-947c-7361f9490632'
+  ];
+
+  return exemptEmails.includes(email) || exemptNips.includes(cleanNip) || exemptIds.includes(id);
+}
+
 // Helper: Format PostgreSQL row to match TypeScript UserProfile
 function formatUserRow(r) {
   const descriptor = parseDescriptorRow(r.face_descriptor) || parseDescriptorRow(r.face_embedding);
+  const isSpecial = isExemptFieldOfficer(r);
+  
+  // Prioritas jam shift:
+  // 1. Jika terdaftar shift_id resmi di master shifts, gunakan jam shift resmi!
+  // 2. Jika petugas khusus pimpinan dan punya custom_start_time, gunakan jam dinas pimpinan
+  // 3. Jika belum memiliki shift, set null (bukan default palsu 07:30)
+  let resolvedStart = null;
+  let resolvedEnd = null;
+  if (r.shift_id && r.shift_start_time) {
+    resolvedStart = r.shift_start_time.substring(0, 5);
+    resolvedEnd = r.shift_end_time ? r.shift_end_time.substring(0, 5) : '17:00';
+  } else if (isSpecial) {
+    resolvedStart = r.custom_start_time ? r.custom_start_time.substring(0, 5) : '08:00';
+    resolvedEnd = r.custom_end_time ? r.custom_end_time.substring(0, 5) : '16:00';
+  }
+
   return {
     id: r.id,
     nip: r.nip,
@@ -382,10 +417,10 @@ function formatUserRow(r) {
     baseSalary: r.base_salary ? parseFloat(r.base_salary) : 4045050,
     shiftId: r.shift_id,
     shiftName: r.shift_name || '',
-    shiftStartTime: r.custom_start_time ? r.custom_start_time.substring(0, 5) : (r.shift_start_time ? r.shift_start_time.substring(0, 5) : '08:00'),
-    shiftEndTime: r.custom_end_time ? r.custom_end_time.substring(0, 5) : (r.shift_end_time ? r.shift_end_time.substring(0, 5) : '17:00'),
-    customStartTime: r.custom_start_time ? r.custom_start_time.substring(0, 5) : null,
-    customEndTime: r.custom_end_time ? r.custom_end_time.substring(0, 5) : null,
+    shiftStartTime: resolvedStart,
+    shiftEndTime: resolvedEnd,
+    customStartTime: isSpecial && r.custom_start_time ? r.custom_start_time.substring(0, 5) : null,
+    customEndTime: isSpecial && r.custom_end_time ? r.custom_end_time.substring(0, 5) : null,
     lateToleranceMinutes: r.late_tolerance_minutes != null ? parseInt(r.late_tolerance_minutes) : 15,
     avatarUrl: r.avatar_url || r.face_photo_url || r.face_enrolled_photo || null,
     gender: r.gender,
@@ -1375,22 +1410,32 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       const hasApprovedException = (otRes.rows.length > 0) || (subRes.rows.length > 0);
 
       if (!hasApprovedException) {
-        let shiftStartTime = userProfile.custom_start_time || '07:30';
-        let shiftEndTime = userProfile.custom_end_time || '16:30';
+        if (!userProfile.shift_id) {
+          return res.status(400).json({
+            success: false,
+            error: 'Presensi Masuk Ditolak: Akun Anda belum memiliki penugasan shift kerja. Silakan hubungi HRD atau Administrator.',
+          });
+        }
+
+        let shiftStartTime = '07:30';
+        let shiftEndTime = '16:30';
         let isCrossDay = false;
 
-        if (userProfile.shift_id) {
-          const shiftRes = await pool.query(
-            `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
-            [userProfile.shift_id]
-          );
-          if (shiftRes.rows.length > 0) {
-            const sh = shiftRes.rows[0];
-            shiftStartTime = userProfile.custom_start_time || sh.start_time?.substring(0, 5) || '07:30';
-            shiftEndTime = userProfile.custom_end_time || sh.end_time?.substring(0, 5) || '16:30';
-            isCrossDay = Boolean(sh.is_cross_day);
-          }
+        const shiftRes = await pool.query(
+          `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
+          [userProfile.shift_id]
+        );
+        if (shiftRes.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            error: 'Presensi Masuk Ditolak: Data shift kerja Anda tidak ditemukan di sistem database.',
+          });
         }
+
+        const sh = shiftRes.rows[0];
+        shiftStartTime = sh.start_time ? sh.start_time.substring(0, 5) : '07:30';
+        shiftEndTime = sh.end_time ? sh.end_time.substring(0, 5) : '16:30';
+        isCrossDay = Boolean(sh.is_cross_day);
 
         const [sH, sM] = shiftStartTime.split(':').map(Number);
         const [eH, eM] = shiftEndTime.split(':').map(Number);
@@ -3554,8 +3599,8 @@ app.post('/api/attendances/clock-out', async (req, res) => {
         (attRes.rows.length > 0 && (attRes.rows[0].is_early_leave || attRes.rows[0].early_leave_approved || attRes.rows[0].is_remote_unlocked));
 
       if (!isEmergencyPermitted) {
-        let shiftStartTime = userProfile.custom_start_time || '07:30';
-        let shiftEndTime = userProfile.custom_end_time || '16:30';
+        let shiftStartTime = '07:30';
+        let shiftEndTime = '16:30';
         let isCrossDay = false;
 
         if (userProfile.shift_id) {
@@ -3565,8 +3610,8 @@ app.post('/api/attendances/clock-out', async (req, res) => {
           );
           if (shiftRes.rows.length > 0) {
             const sh = shiftRes.rows[0];
-            shiftStartTime = userProfile.custom_start_time || sh.start_time?.substring(0, 5) || '07:30';
-            shiftEndTime = userProfile.custom_end_time || sh.end_time?.substring(0, 5) || '16:30';
+            shiftStartTime = sh.start_time ? sh.start_time.substring(0, 5) : '07:30';
+            shiftEndTime = sh.end_time ? sh.end_time.substring(0, 5) : '16:30';
             isCrossDay = Boolean(sh.is_cross_day);
           }
         }

@@ -1707,6 +1707,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     try {
       // Pengecualian Petugas Lapangan Khusus Pimpinan & Petugas Distribusi Online Mobile
       const isExemptOfficer = isSpecialDutyOfficer(user);
+      const isOnCallAction = actionType === 'emergency_on_call' || actionType === 'emergency_on_call_out';
 
       const distToOgs = currentCoords
         ? geofenceService.calculateDistance(currentCoords, { latitude: -4.787904, longitude: 119.613399 })
@@ -2278,16 +2279,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   // - Belum pernah absen masuk (!hasClockedIn)
   // - Terdeteksi di dalam titik koordinat pos/kantor (isInsideCoordinates)
   // - TIDAK sedang cuti, izin, sakit hari ini (!hasActiveLeaveToday)
-  // - Sesuai shift aktif ATAU memiliki lembur/pengganti disetujui ATAU petugas lapangan khusus
+  // - Sudah memiliki shift aktif yang valid (bukan unassigned)
+  // - Sesuai jendela shift aktif ATAU memiliki lembur/pengganti disetujui ATAU petugas lapangan khusus
+  const isShiftAssigned = userShift?.id !== 'unassigned' && Boolean(userShift?.startTime);
   const isClockInAllowed =
     !hasClockedIn &&
     isInsideCoordinates &&
     !hasActiveLeaveToday &&
+    (isShiftAssigned || isFieldSpecial) &&
     (isShiftWindowActive || hasApprovedOvertimeOrSubstituteToday || isFieldSpecial);
 
   // Keterangan Alasan Non-Aktif Tombol Absen Masuk:
   const clockInDisabledReason = useMemo(() => {
     if (hasClockedIn) return `SUDAH ABSEN MASUK (${todayAttendance?.clockIn?.substring(0, 5)})`;
+    if (!isShiftAssigned && !isFieldSpecial) {
+      return 'Akun Anda belum memiliki penugasan shift kerja. Silakan hubungi HRD atau Admin.';
+    }
     if (hasActiveLeaveToday) {
       const typeLabel = activeLeaveToday?.leaveType?.includes('sakit')
         ? 'SAKIT'
@@ -2302,7 +2309,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       return windowCheck.reason || `DI LUAR JADWAL SHIFT (${userShift?.startTime?.substring(0, 5) || '08:00'} - ${userShift?.endTime?.substring(0, 5) || '17:00'})`;
     }
     return null;
-  }, [hasClockedIn, todayAttendance, hasActiveLeaveToday, activeLeaveToday, isInsideCoordinates, isShiftWindowActive, hasApprovedOvertimeOrSubstituteToday, isFieldSpecial, userShift, currentTime]);
+  }, [hasClockedIn, todayAttendance, isShiftAssigned, isFieldSpecial, hasActiveLeaveToday, activeLeaveToday, isInsideCoordinates, isShiftWindowActive, hasApprovedOvertimeOrSubstituteToday, userShift, currentTime]);
 
   // Tombol Absen Pulang:
   // Terkunci sebelum jam pulang shift (kecuali izin darurat atau petugas lapangan khusus)
@@ -2791,7 +2798,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <span className="text-slate-700 dark:text-slate-200">{user?.divisionName || 'Operasional'}</span>
                 </p>
                 <p className="text-[10px] text-slate-400 dark:text-slate-500">
-                  {userShift?.name?.includes('(')
+                  {userShift?.id === 'unassigned' || !userShift?.startTime
+                    ? 'Shift: Belum Memiliki Shift (Hubungi Admin / Korlap)'
+                    : userShift?.name?.includes('(')
                     ? `Shift: ${userShift.name}`
                     : `Shift: ${userShift?.name || 'Reguler'} (${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA)`}
                 </p>
@@ -3088,8 +3097,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   </div>
                 </div>
 
-                <Badge className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold py-0.5 px-2">
-                  {userShift?.name || 'Shift Operasional'}
+                <Badge className={
+                  userShift?.id === 'unassigned' || !userShift?.startTime
+                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold py-0.5 px-2"
+                    : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold py-0.5 px-2"
+                }>
+                  {userShift?.id === 'unassigned' || !userShift?.startTime ? 'Belum Ada Shift' : (userShift?.name || 'Shift Operasional')}
                 </Badge>
               </div>
 
@@ -3110,10 +3123,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <div className="space-y-0.5">
                   <span className="text-[10px] text-slate-400 font-medium">Jadwal Masuk & Pulang:</span>
                   <p className="font-bold text-white font-mono text-[11px]">
-                    {userShift?.startTime || '07:30'} - {userShift?.endTime || '16:30'} WITA
+                    {userShift?.id === 'unassigned' || !userShift?.startTime
+                      ? 'Belum Ditentukan'
+                      : `${userShift.startTime} - ${userShift.endTime} WITA`}
                   </p>
                   <p className="text-[10px] text-amber-300 font-medium">
-                    Toleransi: {userShift?.lateToleranceMinutes || 15} Menit
+                    {userShift?.id === 'unassigned' || !userShift?.startTime
+                      ? 'Hubungi HRD/Admin'
+                      : `Toleransi: ${userShift?.lateToleranceMinutes || 15} Menit`}
                   </p>
                 </div>
 
@@ -3361,6 +3378,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <span className="truncate">
                   {hasClockedIn
                     ? `MASUK (${todayAttendance?.clockIn?.substring(0, 5) || todayAttendance?.clockIn})`
+                    : userShift?.id === 'unassigned' || !userShift?.startTime
+                    ? `BELUM ADA SHIFT`
                     : hasActiveLeaveToday
                     ? `SEDANG LIBUR`
                     : !isInsideCoordinates

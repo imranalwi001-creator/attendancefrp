@@ -1,4 +1,4 @@
-import { Shift, UserProfile, EmployeeSchedule } from '@/types/hrm';
+import { Shift, UserProfile, EmployeeSchedule, isSpecialDutyOfficer } from '@/types/hrm';
 
 /**
  * Helper untuk mengekstrak jam dari string seperti "Shift III (22:30 - 07:30 WITA)" atau "22:30 - 07:30"
@@ -40,8 +40,8 @@ export function resolveEffectiveShift(
       id: dailySchedule.shiftId || `sched-${dailySchedule.shiftCode || 'REG'}`,
       code: dailySchedule.shiftCode || 'SHF',
       name: dailySchedule.shiftName || 'Shift Terjadwal',
-      startTime: dailySchedule.startTime,
-      endTime: dailySchedule.endTime,
+      startTime: dailySchedule.startTime.substring(0, 5),
+      endTime: dailySchedule.endTime.substring(0, 5),
       lateToleranceMinutes: 15,
       earliestClockInMinutes: 120, // 2 Jam (120 menit) Datang Lebih Cepat Boleh Absen Masuk!
       isCrossDay: isNight,
@@ -49,19 +49,24 @@ export function resolveEffectiveShift(
     };
   }
 
+  const isSpecialDuty = isSpecialDutyOfficer(user);
+
   // 2. Coba cocokkan user.shiftId dengan ID di master shifts
   const shiftById = user?.shiftId ? allShifts.find((s) => s.id === user.shiftId) : null;
   if (shiftById) {
     const isCross = Boolean(shiftById.isCrossDay || (shiftById.startTime && shiftById.endTime && shiftById.endTime < shiftById.startTime));
     const res: Shift = {
       ...shiftById,
+      startTime: (shiftById.startTime || '07:30').substring(0, 5),
+      endTime: (shiftById.endTime || '16:30').substring(0, 5),
       earliestClockInMinutes: shiftById.earliestClockInMinutes || 120,
       isCrossDay: isCross,
     };
-    if (user?.shiftStartTime) res.startTime = user.shiftStartTime;
-    if (user?.shiftEndTime) res.endTime = user.shiftEndTime;
-    if (user?.customStartTime) res.startTime = user.customStartTime;
-    if (user?.customEndTime) res.endTime = user.customEndTime;
+    // HANYA petugas khusus yang diizinkan menimpa shift resmi dengan jam custom pimpinan
+    if (isSpecialDuty) {
+      if (user?.customStartTime) res.startTime = user.customStartTime.substring(0, 5);
+      if (user?.customEndTime) res.endTime = user.customEndTime.substring(0, 5);
+    }
     if (user?.lateToleranceMinutes != null) res.lateToleranceMinutes = user.lateToleranceMinutes;
     return res;
   }
@@ -70,8 +75,8 @@ export function resolveEffectiveShift(
   const userShiftName = user?.shiftName || '';
   const parsedFromName = extractTimesFromShiftName(userShiftName);
   if (parsedFromName) {
-    const sStart = user?.customStartTime || user?.shiftStartTime || parsedFromName.startTime!;
-    const sEnd = user?.customEndTime || user?.shiftEndTime || parsedFromName.endTime!;
+    const sStart = isSpecialDuty && user?.customStartTime ? user.customStartTime.substring(0, 5) : parsedFromName.startTime!;
+    const sEnd = isSpecialDuty && user?.customEndTime ? user.customEndTime.substring(0, 5) : parsedFromName.endTime!;
     const [sH, sM] = sStart.split(':').map(Number);
     const [eH, eM] = sEnd.split(':').map(Number);
     const isCross = (eH * 60 + eM) < (sH * 60 + sM);
@@ -97,8 +102,8 @@ export function resolveEffectiveShift(
       id: nightMaster?.id || 'shift-night',
       code: nightMaster?.code || 'MALAM',
       name: userShiftName || nightMaster?.name || 'Shift III (22:30 - 07:30 WITA)',
-      startTime: user?.customStartTime || user?.shiftStartTime || nightMaster?.startTime || '22:30',
-      endTime: user?.customEndTime || user?.shiftEndTime || nightMaster?.endTime || '07:30',
+      startTime: (nightMaster?.startTime || '22:30').substring(0, 5),
+      endTime: (nightMaster?.endTime || '07:30').substring(0, 5),
       breakStartTime: nightMaster?.breakStartTime || '02:00',
       breakEndTime: nightMaster?.breakEndTime || '03:00',
       lateToleranceMinutes: user?.lateToleranceMinutes ?? (nightMaster?.lateToleranceMinutes || 15),
@@ -114,8 +119,8 @@ export function resolveEffectiveShift(
       id: afternoonMaster?.id || 'shift-afternoon',
       code: afternoonMaster?.code || 'SIANG',
       name: userShiftName || afternoonMaster?.name || 'Shift II (15:30 - 22:30 WITA)',
-      startTime: user?.customStartTime || user?.shiftStartTime || afternoonMaster?.startTime || '15:30',
-      endTime: user?.customEndTime || user?.shiftEndTime || afternoonMaster?.endTime || '22:30',
+      startTime: (afternoonMaster?.startTime || '15:30').substring(0, 5),
+      endTime: (afternoonMaster?.endTime || '22:30').substring(0, 5),
       breakStartTime: afternoonMaster?.breakStartTime || '18:00',
       breakEndTime: afternoonMaster?.breakEndTime || '19:00',
       lateToleranceMinutes: user?.lateToleranceMinutes ?? (afternoonMaster?.lateToleranceMinutes || 15),
@@ -131,8 +136,8 @@ export function resolveEffectiveShift(
       id: morningMaster?.id || 'shift-morning',
       code: morningMaster?.code || 'PAGI',
       name: userShiftName || morningMaster?.name || 'Shift I (07:30 - 15:30 WITA)',
-      startTime: user?.customStartTime || user?.shiftStartTime || morningMaster?.startTime || '07:30',
-      endTime: user?.customEndTime || user?.shiftEndTime || morningMaster?.endTime || '15:30',
+      startTime: (morningMaster?.startTime || '07:30').substring(0, 5),
+      endTime: (morningMaster?.endTime || '15:30').substring(0, 5),
       breakStartTime: morningMaster?.breakStartTime || '11:30',
       breakEndTime: morningMaster?.breakEndTime || '12:30',
       lateToleranceMinutes: user?.lateToleranceMinutes ?? (morningMaster?.lateToleranceMinutes || 15),
@@ -142,29 +147,34 @@ export function resolveEffectiveShift(
     };
   }
 
-  // 5. Default Fallback ke Shift pertama atau Day Shift
-  const base = allShifts[0] || {
-    id: 'shift-regular',
-    code: 'DAY',
-    name: 'Day Shift (07:30 - 16:30 WITA)',
-    startTime: '07:30',
-    endTime: '16:30',
-    lateToleranceMinutes: 15,
-    earliestClockInMinutes: 120,
+  // 5. Khusus Petugas Lapangan Khusus Pimpinan (Bpk Reski Faisal): Default Jam Tugas 08:00 - 16:00 WITA
+  if (isSpecialDuty) {
+    return {
+      id: 'shift-field-special',
+      code: 'FIELD',
+      name: 'Petugas Lapangan Khusus Pimpinan',
+      startTime: (user?.customStartTime || '08:00').substring(0, 5),
+      endTime: (user?.customEndTime || '16:00').substring(0, 5),
+      lateToleranceMinutes: user?.lateToleranceMinutes ?? 15,
+      earliestClockInMinutes: 120,
+      isCrossDay: false,
+      colorTag: '#10b981',
+    };
+  }
+
+  // 6. Jika Karyawan Reguler Belum Ditentukan Shift oleh HRD/Admin di Dashboard:
+  // JANGAN fallback ke Day Shift! Kembalikan status Belum Memiliki Shift (Unassigned)
+  return {
+    id: 'unassigned',
+    code: 'NO-SHIFT',
+    name: 'Belum Memiliki Shift',
+    startTime: '',
+    endTime: '',
+    lateToleranceMinutes: 0,
+    earliestClockInMinutes: 0,
     isCrossDay: false,
-    colorTag: '#0d9488',
+    colorTag: '#64748b',
   };
-
-  const finalShift = { ...base };
-  if (user?.shiftStartTime) finalShift.startTime = user.shiftStartTime;
-  if (user?.shiftEndTime) finalShift.endTime = user.shiftEndTime;
-  if (user?.customStartTime) finalShift.startTime = user.customStartTime;
-  if (user?.customEndTime) finalShift.endTime = user.customEndTime;
-  if (user?.lateToleranceMinutes != null) finalShift.lateToleranceMinutes = user.lateToleranceMinutes;
-  finalShift.earliestClockInMinutes = finalShift.earliestClockInMinutes || 120;
-  finalShift.isCrossDay = finalShift.endTime < finalShift.startTime;
-
-  return finalShift;
 }
 
 /**
@@ -176,11 +186,13 @@ export function checkShiftClockInWindow(shift: Shift | null, currentTime: Date =
   reason?: string;
   openTimeStr?: string;
 } {
-  if (!shift || !shift.startTime || !shift.endTime) {
-    // Menolak akses jika data shift belum termuat dari sistem/database
+  if (!shift || !shift.startTime || !shift.endTime || shift.id === 'unassigned') {
+    // Menolak akses jika data shift belum termuat atau belum diatur oleh admin
     return {
       isOpen: false,
-      reason: 'Sedang memuat data jadwal shift karyawan...',
+      reason: shift?.id === 'unassigned' 
+        ? 'Akun Anda belum memiliki penugasan shift kerja. Silakan hubungi HRD atau Admin.' 
+        : 'Sedang memuat data jadwal shift karyawan...',
     };
   }
 
