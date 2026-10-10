@@ -8,7 +8,11 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
 
-export const HrmHrdDashboard: React.FC = () => {
+interface HrmHrdDashboardProps {
+  onSwitchToPwa?: () => void;
+}
+
+export const HrmHrdDashboard: React.FC<HrmHrdDashboardProps> = ({ onSwitchToPwa }) => {
   const { user } = useHrmAuth();
   const [todayAttendances, setTodayAttendances] = useState<AttendanceRecord[]>([]);
   const [pendingLeaves, setPendingLeaves] = useState<LeaveRequest[]>([]);
@@ -47,7 +51,16 @@ export const HrmHrdDashboard: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {onSwitchToPwa && (
+              <Button
+                variant="outline"
+                onClick={onSwitchToPwa}
+                className="bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 text-xs rounded-xl"
+              >
+                📱 Buka Presensi PWA
+              </Button>
+            )}
             <Link to="/admin/approval">
               <Button className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium shadow-sm rounded-xl">
                 Proses Izin ({pendingLeaves.length})

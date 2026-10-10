@@ -7,7 +7,11 @@ import { Button } from '@/components/ui/button';
 import { Link } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 
-export const HrmKeuanganDashboard: React.FC = () => {
+interface HrmKeuanganDashboardProps {
+  onSwitchToPwa?: () => void;
+}
+
+export const HrmKeuanganDashboard: React.FC<HrmKeuanganDashboardProps> = ({ onSwitchToPwa }) => {
   const { user } = useHrmAuth();
   const [attendances, setAttendances] = useState(hrmService.getAttendances());
   const [users, setUsers] = useState(hrmService.getUsers());
@@ -68,7 +72,22 @@ export const HrmKeuanganDashboard: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {onSwitchToPwa ? (
+              <Button
+                variant="outline"
+                onClick={onSwitchToPwa}
+                className="bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 text-xs rounded-xl"
+              >
+                📱 Buka Presensi PWA
+              </Button>
+            ) : (
+              <Link to="/presensi">
+                <Button variant="outline" className="border-border hover:bg-muted text-foreground text-xs rounded-xl">
+                  📱 Buka Presensi PWA
+                </Button>
+              </Link>
+            )}
             <Button
               onClick={handleExportPayroll}
               className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium shadow-sm rounded-xl gap-2"
