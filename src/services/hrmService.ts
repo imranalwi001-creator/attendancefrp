@@ -1986,8 +1986,21 @@ export const hrmService = {
         .catch((err) => console.warn('[UpdateUser] Backend sync warning:', err));
 
       return users[idx];
+    } else {
+      // Record belum ada di local cache (misal dibuat di session lain), buat entri dan simpan
+      const newUser = { id, ...updates } as UserProfile;
+      users.push(newUser);
+      safeSetJson(STORAGE_KEYS.USERS, users);
+      window.dispatchEvent(new Event('hrm_users_updated'));
+
+      api.put(`/users/${id}`, updates)
+        .then(() => {
+          hrmService.syncWithBackend().catch(() => null);
+        })
+        .catch((err) => console.warn('[UpdateUser] Backend sync warning:', err));
+
+      return newUser;
     }
-    throw new Error('User tidak ditemukan');
   },
 
   // ─── ADMIN LOCATION / DIVISION REASSIGNMENT & MUTATION ───────────────────

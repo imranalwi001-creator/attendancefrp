@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { hrmService } from '@/services/hrmService';
+import { api } from '@/services/apiClient';
 import { Shift, UserProfile, ShiftSwapRecord } from '@/types/hrm';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -47,13 +48,21 @@ export const HrmShiftManagementTab: React.FC = () => {
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [targetShiftId, setTargetShiftId] = useState<string>('');
 
-  const loadData = () => {
+  const loadData = async () => {
     setIsLoading(true);
     setShifts(hrmService.getShifts());
     setUsers(hrmService.getUsers());
     setDivisions(hrmService.getDivisions());
     setShiftSwaps(hrmService.getShiftSwaps());
     setIsLoading(false);
+
+    try {
+      await hrmService.syncWithBackend();
+      setShifts(hrmService.getShifts());
+      setUsers(hrmService.getUsers());
+      setDivisions(hrmService.getDivisions());
+      setShiftSwaps(hrmService.getShiftSwaps());
+    } catch (_) {}
   };
 
   useEffect(() => {
@@ -135,15 +144,18 @@ export const HrmShiftManagementTab: React.FC = () => {
     setIsSubmitting(true);
     try {
       const targetShift = shifts.find((s) => s.id === targetShiftId);
-      await api.put(`/users/${selectedUser.id}`, {
-        ...selectedUser,
-        shiftId: targetShiftId,
-        shiftName: targetShift?.name,
-      }).catch((err) => console.warn('[AssignShift] API update warning:', err));
+      const shiftName = targetShift ? targetShift.name : '';
 
+      // 1. Simpan langsung ke endpoint REST API PostgreSQL
+      await api.put(`/users/${selectedUser.id}`, {
+        shiftId: targetShiftId,
+        shiftName: shiftName,
+      });
+
+      // 2. Perbarui state lokal & sinkronisasi
       hrmService.updateUser(selectedUser.id, {
         shiftId: targetShiftId,
-        shiftName: targetShift?.name,
+        shiftName: shiftName,
       });
       await hrmService.syncWithBackend().catch(() => null);
 
@@ -151,7 +163,8 @@ export const HrmShiftManagementTab: React.FC = () => {
       setAssignModalOpen(false);
       loadData();
     } catch (err: any) {
-      toast.error('Gagal memperbarui shift karyawan');
+      console.error('[AssignShift Error]', err);
+      toast.error('Gagal memperbarui shift: ' + (err.message || 'Koneksi database terganggu'));
     } finally {
       setIsSubmitting(false);
     }
@@ -566,11 +579,17 @@ export const HrmShiftManagementTab: React.FC = () => {
                     <SelectValue placeholder="Pilih shift..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {shifts.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name} ({s.startTime?.substring(0, 5)} - {s.endTime?.substring(0, 5)} WITA)
-                      </SelectItem>
-                    ))}
+                    {shifts.map((s) => {
+                      const timeStr = `${s.startTime?.substring(0, 5)} - ${s.endTime?.substring(0, 5)} WITA`;
+                      const label = s.name.includes(s.startTime?.substring(0, 5) || '')
+                        ? s.name
+                        : `${s.name} (${timeStr})`;
+                      return (
+                        <SelectItem key={s.id} value={s.id}>
+                          {label}
+                        </SelectItem>
+                      );
+                    })}
                   </SelectContent>
                 </Select>
               </div>
