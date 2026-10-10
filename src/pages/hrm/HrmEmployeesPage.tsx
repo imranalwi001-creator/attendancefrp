@@ -361,12 +361,17 @@ export const HrmEmployeesPage: React.FC = () => {
     };
 
     try {
+      const matchedShift = shifts.find((s) => s.id === shiftId);
+      const resolvedShiftName = matchedShift ? matchedShift.name : '';
+
       if (editingUser) {
         hrmService.updateUser(editingUser.id, {
           nip, fullName, email, phone, password, roleId,
           roleName: selectedRole?.name || 'karyawan',
           divisionId, divisionName: selectedDivision?.name || '-',
-          shiftId, annualLeaveQuota: Number(annualLeave),
+          shiftId: shiftId || undefined,
+          shiftName: resolvedShiftName,
+          annualLeaveQuota: Number(annualLeave),
           avatarUrl: avatarUrl || undefined,
           kepalaReguId: kepalaReguId && kepalaReguId !== 'none' ? kepalaReguId : '',
           kepalaReguName: selectedKr ? selectedKr.fullName : '',
@@ -377,7 +382,9 @@ export const HrmEmployeesPage: React.FC = () => {
           nip, fullName, email, phone, password, roleId,
           roleName: selectedRole?.name || 'karyawan',
           divisionId, divisionName: selectedDivision?.name || '-',
-          shiftId, annualLeaveQuota: Number(annualLeave),
+          shiftId: shiftId || undefined,
+          shiftName: resolvedShiftName,
+          annualLeaveQuota: Number(annualLeave),
           usedLeaveDays: 0, isActive: true,
           avatarUrl: avatarUrl || undefined,
           kepalaReguId: kepalaReguId && kepalaReguId !== 'none' ? kepalaReguId : undefined,

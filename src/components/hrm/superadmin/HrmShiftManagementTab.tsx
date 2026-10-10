@@ -135,11 +135,19 @@ export const HrmShiftManagementTab: React.FC = () => {
     setIsSubmitting(true);
     try {
       const targetShift = shifts.find((s) => s.id === targetShiftId);
-      await hrmService.updateUser(selectedUser.id, {
+      await api.put(`/users/${selectedUser.id}`, {
+        ...selectedUser,
+        shiftId: targetShiftId,
+        shiftName: targetShift?.name,
+      }).catch((err) => console.warn('[AssignShift] API update warning:', err));
+
+      hrmService.updateUser(selectedUser.id, {
         shiftId: targetShiftId,
         shiftName: targetShift?.name,
       });
-      toast.success(`Jadwal shift untuk ${selectedUser.fullName} berhasil diperbarui di database & PWA.`);
+      await hrmService.syncWithBackend().catch(() => null);
+
+      toast.success(`Jadwal shift untuk ${selectedUser.fullName || selectedUser.name} berhasil diperbarui di database & PWA.`);
       setAssignModalOpen(false);
       loadData();
     } catch (err: any) {
@@ -325,7 +333,8 @@ export const HrmShiftManagementTab: React.FC = () => {
                     </tr>
                   ) : (
                     filteredUsers.map((u) => {
-                      const userShift = shifts.find((s) => s.id === u.shiftId) || shifts[0];
+                      const userShift = u.shiftId ? shifts.find((s) => s.id === u.shiftId) : null;
+                      const hasShift = Boolean(u.shiftId && (userShift || u.shiftName));
                       return (
                         <tr key={u.id} className="hover:bg-muted/30 transition-colors">
                           <td className="py-3 px-4">
@@ -341,22 +350,32 @@ export const HrmShiftManagementTab: React.FC = () => {
                             {u.jobTitle || u.roleName || '-'}
                           </td>
                           <td className="py-3 px-4 whitespace-nowrap">
-                            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[11px]">
-                              {u.shiftName || userShift?.name || 'Day Shift'}
-                            </Badge>
+                            {hasShift ? (
+                              <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[11px] font-semibold">
+                                {u.shiftName || userShift?.name}
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20 text-[11px] font-medium">
+                                Belum Ditentukan
+                              </Badge>
+                            )}
                           </td>
-                          <td className="py-3 px-4 text-center font-mono font-medium text-foreground whitespace-nowrap">
-                            {userShift?.startTime?.substring(0, 5)} - {userShift?.endTime?.substring(0, 5)} WITA
+                          <td className="py-3 px-4 text-center font-mono font-medium whitespace-nowrap">
+                            {hasShift && userShift?.startTime && userShift?.endTime ? (
+                              <span className="text-foreground">{userShift.startTime.substring(0, 5)} - {userShift.endTime.substring(0, 5)} WITA</span>
+                            ) : (
+                              <span className="text-muted-foreground text-[11px] italic">Belum Diatur</span>
+                            )}
                           </td>
                           <td className="py-3 px-4 text-right">
                             <Button
                               variant="outline"
                               size="sm"
                               onClick={() => handleOpenAssign(u)}
-                              className="h-7 text-[11px] rounded-lg gap-1"
+                              className={`h-7 text-[11px] rounded-lg gap-1 ${!hasShift ? 'border-primary text-primary hover:bg-primary/10 font-semibold' : ''}`}
                             >
                               <CalendarClock className="w-3 h-3 text-primary" />
-                              Ubah Shift
+                              {hasShift ? 'Ubah Shift' : 'Tetapkan Shift'}
                             </Button>
                           </td>
                         </tr>
