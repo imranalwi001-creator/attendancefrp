@@ -131,25 +131,63 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     loadFieldAgents();
   };
 
+  const fetchLiveAttendancesFast = async () => {
+    try {
+      const today = getTodayDateStr();
+      const res = await fetch(`/api/attendances?date=${today}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          const freshTodayAtts: AttendanceRecord[] = json.data;
+          setAttendances(freshTodayAtts);
+          setAllAttendances((prev) => {
+            const map = new Map(prev.map((a) => [a.id, a]));
+            freshTodayAtts.forEach((a) => map.set(a.id, a));
+            return Array.from(map.values());
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[LiveMonitoring] Fast fetch note:', e);
+    }
+  };
+
   useEffect(() => {
     loadData();
-    hrmService.syncWithBackend().then(() => loadData());
+    fetchLiveAttendancesFast();
+    hrmService.syncWithBackend().then(() => {
+      loadData();
+      fetchLiveAttendancesFast();
+    });
 
-    const handleUpdated = () => loadData();
+    const handleUpdated = () => {
+      loadData();
+      fetchLiveAttendancesFast();
+    };
     const handlePing = () => loadFieldAgents();
     window.addEventListener('hrm_data_updated', handleUpdated);
+    window.addEventListener('hrm_attendance_updated', handleUpdated);
     window.addEventListener('hrm_field_ping_received', handlePing);
     window.addEventListener('hrm_patrol_check_submitted', handlePing);
 
-    const interval = setInterval(() => {
+    // Fast polling every 2.5 detik untuk respon instan saat ada karyawan ceklok
+    const fastInterval = setInterval(() => {
+      fetchLiveAttendancesFast();
+      loadFieldAgents();
+    }, 2500);
+
+    // Master background sync setiap 30 detik
+    const masterInterval = setInterval(() => {
       hrmService.syncWithBackend().then(() => loadData());
-    }, 8000);
+    }, 30000);
 
     return () => {
       window.removeEventListener('hrm_data_updated', handleUpdated);
+      window.removeEventListener('hrm_attendance_updated', handleUpdated);
       window.removeEventListener('hrm_field_ping_received', handlePing);
       window.removeEventListener('hrm_patrol_check_submitted', handlePing);
-      clearInterval(interval);
+      clearInterval(fastInterval);
+      clearInterval(masterInterval);
     };
   }, []);
 
@@ -729,7 +767,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           <span className="font-medium text-foreground">{div?.name || v.divisionName || '-'}</span>
                         </TableCell>
                         <TableCell className="font-mono">
-                          {new Date(v.detectedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WIB
+                          {new Date(v.detectedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WITA
                         </TableCell>
                         <TableCell>
                           <Badge variant="outline" className="text-[10px] gap-1 border-rose-500/30 text-rose-600 bg-rose-500/10 font-mono">
@@ -1266,7 +1304,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         <TableCell className="text-center">
                           {periodScope === 'today' ? (
                             <span className={`font-mono text-xs ${att?.clockIn ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
-                              {att?.clockIn ? `${att.clockIn} WIB` : '-'}
+                              {att?.clockIn ? `${att.clockIn} WITA` : '-'}
                             </span>
                           ) : (
                             lateCount > 0 ? (
@@ -1281,7 +1319,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         <TableCell className="text-center">
                           {periodScope === 'today' ? (
                             <span className={`font-mono text-xs ${att?.clockOut ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
-                              {att?.clockOut ? `${att.clockOut} WIB` : '-'}
+                              {att?.clockOut ? `${att.clockOut} WITA` : '-'}
                             </span>
                           ) : (
                             <span className="font-mono text-xs font-bold text-rose-600">
@@ -1503,13 +1541,13 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Jam Masuk:</span>
                     <span className="font-mono font-medium text-foreground">
-                      {att?.clockIn ? `${att.clockIn} WIB` : '-'}
+                      {att?.clockIn ? `${att.clockIn} WITA` : '-'}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Jam Pulang:</span>
                     <span className="font-mono font-medium text-foreground">
-                      {att?.clockOut ? `${att.clockOut} WIB` : '-'}
+                      {att?.clockOut ? `${att.clockOut} WITA` : '-'}
                     </span>
                   </div>
                 </div>
@@ -1672,7 +1710,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {previewForensic.name} ({previewForensic.nip || '-'}) • {previewForensic.division || 'Umum'} • Jam {previewForensic.time || '-'} WIB
+                  {previewForensic.name} ({previewForensic.nip || '-'}) • {previewForensic.division || 'Umum'} • Jam {previewForensic.time || '-'} WITA
                 </p>
               </div>
               <Button size="icon" variant="ghost" onClick={() => setPreviewForensic(null)} className="h-8 w-8 rounded-xl">
@@ -1849,7 +1887,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Waktu Insiden:</span>
                   <span className="font-mono text-foreground">
-                    {new Date(selectedBreach.detectedAt).toLocaleTimeString('id-ID')} WIB
+                    {new Date(selectedBreach.detectedAt).toLocaleTimeString('id-ID')} WITA
                   </span>
                 </div>
               </div>

@@ -126,71 +126,40 @@ export async function burnForensicWatermark(opts: WatermarkOptions): Promise<str
         const labelFont = `bold ${Math.round(14.5 * scale)}px system-ui, -apple-system, sans-serif`;
         const monoFont = `bold ${Math.round(15.5 * scale)}px ui-monospace, SFMono-Regular, monospace`;
 
-        // Row 1: Location & Timestamp
-        // Col 1: Pos Penugasan
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = labelFont;
-        ctx.fillText('📍 Pos:', col1X, cursorY);
+        // Row 1: Karyawan & Waktu
         ctx.fillStyle = '#ffffff';
         ctx.font = `bold ${Math.round(16.5 * scale)}px system-ui, -apple-system, sans-serif`;
-        const locName = opts.locationName.length > 26 ? opts.locationName.slice(0, 25) + '…' : opts.locationName;
-        ctx.fillText(locName, col1X + 58 * scale, cursorY);
+        const empText = `${opts.employeeName} (${opts.employeeNip})`;
+        ctx.fillText(`👤 ${empText.length > 28 ? empText.slice(0, 27) + '…' : empText}`, col1X, cursorY);
 
-        // Col 2: Waktu
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = labelFont;
-        ctx.fillText('🕒 Waktu:', col2X, cursorY);
         ctx.fillStyle = '#f8fafc';
         ctx.font = monoFont;
-        ctx.fillText(`${dateStr} • ${timeStr} WITA`, col2X + 74 * scale, cursorY);
+        ctx.fillText(`🕒 ${dateStr} • ${timeStr} WITA`, col2X, cursorY);
 
-        // Row 2: GPS Coordinates & Accuracy
+        // Row 2: Posisi & Koordinat GPS
         cursorY += rowStep;
-        // Col 1: GPS
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = labelFont;
-        ctx.fillText('🌐 GPS:', col1X, cursorY);
+        ctx.fillStyle = '#34d399';
+        ctx.font = `bold ${Math.round(15.5 * scale)}px system-ui, -apple-system, sans-serif`;
+        const locName = opts.locationName.length > 28 ? opts.locationName.slice(0, 27) + '…' : opts.locationName;
+        ctx.fillText(`📍 ${locName}`, col1X, cursorY);
+
         ctx.fillStyle = '#38bdf8';
         ctx.font = monoFont;
         const latStr = opts.latitude ? opts.latitude.toFixed(6) : '0.000000';
         const lngStr = opts.longitude ? opts.longitude.toFixed(6) : '0.000000';
-        ctx.fillText(`${latStr}, ${lngStr}`, col1X + 58 * scale, cursorY);
-
-        // Col 2: Akurasi & Jarak
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = labelFont;
-        ctx.fillText('🎯 Akurasi:', col2X, cursorY);
-        ctx.fillStyle = '#e2e8f0';
-        ctx.font = monoFont;
         const accStr = opts.accuracyMeters ? `±${opts.accuracyMeters.toFixed(1)}m` : '±5m';
-        const distStr = opts.distanceMeters !== undefined ? ` (Selisih: ${Math.round(opts.distanceMeters)}m)` : '';
-        ctx.fillText(`${accStr}${distStr}`, col2X + 74 * scale, cursorY);
+        ctx.fillText(`🌐 ${latStr}, ${lngStr} (${accStr})`, col2X, cursorY);
 
-        // Row 3: Karyawan & Biometrik
+        // Row 3: Biometrik & Keamanan
         cursorY += rowStep;
-        // Col 1: Petugas
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = labelFont;
-        ctx.fillText('👤 Petugas:', col1X, cursorY);
-        ctx.fillStyle = '#f8fafc';
-        ctx.font = `bold ${Math.round(16 * scale)}px system-ui, -apple-system, sans-serif`;
-        const empText = `${opts.employeeName} (${opts.employeeNip})`;
-        ctx.fillText(empText.length > 28 ? empText.slice(0, 27) + '…' : empText, col1X + 76 * scale, cursorY);
-
-        // Col 2: Biometrik
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = labelFont;
-        ctx.fillText('🛡️ Biometrik:', col2X, cursorY);
-        ctx.fillStyle = '#34d399';
-        ctx.font = `bold ${Math.round(15.5 * scale)}px system-ui, -apple-system, sans-serif`;
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = `bold ${Math.round(14.5 * scale)}px system-ui, -apple-system, sans-serif`;
         const score = opts.biometricScore || 98.6;
-        ctx.fillText(`${score}% Match (Anti-Spoof Valid)`, col2X + 88 * scale, cursorY);
+        ctx.fillText(`🛡️ 1:1 Biometrik: ${score}% (Valid)`, col1X, cursorY);
 
-        // 6. Security Watermark Stamp Bar (Bottom mini line)
-        cursorY += rowStep + 6 * scale;
         ctx.fillStyle = '#94a3b8';
         ctx.font = `bold italic ${Math.round(12.5 * scale)}px system-ui, -apple-system, sans-serif`;
-        ctx.fillText('✓ SHA-256 Verified On-Device Stamp • GPS Tamper-Protected System', paddingX, cursorY);
+        ctx.fillText('✓ SHA-256 Tamper-Protected System', col2X, cursorY);
         ctx.restore();
 
         // Output as high quality JPEG Data URL
