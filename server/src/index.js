@@ -1366,13 +1366,17 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       const otRes = await pool.query(
         `SELECT id FROM hrm_overtime_records WHERE user_id = $1 AND date = $2 AND status = 'approved' LIMIT 1`,
         [userId, date]
-      );
+      ).catch(() => ({ rows: [] }));
       const subRes = await pool.query(
-        `SELECT id FROM hrm_shift_substitutions WHERE (substitute_user_id = $1 OR user_id = $1) AND (target_date = $2 OR date = $2) AND status = 'approved' LIMIT 1`,
+        `SELECT id FROM hrm_shift_substitutions WHERE (relief_user_id = $1 OR original_user_id = $1) AND duty_date = $2 AND status = 'approved' LIMIT 1`,
         [userId, date]
-      );
+      ).catch(() => ({ rows: [] }));
+      const swapRes = await pool.query(
+        `SELECT id FROM hrm_shift_swaps WHERE (substitute_id = $1 OR requester_id = $1) AND swap_date = $2 AND status = 'approved' LIMIT 1`,
+        [userId, date]
+      ).catch(() => ({ rows: [] }));
 
-      const hasApprovedException = (otRes.rows.length > 0) || (subRes.rows.length > 0);
+      const hasApprovedException = (otRes.rows.length > 0) || (subRes.rows.length > 0) || (swapRes.rows.length > 0);
 
       if (!hasApprovedException) {
         if (!userProfile.shift_id) {
@@ -4186,7 +4190,7 @@ app.post('/api/settings/break-policy', async (req, res) => {
 
 // GET /api/attendances/today - Ambil data presensi hari ini untuk karyawan secara realtime & akurat
 app.get('/api/attendances/today', async (req, res) => {
-  const { userId } = req.query;
+  const { userId, date } = req.query;
   if (!userId) {
     return res.status(400).json({ success: false, error: 'User ID wajib disertakan' });
   }
@@ -4194,7 +4198,7 @@ app.get('/api/attendances/today', async (req, res) => {
     let validUserId = userId;
     if (!UUID_REGEX.test(userId)) {
       const u = await pool.query(
-        'SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1',
+        'SELECT id FROM hrm_profiles WHERE LOWER(TRIM(email)) = LOWER(TRIM($1)) OR LOWER(TRIM(nip)) = LOWER(TRIM($1)) OR id::text = $1 LIMIT 1',
         [userId]
       );
       if (u.rows.length > 0) validUserId = u.rows[0].id;
@@ -4206,11 +4210,15 @@ app.get('/api/attendances/today', async (req, res) => {
       FROM hrm_attendances a
       LEFT JOIN hrm_profiles p ON a.user_id = p.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      WHERE a.user_id = $1 AND a.attendance_date = CURRENT_DATE
+      WHERE (a.user_id::text = $1 OR a.user_id::text = $3) 
+        AND (
+          a.attendance_date = COALESCE($2::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
+          OR a.attendance_date = CURRENT_DATE
+        )
       ORDER BY a.clock_in DESC NULLS LAST, a.created_at DESC
       LIMIT 1;
     `;
-    const result = await pool.query(query, [validUserId]);
+    const result = await pool.query(query, [String(validUserId), date || null, String(userId)]);
     if (result.rows.length === 0) {
       return res.json({ success: true, attendance: null });
     }
@@ -4263,7 +4271,7 @@ app.get('/api/attendances/today', async (req, res) => {
 });
 
 app.get('/api/attendances', async (req, res) => {
-  const { date } = req.query;
+  const { date, userId } = req.query;
   try {
     let query = `
       SELECT a.*, p.full_name as user_name, p.nip as user_nip, p.avatar_url as user_avatar,
@@ -4273,9 +4281,28 @@ app.get('/api/attendances', async (req, res) => {
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
     `;
     const params = [];
+    const conditions = [];
     if (date) {
-      query += ' WHERE a.attendance_date = $1';
       params.push(date);
+      conditions.push(`a.attendance_date = $${params.length}`);
+    }
+    if (userId) {
+      let resolvedUserId = userId;
+      if (!UUID_REGEX.test(userId)) {
+        const u = await pool.query(
+          'SELECT id FROM hrm_profiles WHERE LOWER(TRIM(email)) = LOWER(TRIM($1)) OR LOWER(TRIM(nip)) = LOWER(TRIM($1)) OR id::text = $1 LIMIT 1',
+          [userId]
+        );
+        if (u.rows.length > 0) resolvedUserId = u.rows[0].id;
+      }
+      params.push(String(resolvedUserId));
+      const p1 = params.length;
+      params.push(String(userId));
+      const p2 = params.length;
+      conditions.push(`(a.user_id::text = $${p1} OR a.user_id::text = $${p2} OR LOWER(p.nip) = LOWER($${p2}) OR LOWER(p.email) = LOWER($${p2}))`);
+    }
+    if (conditions.length > 0) {
+      query += ' WHERE ' + conditions.join(' AND ');
     }
     query += ' ORDER BY a.attendance_date DESC, a.clock_in DESC LIMIT 500';
     const result = await pool.query(query, params);

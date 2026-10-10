@@ -433,7 +433,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const handleShutterCaptureRef = useRef<() => void>();
   const autoCaptureCooldownUntilRef = useRef<number>(0);
 
-  // Active Real-time Face Detection Loop on Camera Stream (Ultra Fast & Smooth)
+  // Active Liveness Challenge States (Anti-Foto Statis & Anti-Layar HP)
+  const livenessPassedRef = useRef<boolean>(false);
+  const [, setIsLivenessPassed] = useState<boolean>(false);
+  const eyeBlinkStageRef = useRef<'waiting_close' | 'waiting_open' | 'done'>('waiting_close');
+  const staticFaceDetectedSinceRef = useRef<number | null>(null);
+  const earHistoryRef = useRef<number[]>([]);
+  const initialYawRef = useRef<number | null>(null);
+
+  // Active Real-time Face Detection Loop on Camera Stream with Active Liveness Verification
   useEffect(() => {
     if (!isCameraActive || !cameraStream) {
       setLiveFaceStatus({
@@ -445,6 +453,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       setAutoCaptureProgress(0);
       greenSinceRef.current = null;
       isTriggeringAutoRef.current = false;
+      livenessPassedRef.current = false;
+      setIsLivenessPassed(false);
+      eyeBlinkStageRef.current = 'waiting_close';
+      staticFaceDetectedSinceRef.current = null;
+      earHistoryRef.current = [];
+      initialYawRef.current = null;
       return;
     }
 
@@ -457,8 +471,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       isProcessing = true;
       try {
-        // Fast face presence & position detection (< 25ms, no ResNet loop bottleneck)
-        const detail = await biometricService.detectFaceFast(videoRef.current);
+        // Fast real-time landmark & EAR tracking (< 35ms)
+        const detail = await biometricService.detectFaceWithLandmarks(videoRef.current);
 
         if (!isMounted) return;
 
@@ -466,6 +480,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           greenSinceRef.current = null;
           isTriggeringAutoRef.current = false;
           setAutoCaptureProgress(0);
+          staticFaceDetectedSinceRef.current = null;
+          earHistoryRef.current = [];
+          initialYawRef.current = null;
+          if (!livenessPassedRef.current) {
+            eyeBlinkStageRef.current = 'waiting_close';
+          }
           setLiveFaceStatus({
             detected: false,
             isGreen: false,
@@ -500,8 +520,73 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               message: 'Posisikan wajah tepat di tengah bingkai',
             });
           } else {
-            // Wajah terdeteksi tepat di tengah & ukuran pas! INDIKATOR HIJAU AKTIF!
+            // Wajah terdeteksi tepat di tengah & ukuran pas
             const now = Date.now();
+            if (!staticFaceDetectedSinceRef.current) {
+              staticFaceDetectedSinceRef.current = now;
+            }
+
+            // ─── ACTIVE LIVENESS VERIFICATION (ANTI-FOTO STATIS / LAYAR HP) ───
+            if (!livenessPassedRef.current) {
+              // 1. Analisis Eye Aspect Ratio (EAR) untuk deteksi kedipan mata nyata
+              if (typeof detail.ear === 'number' && !isNaN(detail.ear)) {
+                earHistoryRef.current.push(detail.ear);
+                if (earHistoryRef.current.length > 20) earHistoryRef.current.shift();
+
+                // Deteksi Kedip: Mata Terbuka -> Terpejam (EAR < 0.195) -> Terbuka Kembali (EAR >= 0.22)
+                if (eyeBlinkStageRef.current === 'waiting_close') {
+                  if (detail.ear <= 0.195) {
+                    eyeBlinkStageRef.current = 'waiting_open';
+                  }
+                } else if (eyeBlinkStageRef.current === 'waiting_open') {
+                  if (detail.ear >= 0.22) {
+                    eyeBlinkStageRef.current = 'done';
+                    livenessPassedRef.current = true;
+                    setIsLivenessPassed(true);
+                  }
+                }
+              }
+
+              // 2. Alternatif Liveness: Micro-turn kepala / 3D Parallax jika memakai kacamata
+              if (!livenessPassedRef.current && typeof detail.headYawRatio === 'number') {
+                if (initialYawRef.current === null) {
+                  initialYawRef.current = detail.headYawRatio;
+                } else {
+                  const yawDiff = Math.abs(detail.headYawRatio - initialYawRef.current);
+                  if (yawDiff >= 0.08) {
+                    livenessPassedRef.current = true;
+                    setIsLivenessPassed(true);
+                  }
+                }
+              }
+
+              // Jika Liveness BELUM Lulus:
+              if (!livenessPassedRef.current) {
+                const staticDuration = now - (staticFaceDetectedSinceRef.current || now);
+                let earVariance = 1.0;
+                if (earHistoryRef.current.length >= 8) {
+                  const m = earHistoryRef.current.reduce((a, b) => a + b, 0) / earHistoryRef.current.length;
+                  earVariance = earHistoryRef.current.reduce((a, b) => a + Math.pow(b - m, 2), 0) / earHistoryRef.current.length;
+                }
+                const isSuspectedStaticScreen = staticDuration > 3000 && earVariance < 0.0012;
+
+                setAutoCaptureProgress(0);
+                greenSinceRef.current = null;
+                isTriggeringAutoRef.current = false;
+
+                setLiveFaceStatus({
+                  detected: true,
+                  isGreen: false,
+                  confidence: 65,
+                  message: isSuspectedStaticScreen
+                    ? '⚠️ Layar HP/Foto statis terdeteksi! Silakan tatap langsung & kedipkan mata.'
+                    : '👁️ Silakan KEDIPKAN MATA Anda untuk verifikasi presensi...',
+                });
+                return;
+              }
+            }
+
+            // ─── LIVENESS LULUS (MANUSIA ASLI & AKTIF) - INDIKATOR HIJAU NYALA! ───
             if (!greenSinceRef.current) {
               greenSinceRef.current = now;
             }
@@ -514,20 +599,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             const elapsed = now - greenSinceRef.current;
 
             if (scanMode === 'auto') {
-              const progress = Math.min(100, Math.round((elapsed / 750) * 100));
+              const progress = Math.min(100, Math.round((elapsed / 600) * 100));
               setAutoCaptureProgress(progress);
 
               setLiveFaceStatus({
                 detected: true,
                 isGreen: true,
-                confidence: masterDescriptor ? 98 : 94,
+                confidence: masterDescriptor ? 98 : 95,
                 message: progress >= 100
-                  ? '✓ Mengambil foto otomatis...'
-                  : '✓ Wajah Terkunci • Menjepret...',
+                  ? '✓ Mengambil foto presensi...'
+                  : '✓ Liveness Terverifikasi • Menjepret...',
               });
 
-              // Auto-capture otomatis setelah bertahan 700ms (hanya jika cooldown telah selesai)
-              if (elapsed >= 700 && !isCapturingRef.current && !isTriggeringAutoRef.current && now >= autoCaptureCooldownUntilRef.current) {
+              // Auto-capture otomatis setelah bertahan 550ms dari liveness verification
+              if (elapsed >= 550 && !isCapturingRef.current && !isTriggeringAutoRef.current && now >= autoCaptureCooldownUntilRef.current) {
                 isTriggeringAutoRef.current = true;
                 greenSinceRef.current = null;
                 setAutoCaptureProgress(100);
@@ -541,8 +626,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               setLiveFaceStatus({
                 detected: true,
                 isGreen: true,
-                confidence: masterDescriptor ? 98 : 94,
-                message: '✓ Posisi Optimal • Ketuk Tombol Kamera',
+                confidence: masterDescriptor ? 98 : 95,
+                message: '✓ Liveness Terverifikasi • Ketuk Tombol Kamera',
               });
             }
           }
@@ -552,7 +637,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       } finally {
         isProcessing = false;
       }
-    }, 130);
+    }, 120);
 
     return () => {
       isMounted = false;
@@ -604,7 +689,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       let todayAtt: AttendanceRecord | undefined = undefined;
 
       try {
-        const todayRes = await fetch(`/api/attendances/today?userId=${encodeURIComponent(user.id)}`);
+        const todayRes = await fetch(`/api/attendances/today?userId=${encodeURIComponent(user.id)}&date=${encodeURIComponent(todayStr)}`);
         if (todayRes.ok) {
           const todayData = await todayRes.json();
           if (todayData.success && todayData.attendance) {
@@ -615,9 +700,26 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         console.warn('[PWA] Gagal fetch today attendance, fallback ke local cache:', err);
       }
 
-      const userAtts = hrmService.getAttendances().filter((a) => a.userId === user.id);
+      const validUserIds = [user.id, user.nip, user.email].filter(Boolean);
+      let userAtts = hrmService.getAttendances().filter((a) => {
+        const aUser = a.userId || (a as any).user_id;
+        return validUserIds.includes(aUser);
+      });
+
+      try {
+        const histRes = await fetch(`/api/attendances?userId=${encodeURIComponent(user.id)}`);
+        if (histRes.ok) {
+          const histData = await histRes.json();
+          if (histData.success && Array.isArray(histData.data) && histData.data.length > 0) {
+            userAtts = histData.data;
+          }
+        }
+      } catch (e) {
+        console.warn('[PWA] Attendance history fetch note:', e);
+      }
+
       if (todayAtt) {
-        const existingIdx = userAtts.findIndex((a) => a.id === todayAtt?.id || a.date === todayStr);
+        const existingIdx = userAtts.findIndex((a) => a.id === todayAtt?.id || a.date === todayStr || a.attendanceDate === todayStr);
         if (existingIdx >= 0) {
           userAtts[existingIdx] = { ...userAtts[existingIdx], ...todayAtt };
         } else {
@@ -907,11 +1009,35 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     window.addEventListener('hrm_users_updated', handleUpdate);
     window.addEventListener('hrm_shifts_updated', handleUpdate);
 
+    // ─── PWA APP RESUME & WAKEUP LIFECYCLE (HP BANGUN DARI SLEEP / LAYAR NYALA / TAB AKTIF) ───
+    const handleResumeOrWakeup = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        console.info('[PWA Lifecycle] App resumed from sleep / visible, refreshing attendance state...');
+        loadRealData();
+        evaluateRealLocation();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleResumeOrWakeup);
+    window.addEventListener('pageshow', handleResumeOrWakeup);
+    window.addEventListener('focus', handleResumeOrWakeup);
+
+    // Periodic live background poll setiap 20 detik saat PWA aktif agar data selalu sinkron
+    const periodicPoll = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible' && !isCameraActive) {
+        loadRealData();
+      }
+    }, 20000);
+
     return () => {
       window.removeEventListener('hrm_attendance_updated', handleUpdate);
       window.removeEventListener('hrm_settings_updated', handleUpdate);
       window.removeEventListener('hrm_users_updated', handleUpdate);
       window.removeEventListener('hrm_shifts_updated', handleUpdate);
+      document.removeEventListener('visibilitychange', handleResumeOrWakeup);
+      window.removeEventListener('pageshow', handleResumeOrWakeup);
+      window.removeEventListener('focus', handleResumeOrWakeup);
+      clearInterval(periodicPoll);
     };
   }, [user]);
 
@@ -1313,16 +1439,52 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         ? 'Cukup (B)'
         : 'Perlu Evaluasi (C)';
 
-    // Weekly 7 Days Streak (Senin - Minggu)
+    // Weekly 7 Days Streak (Senin - Minggu) SINKRON DENGAN DATABASE
+    const now = new Date();
+    const currentDayOfWeek = (now.getDay() + 6) % 7; // 0 = Senin, ..., 6 = Minggu
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - currentDayOfWeek);
+
     const daysName = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
-    const todayIndex = (new Date().getDay() + 6) % 7;
     const weeklyStreak = daysName.map((day, idx) => {
-      if (idx > todayIndex) return { day, status: 'upcoming' };
-      if (idx === todayIndex) {
-        if (todayAttendance?.clockIn) return { day, status: todayAttendance.status === 'terlambat' ? 'late' : 'present' };
-        return { day, status: 'current' };
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + idx);
+      const dateStr = d.toLocaleDateString('en-CA');
+      const dayNum = d.getDate();
+
+      if (idx > currentDayOfWeek) {
+        return { day, status: 'upcoming', date: dateStr, label: `${dayNum}` };
       }
-      return { day, status: 'present' };
+
+      if (idx === currentDayOfWeek) {
+        if (todayAttendance?.clockIn) {
+          const isLate = todayAttendance.status === 'terlambat' || ((todayAttendance.lateMinutes || 0) > 0);
+          return { day, status: isLate ? 'late' : 'present', date: dateStr, label: isLate ? '!' : '✓' };
+        }
+        return { day, status: 'current', date: dateStr, label: `${dayNum}` };
+      }
+
+      // Past days: cari record riil di database attendancesHistory
+      const pastRecord = attendancesHistory.find(
+        (a) => (a.date === dateStr || a.attendanceDate === dateStr)
+      );
+
+      if (pastRecord && pastRecord.clockIn) {
+        const isLate = pastRecord.status === 'terlambat' || ((pastRecord.lateMinutes || 0) > 0);
+        return { day, status: isLate ? 'late' : 'present', date: dateStr, label: isLate ? '!' : '✓' };
+      }
+
+      // Cek apakah ada permohonan cuti/izin yang disetujui pada tanggal tersebut
+      const isApprovedLeave = userLeaves.some(
+        (l) => l.status === 'approved' && dateStr >= l.startDate && dateStr <= l.endDate
+      );
+      if (isApprovedLeave) {
+        return { day, status: 'leave', date: dateStr, label: 'I' };
+      }
+
+      // Past day tanpa kehadiran
+      const isSunday = idx === 6;
+      return { day, status: isSunday ? 'off' : 'absent', date: dateStr, label: isSunday ? 'OFF' : '✕' };
     });
 
     return {
@@ -1593,20 +1755,37 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     ctx.fillStyle = grad;
     ctx.fillRect(0, h - barHeight, w, barHeight);
 
-    // Evaluasi Pos Realtime
-    let postDisplay = assignedPostName || 'Kantor FRP';
-    let isSahDiPos = true;
-    if (isOnCall || isMobileOnlineOfficer(user)) {
-      postDisplay = assignedPostName || 'Area Mobile / Online Remote (WFA Sah)';
-      isSahDiPos = true;
-    } else if (detectedFrp) {
-      if (detectedFrp.isWithinRadius) {
-        postDisplay = `${detectedFrp.name} [${detectedFrp.code}] (${detectedFrp.distance}m • DALAM RADIUS)`;
+    // Evaluasi Lokasi Realtime Presisi yang 100% SINKRON dengan layar PWA
+    let resolvedLoc = assignedPostName || (user?.divisionLocationName || user?.divisionName || 'Gedung IT Cyber');
+    let isSahDiPos = locationStatus === 'inside';
+
+    if (bankPosts && bankPosts.length > 0 && currentCoords) {
+      const matchedBank = bankPosts.find((p) => {
+        const d = geofenceService.calculateDistance(currentCoords, { latitude: p.latitude, longitude: p.longitude });
+        return d <= (p.radiusMeters || 100) + 25;
+      });
+      if (matchedBank) {
+        resolvedLoc = `${matchedBank.postName} [${matchedBank.postCode || 'POS'}]`;
         isSahDiPos = true;
-      } else {
-        postDisplay = `${detectedFrp.name} [${detectedFrp.code}] (${detectedFrp.distance}m • RADIUS ${detectedFrp.radiusMeters}m)`;
-        isSahDiPos = false;
       }
+    } else if (assignedOffice && currentCoords) {
+      const dOffice = geofenceService.calculateDistance(currentCoords, { latitude: assignedOffice.latitude, longitude: assignedOffice.longitude });
+      const rad = assignedOffice.radiusMeters || 50;
+      if (dOffice <= rad + 25) {
+        resolvedLoc = assignedOffice.name;
+        isSahDiPos = true;
+      }
+    } else if (user?.divisionLatitude && user?.divisionLongitude && currentCoords) {
+      const dDiv = geofenceService.calculateDistance(currentCoords, { latitude: Number(user.divisionLatitude), longitude: Number(user.divisionLongitude) });
+      const rad = Number(user.divisionRadiusMeters) || 50;
+      if (dDiv <= rad + 25) {
+        resolvedLoc = user.divisionLocationName || user.divisionName || 'Gedung IT Cyber';
+        isSahDiPos = true;
+      }
+    }
+
+    if (isOnCall || isMobileOnlineOfficer(user)) {
+      isSahDiPos = true;
     }
 
     // Top Status Accent Glow Line (Biru on-call, Hijau dalam pos, Rose luar radius, Amber spot-check)
@@ -1615,20 +1794,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     ctx.fillRect(0, h - barHeight + Math.round(16 * scale), w, Math.max(4, Math.round(4 * scale)));
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // HEADER BADGE (Top Header Capsule - Besar, Tebal, & Tajam)
+    // HEADER BADGE (Top Header Capsule - Ringkas, Tajam, & Elegan)
     // ─────────────────────────────────────────────────────────────────────────────
     const badgePadX = Math.round(18 * scale);
-    const badgeH = Math.round(40 * scale);
+    const badgeH = Math.round(38 * scale);
     const badgeY = Math.round(18 * scale);
     const badgeX = Math.round(18 * scale);
-    const badgeW = Math.min(w - badgeX * 2, Math.round(580 * scale));
+    const badgeW = Math.min(w - badgeX * 2, Math.round(560 * scale));
     const badgeRadius = Math.round(10 * scale);
 
-    // Draw Rounded Badge Background
     ctx.save();
     ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
     ctx.strokeStyle = accentColor;
-    ctx.lineWidth = Math.max(2.5, Math.round(2.5 * scale));
+    ctx.lineWidth = Math.max(2, Math.round(2 * scale));
     if (typeof ctx.roundRect === 'function') {
       ctx.beginPath();
       ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeRadius);
@@ -1639,21 +1817,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       ctx.strokeRect(badgeX, badgeY, badgeW, badgeH);
     }
 
-    // Header Text - Bold & High Contrast
     ctx.font = `bold ${Math.round(13.5 * scale)}px system-ui, -apple-system, sans-serif`;
     ctx.fillStyle = accentColor;
     ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
     ctx.shadowBlur = Math.round(3 * scale);
     const headerTitle = isSpotCheck
-      ? `🛡️ PT FAWWAZ RESKI PERWIRA • 1 BUKTI SELFIE REALTIME • 1:1 SCORE: ${matchScore || 98}%`
+      ? `PT FAWWAZ RESKI PERWIRA • SELFIE REALTIME • SKOR: ${matchScore || 98}%`
       : isOnCall
-      ? `⚡ PT FAWWAZ RESKI PERWIRA • ${actionType === 'emergency_on_call' ? 'ON-CALL MASUK' : 'ON-CALL PULANG'} • 1:1 SCORE: ${matchScore || 98}%`
-      : `🛡️ PT FAWWAZ RESKI PERWIRA • ${actionType === 'clock_in' ? 'CLOCK-IN (MASUK)' : 'CLOCK-OUT (PULANG)'} • 1:1 SCORE: ${matchScore || 98}%`;
-    ctx.fillText(headerTitle, badgeX + badgePadX, badgeY + Math.round(25 * scale));
+      ? `PT FAWWAZ RESKI PERWIRA • ON-CALL WFA • SKOR: ${matchScore || 98}%`
+      : `PT FAWWAZ RESKI PERWIRA • ${actionType === 'clock_in' ? 'PRESENSI MASUK' : 'PRESENSI PULANG'} • SKOR: ${matchScore || 98}%`;
+    ctx.fillText(headerTitle, badgeX + badgePadX, badgeY + Math.round(24 * scale));
     ctx.restore();
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // BOTTOM FORENSIC INFORMATION CARD - BESAR, BOLD, & SANGAT TERBACA
+    // BOTTOM FORENSIC INFORMATION CARD - FOKUS LANGSUNG KE DATA TANPA JUDUL PANJANG
     // ─────────────────────────────────────────────────────────────────────────────
     const paddingX = Math.round(22 * scale);
     let startY = h - barHeight + Math.round(48 * scale);
@@ -1665,38 +1842,38 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 1;
 
-    // Line 1: Nama Karyawan (Font Besar & Tebal), NIP, & Divisi
+    // Line 1: Langsung Nama (NIP) • Divisi
     const empName = user.fullName || (user as any).name || 'Karyawan';
     const empNip = user.nip || (user.id ? 'ID: ' + String(user.id).slice(0, 8) : 'FRP');
     const empDiv = user.divisionName || (user as any).division_name || 'Petugas Lapangan';
     ctx.font = `bold ${Math.round(17.5 * scale)}px system-ui, -apple-system, sans-serif`;
     ctx.fillStyle = '#ffffff';
     ctx.fillText(
-      `👤 ${empName} [${empNip}] • ${empDiv}`,
+      `👤 ${empName} (${empNip}) • ${empDiv}`,
       paddingX,
       startY
     );
 
-    // Line 2: Shift atau Instruksi Lapor Realtime
+    // Line 2: Langsung Shift Kerja & Jam Shift (Tanpa kata "Shift:")
     startY += lineGap;
     if (isSpotCheck) {
-      ctx.font = `bold ${Math.round(14 * scale)}px system-ui, -apple-system, sans-serif`;
+      ctx.font = `bold ${Math.round(14.5 * scale)}px system-ui, -apple-system, sans-serif`;
       ctx.fillStyle = '#fcd34d'; // Amber bright
-      ctx.fillText(`🚨 INSTRUKSI PIMPINAN: BUKTI 1 SELFIE REALTIME LAPORAN WAJAH`, paddingX, startY);
+      ctx.fillText(`🚨 BUKTI 1 SELFIE REALTIME LAPORAN WAJAH`, paddingX, startY);
     } else if (isOnCall) {
-      ctx.font = `bold ${Math.round(14 * scale)}px system-ui, -apple-system, sans-serif`;
+      ctx.font = `bold ${Math.round(14.5 * scale)}px system-ui, -apple-system, sans-serif`;
       ctx.fillStyle = '#93c5fd'; // Light blue
-      ctx.fillText(`⚡ STATUS: TUGAS DARURAT ONLINE (ON-CALL REMOTE WFA SAH)`, paddingX, startY);
+      ctx.fillText(`⚡ TUGAS DARURAT ONLINE (ON-CALL REMOTE WFA SAH)`, paddingX, startY);
     } else {
-      const cleanShiftName = userShift?.name || 'Shift Reguler';
-      const shiftHoursStr = `${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA`;
-      const shiftText = cleanShiftName.includes('(') ? `⏰ Shift: ${cleanShiftName}` : `⏰ Shift: ${cleanShiftName} (${shiftHoursStr})`;
-      ctx.font = `bold ${Math.round(14 * scale)}px system-ui, -apple-system, sans-serif`;
+      const cleanShiftName = userShift?.name || 'Day Shift';
+      const shiftHoursStr = `${userShift?.startTime || '07:30'} - ${userShift?.endTime || '16:30'} WITA`;
+      const shiftDirectText = cleanShiftName.includes('(') ? cleanShiftName : `${cleanShiftName} (${shiftHoursStr})`;
+      ctx.font = `bold ${Math.round(14.5 * scale)}px system-ui, -apple-system, sans-serif`;
       ctx.fillStyle = '#fbbf24'; // Amber / Gold
-      ctx.fillText(shiftText, paddingX, startY);
+      ctx.fillText(`⏰ ${shiftDirectText}`, paddingX, startY);
     }
 
-    // Line 3: Tanggal dan Waktu Server Realtime (Hingga Detik)
+    // Line 3: Langsung Waktu Realtime (Tanpa kata "WAKTU REALTIME:")
     startY += lineGap;
     const now = new Date();
     const dateFormatted = now.toLocaleDateString('id-ID', {
@@ -1706,25 +1883,25 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       year: 'numeric',
     });
     const timeFormatted = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\./g, ':');
-    ctx.font = `bold ${Math.round(15 * scale)}px ui-monospace, SFMono-Regular, monospace`;
+    ctx.font = `bold ${Math.round(14.5 * scale)}px ui-monospace, SFMono-Regular, monospace`;
     ctx.fillStyle = '#f8fafc'; // Crisp pure white
-    ctx.fillText(`🕒 WAKTU REALTIME: ${dateFormatted} • ${timeFormatted} WITA`, paddingX, startY);
+    ctx.fillText(`🕒 ${dateFormatted} • ${timeFormatted} WITA`, paddingX, startY);
 
-    // Line 4: Lokasi Realtime 6 Titik Pos FRP / Jaringan Mobile
+    // Line 4: Langsung Posisi / Lokasi Realtime (Tanpa kata "POS REALTIME:")
     startY += lineGap;
-    const locLine = isOnCall ? `📍 AREA TUGAS: ${postDisplay}` : `📍 POS REALTIME: ${postDisplay}`;
+    const locDirectText = `${resolvedLoc} • ${isSahDiPos ? 'Di Radius Pos' : 'Di Luar Radius'}`;
     ctx.font = `bold ${Math.round(14.5 * scale)}px system-ui, -apple-system, sans-serif`;
     ctx.fillStyle = isSahDiPos ? '#34d399' : '#fb7185'; // Emerald or Rose
-    ctx.fillText(locLine, paddingX, startY);
+    ctx.fillText(`📍 ${locDirectText}`, paddingX, startY);
 
-    // Line 5: GPS Realtime, Akurasi & Anti-Spoof Security Stamp
+    // Line 5: Langsung Koordinat GPS & Akurasi (Tanpa kata "GPS:")
     startY += lineGap - Math.round(2 * scale);
-    const coordsStr = currentCoords
-      ? `📡 GPS: ${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 10}m) • ${isOnCall ? '🌐 KONEKSI ONLINE SAH' : (isSahDiPos ? '✅ SAH DI POS TUGAS' : '⚠️ DI LUAR RADIUS')} • 🔒 ANTI-TAMPER`
-      : `📡 GPS: Sinyal Aktif • Pos Terdata • 🔒 ANTI-TAMPER`;
-    ctx.font = `bold ${Math.round(12.5 * scale)}px ui-monospace, SFMono-Regular, monospace`;
+    const coordsDirectText = currentCoords
+      ? `${currentCoords.lat.toFixed(6)}, ${currentCoords.lng.toFixed(6)} (±${coordsAccuracy ? Math.round(coordsAccuracy) : 5}m)`
+      : `Sinyal GPS Aktif (Akurasi Presisi)`;
+    ctx.font = `bold ${Math.round(13.5 * scale)}px ui-monospace, SFMono-Regular, monospace`;
     ctx.fillStyle = '#cbd5e1'; // Slate 300
-    ctx.fillText(coordsStr, paddingX, startY);
+    ctx.fillText(`🌐 ${coordsDirectText}`, paddingX, startY);
 
     ctx.restore();
   };
@@ -1749,7 +1926,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       try { navigator.vibrate([70, 35, 70]); } catch (e) {}
     }
 
-    const toastLoadingId = toast.loading('Memproses verifikasi wajah & mencatat presensi...', { duration: 10000 });
+    // ─── ANTI-SPOOFING & ANTI-FOTO STATIS: LIVENESS VERIFICATION GUARD ───
+    if (!livenessPassedRef.current && !isSpotCheckAction) {
+      toast.dismiss(toastLoadingId);
+      toast.error(
+        'Presensi Ditolak! Verifikasi keaktifan wajah belum lulus. Silakan tatap kamera dan kedipkan mata Anda secara nyata (Bukan foto/layar HP).',
+        { id: 'liveness-guard', duration: 4500 }
+      );
+      isCapturingRef.current = false;
+      setIsCapturing(false);
+      isTriggeringAutoRef.current = false;
+      setAutoCaptureProgress(0);
+      return;
+    }
 
     try {
       // Pengecualian Petugas Lapangan Khusus Pimpinan & Petugas Distribusi Online Mobile
@@ -1920,10 +2109,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             }
           }
 
+          toast.dismiss(toastLoadingId);
           toast.success(`✅ 1 Bukti Selfie Realtime Berhasil Terkirim ke Pimpinan & Superadmin! (${timeStr} WITA)`);
           await loadRealData();
           return;
         } catch (patrolErr: any) {
+          toast.dismiss(toastLoadingId);
           console.error('[Spot Check Submit Error]', patrolErr);
           toast.error('Gagal mengirim 1 bukti selfie: ' + (patrolErr?.message || 'Koneksi error'));
           return;
@@ -2010,6 +2201,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           try { navigator.vibrate([120, 60, 120]); } catch (e) {}
         }
 
+        toast.dismiss(toastLoadingId);
         toast.success(
           actionType === 'emergency_on_call'
             ? `⚡ Tugas Darurat Online Dimulai! (${timeStr} WITA) Laporan terkirim ke pimpinan.`
@@ -2063,6 +2255,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         isVerifiedBiometric: isVerifiedBiometric,
       });
 
+      // Dismiss loading toast immediately so it doesn't linger
+      toast.dismiss(toastLoadingId);
+
       if (savedAttendance) {
         setTodayAttendance(savedAttendance);
       }
@@ -2080,6 +2275,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       await loadRealData();
     } catch (err: any) {
+      toast.dismiss(toastLoadingId);
       console.error('[Attendance Submit Error]', err);
       toast.error('Gagal mencatat presensi: ' + (err.message || 'Koneksi error'));
     } finally {
@@ -3621,10 +3817,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                             ? 'bg-amber-500 text-white'
                             : item.status === 'current'
                             ? 'border-2 border-emerald-500 text-emerald-600 animate-pulse'
+                            : item.status === 'leave'
+                            ? 'bg-blue-500 text-white'
+                            : item.status === 'absent'
+                            ? 'bg-rose-500/20 text-rose-500 border border-rose-500/40'
                             : 'bg-slate-200 dark:bg-slate-800 text-slate-400'
                         }`}
                       >
-                        {item.status === 'present' ? '✓' : item.status === 'late' ? '!' : idx + 1}
+                        {item.status === 'present'
+                          ? '✓'
+                          : item.status === 'late'
+                          ? '!'
+                          : item.status === 'leave'
+                          ? 'I'
+                          : item.status === 'absent'
+                          ? '✕'
+                          : item.label || (idx + 1)}
                       </div>
                     </div>
                   ))}

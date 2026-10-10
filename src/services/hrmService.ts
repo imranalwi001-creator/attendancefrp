@@ -765,6 +765,8 @@ export const hrmService = {
             const pOut = a.photoOut || a.clockOutPhoto || a.photo_out;
             return {
               ...a,
+              userId: a.userId || a.user_id,
+              user_id: a.user_id || a.userId,
               attendanceDate: attDate,
               date: attDate,
               photoIn: pIn,
@@ -2207,6 +2209,8 @@ export const hrmService = {
       const pOut = mem?.photoOut || mem?.clockOutPhoto || a.photoOut || a.clockOutPhoto || a.photo_out;
       return {
         ...a,
+        userId: a.userId || a.user_id,
+        user_id: a.user_id || a.userId,
         attendanceDate: attDate,
         date: attDate,
         photoIn: pIn,
@@ -2226,7 +2230,11 @@ export const hrmService = {
     const list = hrmService.getAttendances(today);
     const users = hrmService.getUsers();
     const u = users.find((x) => x.id === userId || x.email === userId || x.nip === userId);
-    return list.find((a) => a.userId === userId || (u && (a.userId === u.id || a.userId === u.email || a.userId === u.nip)));
+    const validTargets = [userId, u?.id, u?.email, u?.nip].filter(Boolean);
+    return list.find((a) => {
+      const aUser = a.userId || (a as any).user_id;
+      return validTargets.includes(aUser);
+    });
   },
 
   saveAttendances: (attendances: AttendanceRecord[]): boolean => {
@@ -2572,7 +2580,7 @@ export const hrmService = {
     return false;
   },
 
-  recordClockIn: (data: {
+  recordClockIn: async (data: {
     userId: string;
     latitude?: number;
     longitude?: number;
@@ -2587,7 +2595,7 @@ export const hrmService = {
     geofenceDistance?: number;
     geofenceValid?: boolean;
     isMockLocation?: boolean;
-  }): AttendanceRecord => {
+  }): Promise<AttendanceRecord> => {
     const today = getTodayDateStr();
     const existing = hrmService.getUserTodayAttendance(data.userId);
     if (existing && existing.clockIn) {
@@ -2780,15 +2788,35 @@ export const hrmService = {
       deviceModel: currentModel,
     };
 
-    api.post('/attendances/clock-in', clockInPayload).catch((err) => {
-      console.warn('[Attendance] Backend clock-in warning (enqueued for offline sync):', err);
+    try {
+      const response = await api.post('/attendances/clock-in', clockInPayload);
+      if (response && response.data && response.data.data) {
+        const dbRecord = response.data.data;
+        if (dbRecord.id) {
+          memRec.id = dbRecord.id;
+          newRecord.id = dbRecord.id;
+          const idxAll = all.findIndex((a) => a.id === newRecord.id || (a.userId === user.id && a.date === today));
+          if (idxAll !== -1) all[idxAll].id = dbRecord.id;
+          hrmService.saveAttendances(all);
+        }
+      }
+    } catch (err: any) {
+      console.warn('[Attendance] Backend clock-in warning:', err);
+      if (err.response && err.response.data && err.response.data.error) {
+        const rollbackAll = hrmService.getAttendances().filter((a) => a.id !== newRecord.id && a.id !== memRec.id);
+        hrmService.saveAttendances(rollbackAll);
+        const memIdxRoll = inMemoryAttendances.findIndex((m) => m.id === newRecord.id || m.id === memRec.id);
+        if (memIdxRoll !== -1) inMemoryAttendances.splice(memIdxRoll, 1);
+        window.dispatchEvent(new Event('hrm_attendance_updated'));
+        throw new Error(err.response.data.error);
+      }
       hrmService.enqueueOfflineSync('clock-in', clockInPayload);
-    });
+    }
 
     return memRec;
   },
 
-  recordClockOut: (data: {
+  recordClockOut: async (data: {
     userId: string;
     latitude?: number;
     longitude?: number;
@@ -2803,7 +2831,7 @@ export const hrmService = {
     geofenceDistance?: number;
     geofenceValid?: boolean;
     isMockLocation?: boolean;
-  }): AttendanceRecord => {
+  }): Promise<AttendanceRecord> => {
     const existing = hrmService.getUserTodayAttendance(data.userId);
     if (!existing || !existing.clockIn) {
       throw new Error('Anda belum melakukan presensi masuk hari ini');
@@ -2917,10 +2945,15 @@ export const hrmService = {
       deviceModel: hrmService.getDeviceModel(),
     };
 
-    api.post('/attendances/clock-out', clockOutPayload).catch((err) => {
-      console.warn('[Attendance] Backend clock-out warning (enqueued for offline sync):', err);
+    try {
+      await api.post('/attendances/clock-out', clockOutPayload);
+    } catch (err: any) {
+      console.warn('[Attendance] Backend clock-out warning:', err);
+      if (err.response && err.response.data && err.response.data.error) {
+        throw new Error(err.response.data.error);
+      }
       hrmService.enqueueOfflineSync('clock-out', clockOutPayload);
-    });
+    }
 
     return memRec;
   },
@@ -2954,7 +2987,7 @@ export const hrmService = {
 
     if (isClockOut) {
       if (existing && !existing.clockOut) {
-        return hrmService.recordClockOut({
+        return await hrmService.recordClockOut({
           userId: data.userId,
           latitude: data.latitude,
           longitude: data.longitude,
@@ -2984,7 +3017,7 @@ export const hrmService = {
       return existing;
     }
 
-    return hrmService.recordClockIn({
+    return await hrmService.recordClockIn({
       userId: data.userId,
       latitude: data.latitude,
       longitude: data.longitude,

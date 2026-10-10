@@ -200,6 +200,59 @@ export class BiometricService {
   }
 
   /**
+   * Fast real-time landmark tracking (< 35ms) for active liveness challenge & eye-blink detection
+   */
+  public async detectFaceWithLandmarks(
+    input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement
+  ): Promise<FaceDetectionDetail | null> {
+    if (!this.modelsLoaded) {
+      await this.loadModels();
+      if (!this.modelsLoaded) return null;
+    }
+
+    try {
+      const res: any = await faceapi.detectSingleFace(input, this.fastDetectorOptions).withFaceLandmarks();
+      if (!res || !res.detection) return null;
+
+      const box = {
+        x: Math.round(res.detection.box.x),
+        y: Math.round(res.detection.box.y),
+        width: Math.round(res.detection.box.width),
+        height: Math.round(res.detection.box.height),
+      };
+
+      let ear: number | undefined;
+      let headYawRatio: number | undefined;
+      if (res.landmarks) {
+        const pts = res.landmarks.positions;
+        if (pts.length >= 68) {
+          const leftEAR = this.calculateEAR(pts[36], pts[37], pts[38], pts[39], pts[40], pts[41]);
+          const rightEAR = this.calculateEAR(pts[42], pts[43], pts[44], pts[45], pts[46], pts[47]);
+          ear = Number(((leftEAR + rightEAR) / 2).toFixed(3));
+
+          const jawLeftX = pts[0].x;
+          const jawRightX = pts[16].x;
+          const noseX = pts[30].x;
+          const totalJawWidth = jawRightX - jawLeftX;
+          if (totalJawWidth > 0) {
+            headYawRatio = Number(((noseX - jawLeftX) / totalJawWidth).toFixed(3));
+          }
+        }
+      }
+
+      return {
+        box,
+        score: Number((res.detection.score ?? 1).toFixed(3)),
+        landmarks: res.landmarks,
+        ear,
+        headYawRatio,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Compatibility alias for detectFace
    */
   public async detectFaceDetail(
