@@ -653,25 +653,32 @@ export const sanitizeUserRecords = (records: any[]): any[] => {
     // Foto master biometrik berukuran 200KB - 800KB base64 per karyawan.
     // Jika disimpan mentah di localStorage hrm_users, langsung melebihi kuota 5MB browser!
     // Foto master tersimpan aman secara permanen di database PostgreSQL hrm_profiles.
-    if (typeof clean.faceEnrolledPhoto === 'string' && clean.faceEnrolledPhoto.startsWith('data:image/') && clean.faceEnrolledPhoto.length > 2048) {
+    if (typeof clean.faceEnrolledPhoto === 'string' && clean.faceEnrolledPhoto.startsWith('data:image/')) {
       clean.faceEnrolledPhoto = '[Tersimpan di Database PostgreSQL]';
     }
-    if (typeof clean.face_enrolled_photo === 'string' && clean.face_enrolled_photo.startsWith('data:image/') && clean.face_enrolled_photo.length > 2048) {
+    if (typeof clean.face_enrolled_photo === 'string' && clean.face_enrolled_photo.startsWith('data:image/')) {
       clean.face_enrolled_photo = '[Tersimpan di Database PostgreSQL]';
     }
-    // Jika avatarUrl adalah base64 raksasa (> 20KB), tanggalkan dari cache lokal agar tidak meledakkan kuota
-    if (typeof clean.avatarUrl === 'string' && clean.avatarUrl.startsWith('data:image/') && clean.avatarUrl.length > 20480) {
+    // Hapus SEMUA base64 avatar dari cache localStorage agar tidak meledakkan kuota (cukup URL http/null)
+    if (typeof clean.avatarUrl === 'string' && clean.avatarUrl.startsWith('data:image/')) {
       clean.avatarUrl = null;
     }
-    if (typeof clean.avatar_url === 'string' && clean.avatar_url.startsWith('data:image/') && clean.avatar_url.length > 20480) {
+    if (typeof clean.avatar_url === 'string' && clean.avatar_url.startsWith('data:image/')) {
       clean.avatar_url = null;
     }
+    // Hapus array descriptor raksasa dari serialisasi hrm_users di localStorage
+    delete clean.faceDescriptor;
+    delete clean.face_descriptor;
+    delete clean.face_embedding;
     return clean;
   });
 };
 
 export const safeSetJson = (key: string, data: any): boolean => {
   try {
+    if (key === STORAGE_KEYS.USERS && Array.isArray(data)) {
+      inMemoryUsers = data;
+    }
     let toStore = data;
     if (key === STORAGE_KEYS.ATTENDANCE && Array.isArray(data)) {
       toStore = sanitizeAttendanceRecords(data);
@@ -2246,11 +2253,11 @@ export const hrmService = {
     users[idx].faceEnrolledPhoto = undefined;
     users[idx].faceEnrolledAt = undefined;
 
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    safeSetJson(STORAGE_KEYS.USERS, users);
 
     const currentUser = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
     if (currentUser && currentUser.id === userId) {
-      localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(users[idx]));
+      safeSetJson(STORAGE_KEYS.CURRENT_USER, users[idx]);
     }
 
     window.dispatchEvent(new Event('hrm_users_updated'));
@@ -2318,12 +2325,22 @@ export const hrmService = {
   cleanupStorageQuota: () => {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
-      if (raw && (raw.includes('data:image/') || raw.length > 300000)) {
-        console.info('[HRM Storage] Local attendance cache exceeds safe size or contains raw base64 photos, cleaning up...');
+      if (raw && (raw.includes('data:image/') || raw.length > 250000)) {
+        console.info('[HRM Storage] Local attendance cache exceeds safe size, cleaning up...');
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
           const cleaned = sanitizeAttendanceRecords(parsed);
-          localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(cleaned));
+          safeSetJson(STORAGE_KEYS.ATTENDANCE, cleaned);
+        }
+      }
+
+      const rawUsers = localStorage.getItem(STORAGE_KEYS.USERS);
+      if (rawUsers && (rawUsers.includes('data:image/') || rawUsers.length > 150000)) {
+        console.info('[HRM Storage] Local users cache contains heavy media or exceeds 150KB, sanitizing...');
+        const parsedUsers = JSON.parse(rawUsers);
+        if (Array.isArray(parsedUsers)) {
+          const leanUsers = sanitizeUserRecords(parsedUsers);
+          safeSetJson(STORAGE_KEYS.USERS, leanUsers);
         }
       }
     } catch (e) {
@@ -2365,7 +2382,7 @@ export const hrmService = {
       users[idx].deviceModel = undefined;
       (users[idx] as any).isDeviceBound = false;
       (users[idx] as any).deviceBoundAt = undefined;
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+      safeSetJson(STORAGE_KEYS.USERS, users);
       window.dispatchEvent(new Event('hrm_users_updated'));
     }
 
@@ -2555,12 +2572,12 @@ export const hrmService = {
         const idx = users.findIndex((u) => u.id === userId);
         if (idx !== -1) {
           users[idx].password = newPassword;
-          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+          safeSetJson(STORAGE_KEYS.USERS, users);
         }
         const curr = hrmService.getCurrentUser();
         if (curr && curr.id === userId) {
           curr.password = newPassword;
-          localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(curr));
+          safeSetJson(STORAGE_KEYS.CURRENT_USER, curr);
         }
         window.dispatchEvent(new Event('hrm_users_updated'));
       }
@@ -2580,7 +2597,7 @@ export const hrmService = {
         const idx = users.findIndex((u) => u.id === userId);
         if (idx !== -1) {
           users[idx].password = newPassword;
-          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+          safeSetJson(STORAGE_KEYS.USERS, users);
         }
         window.dispatchEvent(new Event('hrm_users_updated'));
       }
@@ -2691,7 +2708,7 @@ export const hrmService = {
       user.registeredDeviceId = currentDeviceId;
       user.deviceModel = currentModel;
       users[userIdx] = user;
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+      safeSetJson(STORAGE_KEYS.USERS, users);
       flags.push('DEVICE_BOUND_INITIAL');
     } else if (user.registeredDeviceId === currentDeviceId) {
       flags.push('DEVICE_MATCH_OK');
@@ -3616,12 +3633,12 @@ export const hrmService = {
       const uIdx = users.findIndex((u) => u.id === leaves[idx].userId);
       if (uIdx !== -1) {
         users[uIdx].usedLeaveDays = (users[uIdx].usedLeaveDays || 0) + leaves[idx].totalDays;
-        localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+        safeSetJson(STORAGE_KEYS.USERS, users);
 
         const cur = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
         if (cur && cur.id === leaves[idx].userId) {
           cur.usedLeaveDays = (cur.usedLeaveDays || 0) + leaves[idx].totalDays;
-          localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(cur));
+          safeSetJson(STORAGE_KEYS.CURRENT_USER, cur);
         }
       }
     }
@@ -4927,7 +4944,7 @@ export const hrmService = {
       ...users[userIdx],
       employeeDocuments: [newDoc, ...existing],
     };
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    safeSetJson(STORAGE_KEYS.USERS, users);
     return newDoc;
   },
 
@@ -4939,7 +4956,7 @@ export const hrmService = {
       ...users[userIdx],
       employeeDocuments: (users[userIdx].employeeDocuments || []).filter((d) => d.id !== docId),
     };
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    safeSetJson(STORAGE_KEYS.USERS, users);
   },
 
   // ─── GEOFENCE PERIMETER WATCHDOG & BREACH DISCIPLINARY ENGINE ─────────────

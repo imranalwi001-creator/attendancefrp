@@ -552,12 +552,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         } else {
           const vw = videoRef.current.videoWidth || 640;
           const boxCenterX = detail.box.x + detail.box.width / 2;
-          const isCentered = Math.abs(boxCenterX - vw / 2) < vw * 0.35;
+          const isCentered = Math.abs(boxCenterX - vw / 2) < vw * 0.40;
           const scaleRatio = detail.box.width / vw;
-          // Lapisan 1: Strict Scale Guard (Wajah harus minimal 32% dari frame agar tidak bisa menodongkan HP sekunder)
-          const isGoodScale = scaleRatio >= 0.32 && scaleRatio <= 0.88;
+          // Lapisan 1: Realistis Scale Guard (Wajah 18% - 88% dari frame video agar nyaman di jarak selfie lengan)
+          const isGoodScale = scaleRatio >= 0.18 && scaleRatio <= 0.88;
 
-          if (!isGoodScale && scaleRatio < 0.32) {
+          if (!isGoodScale && scaleRatio < 0.18) {
             greenSinceRef.current = null;
             isTriggeringAutoRef.current = false;
             setAutoCaptureProgress(0);
@@ -565,7 +565,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               detected: true,
               isGreen: false,
               confidence: 50,
-              message: '⚠️ Dekatkan wajah ke kamera hingga memenuhi bingkai (Layar HP terlalu jauh/kecil)',
+              message: '⚠️ Dekatkan wajah sedikit ke kamera (Posisikan di dalam lingkaran)',
             });
             return;
           } else if (!isCentered) {
@@ -592,8 +592,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 return;
               }
 
-              // Jika challenge melebihi 7 detik tanpa tuntas, ganti tantangan acak
-              if (now - challengeStartedAtRef.current > 7000) {
+              // Jika challenge melebihi 6.5 detik tanpa tuntas, ganti tantangan acak
+              if (now - challengeStartedAtRef.current > 6500) {
                 pickRandomChallenge();
               }
 
@@ -607,20 +607,24 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   if (earHistoryRef.current.length > 25) earHistoryRef.current.shift();
 
                   if (!hasEstablishedBaselineRef.current) {
-                    if (ear >= 0.20) {
+                    if (ear >= 0.17) {
                       openFramesCountRef.current += 1;
                       if (openFramesCountRef.current >= 2) {
                         hasEstablishedBaselineRef.current = true;
-                        baselineOpenEarRef.current = Math.max(ear, 0.23);
+                        baselineOpenEarRef.current = Math.max(ear, 0.21);
                       }
-                    } else {
-                      openFramesCountRef.current = 0;
+                    } else if (earHistoryRef.current.length >= 4) {
+                      const maxObserved = Math.max(...earHistoryRef.current);
+                      if (maxObserved >= 0.175) {
+                        hasEstablishedBaselineRef.current = true;
+                        baselineOpenEarRef.current = maxObserved;
+                      }
                     }
                   }
 
                   if (hasEstablishedBaselineRef.current) {
                     if (blinkStateRef.current === 'waiting_blink') {
-                      if (ear <= 0.185 || (baselineOpenEarRef.current - ear >= 0.045)) {
+                      if (ear <= 0.175 || (baselineOpenEarRef.current - ear >= 0.035)) {
                         blinkClosedAtRef.current = now;
                         blinkStateRef.current = 'blink_closed';
                       }
@@ -629,7 +633,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       if (closedDuration > 2500) {
                         blinkStateRef.current = 'waiting_blink';
                         blinkClosedAtRef.current = null;
-                      } else if (ear >= 0.205 && closedDuration >= 50) {
+                      } else if ((ear >= 0.185 || (ear - (baselineOpenEarRef.current - 0.035) >= 0.015)) && closedDuration >= 40) {
                         blinkStateRef.current = 'verified';
                         isChallengeMet = true;
                       }
@@ -637,11 +641,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   }
                 }
               } else if (currentChallenge === 'smile') {
-                if (typeof detail.smileScore === 'number' && detail.smileScore >= 0.52) {
+                if (typeof detail.smileScore === 'number' && detail.smileScore >= 0.32) {
                   isChallengeMet = true;
                 }
               } else if (currentChallenge === 'open_mouth') {
-                if (typeof detail.mar === 'number' && detail.mar >= 0.28) {
+                if (typeof detail.mar === 'number' && detail.mar >= 0.20) {
                   isChallengeMet = true;
                 }
               }
@@ -660,19 +664,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
                     const deltaCyan = (s1.g + s1.b) - (s0.g + s0.b);
                     const deltaLum = s1.lum - s0.lum;
+                    const isOutdoorBright = s0.lum >= 120; // Kondisi pencahayaan tinggi / outdoor
 
                     // Kulit manusia 3D memantulkan cahaya cyan layar HP secara terukur
-                    // Layar HP sekunder / video call tidak memantulkan cahaya pada pixel video
-                    if (deltaCyan >= 2.2 || deltaLum >= 1.6) {
+                    // Pada siang hari / pencahayaan tinggi, respons delta lebih halus
+                    const isReflectionVerified = deltaCyan >= 0.7 || deltaLum >= 0.5 || (isOutdoorBright && (deltaCyan >= 0.2 || deltaLum >= 0.2 || s1.lum !== s0.lum));
+
+                    if (isReflectionVerified) {
                       flashStateRef.current = 'verified';
                       livenessPassedRef.current = true;
                       setIsLivenessPassed(true);
                     } else {
                       flashStateRef.current = 'idle';
-                      autoCaptureCooldownUntilRef.current = Date.now() + 3500;
-                      toast.error('⚠️ Terdeteksi Rekaman Layar HP / Video Call! (Tidak terdeteksi pantulan cahaya 3D kulit asli). Presensi Ditolak.', {
+                      autoCaptureCooldownUntilRef.current = Date.now() + 2500;
+                      toast.error('⚠️ Terdeteksi Rekaman Layar HP / Video Call! (Tidak terdeteksi pantulan cahaya 3D kulit asli). Silakan ikuti instruksi.', {
                         id: 'anti-screen-spoof',
-                        duration: 4000
+                        duration: 3500
                       });
                       pickRandomChallenge();
                     }
@@ -719,7 +726,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             const elapsed = now - greenSinceRef.current;
 
             if (scanMode === 'auto') {
-              const progress = Math.min(100, Math.round((elapsed / 600) * 100));
+              const progress = Math.min(100, Math.round((elapsed / 450) * 100));
               setAutoCaptureProgress(progress);
 
               setLiveFaceStatus({
@@ -728,11 +735,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 confidence: masterDescriptor ? 98 : 95,
                 message: progress >= 100
                   ? '✓ Mengambil foto presensi...'
-                  : '✓ Liveness Terverifikasi • Menjepret...',
+                  : '✓ Wajah Asli Terverifikasi • Menjepret...',
               });
 
-              // Auto-capture otomatis setelah bertahan 550ms dari liveness verification
-              if (elapsed >= 550 && !isCapturingRef.current && !isTriggeringAutoRef.current && now >= autoCaptureCooldownUntilRef.current) {
+              // Auto-capture otomatis setelah 450ms dari liveness verification
+              if (elapsed >= 450 && !isCapturingRef.current && !isTriggeringAutoRef.current && now >= autoCaptureCooldownUntilRef.current) {
                 isTriggeringAutoRef.current = true;
                 greenSinceRef.current = null;
                 setAutoCaptureProgress(100);
