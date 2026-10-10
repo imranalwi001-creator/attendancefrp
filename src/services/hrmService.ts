@@ -646,6 +646,30 @@ export const sanitizeLeaveRecords = (records: any[]): any[] => {
   });
 };
 
+export const sanitizeUserRecords = (records: any[]): any[] => {
+  if (!Array.isArray(records)) return [];
+  return records.map((u) => {
+    const clean = { ...u };
+    // Foto master biometrik berukuran 200KB - 800KB base64 per karyawan.
+    // Jika disimpan mentah di localStorage hrm_users, langsung melebihi kuota 5MB browser!
+    // Foto master tersimpan aman secara permanen di database PostgreSQL hrm_profiles.
+    if (typeof clean.faceEnrolledPhoto === 'string' && clean.faceEnrolledPhoto.startsWith('data:image/') && clean.faceEnrolledPhoto.length > 2048) {
+      clean.faceEnrolledPhoto = '[Tersimpan di Database PostgreSQL]';
+    }
+    if (typeof clean.face_enrolled_photo === 'string' && clean.face_enrolled_photo.startsWith('data:image/') && clean.face_enrolled_photo.length > 2048) {
+      clean.face_enrolled_photo = '[Tersimpan di Database PostgreSQL]';
+    }
+    // Jika avatarUrl adalah base64 raksasa (> 20KB), tanggalkan dari cache lokal agar tidak meledakkan kuota
+    if (typeof clean.avatarUrl === 'string' && clean.avatarUrl.startsWith('data:image/') && clean.avatarUrl.length > 20480) {
+      clean.avatarUrl = null;
+    }
+    if (typeof clean.avatar_url === 'string' && clean.avatar_url.startsWith('data:image/') && clean.avatar_url.length > 20480) {
+      clean.avatar_url = null;
+    }
+    return clean;
+  });
+};
+
 export const safeSetJson = (key: string, data: any): boolean => {
   try {
     let toStore = data;
@@ -653,6 +677,8 @@ export const safeSetJson = (key: string, data: any): boolean => {
       toStore = sanitizeAttendanceRecords(data);
     } else if (key === STORAGE_KEYS.LEAVES && Array.isArray(data)) {
       toStore = sanitizeLeaveRecords(data);
+    } else if (key === STORAGE_KEYS.USERS && Array.isArray(data)) {
+      toStore = sanitizeUserRecords(data);
     } else if (typeof data === 'object' && data !== null) {
       toStore = stripLargeMedia(data);
     }
@@ -695,6 +721,7 @@ export const safeSetJson = (key: string, data: any): boolean => {
       // 3. Remove temporary or non-critical storage items
       try {
         localStorage.removeItem(STORAGE_KEYS.PERIMETER_VIOLATIONS);
+        localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
       } catch {}
 
       // 4. Retry saving lean payload
@@ -703,6 +730,8 @@ export const safeSetJson = (key: string, data: any): boolean => {
         fallbackData = sanitizeAttendanceRecords(data).slice(0, 15);
       } else if (key === STORAGE_KEYS.LEAVES && Array.isArray(data)) {
         fallbackData = sanitizeLeaveRecords(data);
+      } else if (key === STORAGE_KEYS.USERS && Array.isArray(data)) {
+        fallbackData = sanitizeUserRecords(data);
       } else {
         fallbackData = stripLargeMedia(data);
       }
@@ -710,6 +739,24 @@ export const safeSetJson = (key: string, data: any): boolean => {
       return true;
     } catch (e) {
       console.error(`[HRM Storage] Fatal storage failure for ${key}:`, e);
+      try {
+        if (key === STORAGE_KEYS.USERS && Array.isArray(data)) {
+          const ultraMinimal = data.map((u: any) => ({
+            id: u.id,
+            nip: u.nip,
+            fullName: u.fullName,
+            email: u.email,
+            roleId: u.roleId,
+            roleName: u.roleName,
+            divisionId: u.divisionId,
+            divisionName: u.divisionName,
+            shiftId: u.shiftId,
+            isActive: u.isActive,
+          }));
+          localStorage.setItem(key, JSON.stringify(ultraMinimal));
+          return true;
+        }
+      } catch {}
       return false;
     }
   }
@@ -1822,7 +1869,7 @@ export const hrmService = {
       createdAt: new Date().toISOString(),
     };
     users.push(newUser);
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    safeSetJson(STORAGE_KEYS.USERS, users);
 
     // Persist to PostgreSQL database directly
     api.post('/users', user)
@@ -1833,7 +1880,7 @@ export const hrmService = {
           const foundIdx = currentUsers.findIndex((u) => u.email.toLowerCase() === user.email.toLowerCase());
           if (foundIdx !== -1) {
             currentUsers[foundIdx] = { ...currentUsers[foundIdx], id: res.data.id };
-            localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(currentUsers));
+            safeSetJson(STORAGE_KEYS.USERS, currentUsers);
           }
         }
         hrmService.syncWithBackend().catch(() => null);
@@ -1914,7 +1961,7 @@ export const hrmService = {
     });
 
     if (successCount > 0) {
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(currentUsers));
+      safeSetJson(STORAGE_KEYS.USERS, currentUsers);
       // Persist all added users to backend asynchronously
       Promise.all(addedUsers.map((u) => api.post('/users', u).catch(() => null)))
         .then(() => hrmService.syncWithBackend().catch(() => null));
@@ -1928,7 +1975,7 @@ export const hrmService = {
     const idx = users.findIndex((u) => u.id === id);
     if (idx !== -1) {
       users[idx] = { ...users[idx], ...updates };
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+      safeSetJson(STORAGE_KEYS.USERS, users);
       window.dispatchEvent(new Event('hrm_users_updated'));
 
       // Persist to PostgreSQL database directly
@@ -1972,8 +2019,15 @@ export const hrmService = {
     user.assignmentNotes = notes || undefined;
 
     users[userIdx] = user;
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    safeSetJson(STORAGE_KEYS.USERS, users);
     window.dispatchEvent(new Event('hrm_users_updated'));
+
+    // Synchronize division mutation to PostgreSQL database directly
+    api.put(`/users/${user.id}`, {
+      divisionId: newDivisionId,
+      divisionName: targetDivision.name,
+      assignmentNotes: notes || '',
+    }).catch((err) => console.warn('[AssignDivision] Backend sync warning:', err));
 
     // Send Notification to Employee
     hrmService.addNotification({
@@ -2033,8 +2087,15 @@ export const hrmService = {
     user.assignmentNotes = undefined;
 
     users[userIdx] = user;
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    safeSetJson(STORAGE_KEYS.USERS, users);
     window.dispatchEvent(new Event('hrm_users_updated'));
+
+    // Synchronize restored division to PostgreSQL database directly
+    api.put(`/users/${user.id}`, {
+      divisionId: user.divisionId,
+      divisionName: targetName,
+      assignmentNotes: '',
+    }).catch((err) => console.warn('[RestoreDivision] Backend sync warning:', err));
 
     // Send Notification to Employee
     hrmService.addNotification({
@@ -2071,7 +2132,7 @@ export const hrmService = {
 
   deleteUser: (id: string) => {
     const users = hrmService.getUsers().filter((u) => u.id !== id);
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    safeSetJson(STORAGE_KEYS.USERS, users);
     window.dispatchEvent(new Event('hrm_users_updated'));
 
     // Delete from PostgreSQL database directly
@@ -2122,11 +2183,11 @@ export const hrmService = {
         users[idx] = { ...users[idx], ...backendUser };
       }
 
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+      safeSetJson(STORAGE_KEYS.USERS, users);
 
       const currentUser = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
       if (currentUser && (currentUser.id === userId || currentUser.nip === userId)) {
-        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(users[idx]));
+        safeSetJson(STORAGE_KEYS.CURRENT_USER, users[idx]);
       }
 
       window.dispatchEvent(new Event('hrm_users_updated'));
@@ -2324,7 +2385,7 @@ export const hrmService = {
       users[idx].deviceModel = currentDeviceModel;
       (users[idx] as any).isDeviceBound = true;
       (users[idx] as any).deviceBoundAt = new Date().toISOString();
-      hrmService.saveUsers(users);
+      safeSetJson(STORAGE_KEYS.USERS, users);
     }
 
     // 2. Update current logged-in user in session/localStorage

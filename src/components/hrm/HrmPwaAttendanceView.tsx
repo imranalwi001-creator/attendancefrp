@@ -433,13 +433,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const handleShutterCaptureRef = useRef<() => void>();
   const autoCaptureCooldownUntilRef = useRef<number>(0);
 
-  // Active Liveness Challenge States (Anti-Foto Statis & Anti-Layar HP)
+  // Active Liveness Challenge States (Strict Anti-Foto Statis & Anti-Layar HP)
   const livenessPassedRef = useRef<boolean>(false);
   const [, setIsLivenessPassed] = useState<boolean>(false);
-  const eyeBlinkStageRef = useRef<'waiting_close' | 'waiting_open' | 'done'>('waiting_close');
+  const blinkStateRef = useRef<'baseline_open' | 'blink_closed' | 'verified'>('baseline_open');
+  const openFramesCountRef = useRef<number>(0);
+  const baselineOpenEarRef = useRef<number>(0.26);
+  const blinkClosedAtRef = useRef<number | null>(null);
   const staticFaceDetectedSinceRef = useRef<number | null>(null);
   const earHistoryRef = useRef<number[]>([]);
-  const initialYawRef = useRef<number | null>(null);
 
   // Active Real-time Face Detection Loop on Camera Stream with Active Liveness Verification
   useEffect(() => {
@@ -455,10 +457,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       isTriggeringAutoRef.current = false;
       livenessPassedRef.current = false;
       setIsLivenessPassed(false);
-      eyeBlinkStageRef.current = 'waiting_close';
+      blinkStateRef.current = 'baseline_open';
+      openFramesCountRef.current = 0;
+      baselineOpenEarRef.current = 0.26;
+      blinkClosedAtRef.current = null;
       staticFaceDetectedSinceRef.current = null;
       earHistoryRef.current = [];
-      initialYawRef.current = null;
       return;
     }
 
@@ -482,9 +486,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           setAutoCaptureProgress(0);
           staticFaceDetectedSinceRef.current = null;
           earHistoryRef.current = [];
-          initialYawRef.current = null;
           if (!livenessPassedRef.current) {
-            eyeBlinkStageRef.current = 'waiting_close';
+            blinkStateRef.current = 'baseline_open';
+            openFramesCountRef.current = 0;
+            blinkClosedAtRef.current = null;
           }
           setLiveFaceStatus({
             detected: false,
@@ -528,32 +533,42 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
             // ─── ACTIVE LIVENESS VERIFICATION (ANTI-FOTO STATIS / LAYAR HP) ───
             if (!livenessPassedRef.current) {
-              // 1. Analisis Eye Aspect Ratio (EAR) untuk deteksi kedipan mata nyata
-              if (typeof detail.ear === 'number' && !isNaN(detail.ear)) {
-                earHistoryRef.current.push(detail.ear);
-                if (earHistoryRef.current.length > 20) earHistoryRef.current.shift();
+              const ear = typeof detail.ear === 'number' && !isNaN(detail.ear) ? detail.ear : null;
 
-                // Deteksi Kedip: Mata Terbuka -> Terpejam (EAR < 0.195) -> Terbuka Kembali (EAR >= 0.22)
-                if (eyeBlinkStageRef.current === 'waiting_close') {
-                  if (detail.ear <= 0.195) {
-                    eyeBlinkStageRef.current = 'waiting_open';
-                  }
-                } else if (eyeBlinkStageRef.current === 'waiting_open') {
-                  if (detail.ear >= 0.22) {
-                    eyeBlinkStageRef.current = 'done';
-                    livenessPassedRef.current = true;
-                    setIsLivenessPassed(true);
-                  }
-                }
-              }
+              if (ear !== null) {
+                earHistoryRef.current.push(ear);
+                if (earHistoryRef.current.length > 25) earHistoryRef.current.shift();
 
-              // 2. Alternatif Liveness: Micro-turn kepala / 3D Parallax jika memakai kacamata
-              if (!livenessPassedRef.current && typeof detail.headYawRatio === 'number') {
-                if (initialYawRef.current === null) {
-                  initialYawRef.current = detail.headYawRatio;
-                } else {
-                  const yawDiff = Math.abs(detail.headYawRatio - initialYawRef.current);
-                  if (yawDiff >= 0.08) {
+                // FASE 1: Deteksi Mata Terbuka Nyata (Baseline Open)
+                // Wajib stabil dengan mata terbuka (EAR >= 0.22) selama minimal 3 tick (~360ms)
+                if (blinkStateRef.current === 'baseline_open') {
+                  if (ear >= 0.22) {
+                    openFramesCountRef.current += 1;
+                    if (openFramesCountRef.current >= 3) {
+                      baselineOpenEarRef.current = Math.max(ear, 0.24);
+                    }
+                  } else {
+                    openFramesCountRef.current = 0;
+                  }
+
+                  // Transisi ke FASE 2: Menunggu Kedipan Mata (Penutupan Kelopak Mata Nyata)
+                  if (openFramesCountRef.current >= 3 && ear <= 0.175 && (baselineOpenEarRef.current - ear >= 0.055)) {
+                    blinkClosedAtRef.current = now;
+                    blinkStateRef.current = 'blink_closed';
+                  }
+                } 
+                // FASE 2: Kelopak mata terpejam terdeteksi, menunggu mata terbuka kembali (Re-Open)
+                else if (blinkStateRef.current === 'blink_closed') {
+                  const closedDuration = now - (blinkClosedAtRef.current || now);
+
+                  // Jika mata terpejam terlalu lama (> 1200ms), batalkan & reset ke baseline
+                  if (closedDuration > 1200) {
+                    blinkStateRef.current = 'baseline_open';
+                    openFramesCountRef.current = 0;
+                    blinkClosedAtRef.current = null;
+                  } else if (ear >= 0.215 && closedDuration >= 70) {
+                    // Kedipan fisiologis manusia sah dan selesai!
+                    blinkStateRef.current = 'verified';
                     livenessPassedRef.current = true;
                     setIsLivenessPassed(true);
                   }
@@ -568,19 +583,23 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   const m = earHistoryRef.current.reduce((a, b) => a + b, 0) / earHistoryRef.current.length;
                   earVariance = earHistoryRef.current.reduce((a, b) => a + Math.pow(b - m, 2), 0) / earHistoryRef.current.length;
                 }
-                const isSuspectedStaticScreen = staticDuration > 3000 && earVariance < 0.0012;
+                const isSuspectedStaticScreen = staticDuration > 2500 && earVariance < 0.0008;
 
                 setAutoCaptureProgress(0);
                 greenSinceRef.current = null;
                 isTriggeringAutoRef.current = false;
 
+                const statusMsg = blinkStateRef.current === 'blink_closed'
+                  ? '👁️ Kedipan terdeteksi, buka mata Anda...'
+                  : isSuspectedStaticScreen
+                  ? '⚠️ Foto di Layar HP Ditolak! Wajib berkedip di depan kamera.'
+                  : '👁️ Silakan KEDIPKAN MATA Anda untuk verifikasi presensi...';
+
                 setLiveFaceStatus({
                   detected: true,
                   isGreen: false,
                   confidence: 65,
-                  message: isSuspectedStaticScreen
-                    ? '⚠️ Layar HP/Foto statis terdeteksi! Silakan tatap langsung & kedipkan mata.'
-                    : '👁️ Silakan KEDIPKAN MATA Anda untuk verifikasi presensi...',
+                  message: statusMsg,
                 });
                 return;
               }
@@ -1549,6 +1568,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     greenSinceRef.current = null;
     isTriggeringAutoRef.current = false;
     setAutoCaptureProgress(0);
+    livenessPassedRef.current = false;
+    setIsLivenessPassed(false);
+    blinkStateRef.current = 'baseline_open';
+    openFramesCountRef.current = 0;
+    baselineOpenEarRef.current = 0.26;
+    blinkClosedAtRef.current = null;
+    staticFaceDetectedSinceRef.current = null;
+    earHistoryRef.current = [];
 
     if (!biometricService.isReady()) {
       biometricService.loadModels().catch((e) => console.warn('[FaceModels Load]', e));
@@ -1619,6 +1646,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     greenSinceRef.current = null;
     isTriggeringAutoRef.current = false;
     setAutoCaptureProgress(0);
+    livenessPassedRef.current = false;
+    setIsLivenessPassed(false);
+    blinkStateRef.current = 'baseline_open';
+    openFramesCountRef.current = 0;
+    baselineOpenEarRef.current = 0.26;
+    blinkClosedAtRef.current = null;
+    staticFaceDetectedSinceRef.current = null;
+    earHistoryRef.current = [];
   };
 
   const toggleFacingMode = async () => {
@@ -1918,6 +1953,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       return;
     }
 
+    const toastLoadingId = 'pwa-attendance-submitting-' + Date.now();
     isCapturingRef.current = true;
     setIsCapturing(true);
 
@@ -1930,7 +1966,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     if (!livenessPassedRef.current && !isSpotCheckAction) {
       toast.dismiss(toastLoadingId);
       toast.error(
-        'Presensi Ditolak! Verifikasi keaktifan wajah belum lulus. Silakan tatap kamera dan kedipkan mata Anda secara nyata (Bukan foto/layar HP).',
+        'Presensi Ditolak! Verifikasi keaktifan wajah belum lulus. Wajib mengedipkan mata secara nyata di depan kamera (Bukan foto/layar HP).',
         { id: 'liveness-guard', duration: 4500 }
       );
       isCapturingRef.current = false;

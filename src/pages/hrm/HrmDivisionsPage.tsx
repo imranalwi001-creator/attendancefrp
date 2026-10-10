@@ -848,7 +848,7 @@ export const HrmDivisionsPage: React.FC = () => {
 
     try {
       setIsAddingEmp(true);
-      hrmService.assignUserDivision(
+      await hrmService.assignUserDivision(
         targetUser.id,
         viewEmployeesDiv.id,
         `Ditugaskan ke divisi ${viewEmployeesDiv.name}`,
@@ -860,7 +860,8 @@ export const HrmDivisionsPage: React.FC = () => {
       setSearchEmpToAdd('');
       toast.success(`${targetUser.fullName} berhasil ditambahkan ke divisi ${viewEmployeesDiv.name}!`);
     } catch (err: any) {
-      toast.error(err.message || 'Gagal menambahkan karyawan ke divisi.');
+      console.error('[AddEmployeeToDivision Error]', err);
+      toast.error(err?.message || 'Gagal menambahkan karyawan ke divisi.');
     } finally {
       setIsAddingEmp(false);
     }

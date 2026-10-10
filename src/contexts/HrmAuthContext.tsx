@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { UserProfile } from '@/types/hrm';
-import { hrmService } from '@/services/hrmService';
+import { hrmService, safeSetJson } from '@/services/hrmService';
 
 import { api } from '@/services/apiClient';
 
@@ -63,7 +63,7 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
               const idx = allUsers.findIndex((u) => u.id === freshUser.id);
               if (idx !== -1) {
                 allUsers[idx] = { ...allUsers[idx], ...freshUser };
-                localStorage.setItem('hrm_users', JSON.stringify(allUsers));
+                safeSetJson('hrm_users', allUsers);
               }
               window.dispatchEvent(new Event('hrm_users_updated'));
             }
@@ -165,7 +165,7 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const uIdx = users.findIndex((u) => u.id === found.id);
           if (uIdx !== -1) {
             users[uIdx] = found;
-            localStorage.setItem('hrm_users', JSON.stringify(users));
+            safeSetJson('hrm_users', users);
           }
         }
       }
@@ -209,7 +209,7 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const idx = allUsers.findIndex((u) => u.id === freshUser.id);
         if (idx !== -1) {
           allUsers[idx] = { ...allUsers[idx], ...freshUser };
-          localStorage.setItem('hrm_users', JSON.stringify(allUsers));
+          safeSetJson('hrm_users', allUsers);
         }
         window.dispatchEvent(new Event('hrm_users_updated'));
       }
