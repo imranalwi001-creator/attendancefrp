@@ -1,9 +1,0 @@
-export { MapelListSkeleton } from './MapelListSkeleton';
-export { MateriDetailSkeleton } from './MateriDetailSkeleton';
-export { AdminUsersSkeleton } from './AdminUsersSkeleton';
-export { AdminPenilaianSkeleton } from './AdminPenilaianSkeleton';
-export { RaportSkeleton } from './RaportSkeleton';
-export { RaportMenuSkeleton } from './RaportMenuSkeleton';
-export { AdminDashboardSkeleton } from './AdminDashboardSkeleton';
-export { UserDetailSkeleton } from './UserDetailSkeleton';
-export { StatCardSkeleton } from './StatCardSkeleton';
