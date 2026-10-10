@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { toast } from 'sonner';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
+import { api } from '@/services/apiClient';
 import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation } from '@/types/hrm';
 import {
   UserCheck,
@@ -119,6 +120,19 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     }
   };
 
+  const fetchLiveUsersFast = async () => {
+    try {
+      const res = await api.get<{ success: boolean; data: UserProfile[] }>('/users');
+      if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+        const activeUsers = res.data.filter((u) => u.isActive);
+        setUsers(activeUsers);
+        hrmService.setInMemoryUsers(res.data);
+      }
+    } catch (e) {
+      console.warn('[LiveMonitoring] Users fetch note:', e);
+    }
+  };
+
   const loadData = () => {
     const today = getTodayDateStr();
     setUsers(hrmService.getUsers().filter((u) => u.isActive));
@@ -129,6 +143,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     setOvertimes(hrmService.getOvertimeRecords());
     setPerimeterViolations(hrmService.getPerimeterViolations());
     loadFieldAgents();
+    fetchLiveUsersFast();
   };
 
   const fetchLiveAttendancesFast = async () => {
@@ -154,19 +169,23 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    fetchLiveUsersFast();
     fetchLiveAttendancesFast();
     hrmService.syncWithBackend().then(() => {
       loadData();
+      fetchLiveUsersFast();
       fetchLiveAttendancesFast();
     });
 
     const handleUpdated = () => {
       loadData();
+      fetchLiveUsersFast();
       fetchLiveAttendancesFast();
     };
     const handlePing = () => loadFieldAgents();
     window.addEventListener('hrm_data_updated', handleUpdated);
     window.addEventListener('hrm_attendance_updated', handleUpdated);
+    window.addEventListener('hrm_users_updated', handleUpdated);
     window.addEventListener('hrm_field_ping_received', handlePing);
     window.addEventListener('hrm_patrol_check_submitted', handlePing);
 
@@ -178,12 +197,16 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
     // Master background sync setiap 30 detik
     const masterInterval = setInterval(() => {
-      hrmService.syncWithBackend().then(() => loadData());
+      hrmService.syncWithBackend().then(() => {
+        loadData();
+        fetchLiveUsersFast();
+      });
     }, 30000);
 
     return () => {
       window.removeEventListener('hrm_data_updated', handleUpdated);
       window.removeEventListener('hrm_attendance_updated', handleUpdated);
+      window.removeEventListener('hrm_users_updated', handleUpdated);
       window.removeEventListener('hrm_field_ping_received', handlePing);
       window.removeEventListener('hrm_patrol_check_submitted', handlePing);
       clearInterval(fastInterval);
@@ -892,17 +915,36 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-3">
                         <div className="relative">
-                          {agent.avatarUrl || agent.facePhotoUrl ? (
-                            <img
-                              src={agent.avatarUrl || agent.facePhotoUrl}
-                              alt={agent.fullName}
-                              className="w-11 h-11 rounded-full object-cover border-2 border-indigo-500/40"
-                            />
-                          ) : (
-                            <div className="w-11 h-11 rounded-full bg-indigo-600/20 text-indigo-700 dark:text-indigo-300 font-bold flex items-center justify-center border border-indigo-500/30 text-sm">
-                              {agent.fullName?.charAt(0) || 'P'}
-                            </div>
-                          )}
+                          {(() => {
+                            const rawAgentPhoto = agent.avatarUrl || agent.facePhotoUrl || (agent as any).faceEnrolledPhoto || (agent as any).face_enrolled_photo || (agent as any).face_photo_url;
+                            const agentPhoto = (typeof rawAgentPhoto === 'string' && (rawAgentPhoto.startsWith('data:image/') || rawAgentPhoto.startsWith('http') || rawAgentPhoto.startsWith('/')))
+                              ? rawAgentPhoto
+                              : null;
+                            return agentPhoto ? (
+                              <img
+                                src={agentPhoto}
+                                alt={agent.fullName}
+                                className="w-11 h-11 rounded-full object-cover border-2 border-indigo-500/40"
+                                onError={(e) => {
+                                  const target = e.currentTarget;
+                                  target.style.display = 'none';
+                                  const fallback = target.nextElementSibling;
+                                  if (fallback) (fallback as HTMLElement).style.display = 'flex';
+                                }}
+                              />
+                            ) : null;
+                          })()}
+                          <div
+                            className="w-11 h-11 rounded-full bg-indigo-600/20 text-indigo-700 dark:text-indigo-300 font-bold flex items-center justify-center border border-indigo-500/30 text-sm"
+                            style={{
+                              display: (() => {
+                                const rawAgentPhoto = agent.avatarUrl || agent.facePhotoUrl || (agent as any).faceEnrolledPhoto || (agent as any).face_enrolled_photo || (agent as any).face_photo_url;
+                                return (typeof rawAgentPhoto === 'string' && (rawAgentPhoto.startsWith('data:image/') || rawAgentPhoto.startsWith('http') || rawAgentPhoto.startsWith('/'))) ? 'none' : 'flex';
+                              })(),
+                            }}
+                          >
+                            {agent.fullName?.charAt(0) || 'P'}
+                          </div>
                           <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-card ${
                             isBreached ? 'bg-rose-500 animate-ping' : isLiveNow ? 'bg-emerald-500 animate-pulse' : isStale ? 'bg-amber-500' : 'bg-slate-400'
                           }`} />
@@ -1237,14 +1279,16 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         <TableCell>
                           <div className="flex items-center gap-2.5">
                             {(() => {
-                              const photo = u.avatarUrl || u.faceEnrolledPhoto || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
+                              const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
+                              const photo = (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/')))
+                                ? rawPhoto
+                                : null;
                               return photo ? (
                                 <img
                                   src={photo}
                                   alt={u.fullName}
                                   className="w-8 h-8 rounded-full object-cover border border-primary/20 shrink-0 shadow-xs"
                                   onError={(e) => {
-                                    // Fallback ke inisial jika foto rusak
                                     const target = e.currentTarget;
                                     target.style.display = 'none';
                                     const fallback = target.nextElementSibling;
@@ -1255,7 +1299,12 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                             })()}
                             <div
                               className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0"
-                              style={{ display: (u.avatarUrl || u.faceEnrolledPhoto || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn) ? 'none' : 'flex' }}
+                              style={{
+                                display: (() => {
+                                  const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
+                                  return (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/'))) ? 'none' : 'flex';
+                                })(),
+                              }}
                             >
                               {u.fullName.charAt(0)}
                             </div>
@@ -1506,7 +1555,34 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 <CardContent className="p-4 space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-9 h-9 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
+                      {(() => {
+                        const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
+                        const photo = (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/')))
+                          ? rawPhoto
+                          : null;
+                        return photo ? (
+                          <img
+                            src={photo}
+                            alt={u.fullName}
+                            className="w-9 h-9 rounded-full object-cover border border-primary/20 shrink-0 shadow-xs"
+                            onError={(e) => {
+                              const target = e.currentTarget;
+                              target.style.display = 'none';
+                              const fallback = target.nextElementSibling;
+                              if (fallback) (fallback as HTMLElement).style.display = 'flex';
+                            }}
+                          />
+                        ) : null;
+                      })()}
+                      <div
+                        className="w-9 h-9 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0"
+                        style={{
+                          display: (() => {
+                            const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
+                            return (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/'))) ? 'none' : 'flex';
+                          })(),
+                        }}
+                      >
                         {u.fullName.charAt(0)}
                       </div>
                       <div>
