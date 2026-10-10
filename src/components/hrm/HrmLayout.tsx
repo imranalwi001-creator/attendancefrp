@@ -534,20 +534,26 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
           )}
         </div>
 
-        {/* User Card */}
         <div className={cn('m-2 rounded-xl bg-muted/30 border border-border transition-all', isCompact ? 'p-2 flex justify-center' : 'p-3')}>
           <div className={cn('flex items-center', isCompact ? 'justify-center' : 'gap-2.5')}>
-            {(user?.avatarUrl || (user as any)?.faceEnrolledPhoto) ? (
-              <img
-                src={user?.avatarUrl || (user as any)?.faceEnrolledPhoto}
-                alt={user?.fullName || ''}
-                className="w-8 h-8 rounded-full object-cover shadow-2xs border border-primary/20 shrink-0"
-              />
-            ) : (
-              <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground font-semibold flex items-center justify-center text-xs shadow-2xs shrink-0">
-                {user?.fullName?.charAt(0) || 'U'}
-              </div>
-            )}
+            {(() => {
+              const rawUserPhoto = user?.avatarUrl || (user as any)?.faceEnrolledPhoto;
+              const isRealPhoto = typeof rawUserPhoto === 'string' && (rawUserPhoto.startsWith('data:image/') || rawUserPhoto.startsWith('http') || rawUserPhoto.startsWith('/'));
+              return isRealPhoto ? (
+                <img
+                  src={rawUserPhoto}
+                  alt={user?.fullName || ''}
+                  className="w-8 h-8 rounded-full object-cover shadow-2xs border border-primary/20 shrink-0"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                  }}
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground font-semibold flex items-center justify-center text-xs shadow-2xs shrink-0">
+                  {user?.fullName?.charAt(0) || 'U'}
+                </div>
+              );
+            })()}
             {!isCompact && (
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-semibold text-foreground truncate">{user?.fullName}</p>
@@ -655,17 +661,24 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
           style={{ top: 'calc(54px + max(env(safe-area-inset-top, 0px), 24px))' }}
         >
           <div className="p-3 bg-muted rounded-xl mb-2 flex items-center gap-3">
-            {(user?.avatarUrl || (user as any)?.faceEnrolledPhoto) ? (
-              <img
-                src={user?.avatarUrl || (user as any)?.faceEnrolledPhoto}
-                alt={user?.fullName || ''}
-                className="w-9 h-9 rounded-full object-cover shadow-sm border border-primary/20 shrink-0"
-              />
-            ) : (
-              <div className="w-9 h-9 rounded-full bg-primary text-primary-foreground font-bold flex items-center justify-center text-xs shrink-0">
-                {user?.fullName?.charAt(0) || 'U'}
-              </div>
-            )}
+            {(() => {
+              const rawUserPhoto = user?.avatarUrl || (user as any)?.faceEnrolledPhoto;
+              const isRealPhoto = typeof rawUserPhoto === 'string' && (rawUserPhoto.startsWith('data:image/') || rawUserPhoto.startsWith('http') || rawUserPhoto.startsWith('/'));
+              return isRealPhoto ? (
+                <img
+                  src={rawUserPhoto}
+                  alt={user?.fullName || ''}
+                  className="w-9 h-9 rounded-full object-cover shadow-sm border border-primary/20 shrink-0"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                  }}
+                />
+              ) : (
+                <div className="w-9 h-9 rounded-full bg-primary text-primary-foreground font-bold flex items-center justify-center text-xs shrink-0">
+                  {user?.fullName?.charAt(0) || 'U'}
+                </div>
+              );
+            })()}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <p className="font-semibold text-foreground text-sm truncate">{user?.fullName}</p>

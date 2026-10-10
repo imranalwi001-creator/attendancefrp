@@ -1028,13 +1028,24 @@ export const HrmDivisionsPage: React.FC = () => {
                           className="flex items-center gap-1 bg-muted/40 border border-border px-2 py-1 rounded-lg text-[11px] truncate max-w-[120px]"
                           title={`${emp.fullName} (${emp.nip})`}
                         >
-                          {(emp.avatarUrl || emp.faceEnrolledPhoto) ? (
-                            <img src={emp.avatarUrl || emp.faceEnrolledPhoto} alt={emp.fullName} className="w-4 h-4 rounded-full object-cover shrink-0" />
-                          ) : (
-                            <div className="w-4 h-4 rounded-full bg-primary/20 text-primary font-bold flex items-center justify-center text-[9px] shrink-0">
-                              {emp.fullName.charAt(0)}
-                            </div>
-                          )}
+                          {(() => {
+                            const rawEmpPhoto = emp.avatarUrl || emp.faceEnrolledPhoto;
+                            const isRealEmpPhoto = typeof rawEmpPhoto === 'string' && (rawEmpPhoto.startsWith('data:image/') || rawEmpPhoto.startsWith('http') || rawEmpPhoto.startsWith('/'));
+                            return isRealEmpPhoto ? (
+                              <img
+                                src={rawEmpPhoto}
+                                alt={emp.fullName}
+                                className="w-4 h-4 rounded-full object-cover shrink-0"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = 'none';
+                                }}
+                              />
+                            ) : (
+                              <div className="w-4 h-4 rounded-full bg-primary/20 text-primary font-bold flex items-center justify-center text-[9px] shrink-0">
+                                {emp.fullName.charAt(0)}
+                              </div>
+                            );
+                          })()}
                           <span className="truncate text-foreground font-medium">{emp.fullName.split(' ')[0]}</span>
                         </div>
                       ))}
@@ -1777,17 +1788,24 @@ export const HrmDivisionsPage: React.FC = () => {
                   className="p-3 bg-card border border-border rounded-xl flex items-center justify-between gap-3 hover:border-primary/20 transition-colors"
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    {(emp.avatarUrl || emp.faceEnrolledPhoto) ? (
-                      <img
-                        src={emp.avatarUrl || emp.faceEnrolledPhoto}
-                        alt={emp.fullName}
-                        className="w-10 h-10 rounded-full object-cover border border-primary/20 shrink-0"
-                      />
-                    ) : (
-                      <div className="w-10 h-10 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-sm shrink-0">
-                        {emp.fullName.charAt(0)}
-                      </div>
-                    )}
+                    {(() => {
+                      const rawEmpPhoto = emp.avatarUrl || emp.faceEnrolledPhoto;
+                      const isRealEmpPhoto = typeof rawEmpPhoto === 'string' && (rawEmpPhoto.startsWith('data:image/') || rawEmpPhoto.startsWith('http') || rawEmpPhoto.startsWith('/'));
+                      return isRealEmpPhoto ? (
+                        <img
+                          src={rawEmpPhoto}
+                          alt={emp.fullName}
+                          className="w-10 h-10 rounded-full object-cover border border-primary/20 shrink-0"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-sm shrink-0">
+                          {emp.fullName.charAt(0)}
+                        </div>
+                      );
+                    })()}
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <p className="font-semibold text-foreground text-xs truncate">{emp.fullName}</p>

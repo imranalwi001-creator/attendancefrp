@@ -222,19 +222,20 @@ export const HrmEmployeesPage: React.FC = () => {
   };
 
   const loadData = async () => {
-    // 1. Initial immediate paint from local storage
+    // 1. Initial immediate paint from inMemory / local storage
     setUsers(hrmService.getUsers());
     setRoles(hrmService.getRoles());
     setDivisions(hrmService.getDivisions());
     setShifts(hrmService.getShifts());
 
     // 2. Direct fetch from PostgreSQL users table for 100% fresh employee biometrics & photo
+    let fetchedUsers: UserProfile[] | null = null;
     try {
       const res = await api.get<{ success: boolean; data: UserProfile[] }>('/users');
       if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+        fetchedUsers = res.data;
         setUsers(res.data);
         hrmService.setInMemoryUsers(res.data);
-        safeSetJson('hrm_users', res.data);
       }
     } catch {
       // Continue to syncWithBackend fallback
@@ -243,7 +244,9 @@ export const HrmEmployeesPage: React.FC = () => {
     // 3. Synchronize full dataset (roles, shifts, divisions, leaves)
     const synced = await hrmService.syncWithBackend().catch(() => false);
     if (synced) {
-      setUsers(hrmService.getUsers());
+      if (!fetchedUsers) {
+        setUsers(hrmService.getUsers());
+      }
       setRoles(hrmService.getRoles());
       setDivisions(hrmService.getDivisions());
       setShifts(hrmService.getShifts());
@@ -948,19 +951,35 @@ export const HrmEmployeesPage: React.FC = () => {
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2.5">
                           {(() => {
-                            const photo = u.avatarUrl || u.faceEnrolledPhoto;
+                            const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl;
+                            const photo = (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/')))
+                              ? rawPhoto
+                              : null;
                             return photo ? (
                               <img
                                 src={photo}
                                 alt={u.fullName}
-                                className="w-8 h-8 rounded-full object-cover border border-primary/20 shrink-0"
+                                className="w-8 h-8 rounded-full object-cover border border-primary/20 shrink-0 shadow-xs"
+                                onError={(e) => {
+                                  const target = e.currentTarget;
+                                  target.style.display = 'none';
+                                  const fallback = target.nextElementSibling;
+                                  if (fallback) (fallback as HTMLElement).style.display = 'flex';
+                                }}
                               />
-                            ) : (
-                              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
-                                {u.fullName.charAt(0)}
-                              </div>
-                            );
+                            ) : null;
                           })()}
+                          <div
+                            className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0"
+                            style={{
+                              display: (() => {
+                                const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl;
+                                return (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/'))) ? 'none' : 'flex';
+                              })(),
+                            }}
+                          >
+                            {u.fullName.charAt(0)}
+                          </div>
                           <div>
                             <div className="flex items-center gap-1.5">
                               <p className="font-semibold text-foreground">{u.fullName}</p>

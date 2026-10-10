@@ -653,17 +653,18 @@ export const sanitizeUserRecords = (records: any[]): any[] => {
     // Foto master biometrik berukuran 200KB - 800KB base64 per karyawan.
     // Jika disimpan mentah di localStorage hrm_users, langsung melebihi kuota 5MB browser!
     // Foto master tersimpan aman secara permanen di database PostgreSQL hrm_profiles.
-    if (typeof clean.faceEnrolledPhoto === 'string' && clean.faceEnrolledPhoto.startsWith('data:image/')) {
-      clean.faceEnrolledPhoto = '[Tersimpan di Database PostgreSQL]';
+    // PENTING: Gunakan null (BUKAN teks string placeholder) agar tidak pernah di-render sebagai URL gambar yang rusak!
+    if (typeof clean.faceEnrolledPhoto === 'string' && (clean.faceEnrolledPhoto.startsWith('data:image/') || clean.faceEnrolledPhoto.includes('PostgreSQL'))) {
+      clean.faceEnrolledPhoto = null;
     }
-    if (typeof clean.face_enrolled_photo === 'string' && clean.face_enrolled_photo.startsWith('data:image/')) {
-      clean.face_enrolled_photo = '[Tersimpan di Database PostgreSQL]';
+    if (typeof clean.face_enrolled_photo === 'string' && (clean.face_enrolled_photo.startsWith('data:image/') || clean.face_enrolled_photo.includes('PostgreSQL'))) {
+      clean.face_enrolled_photo = null;
     }
     // Hapus SEMUA base64 avatar dari cache localStorage agar tidak meledakkan kuota (cukup URL http/null)
-    if (typeof clean.avatarUrl === 'string' && clean.avatarUrl.startsWith('data:image/')) {
+    if (typeof clean.avatarUrl === 'string' && (clean.avatarUrl.startsWith('data:image/') || clean.avatarUrl.includes('PostgreSQL'))) {
       clean.avatarUrl = null;
     }
-    if (typeof clean.avatar_url === 'string' && clean.avatar_url.startsWith('data:image/')) {
+    if (typeof clean.avatar_url === 'string' && (clean.avatar_url.startsWith('data:image/') || clean.avatar_url.includes('PostgreSQL'))) {
       clean.avatar_url = null;
     }
     // Hapus array descriptor raksasa dari serialisasi hrm_users di localStorage
@@ -677,7 +678,25 @@ export const sanitizeUserRecords = (records: any[]): any[] => {
 export const safeSetJson = (key: string, data: any): boolean => {
   try {
     if (key === STORAGE_KEYS.USERS && Array.isArray(data)) {
-      inMemoryUsers = data;
+      if (!inMemoryUsers || inMemoryUsers.length === 0) {
+        inMemoryUsers = data;
+      } else {
+        inMemoryUsers = data.map((u: any) => {
+          const ex = inMemoryUsers?.find((p) => p.id === u.id);
+          const exPhoto = ex?.avatarUrl || ex?.faceEnrolledPhoto;
+          const uPhoto = u.avatarUrl || u.faceEnrolledPhoto;
+          const isUPhotoValid = typeof uPhoto === 'string' && (uPhoto.startsWith('data:image/') || uPhoto.startsWith('http') || uPhoto.startsWith('/'));
+          const isExPhotoValid = typeof exPhoto === 'string' && (exPhoto.startsWith('data:image/') || exPhoto.startsWith('http') || exPhoto.startsWith('/'));
+          if (!isUPhotoValid && isExPhotoValid && ex) {
+            return {
+              ...u,
+              avatarUrl: ex.avatarUrl || u.avatarUrl,
+              faceEnrolledPhoto: ex.faceEnrolledPhoto || u.faceEnrolledPhoto,
+            };
+          }
+          return u;
+        });
+      }
     }
     let toStore = data;
     if (key === STORAGE_KEYS.ATTENDANCE && Array.isArray(data)) {

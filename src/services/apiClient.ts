@@ -37,7 +37,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   };
 
   const controller = new AbortController();
-  const timeoutMs = endpoint.includes('/bootstrap') ? 10000 : 8000;
+  const timeoutMs = (endpoint.includes('/bootstrap') || endpoint.includes('/users')) ? 30000 : 15000;
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
