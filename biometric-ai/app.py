@@ -154,6 +154,74 @@ async def extract_embedding_json(body: ExtractBase64Request):
         return {"success": False, "error": str(e)}
 
 
+def check_presentation_attack(img: np.ndarray, bbox: List[int]) -> tuple:
+    """
+    ISO/IEC 30107 Presentation Attack Detection (PAD).
+    Detects if the face is presented via secondary smartphone, tablet, screen replay, or video call.
+    """
+    try:
+        h, w = img.shape[:2]
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        face_w = x2 - x1
+        face_h = y2 - y1
+
+        # 1. Scale ratio guard: A real selfie face takes at least 30% of image width
+        ratio = float(face_w) / w if w > 0 else 0
+        if ratio < 0.30:
+            return True, "Wajah terlalu kecil / jauh dari kamera (Kecurangan Layar HP Sekunder Ditolak)"
+
+        # 2. Smartphone bezel & rectangular display border detection
+        pad_x = int(face_w * 0.55)
+        pad_y = int(face_h * 0.55)
+        rx1 = max(0, x1 - pad_x)
+        ry1 = max(0, y1 - pad_y)
+        rx2 = min(w, x2 + pad_x)
+        ry2 = min(h, y2 + pad_y)
+
+        crop = img[ry1:ry2, rx1:rx2]
+        if crop.size > 0:
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            edges = cv2.Canny(blurred, 35, 110)
+
+            # Detect straight parallel chassis lines of a secondary smartphone
+            lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=35, minLineLength=int(face_h * 0.45), maxLineGap=20)
+            if lines is not None:
+                vertical_edges = 0
+                for line in lines:
+                    lx1, ly1, lx2, ly2 = line[0]
+                    dx = abs(lx2 - lx1)
+                    dy = abs(ly2 - ly1)
+                    if dx <= dy * 0.22 and dy >= face_h * 0.4:
+                        vertical_edges += 1
+                if vertical_edges >= 2:
+                    return True, "Terdeteksi tepi lurus fisik casing / bingkai layar HP sekunder (Replay Attack Ditolak)"
+
+            contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if area > (face_w * face_h * 0.75):
+                    peri = cv2.arcLength(cnt, True)
+                    approx = cv2.approxPolyDP(cnt, 0.03 * peri, True)
+                    if len(approx) == 4 and cv2.isContourConvex(approx):
+                        bx, by, bw, bh = cv2.boundingRect(approx)
+                        aspect = float(bh) / bw if bw > 0 else 0
+                        if (1.25 <= aspect <= 2.6 or 0.38 <= aspect <= 0.8) and bw > face_w * 0.80:
+                            return True, "Terdeteksi bingkai / bezel layar HP sekunder (Replay Attack Ditolak)"
+
+        # 3. Specular glare & screen wash out
+        face_crop = img[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+        if face_crop.size > 0:
+            fgray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+            glare_count = np.sum(fgray >= 253)
+            if glare_count / fgray.size > 0.07:
+                return True, "Terdeteksi pantulan kaca layar HP / silau layar digital (Screen Glare Ditolak)"
+
+        return False, ""
+    except Exception:
+        return False, ""
+
+
 @app.post("/verify-face")
 async def verify_face(
     file: Optional[UploadFile] = File(None),
@@ -174,7 +242,6 @@ async def verify_face(
             master_vec = master_embedding
 
         master_arr = np.array(master_vec, dtype=np.float32)
-        # Normalize master vector
         norm_val = np.linalg.norm(master_arr)
         if norm_val > 0:
             master_arr = master_arr / norm_val
@@ -197,12 +264,22 @@ async def verify_face(
                 "error": "Wajah tidak terdeteksi pada kamera absensi. Dekatkan wajah ke kamera dengan cahaya yang baik."
             }
 
-        # Select highest-confidence face
         faces.sort(key=lambda x: x.det_score, reverse=True)
         live_face = faces[0]
+
+        # Check Presentation Attack / Screen Replay Detection
+        is_spoof, spoof_reason = check_presentation_attack(img, live_face.bbox)
+        if is_spoof:
+            return {
+                "success": False,
+                "is_match": False,
+                "is_spoof": True,
+                "confidence": 0.0,
+                "error": f"Kecurangan Terdeteksi: {spoof_reason}. Presensi wajib menggunakan wajah asli secara langsung di depan kamera."
+            }
+
         live_vec = live_face.normed_embedding
 
-        # Cosine Similarity between two normalized unit vectors = dot product
         similarity = float(np.dot(live_vec, master_arr))
         threshold = 0.70
         is_match = similarity >= threshold
@@ -245,6 +322,18 @@ async def verify_face_json(body: VerifyBase64Request):
 
         faces.sort(key=lambda x: x.det_score, reverse=True)
         live_face = faces[0]
+
+        # Check Presentation Attack / Screen Replay Detection
+        is_spoof, spoof_reason = check_presentation_attack(img, live_face.bbox)
+        if is_spoof:
+            return {
+                "success": False,
+                "is_match": False,
+                "is_spoof": True,
+                "confidence": 0.0,
+                "error": f"Kecurangan Terdeteksi: {spoof_reason}. Presensi wajib menggunakan wajah asli secara langsung di depan kamera."
+            }
+
         live_vec = live_face.normed_embedding
 
         similarity = float(np.dot(live_vec, master_arr))

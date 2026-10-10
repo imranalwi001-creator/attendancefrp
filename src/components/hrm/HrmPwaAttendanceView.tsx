@@ -433,9 +433,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const handleShutterCaptureRef = useRef<() => void>();
   const autoCaptureCooldownUntilRef = useRef<number>(0);
 
-  // Active Liveness Challenge States (Strict Anti-Foto Statis & Anti-Layar HP)
+  // Active Liveness Challenge States (Strict Anti-Foto Statis & Anti-Layar HP / Video Call Replay)
   const livenessPassedRef = useRef<boolean>(false);
   const [, setIsLivenessPassed] = useState<boolean>(false);
+  const [activeChallenge, setActiveChallenge] = useState<'blink' | 'smile' | 'open_mouth'>('blink');
+  const activeChallengeRef = useRef<'blink' | 'smile' | 'open_mouth'>('blink');
+  const challengeStartedAtRef = useRef<number>(Date.now());
+  const [isChromaticFlashing, setIsChromaticFlashing] = useState<boolean>(false);
+  const flashStateRef = useRef<'idle' | 'flashing' | 'verified' | 'failed'>('idle');
+
   const blinkStateRef = useRef<'waiting_blink' | 'blink_closed' | 'verified'>('waiting_blink');
   const hasEstablishedBaselineRef = useRef<boolean>(false);
   const openFramesCountRef = useRef<number>(0);
@@ -443,6 +449,55 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const blinkClosedAtRef = useRef<number | null>(null);
   const staticFaceDetectedSinceRef = useRef<number | null>(null);
   const earHistoryRef = useRef<number[]>([]);
+
+  // Randomizer for active challenges (Anti pre-recorded video loops)
+  const pickRandomChallenge = () => {
+    const list: ('blink' | 'smile' | 'open_mouth')[] = ['blink', 'smile', 'open_mouth'];
+    const current = activeChallengeRef.current;
+    const pool = list.filter((c) => c !== current);
+    const next = pool[Math.floor(Math.random() * pool.length)] || 'blink';
+    activeChallengeRef.current = next;
+    setActiveChallenge(next);
+    challengeStartedAtRef.current = Date.now();
+    blinkStateRef.current = 'waiting_blink';
+    hasEstablishedBaselineRef.current = false;
+    openFramesCountRef.current = 0;
+    baselineOpenEarRef.current = 0.26;
+    blinkClosedAtRef.current = null;
+    flashStateRef.current = 'idle';
+  };
+
+  // Helper to sample facial skin patch color & luminance for 3D chromatic reflection test
+  const sampleSkinPatch = (box: { x: number; y: number; width: number; height: number }) => {
+    if (!videoRef.current || videoRef.current.videoWidth === 0) return { r: 128, g: 128, b: 128, lum: 128 };
+    try {
+      const c = document.createElement('canvas');
+      c.width = 32;
+      c.height = 32;
+      const ctx = c.getContext('2d');
+      if (!ctx) return { r: 128, g: 128, b: 128, lum: 128 };
+      const sx = Math.max(0, box.x + box.width * 0.35);
+      const sy = Math.max(0, box.y + box.height * 0.20);
+      const sw = Math.max(10, box.width * 0.30);
+      const sh = Math.max(10, box.height * 0.25);
+      ctx.drawImage(videoRef.current, sx, sy, sw, sh, 0, 0, 32, 32);
+      const d = ctx.getImageData(0, 0, 32, 32).data;
+      let rSum = 0, gSum = 0, bSum = 0;
+      const total = 32 * 32;
+      for (let i = 0; i < d.length; i += 4) {
+        rSum += d[i];
+        gSum += d[i + 1];
+        bSum += d[i + 2];
+      }
+      const r = rSum / total;
+      const g = gSum / total;
+      const b = bSum / total;
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      return { r, g, b, lum };
+    } catch {
+      return { r: 128, g: 128, b: 128, lum: 128 };
+    }
+  };
 
   // Active Real-time Face Detection Loop on Camera Stream with Active Liveness Verification
   useEffect(() => {
@@ -458,11 +513,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       isTriggeringAutoRef.current = false;
       livenessPassedRef.current = false;
       setIsLivenessPassed(false);
-      blinkStateRef.current = 'waiting_blink';
-      hasEstablishedBaselineRef.current = false;
-      openFramesCountRef.current = 0;
-      baselineOpenEarRef.current = 0.26;
-      blinkClosedAtRef.current = null;
+      pickRandomChallenge();
       staticFaceDetectedSinceRef.current = null;
       earHistoryRef.current = [];
       return;
@@ -503,9 +554,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           const boxCenterX = detail.box.x + detail.box.width / 2;
           const isCentered = Math.abs(boxCenterX - vw / 2) < vw * 0.35;
           const scaleRatio = detail.box.width / vw;
-          const isGoodScale = scaleRatio >= 0.16 && scaleRatio <= 0.88;
+          // Lapisan 1: Strict Scale Guard (Wajah harus minimal 32% dari frame agar tidak bisa menodongkan HP sekunder)
+          const isGoodScale = scaleRatio >= 0.32 && scaleRatio <= 0.88;
 
-          if (!isGoodScale && scaleRatio < 0.16) {
+          if (!isGoodScale && scaleRatio < 0.32) {
             greenSinceRef.current = null;
             isTriggeringAutoRef.current = false;
             setAutoCaptureProgress(0);
@@ -513,8 +565,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               detected: true,
               isGreen: false,
               confidence: 50,
-              message: 'Dekatkan wajah sedikit ke kamera',
+              message: '⚠️ Dekatkan wajah ke kamera hingga memenuhi bingkai (Layar HP terlalu jauh/kecil)',
             });
+            return;
           } else if (!isCentered) {
             greenSinceRef.current = null;
             isTriggeringAutoRef.current = false;
@@ -525,6 +578,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               confidence: 60,
               message: 'Posisikan wajah tepat di tengah bingkai',
             });
+            return;
           } else {
             // Wajah terdeteksi tepat di tengah & ukuran pas
             const now = Date.now();
@@ -532,81 +586,124 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               staticFaceDetectedSinceRef.current = now;
             }
 
-            // ─── ACTIVE LIVENESS VERIFICATION (ANTI-FOTO STATIS / LAYAR HP) ───
+            // ─── ACTIVE LIVENESS VERIFICATION (ANTI-FOTO STATIS / REKAMAN VIDEO / VIDEO CALL) ───
             if (!livenessPassedRef.current) {
-              const ear = typeof detail.ear === 'number' && !isNaN(detail.ear) ? detail.ear : null;
+              if (flashStateRef.current === 'flashing') {
+                return;
+              }
 
-              if (ear !== null) {
-                earHistoryRef.current.push(ear);
-                if (earHistoryRef.current.length > 25) earHistoryRef.current.shift();
+              // Jika challenge melebihi 7 detik tanpa tuntas, ganti tantangan acak
+              if (now - challengeStartedAtRef.current > 7000) {
+                pickRandomChallenge();
+              }
 
-                // FASE 1: Deteksi Mata Terbuka (Baseline Open)
-                // Cukup 2 tick berturut-turut (~240ms) dengan EAR >= 0.20 untuk mencatat baseline mata terbuka
-                if (!hasEstablishedBaselineRef.current) {
-                  if (ear >= 0.20) {
-                    openFramesCountRef.current += 1;
-                    if (openFramesCountRef.current >= 2) {
-                      hasEstablishedBaselineRef.current = true;
-                      baselineOpenEarRef.current = Math.max(ear, 0.23);
+              const currentChallenge = activeChallengeRef.current;
+              let isChallengeMet = false;
+
+              if (currentChallenge === 'blink') {
+                const ear = typeof detail.ear === 'number' && !isNaN(detail.ear) ? detail.ear : null;
+                if (ear !== null) {
+                  earHistoryRef.current.push(ear);
+                  if (earHistoryRef.current.length > 25) earHistoryRef.current.shift();
+
+                  if (!hasEstablishedBaselineRef.current) {
+                    if (ear >= 0.20) {
+                      openFramesCountRef.current += 1;
+                      if (openFramesCountRef.current >= 2) {
+                        hasEstablishedBaselineRef.current = true;
+                        baselineOpenEarRef.current = Math.max(ear, 0.23);
+                      }
+                    } else {
+                      openFramesCountRef.current = 0;
                     }
-                  } else {
-                    openFramesCountRef.current = 0;
+                  }
+
+                  if (hasEstablishedBaselineRef.current) {
+                    if (blinkStateRef.current === 'waiting_blink') {
+                      if (ear <= 0.185 || (baselineOpenEarRef.current - ear >= 0.045)) {
+                        blinkClosedAtRef.current = now;
+                        blinkStateRef.current = 'blink_closed';
+                      }
+                    } else if (blinkStateRef.current === 'blink_closed') {
+                      const closedDuration = now - (blinkClosedAtRef.current || now);
+                      if (closedDuration > 2500) {
+                        blinkStateRef.current = 'waiting_blink';
+                        blinkClosedAtRef.current = null;
+                      } else if (ear >= 0.205 && closedDuration >= 50) {
+                        blinkStateRef.current = 'verified';
+                        isChallengeMet = true;
+                      }
+                    }
                   }
                 }
+              } else if (currentChallenge === 'smile') {
+                if (typeof detail.smileScore === 'number' && detail.smileScore >= 0.52) {
+                  isChallengeMet = true;
+                }
+              } else if (currentChallenge === 'open_mouth') {
+                if (typeof detail.mar === 'number' && detail.mar >= 0.28) {
+                  isChallengeMet = true;
+                }
+              }
 
-                // FASE 2 & 3: Hanya dievaluasi jika baseline mata terbuka sudah pernah tercatat!
-                if (hasEstablishedBaselineRef.current) {
-                  if (blinkStateRef.current === 'waiting_blink') {
-                    // Deteksi penutupan kelopak mata nyata (EAR turun)
-                    if (ear <= 0.185 || (baselineOpenEarRef.current - ear >= 0.045)) {
-                      blinkClosedAtRef.current = now;
-                      blinkStateRef.current = 'blink_closed';
-                    }
-                  } else if (blinkStateRef.current === 'blink_closed') {
-                    const closedDuration = now - (blinkClosedAtRef.current || now);
+              // Tantangan Gerakan Terpenuhi! Uji Pantulan Cahaya 3D (Chromatic Flash Reflection)
+              if (isChallengeMet) {
+                if (flashStateRef.current === 'idle') {
+                  flashStateRef.current = 'flashing';
+                  const s0 = sampleSkinPatch(detail.box);
+                  setIsChromaticFlashing(true);
 
-                    // Jika mata terpejam lebih dari 2.5 detik (tertidur / foto diam merem), batalkan kembali ke waiting_blink
-                    if (closedDuration > 2500) {
-                      blinkStateRef.current = 'waiting_blink';
-                      blinkClosedAtRef.current = null;
-                    } else if (ear >= 0.205 && closedDuration >= 50) {
-                      // Mata terbuka kembali! Siklus kedipan sah (Terbuka -> Terpejam -> Terbuka) tuntas!
-                      blinkStateRef.current = 'verified';
+                  setTimeout(() => {
+                    if (!isMounted || !videoRef.current) return;
+                    const s1 = sampleSkinPatch(detail.box);
+                    setIsChromaticFlashing(false);
+
+                    const deltaCyan = (s1.g + s1.b) - (s0.g + s0.b);
+                    const deltaLum = s1.lum - s0.lum;
+
+                    // Kulit manusia 3D memantulkan cahaya cyan layar HP secara terukur
+                    // Layar HP sekunder / video call tidak memantulkan cahaya pada pixel video
+                    if (deltaCyan >= 2.2 || deltaLum >= 1.6) {
+                      flashStateRef.current = 'verified';
                       livenessPassedRef.current = true;
                       setIsLivenessPassed(true);
+                    } else {
+                      flashStateRef.current = 'idle';
+                      autoCaptureCooldownUntilRef.current = Date.now() + 3500;
+                      toast.error('⚠️ Terdeteksi Rekaman Layar HP / Video Call! (Tidak terdeteksi pantulan cahaya 3D kulit asli). Presensi Ditolak.', {
+                        id: 'anti-screen-spoof',
+                        duration: 4000
+                      });
+                      pickRandomChallenge();
                     }
-                  }
+                  }, 180);
+                  return;
                 }
               }
 
               // Jika Liveness BELUM Lulus:
-              if (!livenessPassedRef.current) {
-                const staticDuration = now - (staticFaceDetectedSinceRef.current || now);
-                let earVariance = 1.0;
-                if (earHistoryRef.current.length >= 8) {
-                  const m = earHistoryRef.current.reduce((a, b) => a + b, 0) / earHistoryRef.current.length;
-                  earVariance = earHistoryRef.current.reduce((a, b) => a + Math.pow(b - m, 2), 0) / earHistoryRef.current.length;
-                }
-                const isSuspectedStaticScreen = staticDuration > 3000 && earVariance < 0.0006 && !blinkClosedAtRef.current;
+              setAutoCaptureProgress(0);
+              greenSinceRef.current = null;
+              isTriggeringAutoRef.current = false;
 
-                setAutoCaptureProgress(0);
-                greenSinceRef.current = null;
-                isTriggeringAutoRef.current = false;
-
-                const statusMsg = blinkStateRef.current === 'blink_closed'
+              let statusMsg = '';
+              if (currentChallenge === 'blink') {
+                statusMsg = blinkStateRef.current === 'blink_closed'
                   ? '👁️ Kedipan terdeteksi! Silakan BUKA MATA Anda...'
-                  : isSuspectedStaticScreen
-                  ? '⚠️ Foto di Layar HP Ditolak! Wajib berkedip di depan kamera.'
                   : '👁️ Silakan KEDIPKAN MATA Anda untuk verifikasi presensi...';
-
-                setLiveFaceStatus({
-                  detected: true,
-                  isGreen: false,
-                  confidence: 65,
-                  message: statusMsg,
-                });
-                return;
+              } else if (currentChallenge === 'smile') {
+                statusMsg = '😊 Silakan TERSENYUM LEBAR di depan kamera...';
+              } else if (currentChallenge === 'open_mouth') {
+                statusMsg = '😮 Silakan BUKA MULUT sedikit di depan kamera...';
               }
+
+              setLiveFaceStatus({
+                detected: true,
+                isGreen: false,
+                confidence: 65,
+                message: statusMsg,
+              });
+              return;
             }
 
             // ─── LIVENESS LULUS (MANUSIA ASLI & AKTIF) - INDIKATOR HIJAU NYALA! ───
@@ -1574,11 +1671,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     setAutoCaptureProgress(0);
     livenessPassedRef.current = false;
     setIsLivenessPassed(false);
-    blinkStateRef.current = 'waiting_blink';
-    hasEstablishedBaselineRef.current = false;
-    openFramesCountRef.current = 0;
-    baselineOpenEarRef.current = 0.26;
-    blinkClosedAtRef.current = null;
+    pickRandomChallenge();
     staticFaceDetectedSinceRef.current = null;
     earHistoryRef.current = [];
 
@@ -2761,6 +2854,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             className={`absolute inset-0 w-full h-full object-cover ${facingMode === 'user' ? '-scale-x-100' : ''}`}
           />
 
+          {/* 3D Optical Chromatic Flash Reflection Overlay (Anti-Screen & Anti-Video Replay) */}
+          {isChromaticFlashing && (
+            <div className="absolute inset-0 z-50 bg-[#00ffff] opacity-95 pointer-events-none transition-none animate-pulse" />
+          )}
+
           {cameraError && (
             <div className="absolute inset-0 z-30 bg-black/92 flex flex-col items-center justify-center p-6 text-center space-y-4">
               <AlertCircle className="w-12 h-12 text-rose-500 animate-bounce" />
@@ -2788,6 +2886,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
           {/* Biometric Aperture Frame (Apple FaceID / Cyber Sentinel Style) */}
           <div className="relative z-20 w-[270px] h-[330px] sm:w-[290px] sm:h-[360px] pointer-events-none flex flex-col items-center justify-center">
+            {/* Dynamic Challenge Indicator Badge */}
+            {!liveFaceStatus.isGreen && liveFaceStatus.detected && (
+              <div className="absolute -top-12 z-30 px-3.5 py-1.5 rounded-full bg-black/85 border border-cyan-400 backdrop-blur-md text-cyan-200 text-xs font-bold shadow-lg flex items-center gap-1.5 animate-pulse">
+                {activeChallenge === 'blink' && <span>👁️ KEDIPKAN MATA ANDA</span>}
+                {activeChallenge === 'smile' && <span>😊 TERSENYUM LEBAR</span>}
+                {activeChallenge === 'open_mouth' && <span>😮 BUKA MULUT SEDIKIT</span>}
+              </div>
+            )}
             {/* Dynamic Outer Aura */}
             <div
               className={`absolute inset-0 rounded-[32px] border-2 transition-all duration-300 ${

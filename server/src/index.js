@@ -1673,6 +1673,13 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         if (aiRes.ok) {
           const aiData = await aiRes.json();
           if (aiData.success) {
+            if (aiData.is_spoof) {
+              return res.status(400).json({
+                success: false,
+                error: `Presensi Ditolak! ${aiData.error || 'Terdeteksi kecurangan: citra berasal dari layar HP / rekaman video sekunder.'}`,
+                code: 'PRESENTATION_ATTACK_DETECTED'
+              });
+            }
             computedBiometricMatch = aiData.is_match;
             computedBiometricScore = aiData.confidence;
 
@@ -1688,8 +1695,8 @@ app.post('/api/attendances/clock-in', async (req, res) => {
           } else {
             return res.status(400).json({
               success: false,
-              error: `Wajah tidak terdeteksi oleh AI pada kamera. Harap pastikan seluruh wajah terlihat jelas menghadap kamera dan berada di area berpenerangan cukup.`,
-              code: 'FACE_NOT_DETECTED'
+              error: aiData.error || `Wajah tidak terdeteksi oleh AI pada kamera. Harap pastikan seluruh wajah terlihat jelas menghadap kamera dan berada di area berpenerangan cukup.`,
+              code: aiData.is_spoof ? 'PRESENTATION_ATTACK_DETECTED' : 'FACE_NOT_DETECTED'
             });
           }
         }

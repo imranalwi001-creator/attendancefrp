@@ -34,9 +34,10 @@ export interface FaceDetectionDetail {
   score: number;
   landmarks?: faceapi.FaceLandmarks68;
   descriptor?: Float32Array;
-  expressions?: faceapi.FaceExpressions;
   ear?: number; // Eye Aspect Ratio
   headYawRatio?: number; // Nose-to-jaw relative ratio (0.5 is center)
+  mar?: number; // Mouth Aspect Ratio (Mouth Open)
+  smileScore?: number; // Happiness / Smile score (0.0 - 1.0)
 }
 
 /**
@@ -237,6 +238,19 @@ export class BiometricService {
           if (totalJawWidth > 0) {
             headYawRatio = Number(((noseX - jawLeftX) / totalJawWidth).toFixed(3));
           }
+
+          const mar = this.calculateMAR(pts);
+          const smileScore = this.calculateSmileScore(pts);
+
+          return {
+            box,
+            score: Number((res.detection.score ?? 1).toFixed(3)),
+            landmarks: res.landmarks,
+            ear,
+            headYawRatio,
+            mar,
+            smileScore,
+          };
         }
       }
 
@@ -333,6 +347,30 @@ export class BiometricService {
           if (totalJawWidth > 0) {
             headYawRatio = Number(((noseX - jawLeftX) / totalJawWidth).toFixed(3));
           }
+          // Mouth Aspect Ratio (MAR): pts[62] (upper inner), pts[66] (lower inner), pts[48] (left), pts[54] (right)
+          let mar: number | undefined;
+          if (pts[62] && pts[66] && pts[48] && pts[54]) {
+            const mH = Math.hypot(pts[62].x - pts[66].x, pts[62].y - pts[66].y);
+            const mW = Math.hypot(pts[48].x - pts[54].x, pts[48].y - pts[54].y);
+            if (mW > 0) mar = Number((mH / mW).toFixed(3));
+          }
+
+          // Smile Score
+          const smileScore = res.expressions && typeof res.expressions.happy === 'number'
+            ? Number(res.expressions.happy.toFixed(3))
+            : undefined;
+
+          return {
+            box,
+            score: res.detection ? Number(res.detection.score.toFixed(3)) : 1,
+            landmarks: res.landmarks,
+            descriptor: res.descriptor,
+            expressions: res.expressions,
+            ear,
+            headYawRatio,
+            mar,
+            smileScore,
+          };
         }
       }
 
@@ -367,6 +405,34 @@ export class BiometricService {
     const distC = Math.hypot(p1.x - p4.x, p1.y - p4.y);
     if (distC === 0) return 0.3;
     return (distA + distB) / (2.0 * distC);
+  }
+
+  /**
+   * Helper to calculate Mouth Aspect Ratio (MAR) for mouth opening detection
+   */
+  private calculateMAR(pts: faceapi.Point[]): number {
+    if (pts.length < 68) return 0;
+    const top = pts[62];
+    const bottom = pts[66];
+    const left = pts[60];
+    const right = pts[64];
+    const vertical = Math.hypot(top.x - bottom.x, top.y - bottom.y);
+    const horizontal = Math.hypot(left.x - right.x, left.y - right.y);
+    if (horizontal === 0) return 0;
+    return Number((vertical / horizontal).toFixed(3));
+  }
+
+  /**
+   * Helper to calculate Smile Score based on mouth corner distance relative to eye distance
+   */
+  private calculateSmileScore(pts: faceapi.Point[]): number {
+    if (pts.length < 68) return 0;
+    const mouthWidth = Math.hypot(pts[48].x - pts[54].x, pts[48].y - pts[54].y);
+    const eyeWidth = Math.hypot(pts[36].x - pts[45].x, pts[36].y - pts[45].y);
+    if (eyeWidth === 0) return 0;
+    const ratio = mouthWidth / eyeWidth;
+    const score = Math.max(0, Math.min(1, (ratio - 0.70) / 0.22));
+    return Number(score.toFixed(3));
   }
 
   /**
