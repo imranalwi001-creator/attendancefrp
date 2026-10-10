@@ -436,7 +436,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   // Active Liveness Challenge States (Strict Anti-Foto Statis & Anti-Layar HP)
   const livenessPassedRef = useRef<boolean>(false);
   const [, setIsLivenessPassed] = useState<boolean>(false);
-  const blinkStateRef = useRef<'baseline_open' | 'blink_closed' | 'verified'>('baseline_open');
+  const blinkStateRef = useRef<'waiting_blink' | 'blink_closed' | 'verified'>('waiting_blink');
+  const hasEstablishedBaselineRef = useRef<boolean>(false);
   const openFramesCountRef = useRef<number>(0);
   const baselineOpenEarRef = useRef<number>(0.26);
   const blinkClosedAtRef = useRef<number | null>(null);
@@ -457,7 +458,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       isTriggeringAutoRef.current = false;
       livenessPassedRef.current = false;
       setIsLivenessPassed(false);
-      blinkStateRef.current = 'baseline_open';
+      blinkStateRef.current = 'waiting_blink';
+      hasEstablishedBaselineRef.current = false;
       openFramesCountRef.current = 0;
       baselineOpenEarRef.current = 0.26;
       blinkClosedAtRef.current = null;
@@ -487,8 +489,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           staticFaceDetectedSinceRef.current = null;
           earHistoryRef.current = [];
           if (!livenessPassedRef.current) {
-            blinkStateRef.current = 'baseline_open';
-            openFramesCountRef.current = 0;
+            blinkStateRef.current = 'waiting_blink';
             blinkClosedAtRef.current = null;
           }
           setLiveFaceStatus({
@@ -539,38 +540,41 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 earHistoryRef.current.push(ear);
                 if (earHistoryRef.current.length > 25) earHistoryRef.current.shift();
 
-                // FASE 1: Deteksi Mata Terbuka Nyata (Baseline Open)
-                // Wajib stabil dengan mata terbuka (EAR >= 0.22) selama minimal 3 tick (~360ms)
-                if (blinkStateRef.current === 'baseline_open') {
-                  if (ear >= 0.22) {
+                // FASE 1: Deteksi Mata Terbuka (Baseline Open)
+                // Cukup 2 tick berturut-turut (~240ms) dengan EAR >= 0.20 untuk mencatat baseline mata terbuka
+                if (!hasEstablishedBaselineRef.current) {
+                  if (ear >= 0.20) {
                     openFramesCountRef.current += 1;
-                    if (openFramesCountRef.current >= 3) {
-                      baselineOpenEarRef.current = Math.max(ear, 0.24);
+                    if (openFramesCountRef.current >= 2) {
+                      hasEstablishedBaselineRef.current = true;
+                      baselineOpenEarRef.current = Math.max(ear, 0.23);
                     }
                   } else {
                     openFramesCountRef.current = 0;
                   }
+                }
 
-                  // Transisi ke FASE 2: Menunggu Kedipan Mata (Penutupan Kelopak Mata Nyata)
-                  if (openFramesCountRef.current >= 3 && ear <= 0.175 && (baselineOpenEarRef.current - ear >= 0.055)) {
-                    blinkClosedAtRef.current = now;
-                    blinkStateRef.current = 'blink_closed';
-                  }
-                } 
-                // FASE 2: Kelopak mata terpejam terdeteksi, menunggu mata terbuka kembali (Re-Open)
-                else if (blinkStateRef.current === 'blink_closed') {
-                  const closedDuration = now - (blinkClosedAtRef.current || now);
+                // FASE 2 & 3: Hanya dievaluasi jika baseline mata terbuka sudah pernah tercatat!
+                if (hasEstablishedBaselineRef.current) {
+                  if (blinkStateRef.current === 'waiting_blink') {
+                    // Deteksi penutupan kelopak mata nyata (EAR turun)
+                    if (ear <= 0.185 || (baselineOpenEarRef.current - ear >= 0.045)) {
+                      blinkClosedAtRef.current = now;
+                      blinkStateRef.current = 'blink_closed';
+                    }
+                  } else if (blinkStateRef.current === 'blink_closed') {
+                    const closedDuration = now - (blinkClosedAtRef.current || now);
 
-                  // Jika mata terpejam terlalu lama (> 1200ms), batalkan & reset ke baseline
-                  if (closedDuration > 1200) {
-                    blinkStateRef.current = 'baseline_open';
-                    openFramesCountRef.current = 0;
-                    blinkClosedAtRef.current = null;
-                  } else if (ear >= 0.215 && closedDuration >= 70) {
-                    // Kedipan fisiologis manusia sah dan selesai!
-                    blinkStateRef.current = 'verified';
-                    livenessPassedRef.current = true;
-                    setIsLivenessPassed(true);
+                    // Jika mata terpejam lebih dari 2.5 detik (tertidur / foto diam merem), batalkan kembali ke waiting_blink
+                    if (closedDuration > 2500) {
+                      blinkStateRef.current = 'waiting_blink';
+                      blinkClosedAtRef.current = null;
+                    } else if (ear >= 0.205 && closedDuration >= 50) {
+                      // Mata terbuka kembali! Siklus kedipan sah (Terbuka -> Terpejam -> Terbuka) tuntas!
+                      blinkStateRef.current = 'verified';
+                      livenessPassedRef.current = true;
+                      setIsLivenessPassed(true);
+                    }
                   }
                 }
               }
@@ -583,14 +587,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   const m = earHistoryRef.current.reduce((a, b) => a + b, 0) / earHistoryRef.current.length;
                   earVariance = earHistoryRef.current.reduce((a, b) => a + Math.pow(b - m, 2), 0) / earHistoryRef.current.length;
                 }
-                const isSuspectedStaticScreen = staticDuration > 2500 && earVariance < 0.0008;
+                const isSuspectedStaticScreen = staticDuration > 3000 && earVariance < 0.0006 && !blinkClosedAtRef.current;
 
                 setAutoCaptureProgress(0);
                 greenSinceRef.current = null;
                 isTriggeringAutoRef.current = false;
 
                 const statusMsg = blinkStateRef.current === 'blink_closed'
-                  ? '👁️ Kedipan terdeteksi, buka mata Anda...'
+                  ? '👁️ Kedipan terdeteksi! Silakan BUKA MATA Anda...'
                   : isSuspectedStaticScreen
                   ? '⚠️ Foto di Layar HP Ditolak! Wajib berkedip di depan kamera.'
                   : '👁️ Silakan KEDIPKAN MATA Anda untuk verifikasi presensi...';
@@ -1570,7 +1574,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     setAutoCaptureProgress(0);
     livenessPassedRef.current = false;
     setIsLivenessPassed(false);
-    blinkStateRef.current = 'baseline_open';
+    blinkStateRef.current = 'waiting_blink';
+    hasEstablishedBaselineRef.current = false;
     openFramesCountRef.current = 0;
     baselineOpenEarRef.current = 0.26;
     blinkClosedAtRef.current = null;
@@ -1648,7 +1653,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     setAutoCaptureProgress(0);
     livenessPassedRef.current = false;
     setIsLivenessPassed(false);
-    blinkStateRef.current = 'baseline_open';
+    blinkStateRef.current = 'waiting_blink';
+    hasEstablishedBaselineRef.current = false;
     openFramesCountRef.current = 0;
     baselineOpenEarRef.current = 0.26;
     blinkClosedAtRef.current = null;
