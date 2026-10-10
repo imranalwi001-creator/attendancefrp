@@ -51,7 +51,28 @@ export function resolveEffectiveShift(
 
   const isSpecialDuty = isSpecialDutyOfficer(user);
 
-  // 2. Coba cocokkan user.shiftId dengan ID di master shifts
+  // 2. Cek langsung shiftStartTime & shiftEndTime yang terpasang pada userProfile (dari PostgreSQL p.shift_start_time / p.shift_end_time)
+  if (user?.shiftStartTime && user?.shiftEndTime) {
+    const sStart = isSpecialDuty && user?.customStartTime ? user.customStartTime.substring(0, 5) : user.shiftStartTime.substring(0, 5);
+    const sEnd = isSpecialDuty && user?.customEndTime ? user.customEndTime.substring(0, 5) : user.shiftEndTime.substring(0, 5);
+    const [sH, sM] = sStart.split(':').map(Number);
+    const [eH, eM] = sEnd.split(':').map(Number);
+    const isCross = (eH * 60 + eM) < (sH * 60 + sM);
+
+    return {
+      id: user?.shiftId || 'shift-direct-profile',
+      code: user?.shiftName?.toUpperCase().includes('III') ? 'SHF-III' : user?.shiftName?.toUpperCase().includes('II') ? 'SHF-II' : 'SHF-I',
+      name: user?.shiftName || 'Shift Operasional',
+      startTime: sStart,
+      endTime: sEnd,
+      lateToleranceMinutes: user?.lateToleranceMinutes ?? 15,
+      earliestClockInMinutes: 120,
+      isCrossDay: isCross,
+      colorTag: isCross ? '#8b5cf6' : '#0d9488',
+    };
+  }
+
+  // 3. Coba cocokkan user.shiftId dengan ID di master shifts
   const shiftById = user?.shiftId ? allShifts.find((s) => s.id === user.shiftId) : null;
   if (shiftById) {
     const isCross = Boolean(shiftById.isCrossDay || (shiftById.startTime && shiftById.endTime && shiftById.endTime < shiftById.startTime));

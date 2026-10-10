@@ -118,8 +118,24 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   // Attendance & Shift State
   const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord | undefined>(undefined);
-  const [userShift, setUserShift] = useState<Shift | null>(null);
+  const [userShift, setUserShift] = useState<Shift | null>(() => {
+    if (!user) return null;
+    const shifts = hrmService.getShifts();
+    const todayStr = getTodayDateStr();
+    const dailySched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
+    return resolveEffectiveShift(user, shifts, dailySched);
+  });
   const [attendancesHistory, setAttendancesHistory] = useState<AttendanceRecord[]>([]);
+
+  // Instant Shift Sync whenever user profile changes in memory
+  useEffect(() => {
+    if (user) {
+      const shifts = hrmService.getShifts();
+      const todayStr = getTodayDateStr();
+      const dailySched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
+      setUserShift(resolveEffectiveShift(user, shifts, dailySched));
+    }
+  }, [user]);
 
   // Fullscreen Live Camera States
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
@@ -548,14 +564,41 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const loadRealData = async () => {
     if (!user) return;
     try {
+      const todayStr = getTodayDateStr();
+
+      // 1. SEGERA RESOLVE SECARA SINKRON DARI DATA TERSEDIA (ZERO DELAY!)
+      const currentShifts = hrmService.getShifts();
+      const currentSched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
+      const instantShift = resolveEffectiveShift(user, currentShifts, currentSched);
+      setUserShift(instantShift);
+
+      // 2. FAST TARGETED USER PROFILE REFRESH (< 50ms)
+      // Tarik profil langsung dari endpoint /api/users/:id untuk mendapatkan perubahan shift
+      // yang baru saja disimpan oleh Superadmin di dashboard, tanpa terhambat sinkronisasi massal
+      try {
+        const userRes = await fetch(`/api/users/${encodeURIComponent(user.id)}`);
+        if (userRes.ok) {
+          const userData = await userRes.json();
+          if (userData.success && userData.user) {
+            const freshUser = userData.user;
+            const updatedShift = resolveEffectiveShift(freshUser, currentShifts, currentSched);
+            setUserShift(updatedShift);
+            sessionStorage.setItem('hrm_active_session_user', JSON.stringify(freshUser));
+            localStorage.setItem('hrm_active_session_user', JSON.stringify(freshUser));
+          }
+        }
+      } catch (err) {
+        console.warn('[PWA] Fast user fetch warning:', err);
+      }
+
+      // 3. BACKGROUND FULL SYNC (Non-blocking untuk tampilan shift)
       await hrmService.syncWithBackend().catch(() => null);
 
-      // 1. Shift Sinkron Database & Roster Terjadwal Hari Ini (Bulletproof Global Resolver)
-      const shifts = hrmService.getShifts();
-      const todayStr = getTodayDateStr();
-      const dailySched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
-      const effectiveShift = resolveEffectiveShift(user, shifts, dailySched);
-      setUserShift(effectiveShift);
+      // Re-evaluate shift setelah full bootstrap selesai
+      const latestShifts = hrmService.getShifts();
+      const latestSched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
+      const finalEffectiveShift = resolveEffectiveShift(user, latestShifts, latestSched);
+      setUserShift(finalEffectiveShift);
 
       // 2. Attendance Hari Ini (Tarik langsung dari PostgreSQL via /api/attendances/today)
       let todayAtt: AttendanceRecord | undefined = undefined;
@@ -861,10 +904,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const handleUpdate = () => loadRealData();
     window.addEventListener('hrm_attendance_updated', handleUpdate);
     window.addEventListener('hrm_settings_updated', handleUpdate);
+    window.addEventListener('hrm_users_updated', handleUpdate);
+    window.addEventListener('hrm_shifts_updated', handleUpdate);
 
     return () => {
       window.removeEventListener('hrm_attendance_updated', handleUpdate);
       window.removeEventListener('hrm_settings_updated', handleUpdate);
+      window.removeEventListener('hrm_users_updated', handleUpdate);
+      window.removeEventListener('hrm_shifts_updated', handleUpdate);
     };
   }, [user]);
 
@@ -2799,7 +2846,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <span className="text-slate-700 dark:text-slate-200">{user?.divisionName || 'Operasional'}</span>
                 </p>
                 <p className="text-[10px] text-slate-400 dark:text-slate-500">
-                  {userShift?.id === 'unassigned' || !userShift?.startTime
+                  {!userShift
+                    ? 'Shift: Menghubungkan jadwal...'
+                    : userShift?.id === 'unassigned' || !userShift?.startTime
                     ? 'Shift: Belum Memiliki Shift (Hubungi Admin / Korlap)'
                     : userShift?.name?.includes('(')
                     ? `Shift: ${userShift.name}`
@@ -3099,11 +3148,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
 
                 <Badge className={
-                  userShift?.id === 'unassigned' || !userShift?.startTime
+                  !userShift
+                    ? "bg-slate-500/20 text-slate-300 border border-slate-500/40 text-[10px] font-bold py-0.5 px-2"
+                    : userShift?.id === 'unassigned' || !userShift?.startTime
                     ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold py-0.5 px-2"
                     : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold py-0.5 px-2"
                 }>
-                  {userShift?.id === 'unassigned' || !userShift?.startTime ? 'Belum Ada Shift' : (userShift?.name || 'Shift Operasional')}
+                  {!userShift ? 'Memuat Shift...' : userShift?.id === 'unassigned' || !userShift?.startTime ? 'Belum Ada Shift' : (userShift?.name || 'Shift Operasional')}
                 </Badge>
               </div>
 
@@ -3124,12 +3175,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <div className="space-y-0.5">
                   <span className="text-[10px] text-slate-400 font-medium">Jadwal Masuk & Pulang:</span>
                   <p className="font-bold text-white font-mono text-[11px]">
-                    {userShift?.id === 'unassigned' || !userShift?.startTime
+                    {!userShift
+                      ? 'Memuat Jadwal...'
+                      : userShift?.id === 'unassigned' || !userShift?.startTime
                       ? 'Belum Ditentukan'
                       : `${userShift.startTime} - ${userShift.endTime} WITA`}
                   </p>
                   <p className="text-[10px] text-amber-300 font-medium">
-                    {userShift?.id === 'unassigned' || !userShift?.startTime
+                    {!userShift
+                      ? 'Sinkronisasi server...'
+                      : userShift?.id === 'unassigned' || !userShift?.startTime
                       ? 'Hubungi HRD/Admin'
                       : `Toleransi: ${userShift?.lateToleranceMinutes || 15} Menit`}
                   </p>
@@ -3379,6 +3434,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <span className="truncate">
                   {hasClockedIn
                     ? `MASUK (${todayAttendance?.clockIn?.substring(0, 5) || todayAttendance?.clockIn})`
+                    : !userShift
+                    ? `MEMUAT SHIFT...`
                     : userShift?.id === 'unassigned' || !userShift?.startTime
                     ? `BELUM ADA SHIFT`
                     : hasActiveLeaveToday

@@ -27,10 +27,12 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
     function initSession() {
       // 1. Pulihkan sesi pengguna secara instan dari storage (zero UI blocking)
       const saved = sessionStorage.getItem(CURRENT_USER_SESSION_KEY) || localStorage.getItem(CURRENT_USER_SESSION_KEY);
+      let sessionUserId: string | null = null;
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           if (parsed && (parsed.id || parsed.nip)) {
+            sessionUserId = parsed.id || null;
             const users = hrmService.getUsers();
             const found = users.find((u) => u.id === parsed.id || u.nip?.toLowerCase() === parsed.nip?.toLowerCase());
             setUser(found || parsed);
@@ -38,11 +40,36 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
         } catch {
           const users = hrmService.getUsers();
           const found = users.find((u) => u.id === saved && u.isActive);
-          if (found) setUser(found);
+          if (found) {
+            sessionUserId = found.id;
+            setUser(found);
+          }
         }
       }
       // Lepaskan status loading segera agar UI tidak freeze di 'Memuat data sesi HRM...'
       setIsLoading(false);
+
+      // 1B. Fast-Sync Profil Pengguna Langsung dari PostgreSQL (< 50ms)
+      // Memastikan perubahan shift atau status dari Superadmin langsung aktif tanpa menunggu /sync/bootstrap yang berat
+      if (sessionUserId) {
+        api.get<{ success: boolean; user?: UserProfile }>(`/users/${sessionUserId}`)
+          .then((res) => {
+            if (res && res.success && res.user) {
+              const freshUser = res.user;
+              setUser(freshUser);
+              sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(freshUser));
+              localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(freshUser));
+              const allUsers = hrmService.getUsers();
+              const idx = allUsers.findIndex((u) => u.id === freshUser.id);
+              if (idx !== -1) {
+                allUsers[idx] = { ...allUsers[idx], ...freshUser };
+                localStorage.setItem('hrm_users', JSON.stringify(allUsers));
+              }
+              window.dispatchEvent(new Event('hrm_users_updated'));
+            }
+          })
+          .catch((err) => console.warn('[Fast User Sync] Notice:', err));
+      }
 
       // 2. Lakukan sinkronisasi data dengan backend di latar belakang
       hrmService.syncWithBackend()
@@ -164,13 +191,29 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  const refreshUser = () => {
+  const refreshUser = async () => {
     if (!user) return;
     const users = hrmService.getUsers();
     const found = users.find((u) => u.id === user.id);
     if (found) {
       setUser({ ...found });
     }
+    try {
+      const res = await api.get<{ success: boolean; user?: UserProfile }>(`/users/${user.id}`);
+      if (res && res.success && res.user) {
+        const freshUser = res.user;
+        setUser(freshUser);
+        sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(freshUser));
+        localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(freshUser));
+        const allUsers = hrmService.getUsers();
+        const idx = allUsers.findIndex((u) => u.id === freshUser.id);
+        if (idx !== -1) {
+          allUsers[idx] = { ...allUsers[idx], ...freshUser };
+          localStorage.setItem('hrm_users', JSON.stringify(allUsers));
+        }
+        window.dispatchEvent(new Event('hrm_users_updated'));
+      }
+    } catch (_) {}
   };
 
   const normalizeRole = (r?: string) => {
