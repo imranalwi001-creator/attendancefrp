@@ -34,8 +34,15 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (parsed && (parsed.id || parsed.nip)) {
             sessionUserId = parsed.id || null;
             const users = hrmService.getUsers();
-            const found = users.find((u) => u.id === parsed.id || u.nip?.toLowerCase() === parsed.nip?.toLowerCase());
-            setUser(found || parsed);
+            const found = users.find((u) => u.id === parsed.id || (u.nip && parsed.nip && u.nip.toLowerCase() === parsed.nip.toLowerCase()));
+            const isGoodPhoto = (s?: string | null) => typeof s === 'string' && (s.startsWith('http') || s.startsWith('/') || (s.startsWith('data:image/') && s.length > 150));
+            const merged = found ? {
+              ...found,
+              ...parsed,
+              avatarUrl: isGoodPhoto(parsed.avatarUrl) ? parsed.avatarUrl : (isGoodPhoto(found.avatarUrl) ? found.avatarUrl : (parsed.avatarUrl || found.avatarUrl)),
+              faceEnrolledPhoto: isGoodPhoto(parsed.faceEnrolledPhoto) ? parsed.faceEnrolledPhoto : (isGoodPhoto(found.faceEnrolledPhoto) ? found.faceEnrolledPhoto : (parsed.faceEnrolledPhoto || found.faceEnrolledPhoto)),
+            } : parsed;
+            setUser(merged);
           }
         } catch {
           const users = hrmService.getUsers();
@@ -52,11 +59,20 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // 1B. Fast-Sync Profil Pengguna Langsung dari PostgreSQL (< 50ms)
       // Memastikan perubahan shift atau status dari Superadmin langsung aktif tanpa menunggu /sync/bootstrap yang berat
       if (sessionUserId) {
-        api.get<{ success: boolean; user?: UserProfile }>(`/users/${sessionUserId}`)
+        api.get<{ success: boolean; user?: UserProfile; data?: UserProfile }>(`/users/${encodeURIComponent(sessionUserId)}`)
           .then((res) => {
-            if (res && res.success && res.user) {
-              const freshUser = res.user;
-              setUser(freshUser);
+            const freshUser = res?.user || res?.data;
+            if (res && res.success && freshUser) {
+              const isGoodPhoto = (s?: string | null) => typeof s === 'string' && (s.startsWith('http') || s.startsWith('/') || (s.startsWith('data:image/') && s.length > 150));
+              setUser((prev) => {
+                if (!prev) return freshUser;
+                return {
+                  ...prev,
+                  ...freshUser,
+                  avatarUrl: isGoodPhoto(freshUser.avatarUrl) ? freshUser.avatarUrl : (isGoodPhoto(prev.avatarUrl) ? prev.avatarUrl : freshUser.avatarUrl),
+                  faceEnrolledPhoto: isGoodPhoto(freshUser.faceEnrolledPhoto) ? freshUser.faceEnrolledPhoto : (isGoodPhoto(prev.faceEnrolledPhoto) ? prev.faceEnrolledPhoto : freshUser.faceEnrolledPhoto),
+                };
+              });
               sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(freshUser));
               localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(freshUser));
               const allUsers = hrmService.getUsers();
@@ -79,11 +95,18 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
             try {
               const p = JSON.parse(latestSaved);
               const freshUsers = hrmService.getUsers();
-              const f = freshUsers.find((u) => u.id === p.id || u.nip?.toLowerCase() === p.nip?.toLowerCase());
+              const f = freshUsers.find((u) => u.id === p.id || (u.nip && p.nip && u.nip.toLowerCase() === p.nip.toLowerCase()));
               if (f) {
-                setUser(f);
-                sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(f));
-                localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(f));
+                const isGoodPhoto = (s?: string | null) => typeof s === 'string' && (s.startsWith('http') || s.startsWith('/') || (s.startsWith('data:image/') && s.length > 150));
+                const merged = {
+                  ...p,
+                  ...f,
+                  avatarUrl: isGoodPhoto(f.avatarUrl) ? f.avatarUrl : (isGoodPhoto(p.avatarUrl) ? p.avatarUrl : f.avatarUrl),
+                  faceEnrolledPhoto: isGoodPhoto(f.faceEnrolledPhoto) ? f.faceEnrolledPhoto : (isGoodPhoto(p.faceEnrolledPhoto) ? p.faceEnrolledPhoto : f.faceEnrolledPhoto),
+                };
+                setUser(merged);
+                sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(merged));
+                localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(merged));
               }
             } catch {}
           }
@@ -113,7 +136,24 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setUser(res.user);
         sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(res.user));
         localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(res.user));
-        // Refresh local cache with latest backend state
+
+        // Prefetch today's confirmed attendance immediately so PWA lock is 0ms on next page load
+        const todayStr = new Date().toLocaleDateString('en-CA');
+        api.get<{ success: boolean; attendance?: any }>(
+          `/attendances/today?userId=${encodeURIComponent(res.user.id)}&nip=${encodeURIComponent(res.user.nip || '')}&date=${todayStr}`
+        ).then((attRes) => {
+          if (attRes && attRes.success && attRes.attendance) {
+            const att = attRes.attendance;
+            if (att.clockIn || att.clock_in) {
+              localStorage.setItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`, JSON.stringify(att));
+              if (res.user.nip) {
+                localStorage.setItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`, JSON.stringify(att));
+              }
+            }
+          }
+        }).catch(() => null);
+
+        // Refresh local cache with latest backend state in background
         hrmService.syncWithBackend().catch(() => null);
         return { success: true };
       }

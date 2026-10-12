@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
-import { hrmService, getTodayDateStr } from '@/services/hrmService';
+import { hrmService, getTodayDateStr, normalizeAttendanceRecord } from '@/services/hrmService';
+import { api } from '@/services/apiClient';
 import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
 import {
   Clock,
@@ -116,8 +117,32 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [bankPosts, setBankPosts] = useState<import('@/types/hrm').FieldAssignedPost[]>([]);
   const [isRefreshingGps, setIsRefreshingGps] = useState<boolean>(false);
 
-  // Attendance & Shift State
-  const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord | undefined>(undefined);
+  // Attendance & Shift State (Diinisialisasi instan dari local confirmed storage untuk mencegah glitch/flicker)
+  const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord | undefined>(() => {
+    if (!user) return undefined;
+    const todayStr = getTodayDateStr();
+    try {
+      const cached = localStorage.getItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && (parsed.clockIn || parsed.clock_in)) {
+          return normalizeAttendanceRecord(parsed);
+        }
+      }
+    } catch (e) {}
+    const existing = hrmService.getUserTodayAttendance(user.id);
+    return existing ? normalizeAttendanceRecord(existing) : undefined;
+  });
+
+  // Jaga konsistensi persisten agar tidak hilang saat sleep / minimize / reload
+  useEffect(() => {
+    if (user && todayAttendance && (todayAttendance.clockIn || todayAttendance.clock_in)) {
+      const todayStr = getTodayDateStr();
+      try {
+        localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(todayAttendance));
+      } catch (e) {}
+    }
+  }, [user, todayAttendance]);
   const [userShift, setUserShift] = useState<Shift | null>(() => {
     if (!user) return null;
     const shifts = hrmService.getShifts();
@@ -773,60 +798,75 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   }, [isCameraActive, cameraStream, scanMode, masterDescriptor]);
 
   // Load Real Data from PostgreSQL & hrmService
+  // Load Real Data from PostgreSQL & hrmService (Zero-Delay Instant Lock Architecture)
   const loadRealData = async () => {
     if (!user) return;
     try {
       const todayStr = getTodayDateStr();
 
-      // 1. SEGERA RESOLVE SECARA SINKRON DARI DATA TERSEDIA (ZERO DELAY!)
+      // ─── TAHAP 1: INSTANT LOCAL CONFIRMATION LOCK (0ms Latency) ───
+      // Kunci tampilan presensi hari ini seketika (sub-millisecond) jika karyawan telah absen masuk
+      let todayAtt: AttendanceRecord | undefined = undefined;
+      try {
+        const cachedConf =
+          localStorage.getItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`) ||
+          (user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`) : null);
+        if (cachedConf) {
+          const parsedConf = JSON.parse(cachedConf);
+          if (parsedConf && (parsedConf.clockIn || parsedConf.clock_in)) {
+            todayAtt = normalizeAttendanceRecord(parsedConf);
+            setTodayAttendance(todayAtt);
+          }
+        }
+      } catch (e) {}
+
+      // ─── TAHAP 2: SEGERA RESOLVE SHIFT SECARA SINKRON DARI DATA TERSEDIA ───
       const currentShifts = hrmService.getShifts();
       const currentSched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
       const instantShift = resolveEffectiveShift(user, currentShifts, currentSched);
       setUserShift(instantShift);
 
-      // 2. FAST TARGETED USER PROFILE REFRESH (< 50ms)
-      // Tarik profil langsung dari endpoint /api/users/:id untuk mendapatkan perubahan shift
-      // yang baru saja disimpan oleh Superadmin di dashboard, tanpa terhambat sinkronisasi massal
+      // ─── TAHAP 3: FAST REALTIME TODAY ATTENDANCE FETCH DARI POSTGRESQL (< 50ms) ───
+      // Dijalankan LANGSUNG ke PostgreSQL sebelum background bootstrap yang berat!
       try {
-        const userRes = await fetch(`/api/users/${encodeURIComponent(user.id)}`);
-        if (userRes.ok) {
-          const userData = await userRes.json();
-          if (userData.success && userData.user) {
-            const freshUser = userData.user;
-            const updatedShift = resolveEffectiveShift(freshUser, currentShifts, currentSched);
-            setUserShift(updatedShift);
-            sessionStorage.setItem('hrm_active_session_user', JSON.stringify(freshUser));
-            localStorage.setItem('hrm_active_session_user', JSON.stringify(freshUser));
+        const todayData = await api.get<{ success: boolean; attendance?: any }>(
+          `/attendances/today?userId=${encodeURIComponent(user.id)}&nip=${encodeURIComponent(user.nip || '')}&date=${encodeURIComponent(todayStr)}`
+        ).catch(() => null);
+
+        if (todayData && todayData.success && todayData.attendance) {
+          const normRemote = normalizeAttendanceRecord(todayData.attendance);
+          if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in) && !normRemote.clockIn) {
+            todayAtt = { ...normRemote, ...todayAtt };
+          } else {
+            todayAtt = normRemote;
           }
+          if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
+            setTodayAttendance(todayAtt);
+            try {
+              localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(todayAtt));
+              if (user.nip) localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`, JSON.stringify(todayAtt));
+            } catch (e) {}
+          }
+        }
+      } catch (err) {
+        console.warn('[PWA] Fetch today attendance API note:', err);
+      }
+
+      // ─── TAHAP 4: FAST TARGETED USER PROFILE REFRESH (< 50ms) ───
+      try {
+        const userData = await api.get<{ success: boolean; user?: any; data?: any }>(`/users/${encodeURIComponent(user.id)}`).catch(() => null);
+        const freshUser = userData?.user || userData?.data;
+        if (userData && userData.success && freshUser) {
+          const updatedShift = resolveEffectiveShift(freshUser, currentShifts, currentSched);
+          setUserShift(updatedShift);
+          sessionStorage.setItem('hrm_active_session_user', JSON.stringify(freshUser));
+          localStorage.setItem('hrm_active_session_user', JSON.stringify(freshUser));
         }
       } catch (err) {
         console.warn('[PWA] Fast user fetch warning:', err);
       }
 
-      // 3. BACKGROUND FULL SYNC (Non-blocking untuk tampilan shift)
-      await hrmService.syncWithBackend().catch(() => null);
-
-      // Re-evaluate shift setelah full bootstrap selesai
-      const latestShifts = hrmService.getShifts();
-      const latestSched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
-      const finalEffectiveShift = resolveEffectiveShift(user, latestShifts, latestSched);
-      setUserShift(finalEffectiveShift);
-
-      // 2. Attendance Hari Ini (Tarik langsung dari PostgreSQL via /api/attendances/today)
-      let todayAtt: AttendanceRecord | undefined = undefined;
-
-      try {
-        const todayRes = await fetch(`/api/attendances/today?userId=${encodeURIComponent(user.id)}&date=${encodeURIComponent(todayStr)}`);
-        if (todayRes.ok) {
-          const todayData = await todayRes.json();
-          if (todayData.success && todayData.attendance) {
-            todayAtt = todayData.attendance;
-          }
-        }
-      } catch (err) {
-        console.warn('[PWA] Gagal fetch today attendance, fallback ke local cache:', err);
-      }
-
+      // ─── TAHAP 5: RIWAYAT PRESENSI (< 100ms) ───
       const validUserIds = [user.id, user.nip, user.email].filter(Boolean);
       let userAtts = hrmService.getAttendances().filter((a) => {
         const aUser = a.userId || (a as any).user_id;
@@ -834,18 +874,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       });
 
       try {
-        const histRes = await fetch(`/api/attendances?userId=${encodeURIComponent(user.id)}`);
-        if (histRes.ok) {
-          const histData = await histRes.json();
-          if (histData.success && Array.isArray(histData.data) && histData.data.length > 0) {
-            userAtts = histData.data;
-          }
+        const histData = await api.get<{ success: boolean; data?: any[] }>(
+          `/attendances?userId=${encodeURIComponent(user.id)}`
+        ).catch(() => null);
+
+        if (histData && histData.success && Array.isArray(histData.data) && histData.data.length > 0) {
+          userAtts = histData.data.map((a: any) => normalizeAttendanceRecord(a));
         }
       } catch (e) {
         console.warn('[PWA] Attendance history fetch note:', e);
       }
 
-      if (todayAtt) {
+      if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
         const existingIdx = userAtts.findIndex((a) => a.id === todayAtt?.id || a.date === todayStr || a.attendanceDate === todayStr);
         if (existingIdx >= 0) {
           userAtts[existingIdx] = { ...userAtts[existingIdx], ...todayAtt };
@@ -853,11 +893,25 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           userAtts.unshift(todayAtt);
         }
       } else {
-        todayAtt = userAtts.find((a) => a.date === todayStr || a.attendanceDate === todayStr);
+        const fromHist = userAtts.find((a) => (a.date === todayStr || a.attendanceDate === todayStr) && (a.clockIn || a.clock_in));
+        if (fromHist) {
+          todayAtt = normalizeAttendanceRecord(fromHist);
+        }
       }
 
       setAttendancesHistory(userAtts);
-      setTodayAttendance(todayAtt || null);
+
+      // KONSISTENSI TOTAL: Kunci status presensi hari ini jika sudah absen masuk
+      if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
+        const finalNormalized = normalizeAttendanceRecord(todayAtt);
+        setTodayAttendance(finalNormalized);
+        try {
+          localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(finalNormalized));
+          if (user.nip) localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`, JSON.stringify(finalNormalized));
+        } catch (e) {}
+      } else if (!todayAttendance || !todayAttendance.clockIn) {
+        setTodayAttendance(null);
+      }
 
       if (todayAtt?.isOnBreak && todayAtt.breakStartTime) {
         setIsBreakActive(true);
@@ -874,6 +928,17 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         setIsBreakActive(false);
         setBreakTimer(0);
       }
+
+      // ─── TAHAP 6: BACKGROUND FULL SYNC (ASINKRON - TIDAK MEMBLOKIR UI / ZERO LAG!) ───
+      // Dijalankan di latar belakang tanpa 'await' agar karyawan langsung melihat data real tanpa jeda
+      hrmService.syncWithBackend()
+        .then(() => {
+          const latestShifts = hrmService.getShifts();
+          const latestSched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
+          const finalEffectiveShift = resolveEffectiveShift(user, latestShifts, latestSched);
+          setUserShift(finalEffectiveShift);
+        })
+        .catch(() => null);
 
       // 2B. Data Permohonan Cuti/Izin Saya
       const myLeaves = hrmService.getUserLeaves(user.id);
@@ -1140,6 +1205,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const handleResumeOrWakeup = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         console.info('[PWA Lifecycle] App resumed from sleep / visible, refreshing attendance state...');
+        // Segera pulihkan dari confirmed local storage agar UI tidak berkedip atau kembali ke awal
+        if (user) {
+          const todayStr = getTodayDateStr();
+          try {
+            const cached = localStorage.getItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
+            if (cached) {
+              const parsed = JSON.parse(cached);
+              if (parsed && (parsed.clockIn || parsed.clock_in)) {
+                setTodayAttendance(normalizeAttendanceRecord(parsed));
+              }
+            }
+          } catch (e) {}
+        }
         loadRealData();
         evaluateRealLocation();
       }
@@ -2401,7 +2479,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       toast.dismiss(toastLoadingId);
 
       if (savedAttendance) {
-        setTodayAttendance(savedAttendance);
+        const normSaved = normalizeAttendanceRecord(savedAttendance);
+        setTodayAttendance(normSaved);
+        try {
+          localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(normSaved));
+        } catch (e) {}
       }
 
       // Haptic feedback
@@ -3210,12 +3292,26 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               {/* Avatar Round Thumbnail with Subtle Ring */}
               <div className="relative shrink-0 w-12 h-12 min-w-[48px] min-h-[48px]">
                 <img
-                  src={user?.avatarUrl || user?.faceEnrolledPhoto || defaultAvatar}
+                  src={
+                    (user?.avatarUrl && user.avatarUrl.length > 150 ? user.avatarUrl : null) ||
+                    (user?.faceEnrolledPhoto && user.faceEnrolledPhoto.length > 150 ? user.faceEnrolledPhoto : null) ||
+                    (todayAttendance?.clockInPhoto && todayAttendance.clockInPhoto.length > 150 ? todayAttendance.clockInPhoto : null) ||
+                    (todayAttendance?.photoIn && todayAttendance.photoIn.length > 150 ? todayAttendance.photoIn : null) ||
+                    user?.avatarUrl ||
+                    user?.faceEnrolledPhoto ||
+                    defaultAvatar
+                  }
                   alt={user?.fullName}
                   className="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-full object-cover border-2 border-emerald-500/40 shadow-sm bg-slate-100"
                   style={{ width: '48px', height: '48px', objectFit: 'cover' }}
                   onError={(e) => {
-                    (e.target as HTMLImageElement).src = defaultAvatar;
+                    const el = e.target as HTMLImageElement;
+                    const fallback = todayAttendance?.clockInPhoto || todayAttendance?.photoIn;
+                    if (fallback && el.src !== fallback) {
+                      el.src = fallback;
+                    } else {
+                      el.src = defaultAvatar;
+                    }
                   }}
                 />
                 <span className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900" />
@@ -3420,16 +3516,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   className="relative w-[150px] h-[150px] shrink-0 aspect-square rounded-full overflow-hidden bg-slate-100 dark:bg-slate-900 flex items-center justify-center shadow-inner border border-slate-200 dark:border-slate-800"
                   style={{ width: '150px', height: '150px', minWidth: '150px', minHeight: '150px', maxWidth: '150px', maxHeight: '150px' }}
                 >
-                  {todayAttendance?.clockInPhoto ? (
+                  {todayAttendance?.clockInPhoto || todayAttendance?.photoIn ? (
                     <img
-                      src={todayAttendance.clockInPhoto}
+                      src={todayAttendance.clockInPhoto || todayAttendance.photoIn}
                       alt="Presensi Wajah Hari Ini"
                       className="w-full h-full max-w-full max-h-full object-cover object-center block rounded-full"
                       style={{ width: '150px', height: '150px', objectFit: 'cover' }}
                     />
-                  ) : user?.faceEnrolledPhoto ? (
+                  ) : user?.faceEnrolledPhoto || user?.avatarUrl ? (
                     <img
-                      src={user.faceEnrolledPhoto}
+                      src={user.faceEnrolledPhoto || user.avatarUrl}
                       alt={user.fullName}
                       className="w-full h-full max-w-full max-h-full object-cover object-center block rounded-full opacity-90 group-hover:opacity-100 transition-opacity"
                       style={{ width: '150px', height: '150px', objectFit: 'cover' }}
@@ -5568,7 +5664,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             });
 
             if (savedAttendance) {
-              setTodayAttendance(savedAttendance);
+              const normSaved = normalizeAttendanceRecord(savedAttendance);
+              setTodayAttendance(normSaved);
+              try {
+                localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(normSaved));
+              } catch (e) {}
             }
 
             if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {

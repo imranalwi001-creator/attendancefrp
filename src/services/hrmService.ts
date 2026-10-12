@@ -558,6 +558,65 @@ export const getTodayDateStr = (): string => {
   return `${year}-${month}-${day}`;
 };
 
+export const normalizeDateString = (dateVal: any): string => {
+  if (!dateVal) return '';
+  if (typeof dateVal === 'string') {
+    const match = dateVal.match(/^\d{4}-\d{2}-\d{2}/);
+    if (match) return match[0];
+  }
+  if (dateVal instanceof Date && !isNaN(dateVal.getTime())) {
+    const y = dateVal.getFullYear();
+    const m = String(dateVal.getMonth() + 1).padStart(2, '0');
+    const d = String(dateVal.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(dateVal).substring(0, 10);
+};
+
+export const normalizeAttendanceRecord = (a: any): AttendanceRecord => {
+  if (!a) return a;
+  const attDate = normalizeDateString(a.attendanceDate || a.date || a.attendance_date) || getTodayDateStr();
+  const cIn = a.clockIn || a.clock_in || undefined;
+  const cOut = a.clockOut || a.clock_out || undefined;
+  const pIn = a.photoIn || a.clockInPhoto || a.photo_in;
+  const pOut = a.photoOut || a.clockOutPhoto || a.photo_out;
+
+  return {
+    ...a,
+    id: a.id || `att-${Date.now()}`,
+    userId: a.userId || a.user_id,
+    user_id: a.user_id || a.userId,
+    userName: a.userName || a.user_name || undefined,
+    userNip: a.userNip || a.user_nip || undefined,
+    userAvatar: a.userAvatar || a.user_avatar || undefined,
+    divisionName: a.divisionName || a.division_name || undefined,
+    date: attDate,
+    attendanceDate: attDate,
+    clockIn: cIn ? (cIn.length > 5 ? cIn.substring(0, 5) : cIn) : undefined,
+    clock_in: cIn,
+    clockOut: cOut ? (cOut.length > 5 ? cOut.substring(0, 5) : cOut) : undefined,
+    clock_out: cOut,
+    photoIn: pIn,
+    clockInPhoto: pIn,
+    photoOut: pOut,
+    clockOutPhoto: pOut,
+    latIn: a.latIn != null ? parseFloat(a.latIn) : (a.lat_in != null ? parseFloat(a.lat_in) : undefined),
+    longIn: a.longIn != null ? parseFloat(a.longIn) : (a.long_in != null ? parseFloat(a.long_in) : undefined),
+    latOut: a.latOut != null ? parseFloat(a.latOut) : (a.lat_out != null ? parseFloat(a.lat_out) : undefined),
+    longOut: a.longOut != null ? parseFloat(a.longOut) : (a.long_out != null ? parseFloat(a.long_out) : undefined),
+    status: a.status || 'hadir',
+    lateMinutes: a.lateMinutes != null ? Number(a.lateMinutes) : (a.late_minutes != null ? Number(a.late_minutes) : 0),
+    earlyLeavingMinutes: a.earlyLeavingMinutes != null ? Number(a.earlyLeavingMinutes) : (a.early_leaving_minutes != null ? Number(a.early_leaving_minutes) : 0),
+    workDurationMinutes: a.workDurationMinutes != null ? Number(a.workDurationMinutes) : (a.work_duration_minutes != null ? Number(a.work_duration_minutes) : 0),
+    isLocked: a.isLocked === true || a.is_locked === true,
+    isPerimeterBreached: a.isPerimeterBreached === true || a.is_perimeter_breached === true,
+    isOnBreak: a.isOnBreak === true || a.is_on_break === true,
+    isEarlyLeave: a.isEarlyLeave === true || a.is_early_leave === true,
+    earlyLeaveApproved: a.earlyLeaveApproved === true || a.early_leave_approved === true,
+    isRemoteUnlocked: a.isRemoteUnlocked === true || a.is_remote_unlocked === true,
+  };
+};
+
 export const calculateDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
   const R = 6371e3; // metres
   const φ1 = (lat1 * Math.PI) / 180;
@@ -832,25 +891,42 @@ export const hrmService = {
           safeSetJson(STORAGE_KEYS.COMPANY_PROFILE, company);
         }
         if (Array.isArray(attendances) && attendances.length > 0) {
-          const mappedAtts: AttendanceRecord[] = attendances.map((a: any) => {
-            const attDate = a.attendanceDate || a.date || (a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '');
-            const pIn = a.photoIn || a.clockInPhoto || a.photo_in;
-            const pOut = a.photoOut || a.clockOutPhoto || a.photo_out;
-            return {
-              ...a,
-              userId: a.userId || a.user_id,
-              user_id: a.user_id || a.userId,
-              attendanceDate: attDate,
-              date: attDate,
-              photoIn: pIn,
-              clockInPhoto: pIn,
-              photoOut: pOut,
-              clockOutPhoto: pOut,
-              userName: a.userName || a.user_name || undefined,
-              userNip: a.userNip || a.user_nip || undefined,
-              divisionName: a.divisionName || a.division_name || undefined,
-            };
-          });
+          const mappedAtts: AttendanceRecord[] = attendances.map((a: any) => normalizeAttendanceRecord(a));
+
+          // Retain any active employee's verified clock-in for today so that bootstrap never overwrites it with an unclocked entry
+          const today = getTodayDateStr();
+          try {
+            const rawCurrent = sessionStorage.getItem('hrm_active_session_user') || localStorage.getItem('hrm_active_session_user');
+            if (rawCurrent) {
+              const u = JSON.parse(rawCurrent);
+              const uId = u?.id;
+              if (uId) {
+                const confKey = `hrm_confirmed_today_att_${uId}_${today}`;
+                const cachedConf = localStorage.getItem(confKey);
+                if (cachedConf) {
+                  const parsedConf = JSON.parse(cachedConf);
+                  if (parsedConf && (parsedConf.clockIn || parsedConf.clock_in)) {
+                    const normConf = normalizeAttendanceRecord(parsedConf);
+                    const idx = mappedAtts.findIndex((m) =>
+                      (m.userId === uId || m.user_id === uId) &&
+                      (m.date === today || m.attendanceDate === today)
+                    );
+                    if (idx !== -1) {
+                      mappedAtts[idx] = {
+                        ...mappedAtts[idx],
+                        ...normConf,
+                        clockIn: normConf.clockIn || mappedAtts[idx].clockIn,
+                        clock_in: normConf.clock_in || mappedAtts[idx].clock_in,
+                      };
+                    } else {
+                      mappedAtts.unshift(normConf);
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {}
+
           inMemoryAttendances = mappedAtts;
           safeSetJson(STORAGE_KEYS.ATTENDANCE, mappedAtts);
           window.dispatchEvent(new Event('hrm_attendance_updated'));
@@ -2302,39 +2378,43 @@ export const hrmService = {
     const diskRecords: AttendanceRecord[] = safeGetJson<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, []);
     // Gabungkan foto beresolusi penuh dari memori RAM ke rekaman data lokal
     const baseSource = inMemoryAttendances.length > 0 ? inMemoryAttendances : diskRecords;
-    const normalized: AttendanceRecord[] = baseSource.map((a: any) => {
-      const mem = inMemoryAttendances.find((m) => m.id === a.id);
-      const attDate = a.attendanceDate || a.date || (a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '');
-      const pIn = mem?.photoIn || mem?.clockInPhoto || a.photoIn || a.clockInPhoto || a.photo_in;
-      const pOut = mem?.photoOut || mem?.clockOutPhoto || a.photoOut || a.clockOutPhoto || a.photo_out;
-      return {
-        ...a,
-        userId: a.userId || a.user_id,
-        user_id: a.user_id || a.userId,
-        attendanceDate: attDate,
-        date: attDate,
-        photoIn: pIn,
-        clockInPhoto: pIn,
-        photoOut: pOut,
-        clockOutPhoto: pOut,
-      };
-    });
+    const normalized: AttendanceRecord[] = baseSource.map((a: any) => normalizeAttendanceRecord(a));
     if (date) {
-      return normalized.filter((a) => (a.attendanceDate || (a as any).date) === date);
+      const targetDate = normalizeDateString(date);
+      return normalized.filter((a) => normalizeDateString(a.attendanceDate || (a as any).date) === targetDate);
     }
     return normalized;
   },
 
   getUserTodayAttendance: (userId: string): AttendanceRecord | undefined => {
     const today = getTodayDateStr();
+    // 1. Cek dedicated persistent key first untuk kepastian tanpa race condition
+    try {
+      const cached = localStorage.getItem(`hrm_confirmed_today_att_${userId}_${today}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && (parsed.clockIn || parsed.clock_in)) {
+          return normalizeAttendanceRecord(parsed);
+        }
+      }
+    } catch (e) {}
+
     const list = hrmService.getAttendances(today);
     const users = hrmService.getUsers();
     const u = users.find((x) => x.id === userId || x.email === userId || x.nip === userId);
     const validTargets = [userId, u?.id, u?.email, u?.nip].filter(Boolean);
-    return list.find((a) => {
+    const found = list.find((a) => {
       const aUser = a.userId || (a as any).user_id;
       return validTargets.includes(aUser);
     });
+
+    if (found && (found.clockIn || found.clock_in)) {
+      try {
+        localStorage.setItem(`hrm_confirmed_today_att_${userId}_${today}`, JSON.stringify(found));
+      } catch (e) {}
+    }
+
+    return found ? normalizeAttendanceRecord(found) : undefined;
   },
 
   saveAttendances: (attendances: AttendanceRecord[]): boolean => {
@@ -2873,6 +2953,9 @@ export const hrmService = {
     }
 
     hrmService.saveAttendances(all);
+    try {
+      localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${today}`, JSON.stringify(memRec));
+    } catch (e) {}
     window.dispatchEvent(new Event('hrm_attendance_updated'));
     window.dispatchEvent(new Event('hrm_data_updated'));
 
@@ -3031,6 +3114,9 @@ export const hrmService = {
     }
 
     hrmService.saveAttendances(all);
+    try {
+      localStorage.setItem(`hrm_confirmed_today_att_${existing.userId}_${existing.attendanceDate || todayStr}`, JSON.stringify(memRec));
+    } catch (e) {}
     window.dispatchEvent(new Event('hrm_attendance_updated'));
     window.dispatchEvent(new Event('hrm_data_updated'));
 

@@ -63,7 +63,8 @@ app.post('/api/auth/login', async (req, res) => {
              d.address as division_address,
              d.allowed_posts as division_allowed_posts,
              s.name as shift_name, s.start_time as shift_start_time, s.end_time as shift_end_time,
-             sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme
+             sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme,
+             (SELECT a.photo_in FROM hrm_attendances a WHERE (a.user_id = p.id OR a.user_id = p.nip) AND a.photo_in IS NOT NULL ORDER BY a.attendance_date DESC, a.created_at DESC LIMIT 1) as latest_attendance_photo
       FROM hrm_profiles p
       LEFT JOIN hrm_roles r ON p.role_id = r.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
@@ -405,7 +406,10 @@ function formatUserRow(r) {
     customStartTime: isSpecial && r.custom_start_time ? r.custom_start_time.substring(0, 5) : null,
     customEndTime: isSpecial && r.custom_end_time ? r.custom_end_time.substring(0, 5) : null,
     lateToleranceMinutes: r.late_tolerance_minutes != null ? parseInt(r.late_tolerance_minutes) : 15,
-    avatarUrl: r.avatar_url || r.face_photo_url || r.face_enrolled_photo || null,
+    avatarUrl: (() => {
+      const isValid = (s) => typeof s === 'string' && (s.startsWith('http') || s.startsWith('/') || (s.startsWith('data:image/') && s.length > 150));
+      return [r.avatar_url, r.face_photo_url, r.face_enrolled_photo, r.latest_attendance_photo].find(isValid) || null;
+    })(),
     gender: r.gender,
     birthPlace: r.birth_place,
     birthDate: r.birth_date,
@@ -434,7 +438,10 @@ function formatUserRow(r) {
     isActive: r.is_active !== false,
     isFaceEnrolled: r.is_face_enrolled === true || !!descriptor || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
     faceDescriptor: descriptor,
-    faceEnrolledPhoto: r.face_photo_url || r.face_enrolled_photo || null,
+    faceEnrolledPhoto: (() => {
+      const isValid = (s) => typeof s === 'string' && (s.startsWith('http') || s.startsWith('/') || (s.startsWith('data:image/') && s.length > 150));
+      return [r.face_photo_url, r.face_enrolled_photo, r.avatar_url, r.latest_attendance_photo].find(isValid) || null;
+    })(),
     faceEnrolledAt: r.face_enrolled_at || null,
     deviceId: r.device_id || null,
     registeredDeviceId: r.device_id || r.registered_device_id || null,
@@ -685,10 +692,11 @@ app.get('/api/sync/bootstrap', async (req, res) => {
       : null;
 
     const attendances = attendancesRes.rows.map((a) => {
-      const attDate = a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '';
+      const attDate = a.attendance_date ? (typeof a.attendance_date === 'string' ? a.attendance_date.substring(0, 10) : new Date(a.attendance_date).toISOString().split('T')[0]) : '';
       return {
         id: a.id,
         userId: a.user_id,
+        user_id: a.user_id,
         userName: a.user_name || undefined,
         userNip: a.user_nip || undefined,
         userAvatar: a.user_avatar || undefined,
@@ -696,7 +704,9 @@ app.get('/api/sync/bootstrap', async (req, res) => {
         date: attDate,
         attendanceDate: attDate,
         clockIn: a.clock_in ? a.clock_in.substring(0, 5) : undefined,
+        clock_in: a.clock_in,
         clockOut: a.clock_out ? a.clock_out.substring(0, 5) : undefined,
+        clock_out: a.clock_out,
         photoIn: a.photo_in,
         photoOut: a.photo_out,
         clockInPhoto: a.photo_in,
@@ -971,7 +981,8 @@ app.get('/api/users/:id', async (req, res) => {
              s.name as shift_name,
              s.start_time as shift_start_time,
              s.end_time as shift_end_time,
-             sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme
+             sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme,
+             (SELECT a.photo_in FROM hrm_attendances a WHERE (a.user_id = p.id OR a.user_id = p.nip) AND a.photo_in IS NOT NULL ORDER BY a.attendance_date DESC, a.created_at DESC LIMIT 1) as latest_attendance_photo
       FROM hrm_profiles p
       LEFT JOIN hrm_roles r ON p.role_id = r.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
@@ -983,7 +994,8 @@ app.get('/api/users/:id', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
-    res.json({ success: true, data: formatUserRow(result.rows[0]) });
+    const formatted = formatUserRow(result.rows[0]);
+    res.json({ success: true, user: formatted, data: formatted });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1759,6 +1771,14 @@ app.post('/api/attendances/clock-in', async (req, res) => {
          WHERE user_id = $1 AND id != $2 AND photo_in IS NOT NULL;`,
         [userId, insertedAttendance.id]
       ).catch((err) => console.warn('[Photo Retention] Error clearing older clock-in photos:', err));
+
+      // Jika user belum memiliki foto profil atau avatar yang valid (>150 char), perbarui juga avatar_url di hrm_profiles
+      await pool.query(
+        `UPDATE hrm_profiles 
+         SET avatar_url = $1, face_photo_url = COALESCE(face_photo_url, $1) 
+         WHERE (id = $2 OR nip = $2) AND (avatar_url IS NULL OR LENGTH(avatar_url) < 150);`,
+        [photo, userId]
+      ).catch((err) => console.warn('[Photo Retention] Error syncing avatar to profile:', err));
     }
 
     res.json({ success: true, data: insertedAttendance });
@@ -1810,8 +1830,8 @@ app.post('/api/biometric/enroll-master', async (req, res) => {
     }
 
     await pool.query(
-      `UPDATE hrm_profiles SET face_embedding = $1, face_photo_url = $2, face_enrolled_at = NOW(), is_face_enrolled = true WHERE id = $3`,
-      [aiData.embedding, targetPhoto.startsWith('data:') ? targetPhoto.slice(0, 100) : targetPhoto, userId]
+      `UPDATE hrm_profiles SET face_embedding = $1, face_photo_url = $2, face_enrolled_photo = $2, avatar_url = $2, face_enrolled_at = NOW(), is_face_enrolled = true WHERE id = $3`,
+      [aiData.embedding, targetPhoto, userId]
     );
 
     res.json({
@@ -4217,7 +4237,7 @@ app.get('/api/attendances/today', async (req, res) => {
       FROM hrm_attendances a
       LEFT JOIN hrm_profiles p ON a.user_id = p.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      WHERE (a.user_id::text = $1 OR a.user_id::text = $3) 
+      WHERE (a.user_id::text = $1 OR a.user_id::text = $3 OR LOWER(p.nip) = LOWER($3) OR LOWER(p.email) = LOWER($3)) 
         AND (
           a.attendance_date = COALESCE($2::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
           OR a.attendance_date = CURRENT_DATE
@@ -4230,10 +4250,11 @@ app.get('/api/attendances/today', async (req, res) => {
       return res.json({ success: true, attendance: null });
     }
     const a = result.rows[0];
-    const attDate = a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '';
+    const attDate = a.attendance_date ? (typeof a.attendance_date === 'string' ? a.attendance_date.substring(0, 10) : new Date(a.attendance_date).toISOString().split('T')[0]) : '';
     const attendance = {
       id: a.id,
       userId: a.user_id,
+      user_id: a.user_id,
       userName: a.user_name || undefined,
       userNip: a.user_nip || undefined,
       userAvatar: a.user_avatar || undefined,
@@ -4241,7 +4262,9 @@ app.get('/api/attendances/today', async (req, res) => {
       date: attDate,
       attendanceDate: attDate,
       clockIn: a.clock_in ? a.clock_in.substring(0, 5) : null,
+      clock_in: a.clock_in,
       clockOut: a.clock_out ? a.clock_out.substring(0, 5) : null,
+      clock_out: a.clock_out,
       photoIn: a.photo_in,
       photoOut: a.photo_out,
       clockInPhoto: a.photo_in,
@@ -4314,10 +4337,11 @@ app.get('/api/attendances', async (req, res) => {
     query += ' ORDER BY a.attendance_date DESC, a.clock_in DESC LIMIT 500';
     const result = await pool.query(query, params);
     const data = result.rows.map((a) => {
-      const attDate = a.attendance_date ? new Date(a.attendance_date).toISOString().split('T')[0] : '';
+      const attDate = a.attendance_date ? (typeof a.attendance_date === 'string' ? a.attendance_date.substring(0, 10) : new Date(a.attendance_date).toISOString().split('T')[0]) : '';
       return {
         id: a.id,
         userId: a.user_id,
+        user_id: a.user_id,
         userName: a.user_name || undefined,
         userNip: a.user_nip || undefined,
         userAvatar: a.user_avatar || undefined,
@@ -4325,7 +4349,9 @@ app.get('/api/attendances', async (req, res) => {
         date: attDate,
         attendanceDate: attDate,
         clockIn: a.clock_in ? a.clock_in.substring(0, 5) : undefined,
+        clock_in: a.clock_in,
         clockOut: a.clock_out ? a.clock_out.substring(0, 5) : undefined,
+        clock_out: a.clock_out,
         photoIn: a.photo_in,
         photoOut: a.photo_out,
         clockInPhoto: a.photo_in,

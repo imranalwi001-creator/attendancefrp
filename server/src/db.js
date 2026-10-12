@@ -3,6 +3,10 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Standard OID 1082 is DATE in PostgreSQL.
+// Returning raw 'YYYY-MM-DD' string prevents Node.js UTC/local timezone skew across timezones (WITA/WIB/WIT).
+pg.types.setTypeParser(1082, (val) => val);
+
 const { Pool } = pg;
 
 export const pool = new Pool({
