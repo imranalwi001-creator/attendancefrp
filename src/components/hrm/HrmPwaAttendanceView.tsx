@@ -220,6 +220,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [emergencyReason, setEmergencyReason] = useState('');
   const [isSubmittingEmergency, setIsSubmittingEmergency] = useState(false);
 
+  // ─── PELAPORAN KELUAR AREA / KLARIFIKASI JAM PULANG (REKOMENDASI PIMPINAN) ───
+  const [breachReportModalOpen, setBreachReportModalOpen] = useState(false);
+  const [breachReportNotes, setBreachReportNotes] = useState('');
+  const [isSubmittingBreachReport, setIsSubmittingBreachReport] = useState(false);
+
   // Leave / Cuti Management States (Tab Aktivitas)
   const [leaveModalOpen, setLeaveModalOpen] = useState(false);
   const [leaveType, setLeaveType] = useState<LeaveRequest['leaveType']>('annual_leave');
@@ -3912,11 +3917,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               {/* Tombol Absen Pulang (Terkunci Sebelum Waktunya Kecuali Izin Darurat - Anti-Early Leave Berlaku Semua Karyawan) */}
               <button
                 type="button"
-                disabled={!isClockOutAllowed}
+                disabled={!isClockOutAllowed && isInsideCoordinates}
                 onClick={() => {
+                  if (!isInsideCoordinates && hasClockedIn && !hasClockedOut) {
+                    setBreachReportModalOpen(true);
+                    return;
+                  }
                   if (!isClockOutAllowed) {
                     if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
-                      toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
+                      toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat atau Lapor Keluar Area.`);
                     }
                     return;
                   }
@@ -3925,12 +3934,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 className={`py-3 px-3 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold transition-all shadow-sm ${
                   hasClockedOut
                     ? 'bg-slate-100 dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-800 opacity-90 cursor-default'
+                    : !isInsideCoordinates && hasClockedIn && !hasClockedOut
+                    ? 'bg-rose-600 hover:bg-rose-700 active:scale-95 text-white shadow-rose-600/20'
                     : isClockOutAllowed
                     ? 'bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white shadow-emerald-700/20'
                     : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-80'
                 }`}
               >
-                {isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut ? (
+                {!isInsideCoordinates && hasClockedIn && !hasClockedOut ? (
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-white animate-pulse" />
+                ) : isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut ? (
                   <Lock className="w-4 h-4 shrink-0 text-amber-500" />
                 ) : (
                   <LogOut className="w-4 h-4 shrink-0" />
@@ -3940,6 +3953,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     ? `PULANG (${todayAttendance?.clockOut?.substring(0, 5) || todayAttendance?.clockOut})`
                     : !hasClockedIn
                     ? 'ABSEN PULANG'
+                    : !isInsideCoordinates
+                    ? 'LAPOR KELUAR POS'
                     : isBeforeShiftEndTime && !hasApprovedEmergencyLeave
                     ? `TERKUNCI (${userShift?.endTime?.substring(0, 5) || '16:30'})`
                     : hasApprovedEmergencyLeave
@@ -3949,8 +3964,34 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </button>
             </div>
 
+            {/* Banner Peringatan Keluar Area Tugas Tanpa Laporan */}
+            {hasClockedIn && !hasClockedOut && (!isInsideCoordinates || todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached) && (
+              <div className="bg-gradient-to-r from-rose-500/10 via-rose-500/15 to-rose-500/10 border border-rose-300 dark:border-rose-800 rounded-2xl p-3 flex items-center justify-between gap-2.5 animate-pulse">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                    <AlertTriangle className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-rose-900 dark:text-rose-100">
+                      Terdeteksi di Luar Area Kerja
+                    </p>
+                    <p className="text-[10px] text-rose-700 dark:text-rose-300 truncate">
+                      Lapor alasan Anda agar jam pulang otomatis tercatat.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBreachReportModalOpen(true)}
+                  className="px-2.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shrink-0 active:scale-95 shadow-xs"
+                >
+                  Lapor Alasan
+                </button>
+              </div>
+            )}
+
             {/* Status Kunci Absen Pulang & Jam Istirahat Otomatis */}
-            {isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut && (
+            {isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut && isInsideCoordinates && (
               <div className="bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl p-2.5 flex items-center justify-between gap-2 text-[10.5px] text-amber-800 dark:text-amber-200">
                 <div className="flex items-center gap-2 min-w-0">
                   <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
@@ -5810,6 +5851,100 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               className="rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700 text-white font-bold text-xs"
             >
               {isSubmittingTravel ? 'Mengirim...' : 'Kirim Laporan Darurat'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL PELAPORAN KELUAR AREA & KONFIRMASI JAM PULANG STANDAR ─── */}
+      <Dialog open={breachReportModalOpen} onOpenChange={setBreachReportModalOpen}>
+        <DialogContent className="max-w-md p-4 sm:p-6 rounded-3xl bg-card border-border">
+          <DialogHeader className="space-y-1">
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-4 h-4" />
+              </div>
+              <span>Pelaporan Keluar Area & Jam Pulang</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Sistem mendeteksi Anda berada di luar area pos kerja. Sampaikan keterangan alasan Anda. Setelah dikirim, jam pulang standar ({userShift?.endTime?.substring(0, 5) || '16:30'} WITA) akan otomatis terisi dan terkirim ke WhatsApp pimpinan.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3.5 py-2 text-xs">
+            {/* Opsi Cepat Alasan */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">Pilih Alasan / Kondisi Lapangan:</label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { label: '🏃 Tugas Luar / Dinas', text: 'Perintah tugas luar / dinas mendadak dari atasan' },
+                  { label: '🚑 Keperluan Mendesak', text: 'Keperluan mendesak keluarga / kondisi darurat di lapangan' },
+                  { label: '📶 Gangguan GPS / Sinyal', text: 'GPS / jaringan ponsel mengalami kendala teknis saat bertugas' },
+                  { label: '🔋 Baterai HP Drop / Habis', text: 'Baterai HP drop / habis sehingga baru dapat melapor saat ini' },
+                ].map((item, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setBreachReportNotes(item.text)}
+                    className="p-2 rounded-xl border border-border hover:bg-muted text-left text-[11px] text-muted-foreground transition-all hover:text-foreground"
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Input Alasan Spesifik */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">Keterangan / Penjelasan Rinci:</label>
+              <Textarea
+                rows={3}
+                placeholder="Contoh: Mengambil berkas operasional ke gudang atas arahan korlap..."
+                value={breachReportNotes}
+                onChange={(e) => setBreachReportNotes(e.target.value)}
+                className="text-xs resize-none rounded-xl"
+              />
+            </div>
+
+            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-800 dark:text-amber-200">
+              <p className="font-semibold">ℹ️ Dampak Pelaporan:</p>
+              <p className="opacity-90">Jam pulang resmi shift ({userShift?.endTime?.substring(0, 5) || '16:30'} WITA) otomatis tercatat di sistem, dan notifikasi WhatsApp langsung terkirim ke Atasan / Pimpinan.</p>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setBreachReportModalOpen(false)} className="rounded-xl text-xs">
+              Tutup
+            </Button>
+            <Button
+              size="sm"
+              onClick={async () => {
+                if (!breachReportNotes.trim()) {
+                  toast.error('Mohon isi keterangan alasan terlebih dahulu.');
+                  return;
+                }
+                setIsSubmittingBreachReport(true);
+                try {
+                  const res = await hrmService.submitBreachReport({
+                    userId: user.id,
+                    notes: breachReportNotes.trim(),
+                    latitude: currentCoords?.lat,
+                    longitude: currentCoords?.lng,
+                  });
+                  toast.success(res.message || 'Laporan berhasil dikirim & jam pulang tercatat!');
+                  setBreachReportModalOpen(false);
+                  setBreachReportNotes('');
+                  await loadRealData();
+                } catch (err: any) {
+                  toast.error(err.message || 'Gagal mengirim laporan');
+                } finally {
+                  setIsSubmittingBreachReport(false);
+                }
+              }}
+              disabled={isSubmittingBreachReport}
+              className="rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs"
+            >
+              {isSubmittingBreachReport ? 'Mengirim...' : 'Kirim Laporan & Konfirmasi Pulang'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -499,7 +499,13 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS current_active_post_entered_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS custom_start_time VARCHAR(10) DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS custom_end_time VARCHAR(10) DEFAULT NULL,
-      ADD COLUMN IF NOT EXISTS late_tolerance_minutes INTEGER DEFAULT 15;
+      ADD COLUMN IF NOT EXISTS late_tolerance_minutes INTEGER DEFAULT 15,
+      ADD COLUMN IF NOT EXISTS last_breach_reminder_at TIMESTAMPTZ DEFAULT NULL;
+
+      ALTER TABLE hrm_attendances
+      ADD COLUMN IF NOT EXISTS breach_report_notes TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS breach_reported_at TIMESTAMPTZ DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS auto_closed_type VARCHAR(50) DEFAULT NULL;
 
       ALTER TABLE hrm_profiles ALTER COLUMN custom_start_time DROP DEFAULT;
       ALTER TABLE hrm_profiles ALTER COLUMN custom_end_time DROP DEFAULT;

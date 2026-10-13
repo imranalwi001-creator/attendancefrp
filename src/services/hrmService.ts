@@ -3384,6 +3384,50 @@ export const hrmService = {
     return existing;
   },
 
+  // ─── REKOMENDASI BARU: Pelaporan Keluar Area / Klarifikasi Ceklok Pulang Mandiri ───
+  submitBreachReport: async (data: {
+    userId: string;
+    notes: string;
+    latitude?: number;
+    longitude?: number;
+  }): Promise<{ success: boolean; message: string; clockOut?: string }> => {
+    try {
+      const res = await fetch('/api/attendances/submit-breach-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const result = await res.json();
+      if (!result.success) {
+        throw new Error(result.error || 'Gagal mengirim laporan keluar area');
+      }
+
+      // Update local storage / in memory attendance
+      const existing = hrmService.getUserTodayAttendance(data.userId);
+      if (existing) {
+        existing.clockOut = result.clockOut || existing.clockOut;
+        existing.isLocked = false;
+        existing.isPerimeterBreached = false;
+        existing.notes = (existing.notes ? existing.notes + ' | ' : '') + `[PELAPORAN KELUAR AREA: ${data.notes}]`;
+        (existing as any).breachReportNotes = data.notes;
+        (existing as any).autoClosedType = 'BREACH_SELF_REPORTED';
+
+        const all = hrmService.getAttendances();
+        const idx = all.findIndex((a) => a.id === existing.id);
+        if (idx !== -1) all[idx] = existing;
+        hrmService.saveAttendances(all);
+
+        window.dispatchEvent(new Event('hrm_attendance_updated'));
+        window.dispatchEvent(new Event('hrm_data_updated'));
+      }
+
+      return result;
+    } catch (err: any) {
+      console.error('[submitBreachReport Error]:', err);
+      throw err;
+    }
+  },
+
   // ─── REKOMENDASI 3: Remote Unlock Kepulangan oleh Admin / Korlap ───
   remoteUnlockAttendance: (userId: string, unlockedByName: string, reason?: string): boolean => {
     const existing = hrmService.getUserTodayAttendance(userId);

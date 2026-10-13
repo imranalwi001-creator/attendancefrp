@@ -2531,6 +2531,43 @@ Mohon segera pantau posisi petugas melalui menu Live Monitoring HRM.`;
       [userLat, userLon, userAccuracy, isExcusedFromBreach ? false : isOutOfBounds, isExcusedFromBreach ? 0 : excessDist, validUserId]
     );
 
+    // Jika terdeteksi di luar area kerja dan tidak sedang izin/excused:
+    if (isOutOfBounds && !isExcusedFromBreach) {
+      await pool.query(
+        `UPDATE hrm_attendances SET
+           is_locked = true,
+           is_perimeter_breached = true,
+           perimeter_breach_count = COALESCE(perimeter_breach_count, 0) + 1,
+           updated_at = NOW()
+         WHERE user_id = $1 AND attendance_date = CURRENT_DATE AND clock_out IS NULL;`,
+        [validUserId]
+      );
+
+      // 📲 REMINDER WHATSAPP LANGSUNG KE HP KARYAWAN (Jika HP di saku / aplikasi sleep)
+      if (prof.phone) {
+        const lastRem = prof.last_breach_reminder_at ? new Date(prof.last_breach_reminder_at).getTime() : 0;
+        const nowMs = Date.now();
+        // Cooldown 30 menit agar tidak spamming
+        if (nowMs - lastRem > 30 * 60 * 1000) {
+          const waEmployeeReminder =
+`⚠️ *PERINGATAN RADAR PRESENSI PT. FAWWAZ RESKI PERWIRA*
+
+Halo *${prof.full_name}*,
+Sistem mendeteksi bahwa posisi Anda saat ini berada di luar radius area pos penugasan selama jam kerja berlangsung (${excessDist} meter di luar batas pos).
+
+Jika Anda sedang menjalankan tugas dinas luar, keperluan darurat, atau terjadi kendala GPS/jaringan pada ponsel, mohon segera buka aplikasi HRM dan kirimkan *Pelaporan Insiden* di menu Presensi agar jam kepulangan Anda dapat dicatatkan secara otomatis.
+
+Tautan Aplikasi: https://hrm.ptfrp.co.id`;
+
+          sendWhatsAppAlert({ phone: prof.phone, message: waEmployeeReminder })
+            .then(() => console.log(`[Breach Reminder sent to ${prof.full_name} (${prof.phone})]`))
+            .catch(e => console.error('[Breach Reminder Error]:', e.message));
+
+          await pool.query('UPDATE hrm_profiles SET last_breach_reminder_at = NOW() WHERE id = $1;', [validUserId]);
+        }
+      }
+    }
+
     if (isMockLocation === true) {
       const fakeGpsMsg = `🚨 *DETEKSI FAKE GPS*\nPetugas *${prof.full_name}* (${prof.nip}) terdeteksi menyalakan aplikasi Mock Location / Fake GPS!`;
       await alertLeadershipViaWhatsAppAndSystem({
@@ -9039,6 +9076,248 @@ async function syncAllUserBiometricEmbeddings() {
   }
 }
 
+// ─── 17. SUBMIT LAPORAN KELUAR AREA & AUTO-FILL JAM PULANG STANDAR ───
+app.post('/api/attendances/submit-breach-report', async (req, res) => {
+  const { userId, notes, latitude, longitude } = req.body;
+  if (!userId || !notes || !notes.trim()) {
+    return res.status(400).json({ success: false, error: 'User ID dan alasan pelaporan wajib diisi.' });
+  }
+
+  try {
+    // 1. Ambil data profil karyawan
+    const profRes = await pool.query(
+      `SELECT p.*, s.name as shift_name, s.start_time, s.end_time, s.is_cross_day, d.name as division_name,
+              kr.phone as korlap_phone, kr.full_name as korlap_name
+       FROM hrm_profiles p
+       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+       LEFT JOIN hrm_profiles kr ON p.kepala_regu_id = kr.id
+       WHERE p.id = $1 LIMIT 1;`,
+      [userId]
+    );
+
+    if (profRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan.' });
+    }
+    const prof = profRes.rows[0];
+
+    // 2. Ambil presensi hari ini
+    const todayRes = await pool.query(
+      `SELECT * FROM hrm_attendances
+       WHERE user_id = $1 AND attendance_date = CURRENT_DATE
+       ORDER BY created_at DESC LIMIT 1;`,
+      [userId]
+    );
+
+    if (todayRes.rows.length === 0 || !todayRes.rows[0].clock_in) {
+      return res.status(400).json({ success: false, error: 'Anda belum melakukan presensi masuk hari ini.' });
+    }
+
+    const todayAtt = todayRes.rows[0];
+
+    // 3. Tentukan jam pulang standar shift
+    const defaultEndTime = prof.custom_end_time || (prof.end_time ? prof.end_time.substring(0, 5) : '16:30');
+    const clockOutTimeStr = defaultEndTime.length === 5 ? `${defaultEndTime}:00` : defaultEndTime;
+
+    // Hitung estimasi durasi kerja
+    const [inH, inM] = (todayAtt.clock_in || '08:00:00').split(':').map(Number);
+    const [outH, outM] = clockOutTimeStr.split(':').map(Number);
+    let workDur = (outH * 60 + outM) - (inH * 60 + inM);
+    if (prof.is_cross_day && workDur < 0) workDur += 24 * 60;
+    workDur = Math.max(0, workDur);
+
+    const reportNoteFull = `[PELAPORAN KELUAR AREA: ${notes.trim()}]`;
+    const updatedNotes = todayAtt.notes ? `${todayAtt.notes} | ${reportNoteFull}` : reportNoteFull;
+
+    // 4. Update presensi di database: isi clock_out, buka kunci, simpan alasan
+    await pool.query(
+      `UPDATE hrm_attendances SET
+         clock_out = $1,
+         lat_out = COALESCE($2, lat_out),
+         long_out = COALESCE($3, long_out),
+         work_duration_minutes = $4,
+         status = 'present',
+         is_locked = false,
+         notes = $5,
+         breach_report_notes = $6,
+         breach_reported_at = NOW(),
+         auto_closed_type = 'BREACH_SELF_REPORTED',
+         updated_at = NOW()
+       WHERE id = $7;`,
+      [
+        clockOutTimeStr,
+        latitude != null ? parseFloat(latitude) : null,
+        longitude != null ? parseFloat(longitude) : null,
+        workDur,
+        updatedNotes,
+        notes.trim(),
+        todayAtt.id
+      ]
+    );
+
+    // Buka status out of bounds pada profil
+    await pool.query(
+      `UPDATE hrm_profiles SET
+         is_out_of_bounds = false,
+         out_of_bounds_distance = 0,
+         updated_at = NOW()
+       WHERE id = $1;`,
+      [userId]
+    );
+
+    // 5. Format waktu WITA untuk WhatsApp
+    const nowWita = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19) + ' WITA';
+
+    // 6. Cek apakah termasuk 3 Petugas Lapangan Khusus
+    const specialNips = ['FRP 07065', 'FR.07.066', 'FRP.07.046'];
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
+      '0a49f92e-5733-4b72-947c-7361f9490632'  // TAKDIR
+    ];
+    const isSpecialOfficer = specialIds.includes(prof.id) || specialNips.includes(prof.nip?.trim());
+
+    if (isSpecialOfficer) {
+      // Dispatch WhatsApp ke Dirut, Pimpinan, dan Superadmin (Tembusan)
+      const waSpecialMsg =
+`📝 *LAPORAN KELUAR AREA & KONFIRMASI KEPULANGAN*
+*PT. FAWWAZ RESKI PERWIRA*
+
+👤 Petugas Khusus: *${prof.full_name}*
+🆔 NIP: *${prof.nip || '-'}*
+🏢 Divisi: *${prof.division_name || 'Petugas Lapangan'}*
+🕒 Jam Pulang Standar: *${defaultEndTime} WITA* (Tercatat Otomatis)
+⏰ Waktu Pelaporan: ${nowWita}
+
+📄 *Alasan / Klarifikasi Petugas:*
+_"${notes.trim()}"_
+
+✅ Status presensi kepulangan telah tercatat di sistem dan kunci presensi telah dibuka.
+Tembusan: Direktur Utama, Pimpinan & Superadmin.`;
+
+      // 1. Dirut: 082291998026
+      await sendWhatsAppAlert({ phone: '082291998026', message: waSpecialMsg }).catch(e => console.error('[WA Dirut Breach Report Error]:', e.message));
+      // 2. Pimpinan: 082192755755
+      await sendWhatsAppAlert({ phone: '082192755755', message: waSpecialMsg }).catch(e => console.error('[WA Pimpinan Breach Report Error]:', e.message));
+      // 3. Superadmin: 081355904897
+      await sendWhatsAppAlert({ phone: '081355904897', message: waSpecialMsg }).catch(e => console.error('[WA Superadmin Breach Report Error]:', e.message));
+
+    } else {
+      // Dispatch WhatsApp untuk Karyawan Reguler ke Korlap, K3, dan Admin
+      const waRegularMsg =
+`📝 *LAPORAN KELUAR AREA & KONFIRMASI KEPULANGAN*
+*PT. FAWWAZ RESKI PERWIRA*
+
+👤 Karyawan: *${prof.full_name}*
+🆔 NIP: *${prof.nip || '-'}*
+🏢 Divisi: *${prof.division_name || '-'}*
+🕒 Jam Pulang Standar: *${defaultEndTime} WITA* (Tercatat Otomatis)
+⏰ Waktu Pelaporan: ${nowWita}
+
+📄 *Alasan / Keterangan:*
+_"${notes.trim()}"_
+
+✅ Jam kepulangan standar telah tercatat di sistem presensi.
+Tembusan: Korlap, K3 & Admin HRD.`;
+
+      // Admin HRD: 081355904897
+      await sendWhatsAppAlert({ phone: '081355904897', message: waRegularMsg }).catch(e => console.error('[WA Admin Breach Report Error]:', e.message));
+
+      // Jika ada nomor Korlap
+      if (prof.korlap_phone) {
+        await sendWhatsAppAlert({ phone: prof.korlap_phone, message: waRegularMsg }).catch(e => console.error('[WA Korlap Breach Report Error]:', e.message));
+      }
+
+      // Cari nomor K3 di database jika ada
+      const k3Res = await pool.query(
+        `SELECT p.phone FROM hrm_profiles p
+         JOIN hrm_roles r ON p.role_id = r.id
+         WHERE (r.name ILIKE '%k3%' OR r.label ILIKE '%k3%' OR p.job_title ILIKE '%k3%') AND p.phone IS NOT NULL AND p.phone != ''
+         LIMIT 3;`
+      ).catch(() => ({ rows: [] }));
+
+      for (const k3Row of k3Res.rows) {
+        if (k3Row.phone && k3Row.phone !== '081355904897' && k3Row.phone !== prof.korlap_phone) {
+          await sendWhatsAppAlert({ phone: k3Row.phone, message: waRegularMsg }).catch(e => console.error('[WA K3 Breach Report Error]:', e.message));
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Laporan berhasil dikirim. Jam pulang standar (${defaultEndTime} WITA) telah otomatis tercatat di sistem.`,
+      clockOut: clockOutTimeStr,
+      workDurationMinutes: workDur
+    });
+  } catch (err) {
+    console.error('[submit-breach-report Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── 18. AUTO-CLOSE SERVICE: KARYAWAN DISIPLIN YANG LUPA CEKOUT (LOWBAT/TERKENDALA) ───
+async function runAutoCloseCompliantAttendance() {
+  try {
+    const candidates = await pool.query(`
+      SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.notes,
+             p.custom_end_time, s.end_time, s.is_cross_day, p.full_name
+      FROM hrm_attendances a
+      JOIN hrm_profiles p ON a.user_id = p.id
+      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+      WHERE a.attendance_date = CURRENT_DATE
+        AND a.clock_in IS NOT NULL
+        AND a.clock_out IS NULL
+        AND (a.is_locked = false OR a.is_locked IS NULL)
+        AND (a.is_perimeter_breached = false OR a.is_perimeter_breached IS NULL)
+        AND (a.perimeter_breach_count = 0 OR a.perimeter_breach_count IS NULL);
+    `);
+
+    if (candidates.rows.length === 0) return;
+
+    const nowWitaDate = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    const nowH = nowWitaDate.getUTCHours();
+    const nowM = nowWitaDate.getUTCMinutes();
+    const nowTotalMins = nowH * 60 + nowM;
+
+    for (const row of candidates.rows) {
+      const shiftEndStr = row.custom_end_time || (row.end_time ? row.end_time.substring(0, 5) : '16:30');
+      const [endH, endM] = shiftEndStr.split(':').map(Number);
+      const shiftEndTotalMins = endH * 60 + endM;
+
+      // Jika sudah lewat jam akhir shift + 30 menit atau sudah malam hari (>= 23:00 WITA)
+      const isPastShift = !row.is_cross_day
+        ? (nowTotalMins >= shiftEndTotalMins + 30 || nowTotalMins >= 23 * 60)
+        : (nowTotalMins >= 8 * 60);
+
+      if (isPastShift) {
+        const [inH, inM] = (row.clock_in || '08:00:00').split(':').map(Number);
+        let workDur = shiftEndTotalMins - (inH * 60 + inM);
+        if (row.is_cross_day && workDur < 0) workDur += 24 * 60;
+        workDur = Math.max(0, workDur);
+
+        const autoCloseNote = '[AUTO-CLOSED: STANDBY VALID DI POS HINGGA SHIFT BERAKHIR]';
+        const updatedNotes = row.notes ? `${row.notes} | ${autoCloseNote}` : autoCloseNote;
+        const clockOutTime = shiftEndStr.length === 5 ? `${shiftEndStr}:00` : shiftEndStr;
+
+        await pool.query(`
+          UPDATE hrm_attendances SET
+            clock_out = $1,
+            work_duration_minutes = $2,
+            status = 'present',
+            auto_closed_type = 'COMPLIANT_ON_SITE',
+            notes = $3,
+            updated_at = NOW()
+          WHERE id = $4;
+        `, [clockOutTime, workDur, updatedNotes, row.id]);
+
+        console.log(`[Auto-Close Compliant] Sukses menutup presensi ${row.full_name} jam ${clockOutTime}`);
+      }
+    }
+  } catch (err) {
+    console.error('[runAutoCloseCompliantAttendance Error]:', err.message);
+  }
+}
+
 // Start Server
 async function start() {
   try {
@@ -9047,8 +9326,13 @@ async function start() {
     await enforceEphemeralPhotoRetention();
     await syncAllUserBiometricEmbeddings();
 
-    // Jalankan pembersihan berkala setiap 6 jam
+    // Jalankan pembersihan foto berkala setiap 6 jam
     setInterval(enforceEphemeralPhotoRetention, 6 * 60 * 60 * 1000);
+
+    // Jalankan auto-close presensi tertib setiap 15 menit
+    setInterval(runAutoCloseCompliantAttendance, 15 * 60 * 1000);
+    // Jalankan satu kali saat startup
+    runAutoCloseCompliantAttendance().catch(() => {});
 
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`[HRM-Backend] Server running on port ${PORT}`);
