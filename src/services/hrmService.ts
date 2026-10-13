@@ -2982,27 +2982,39 @@ export const hrmService = {
     };
 
     try {
-      const response = await api.post('/attendances/clock-in', clockInPayload);
-      if (response && response.data && response.data.data) {
-        const dbRecord = response.data.data;
-        if (dbRecord.id) {
-          memRec.id = dbRecord.id;
-          newRecord.id = dbRecord.id;
-          const idxAll = all.findIndex((a) => a.id === newRecord.id || (a.userId === user.id && a.date === today));
-          if (idxAll !== -1) all[idxAll].id = dbRecord.id;
-          hrmService.saveAttendances(all);
-        }
+      const response = await api.post<any>('/attendances/clock-in', clockInPayload);
+      const dbRecord = response?.data?.data || response?.data || response?.attendance;
+      if (dbRecord && dbRecord.id) {
+        memRec.id = dbRecord.id;
+        newRecord.id = dbRecord.id;
+        const idxAll = all.findIndex((a) => a.id === newRecord.id || (a.userId === user.id && a.date === today));
+        if (idxAll !== -1) all[idxAll].id = dbRecord.id;
+        hrmService.saveAttendances(all);
+        try {
+          localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${today}`, JSON.stringify(memRec));
+          if (user.nip) {
+            localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${today}`, JSON.stringify(memRec));
+          }
+        } catch (e) {}
       }
     } catch (err: any) {
       console.warn('[Attendance] Backend clock-in warning:', err);
-      if (err.response && err.response.data && err.response.data.error) {
+      const serverErrMsg = err.data?.error || err.response?.data?.error;
+      const isBusinessValidationError = err.status === 400 || err.status === 403 || (serverErrMsg && !err.message?.includes('timeout') && !err.message?.includes('Gagal terhubung'));
+
+      if (isBusinessValidationError) {
         const rollbackAll = hrmService.getAttendances().filter((a) => a.id !== newRecord.id && a.id !== memRec.id);
         hrmService.saveAttendances(rollbackAll);
         const memIdxRoll = inMemoryAttendances.findIndex((m) => m.id === newRecord.id || m.id === memRec.id);
         if (memIdxRoll !== -1) inMemoryAttendances.splice(memIdxRoll, 1);
+        try {
+          localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${today}`);
+          if (user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${user.nip}_${today}`);
+        } catch (e) {}
         window.dispatchEvent(new Event('hrm_attendance_updated'));
-        throw new Error(err.response.data.error);
+        throw new Error(serverErrMsg || err.message || 'Presensi ditolak oleh server');
       }
+
       hrmService.enqueueOfflineSync('clock-in', clockInPayload);
     }
 
@@ -3145,8 +3157,10 @@ export const hrmService = {
       await api.post('/attendances/clock-out', clockOutPayload);
     } catch (err: any) {
       console.warn('[Attendance] Backend clock-out warning:', err);
-      if (err.response && err.response.data && err.response.data.error) {
-        throw new Error(err.response.data.error);
+      const serverErrMsg = err.data?.error || err.response?.data?.error;
+      const isBusinessValidationError = err.status === 400 || err.status === 403 || (serverErrMsg && !err.message?.includes('timeout') && !err.message?.includes('Gagal terhubung'));
+      if (isBusinessValidationError) {
+        throw new Error(serverErrMsg || err.message || 'Presensi pulang ditolak oleh server');
       }
       hrmService.enqueueOfflineSync('clock-out', clockOutPayload);
     }

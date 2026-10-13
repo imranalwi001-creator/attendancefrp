@@ -23,6 +23,8 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/downloads', express.static(downloadsDir));
 
+export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 // Health Check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
@@ -469,8 +471,6 @@ function formatUserRow(r) {
     createdAt: r.created_at,
   };
 }
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 async function resolveRoleId(roleId, roleName) {
   if (roleId && UUID_REGEX.test(roleId)) return roleId;
@@ -1341,7 +1341,7 @@ function calculateHaversineMeters(lat1, lon1, lat2, lon2) {
 
 
 app.post('/api/attendances/clock-in', async (req, res) => {
-  const {
+  let {
     userId,
     date,
     time,
@@ -1374,6 +1374,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     if (userRes.rows.length > 0) {
       userProfile = userRes.rows[0];
       validUserId = userProfile.id;
+      userId = validUserId;
     }
 
     const isExempt = isExemptFieldOfficer(userProfile);
@@ -3560,7 +3561,7 @@ app.put('/api/payroll/slips/:id/status', async (req, res) => {
 });
 
 app.post('/api/attendances/clock-out', async (req, res) => {
-  const {
+  let {
     userId,
     date,
     time,
@@ -3593,6 +3594,7 @@ app.post('/api/attendances/clock-out', async (req, res) => {
     if (userRes.rows.length > 0) {
       userProfile = userRes.rows[0];
       validUserId = userProfile.id;
+      userId = validUserId;
     }
 
     const isExempt = isExemptFieldOfficer(userProfile);
@@ -8927,9 +8929,12 @@ async function start() {
     // Jalankan pembersihan berkala setiap 6 jam
     setInterval(enforceEphemeralPhotoRetention, 6 * 60 * 60 * 1000);
 
-    app.listen(PORT, '0.0.0.0', () => {
+    const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`[HRM-Backend] Server running on port ${PORT}`);
     });
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
+    server.requestTimeout = 120000;
   } catch (err) {
     console.error('[HRM-Backend] Startup fatal error:', err);
     process.exit(1);

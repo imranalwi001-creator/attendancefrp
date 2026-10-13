@@ -909,9 +909,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(finalNormalized));
           if (user.nip) localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`, JSON.stringify(finalNormalized));
         } catch (e) {}
-      } else if (initialAtt && (initialAtt.clockIn || initialAtt.clock_in)) {
-        setTodayAttendance(initialAtt);
-      } else if (!todayAttendance || !todayAttendance.clockIn) {
+      } else if (todayAttendance && (todayAttendance.clockIn || (todayAttendance as any).clock_in)) {
+        // Pertahankan status kehadiran yang sudah aktif di memori sesi saat ini
+      } else {
         setTodayAttendance(null);
       }
 
@@ -2194,10 +2194,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         }
       }
 
-      // Optimal resolution (max 1280 wide) to ensure lightweight base64 payload (< 200KB)
-      const rawW = videoRef.current.videoWidth || 1280;
-      const rawH = videoRef.current.videoHeight || 720;
-      const maxW = 1280;
+      // Highly optimized resolution (max 800px) to guarantee sub-second upload on mobile cellular data (< 150KB)
+      const rawW = videoRef.current.videoWidth || 800;
+      const rawH = videoRef.current.videoHeight || 600;
+      const maxW = 800;
       let targetW = rawW;
       let targetH = rawH;
       if (targetW > maxW) {
@@ -2221,7 +2221,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       }
 
       // 1. Ekstraksi Citra Wajah Murni (Clean Face Frame) Tanpa Watermark untuk InsightFace AI 512-D
-      const cleanPhotoData = canvas.toDataURL('image/jpeg', 0.88);
+      const cleanPhotoData = canvas.toDataURL('image/jpeg', 0.75);
 
       // 1:1 Biometric Verification directly against Database Master Vector
       let verifiedConfidence = 95;
@@ -2269,7 +2269,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       // 2. Beri Watermark Stempel Forensik Resmi pada Frame Arsip Visual Database
       applyWatermark(canvas, verifiedConfidence);
-      const photoData = canvas.toDataURL('image/jpeg', 0.82);
+      const photoData = canvas.toDataURL('image/jpeg', 0.75);
 
       // Tutup kamera seketika agar UX mobile sangat responsif dan tidak membeku
       closeLiveCamera();
