@@ -971,6 +971,13 @@ export const hrmService = {
         if (Array.isArray(res.data.leaves)) {
           const mappedLeaves = res.data.leaves.map((l: any) => {
             const user = currentUsersList.find((u: any) => u.id === l.user_id || u.email === l.user_id || u.nip === l.user_id);
+            const formatSafeDate = (d: any) => {
+              if (!d) return '';
+              if (typeof d === 'string') {
+                return d.split('T')[0];
+              }
+              return new Date(d).toISOString().split('T')[0];
+            };
             return {
               id: l.id,
               userId: l.user_id,
@@ -978,8 +985,8 @@ export const hrmService = {
               userNip: l.user_nip || (user ? user.nip : ''),
               divisionName: l.division_name || (user ? (user.division || user.divisionName) : '-'),
               leaveType: l.leave_type,
-              startDate: l.start_date ? new Date(l.start_date).toISOString().split('T')[0] : '',
-              endDate: l.end_date ? new Date(l.end_date).toISOString().split('T')[0] : '',
+              startDate: formatSafeDate(l.start_date),
+              endDate: formatSafeDate(l.end_date),
               totalDays: l.total_days || 1,
               reason: l.reason || '',
               attachmentUrl: l.attachment_url,
@@ -987,6 +994,9 @@ export const hrmService = {
               approvedBy: l.approved_by,
               approvedByName: l.approver_name,
               approvalNotes: l.approval_notes,
+              substituteId: l.substitute_id,
+              substituteName: l.substitute_name,
+              substituteNip: l.substitute_nip,
               createdAt: l.created_at,
             };
           });
@@ -3737,7 +3747,7 @@ export const hrmService = {
     return hrmService.getLeaves().filter((l) => l.userId === userId);
   },
 
-  createLeaveRequest: (req: {
+  createLeaveRequest: async (req: {
     userId: string;
     leaveType: LeaveRequest['leaveType'];
     startDate: string;
@@ -3747,7 +3757,7 @@ export const hrmService = {
     substituteId?: string;
     substituteName?: string;
     substituteNip?: string;
-  }): LeaveRequest => {
+  }): Promise<LeaveRequest> => {
     const user = hrmService.getUsers().find((u) => u.id === req.userId);
     if (!user) throw new Error('Pengguna tidak ditemukan');
 
@@ -3764,9 +3774,32 @@ export const hrmService = {
     const diffTime = Math.abs(end.getTime() - start.getTime());
     const totalDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
 
-    const leaves = hrmService.getLeaves();
+    // Push langsung ke backend PostgreSQL untuk mendapatkan UUID dan memicu broadcast WA seketika!
+    let backendLeave: any = null;
+    try {
+      const res = await api.post<{ success: boolean; leave: any }>('/leaves', {
+        userId: user.id,
+        leaveType: req.leaveType,
+        startDate: req.startDate,
+        endDate: req.endDate,
+        totalDays,
+        reason: req.reason,
+        attachmentUrl: req.attachmentUrl,
+        substituteId: req.substituteId,
+        substituteName: req.substituteName,
+        substituteNip: req.substituteNip,
+      });
+      if (res && res.leave) {
+        backendLeave = res.leave;
+      }
+    } catch (err: any) {
+      console.error('[HRM] Backend leave creation failed:', err);
+      const errMsg = err?.data?.error || err?.message || 'Gagal menyimpan pengajuan ke server database';
+      throw new Error(errMsg);
+    }
+
     const newLeave: LeaveRequest = {
-      id: `leave-${Date.now()}`,
+      id: backendLeave?.id || `leave-${Date.now()}`,
       userId: user.id,
       userName: user.fullName,
       userNip: user.nip,
@@ -3778,31 +3811,16 @@ export const hrmService = {
       reason: req.reason,
       attachmentUrl: req.attachmentUrl,
       status: 'pending',
-      substituteId: req.substituteId,
-      substituteName: req.substituteName,
-      substituteNip: req.substituteNip,
-      createdAt: new Date().toISOString(),
+      substituteId: req.substituteId || backendLeave?.substitute_id,
+      substituteName: req.substituteName || backendLeave?.substitute_name,
+      substituteNip: req.substituteNip || backendLeave?.substitute_nip,
+      createdAt: backendLeave?.created_at || new Date().toISOString(),
     };
 
+    const leaves = hrmService.getLeaves().filter((l) => l.id !== newLeave.id);
     leaves.unshift(newLeave);
     safeSetJson(STORAGE_KEYS.LEAVES, leaves);
     window.dispatchEvent(new Event('hrm_leaves_updated'));
-
-    // Push to backend database asynchronously with WA alert
-    api.post('/leaves', {
-      userId: user.id,
-      leaveType: req.leaveType,
-      startDate: req.startDate,
-      endDate: req.endDate,
-      totalDays,
-      reason: req.reason,
-      attachmentUrl: req.attachmentUrl,
-      substituteId: req.substituteId,
-      substituteName: req.substituteName,
-      substituteNip: req.substituteNip,
-    }).catch((err) => {
-      console.warn('[HRM] Warning syncing leave request to backend:', err);
-    });
 
     // Dispatch real-time alert to Dirut, Pimpinan, Superadmin, Korlap, Admin, K3
     const typeLabel = req.leaveType.replace('_', ' ').toUpperCase();
@@ -3825,7 +3843,35 @@ export const hrmService = {
     return newLeave;
   },
 
-  updateLeaveStatus: (
+  getLeaveSubstituteCandidates: async (params: {
+    applicantId: string;
+    startDate: string;
+    endDate: string;
+    divisionId?: string;
+  }): Promise<{
+    success: boolean;
+    sameDivOff: any[];
+    sameDivShift: any[];
+    globalAll: any[];
+  }> => {
+    try {
+      const qs = new URLSearchParams();
+      if (params.applicantId) qs.set('applicantId', params.applicantId);
+      if (params.startDate) qs.set('startDate', params.startDate);
+      if (params.endDate) qs.set('endDate', params.endDate);
+      if (params.divisionId) qs.set('divisionId', params.divisionId);
+      const res = await api.get<any>(`/leaves/substitute-candidates?${qs.toString()}`);
+      if (res && res.success) {
+        return res;
+      }
+      return { success: false, sameDivOff: [], sameDivShift: [], globalAll: [] };
+    } catch (err) {
+      console.warn('[HRM] Error fetching substitute candidates:', err);
+      return { success: false, sameDivOff: [], sameDivShift: [], globalAll: [] };
+    }
+  },
+
+  updateLeaveStatus: async (
     leaveId: string,
     status: 'approved' | 'rejected',
     approverId: string,
@@ -3833,12 +3879,29 @@ export const hrmService = {
     substituteId?: string,
     substituteName?: string,
     substituteNip?: string
-  ): LeaveRequest => {
+  ): Promise<LeaveRequest> => {
     const leaves = hrmService.getLeaves();
     const idx = leaves.findIndex((l) => l.id === leaveId);
     if (idx === -1) throw new Error('Pengajuan tidak ditemukan');
 
     const approver = hrmService.getUsers().find((u) => u.id === approverId);
+
+    // Call backend API first to guarantee DB update & trigger dual-channel notifications
+    try {
+      await api.put(`/leaves/${leaveId}/status`, {
+        status,
+        approverId,
+        approverName: approver?.fullName || 'Atasan / HRD',
+        notes,
+        substituteId,
+        substituteName,
+        substituteNip,
+      });
+    } catch (err: any) {
+      console.error('[HRM] Error updating leave status in backend:', err);
+      const errMsg = err?.data?.error || err?.message || 'Gagal menyimpan status persetujuan ke server';
+      throw new Error(errMsg);
+    }
 
     leaves[idx].status = status;
     leaves[idx].approvedBy = approverId;
@@ -3943,8 +4006,8 @@ export const hrmService = {
       });
     }
 
-    // Broadcast hasil keputusan persetujuan ke Dirut, Pimpinan, Superadmin, Korlap
-    ['dirut', 'pimpinan', 'superadmin', 'korlap'].forEach((role) => {
+    // Broadcast hasil keputusan persetujuan ke Dirut, Pimpinan, Superadmin, Korlap, Admin, K3
+    ['dirut', 'pimpinan', 'superadmin', 'korlap', 'admin', 'k3'].forEach((role) => {
       hrmService.addNotification({
         recipientRole: role,
         title: `📢 Keputusan Pengajuan: ${leaves[idx].userName} (${statusText})`,
@@ -3973,19 +4036,6 @@ export const hrmService = {
         );
       }
     }
-
-    // Asynchronously push approval/rejection to backend database
-    api.put(`/leaves/${leaveId}/status`, {
-      status,
-      approverId,
-      approverName: approver?.fullName || 'Atasan / HRD',
-      notes,
-      substituteId: actualSubId,
-      substituteName: actualSubName,
-      substituteNip: actualSubNip,
-    }).catch((err) => {
-      console.warn('[HRM] Warning syncing leave status to backend:', err);
-    });
 
     return leaves[idx];
   },

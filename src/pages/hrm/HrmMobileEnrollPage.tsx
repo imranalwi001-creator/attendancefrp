@@ -764,7 +764,7 @@ export const HrmMobileEnrollPage: React.FC = () => {
           <div className="space-y-1.5">
             <h2 className="text-xl font-bold text-white">Wajah Master Berhasil Terdaftar!</h2>
             <p className="text-xs text-slate-300 max-w-xs mx-auto leading-relaxed">
-              Vektor biometrik multi-pose untuk <strong>{employeeDisplayName}</strong> telah tersimpan permanen di database PostgreSQL PT. Fawwaz Reski Perwira.
+              Vektor biometrik multi-pose untuk <strong>{employeeDisplayName}</strong> telah tersimpan permanen di database perusahaan PT. Fawwaz Reski Perwira.
             </p>
           </div>
           <div className="p-3 bg-emerald-950/50 border border-emerald-800/40 rounded-xl text-[11px] text-emerald-300">

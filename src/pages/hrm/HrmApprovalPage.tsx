@@ -29,6 +29,8 @@ import {
   Layers,
   Filter,
   AlertTriangle,
+  MessageCircle,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -141,6 +143,15 @@ export const HrmApprovalPage: React.FC = () => {
   const [applicantQuotaInfo, setApplicantQuotaInfo] = useState<{ totalQuota: number; usedDays: number; remaining: number }>({ totalQuota: 14, usedDays: 0, remaining: 14 });
   const [substituteCandidates, setSubstituteCandidates] = useState<UserProfile[]>([]);
   const [selectedSubstituteId, setSelectedSubstituteId] = useState<string>('');
+  const [selectedSubstituteObj, setSelectedSubstituteObj] = useState<any | null>(null);
+  const [candidateCategory, setCandidateCategory] = useState<'same_off' | 'same_shift' | 'global'>('same_off');
+  const [substituteGroups, setSubstituteGroups] = useState<{
+    sameDivOff: any[];
+    sameDivShift: any[];
+    globalAll: any[];
+  }>({ sameDivOff: [], sameDivShift: [], globalAll: [] });
+  const [loadingSubstituteCandidates, setLoadingSubstituteCandidates] = useState(false);
+  const [submittingDecision, setSubmittingDecision] = useState(false);
 
   // Overtime Approval Modal State (with Admin Approved Hours authority)
   const [otModalOpen, setOtModalOpen] = useState(false);
@@ -325,10 +336,10 @@ export const HrmApprovalPage: React.FC = () => {
     }
   };
 
-  const handleOpenProcess = (leave: LeaveRequest, type: 'approved' | 'rejected') => {
+  const handleOpenProcess = async (leave: LeaveRequest, type: 'approved' | 'rejected') => {
     setSelectedLeave(leave);
     setDecision(type);
-    setNotes(type === 'approved' ? 'Pengajuan cuti/izin disetujui sesuai ketentuan.' : 'Mohon maaf, pengajuan cuti/izin belum dapat disetujui.');
+    setNotes(type === 'approved' ? 'Pengajuan cuti/izin disetujui sesuai ketentuan operasional.' : 'Mohon maaf, pengajuan cuti/izin belum dapat disetujui.');
 
     // 1. Calculate 1-Year Leave History of Applicant
     const oneYearAgo = new Date();
@@ -348,49 +359,96 @@ export const HrmApprovalPage: React.FC = () => {
       remaining: Math.max(0, annualQuota - usedDays),
     });
 
-    // 2. Recommend smart substitute from the same division
-    const sameDiv = users.filter(
-      (u) =>
-        u.id !== leave.userId &&
-        u.isActive &&
-        (u.divisionId === leave.divisionId || (u.divisionName && u.divisionName === leave.divisionName))
-    );
-    const candidates = sameDiv.length > 0 ? sameDiv : users.filter((u) => u.id !== leave.userId && u.isActive);
-    setSubstituteCandidates(candidates);
-    if (candidates.length > 0) {
-      setSelectedSubstituteId(candidates[0].id);
-    } else {
-      setSelectedSubstituteId('');
-    }
-
     setModalOpen(true);
+    setLoadingSubstituteCandidates(true);
+    setSelectedSubstituteId(leave.substituteId || '');
+    setSelectedSubstituteObj(null);
+
+    try {
+      const candidates = await hrmService.getLeaveSubstituteCandidates({
+        applicantId: leave.userId,
+        startDate: leave.startDate,
+        endDate: leave.endDate,
+        divisionId: leave.divisionId || applicantUser?.divisionId,
+      });
+
+      const offList = candidates.sameDivOff || [];
+      const shiftList = candidates.sameDivShift || [];
+      const globalList = candidates.globalAll || [];
+
+      setSubstituteGroups({
+        sameDivOff: offList,
+        sameDivShift: shiftList,
+        globalAll: globalList,
+      });
+
+      // Default selection logic:
+      if (leave.substituteId) {
+        setSelectedSubstituteId(leave.substituteId);
+        const allList = [...offList, ...shiftList, ...globalList];
+        const match = allList.find((c) => c.id === leave.substituteId);
+        if (match) setSelectedSubstituteObj(match);
+      } else if (offList.length > 0) {
+        setSelectedSubstituteId(offList[0].id);
+        setSelectedSubstituteObj(offList[0]);
+        setCandidateCategory('same_off');
+      } else if (shiftList.length > 0) {
+        setSelectedSubstituteId(shiftList[0].id);
+        setSelectedSubstituteObj(shiftList[0]);
+        setCandidateCategory('same_shift');
+      } else if (globalList.length > 0) {
+        setSelectedSubstituteId(globalList[0].id);
+        setSelectedSubstituteObj(globalList[0]);
+        setCandidateCategory('global');
+      }
+    } catch (e) {
+      console.warn('Failed to load substitute candidates:', e);
+    } finally {
+      setLoadingSubstituteCandidates(false);
+    }
   };
 
-  const handleConfirmDecision = () => {
+  const handleOpenLeaveDecision = (leave: LeaveRequest, type: 'approved' | 'rejected') => {
+    handleOpenProcess(leave, type);
+  };
+
+  const handleConfirmDecision = async () => {
     if (!selectedLeave || !user) return;
+
+    if (decision === 'approved' && !selectedSubstituteId) {
+      alert('Sesuai aturan operasional PT FRP, pekerjaan tidak boleh kosong saat karyawan cuti/izin. Korlap, Admin, atau K3 wajib menetapkan satu karyawan pengganti sebelum menyetujui pengajuan.');
+      return;
+    }
+
+    setSubmittingDecision(true);
     try {
-      const selectedSub = substituteCandidates.find((c) => c.id === selectedSubstituteId);
-      hrmService.updateLeaveStatus(
+      const allCands = [...substituteGroups.sameDivOff, ...substituteGroups.sameDivShift, ...substituteGroups.globalAll];
+      const selectedSub = selectedSubstituteObj || allCands.find((c) => c.id === selectedSubstituteId) || users.find((u) => u.id === selectedSubstituteId);
+
+      await hrmService.updateLeaveStatus(
         selectedLeave.id,
         decision,
         user.id,
         notes.trim(),
         decision === 'approved' ? selectedSubstituteId : undefined,
-        decision === 'approved' ? selectedSub?.fullName : undefined,
+        decision === 'approved' ? (selectedSub?.fullName || selectedSub?.name) : undefined,
         decision === 'approved' ? selectedSub?.nip : undefined
       );
+
       setModalOpen(false);
       setActionSuccess(
         `Pengajuan ${selectedLeave.userName} berhasil di-${decision === 'approved' ? 'setujui' : 'tolak'}. ${
           decision === 'approved' && selectedSub
-            ? `Karyawan Pengganti Resmi: ${selectedSub.fullName} (${selectedSub.nip}). Notifikasi telah terkirim.`
+            ? `Karyawan Pengganti Resmi: ${selectedSub.fullName || selectedSub.name} (${selectedSub.nip}). Notifikasi WhatsApp & aplikasi telah dikirimkan ke seluruh pihak.`
             : ''
         }`
       );
-      setTimeout(() => setActionSuccess(null), 4000);
+      setTimeout(() => setActionSuccess(null), 5000);
       loadData();
     } catch (err: any) {
       alert(err.message || 'Gagal memproses permohonan');
+    } finally {
+      setSubmittingDecision(false);
     }
   };
 
@@ -1759,26 +1817,76 @@ export const HrmApprovalPage: React.FC = () => {
 
       {/* Leave Decision Dialog */}
       <Dialog open={modalOpen} onOpenChange={setModalOpen}>
-        <DialogContent className="max-w-lg rounded-2xl max-h-[92vh] overflow-y-auto">
+        <DialogContent className="max-w-xl rounded-2xl max-h-[92vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
+            <DialogTitle className="flex items-center gap-2 text-base">
               {decision === 'approved' ? (
-                <CheckCircle2 className="w-5 h-5 text-primary" />
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
               ) : (
                 <XCircle className="w-5 h-5 text-destructive" />
               )}
-              {decision === 'approved' ? 'Persetujuan Permohonan Cuti' : 'Penolakan Permohonan Cuti'}
+              {decision === 'approved' ? 'Persetujuan Pengajuan Cuti / Izin' : 'Penolakan Pengajuan Cuti / Izin'}
             </DialogTitle>
-            <DialogDescription>
-              {selectedLeave?.userName} ({selectedLeave?.userNip}) — {selectedLeave?.leaveType.replace('_', ' ')} ({selectedLeave?.totalDays} Hari)
+            <DialogDescription className="text-xs">
+              {selectedLeave?.userName} ({selectedLeave?.userNip}) — {selectedLeave?.leaveType.replace('_', ' ').toUpperCase()} ({selectedLeave?.totalDays} Hari: {selectedLeave?.startDate} s/d {selectedLeave?.endDate})
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3.5 my-2">
             {/* Reason */}
             <div className="p-3 bg-muted/30 rounded-xl border border-border text-xs space-y-1">
-              <p className="text-muted-foreground">Alasan Karyawan:</p>
+              <p className="text-muted-foreground font-semibold">Alasan Karyawan:</p>
               <p className="font-medium text-foreground italic">"{selectedLeave?.reason}"</p>
+            </div>
+
+            {/* Bukti Lampiran Foto / Dokumen */}
+            <div className="p-3 bg-muted/40 rounded-xl border border-border text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-foreground flex items-center gap-1.5">
+                  <ImageIcon className="w-4 h-4 text-primary" />
+                  Bukti Lampiran Dokumen / Surat
+                </span>
+                {selectedLeave?.attachmentUrl && (
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px]">
+                    Berkas Tersedia
+                  </Badge>
+                )}
+              </div>
+
+              {selectedLeave?.attachmentUrl ? (
+                <div className="flex items-center justify-between gap-3 p-2 bg-background rounded-lg border border-border">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {selectedLeave.attachmentUrl.startsWith('data:image') || selectedLeave.attachmentUrl.includes('http') ? (
+                      <img
+                        src={selectedLeave.attachmentUrl}
+                        alt="Bukti Lampiran"
+                        className="w-12 h-12 rounded-lg object-cover border border-border shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+                        onClick={() => setPreviewAttachment(selectedLeave.attachmentUrl!)}
+                      />
+                    ) : (
+                      <FileText className="w-8 h-8 text-primary shrink-0" />
+                    )}
+                    <div className="truncate">
+                      <p className="font-semibold text-foreground text-xs">Dokumen Bukti Pendukung</p>
+                      <p className="text-[11px] text-muted-foreground">Klik tombol untuk melihat ukuran penuh</p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewAttachment(selectedLeave.attachmentUrl!)}
+                    className="h-8 text-xs font-semibold gap-1.5 shrink-0 rounded-lg text-primary border-primary/30 hover:bg-primary/10"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    Lihat Bukti
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground italic">
+                  Tidak ada lampiran foto/berkas pada pengajuan ini.
+                </p>
+              )}
             </div>
 
             {/* 1-Year Leave History Summary & Quota Status */}
@@ -1789,7 +1897,7 @@ export const HrmApprovalPage: React.FC = () => {
                   Rekap Hak & Riwayat Cuti 1 Tahun
                 </span>
                 <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px]">
-                  Kuota: {applicantQuotaInfo.totalQuota} Hari (12+2)
+                  Hak: {applicantQuotaInfo.totalQuota} Hari (12+2)
                 </Badge>
               </div>
 
@@ -1834,38 +1942,168 @@ export const HrmApprovalPage: React.FC = () => {
               )}
             </div>
 
-            {/* Smart Division-based Substitute Recommendation (Mandatory Anti-Kekosongan Pos) */}
+            {/* Smart Substitute Recommendation Engine (Zero Vacancy Rule) */}
             {decision === 'approved' && (
-              <div className="space-y-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+              <div className="space-y-2.5 p-3.5 bg-blue-500/10 border border-blue-500/25 rounded-xl">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-bold text-blue-950 dark:text-blue-200 flex items-center gap-1.5">
                     <UserCheck className="w-4 h-4 text-blue-600" />
-                    <span>Pilih Karyawan Pengganti Pos (Divisi {selectedLeave?.divisionName})</span>
+                    <span>Penetapan Karyawan Pengganti (Aturan Zero Vacancy)</span>
                   </Label>
-                  <Badge variant="outline" className="bg-blue-500/20 text-blue-700 dark:text-blue-300 text-[10px]">
-                    Wajib Ada Pengganti
+                  <Badge variant="outline" className="bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[10px] font-bold">
+                    Wajib Diisi Korlap / Admin / K3
                   </Badge>
                 </div>
-                <p className="text-[11px] text-blue-900/80 dark:text-blue-300">
-                  Untuk menjaga operasional pos tetap berjalan tanpa kekosongan, tentukan rekan kerja dari divisi <strong>{selectedLeave?.divisionName}</strong> untuk menggantikan tugas selama periode cuti:
+                <p className="text-[11px] text-blue-900/80 dark:text-blue-300 leading-relaxed">
+                  Pekerjaan tidak boleh kosong selama masa cuti. Sistem merekomendasikan kandidat pengganti terbaik. Silakan konfirmasi via WhatsApp sebelum menetapkan pilihan.
                 </p>
 
-                <Select value={selectedSubstituteId} onValueChange={setSelectedSubstituteId}>
-                  <SelectTrigger className="text-xs rounded-xl h-9 bg-background">
-                    <SelectValue placeholder="Pilih Rekan Pengganti..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {substituteCandidates.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.fullName} ({c.nip}) — Divisi {c.divisionName || 'Operasional'} (Cuti terpakai: {c.usedLeaveDays || 0} hari)
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {/* Tab Kategori Rekomendasi Pengganti */}
+                <div className="flex items-center gap-1 p-1 bg-background/80 rounded-lg border border-border text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setCandidateCategory('same_off')}
+                    className={`flex-1 py-1.5 px-2 rounded-md font-semibold transition-all text-center flex items-center justify-center gap-1 ${
+                      candidateCategory === 'same_off'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <span>★ 1 Divisi (OFF)</span>
+                    <span className="text-[9.5px] px-1 py-0.2 rounded-full bg-black/20 text-white">
+                      {substituteGroups.sameDivOff.length}
+                    </span>
+                  </button>
 
-                {selectedSubstituteId && (
-                  <div className="text-[10px] text-blue-950 dark:text-blue-200 bg-blue-500/15 p-2 rounded-lg">
-                    ✨ Karyawan terpilih akan otomatis menerima <strong>notifikasi surat penugasan dinas pengganti</strong> dan nama karyawan pengganti tercantum pada bukti persetujuan pemohon.
+                  <button
+                    type="button"
+                    onClick={() => setCandidateCategory('same_shift')}
+                    className={`flex-1 py-1.5 px-2 rounded-md font-semibold transition-all text-center flex items-center justify-center gap-1 ${
+                      candidateCategory === 'same_shift'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <span>⚡ Sambung Shift</span>
+                    <span className="text-[9.5px] px-1 py-0.2 rounded-full bg-black/20 text-white">
+                      {substituteGroups.sameDivShift.length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCandidateCategory('global')}
+                    className={`flex-1 py-1.5 px-2 rounded-md font-semibold transition-all text-center flex items-center justify-center gap-1 ${
+                      candidateCategory === 'global'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <span>🌐 Pilihan Global</span>
+                    <span className="text-[9.5px] px-1 py-0.2 rounded-full bg-black/20 text-white">
+                      {substituteGroups.globalAll.length}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Candidate Selection List */}
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {loadingSubstituteCandidates ? (
+                    <div className="p-4 text-center text-xs text-muted-foreground animate-pulse">
+                      Mencari rekomendasi jadwal dan divisi calon pengganti...
+                    </div>
+                  ) : (() => {
+                    const activeList =
+                      candidateCategory === 'same_off'
+                        ? substituteGroups.sameDivOff
+                        : candidateCategory === 'same_shift'
+                        ? substituteGroups.sameDivShift
+                        : substituteGroups.globalAll;
+
+                    if (activeList.length === 0) {
+                      return (
+                        <div className="p-3 text-center text-[11px] text-muted-foreground bg-background rounded-lg border border-border">
+                          Tidak ada kandidat pada kategori ini. Silakan pilih tab lainnya.
+                        </div>
+                      );
+                    }
+
+                    return activeList.map((cand) => {
+                      const isSelected = selectedSubstituteId === cand.id;
+                      return (
+                        <div
+                          key={cand.id}
+                          onClick={() => {
+                            setSelectedSubstituteId(cand.id);
+                            setSelectedSubstituteObj(cand);
+                          }}
+                          className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                            isSelected
+                              ? 'bg-blue-500/20 border-blue-500 text-foreground shadow-xs'
+                              : 'bg-background hover:bg-muted/40 border-border text-foreground'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <input
+                              type="radio"
+                              name="substituteRadio"
+                              checked={isSelected}
+                              onChange={() => {
+                                setSelectedSubstituteId(cand.id);
+                                setSelectedSubstituteObj(cand);
+                              }}
+                              className="accent-primary w-4 h-4 cursor-pointer"
+                            />
+                            <div className="truncate">
+                              <p className="font-bold text-xs flex items-center gap-1.5">
+                                <span>{cand.fullName || cand.name}</span>
+                                <span className="font-mono text-[10px] text-muted-foreground">({cand.nip})</span>
+                              </p>
+                              <p className="text-[10px] text-muted-foreground">
+                                {cand.division || cand.divisionName || 'Operasional'} • {cand.reason || 'Karyawan Aktif'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Badge
+                              variant="outline"
+                              className={`text-[9.5px] px-1.5 py-0.5 ${
+                                cand.badge?.includes('OFF') || cand.badge?.includes('Paling')
+                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 font-bold'
+                                  : 'bg-primary/10 text-primary border-primary/20'
+                              }`}
+                            >
+                              {cand.badge || 'Kandidat'}
+                            </Badge>
+
+                            {/* Tombol Konfirmasi WhatsApp Cepat */}
+                            <a
+                              href={cand.waConfirmUrl || `https://wa.me/?text=Halo`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[10.5px] font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-colors"
+                              title="Kirim pesan konfirmasi via WhatsApp"
+                            >
+                              <MessageCircle className="w-3 h-3" />
+                              <span>Konfirmasi WA</span>
+                            </a>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+
+                {selectedSubstituteId ? (
+                  <div className="text-[11px] text-blue-950 dark:text-blue-200 bg-blue-500/15 p-2 rounded-lg font-medium">
+                    ✅ Karyawan Pengganti Terpilih: <strong>{selectedSubstituteObj?.fullName || substituteGroups.sameDivOff.find(c => c.id === selectedSubstituteId)?.fullName || substituteGroups.globalAll.find(c => c.id === selectedSubstituteId)?.fullName || 'Terpilih'}</strong>. Setelah disetujui, notifikasi WhatsApp dan in-app akan serentak dikirimkan ke 5 pihak.
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-rose-600 dark:text-rose-400 bg-rose-500/10 p-2 rounded-lg font-semibold flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>Wajib memilih 1 karyawan pengganti untuk menyetujui pengajuan ini.</span>
                   </div>
                 )}
               </div>
@@ -1884,14 +2122,15 @@ export const HrmApprovalPage: React.FC = () => {
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="ghost" onClick={() => setModalOpen(false)} className="rounded-xl">
+            <Button variant="ghost" onClick={() => setModalOpen(false)} className="rounded-xl" disabled={submittingDecision}>
               Batal
             </Button>
             <Button
               onClick={handleConfirmDecision}
+              disabled={submittingDecision || (decision === 'approved' && !selectedSubstituteId)}
               className={decision === 'approved' ? 'bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl' : 'bg-destructive hover:bg-destructive/90 text-destructive-foreground rounded-xl'}
             >
-              Konfirmasi {decision === 'approved' ? 'Setujui Pengajuan' : 'Tolak'}
+              {submittingDecision ? 'Memproses Persetujuan...' : `Konfirmasi ${decision === 'approved' ? 'Setujui Pengajuan' : 'Tolak'}`}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1782,7 +1782,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <h3 className="font-bold text-sm text-foreground">Sertifikat Forensik Presensi Dual-Shield</h3>
                   <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
-                    Database PostgreSQL Synchronized
+                    Database Perusahaan Synchronized
                   </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
@@ -1980,7 +1980,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   className="text-xs rounded-xl"
                 />
                 <p className="text-[11px] text-muted-foreground">
-                  Catatan ini akan tersimpan permanen di database PostgreSQL dan menjadi lampiran audit kinerja karyawan.
+                  Catatan ini akan tersimpan permanen di database perusahaan dan menjadi lampiran audit kinerja karyawan.
                 </p>
               </div>
             </div>

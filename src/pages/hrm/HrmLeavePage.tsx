@@ -58,6 +58,7 @@ export const HrmLeavePage: React.FC = () => {
   const [substituteNip, setSubstituteNip] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [submittingLeave, setSubmittingLeave] = useState(false);
 
   // Overtime Form State
   const [otModalOpen, setOtModalOpen] = useState(false);
@@ -110,23 +111,60 @@ export const HrmLeavePage: React.FC = () => {
     setModalOpen(true);
   };
 
+  const compressImage = (dataUrl: string, maxDimension = 1200, quality = 0.75): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } else {
+          resolve(dataUrl);
+        }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 3 * 1024 * 1024) {
-      setFormError('Ukuran file maksimal 3MB');
+    if (file.size > 15 * 1024 * 1024) {
+      setFormError('Ukuran file foto maksimal 15MB');
       return;
     }
 
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setAttachmentUrl(reader.result as string);
+    reader.onloadend = async () => {
+      const rawData = reader.result as string;
+      if (rawData.startsWith('data:image')) {
+        const compressed = await compressImage(rawData);
+        setAttachmentUrl(compressed);
+      } else {
+        setAttachmentUrl(rawData);
+      }
     };
     reader.readAsDataURL(file);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
 
@@ -142,30 +180,34 @@ export const HrmLeavePage: React.FC = () => {
       setFormError('Alasan pengajuan wajib diisi');
       return;
     }
-    if (!substituteId) {
-      setFormError('Sesuai prosedur anti-kekosongan pos pengawasan, Karyawan Pengganti wajib dipilih.');
+    if (!attachmentUrl || !attachmentUrl.trim()) {
+      setFormError('Semua pengajuan cuti, izin, dan sakit WAJIB melampirkan foto bukti pendukung (surat dokter / tiket / surat tugas / keperluan).');
       return;
     }
 
+    setSubmittingLeave(true);
     try {
-      hrmService.createLeaveRequest({
+      await hrmService.createLeaveRequest({
         userId: user!.id,
         leaveType,
         startDate,
         endDate,
         reason: reason.trim(),
         attachmentUrl: attachmentUrl.trim() || undefined,
-        substituteId,
-        substituteName,
-        substituteNip,
+        substituteId: substituteId || undefined,
+        substituteName: substituteName || undefined,
+        substituteNip: substituteNip || undefined,
       });
 
       setModalOpen(false);
-      setSuccessMessage('Pengajuan izin/cuti berhasil dikirim! Karyawan pengganti tercatat dan notifikasi telah dikirimkan ke Korlap, Pimpinan, dan Dirut.');
-      setTimeout(() => setSuccessMessage(null), 6000);
+      setSuccessMessage('Pengajuan izin/cuti berhasil terkirim ke server database! Notifikasi WhatsApp instan dan in-app telah otomatis disiarkan ke Korlap, Admin, K3, dan Pimpinan.');
+      setTimeout(() => setSuccessMessage(null), 7000);
       loadData();
     } catch (err: any) {
-      setFormError(err.message || 'Gagal mengirim pengajuan.');
+      console.error('Submit leave error:', err);
+      setFormError(err.message || 'Gagal mengirim pengajuan cuti.');
+    } finally {
+      setSubmittingLeave(false);
     }
   };
 
@@ -437,7 +479,14 @@ export const HrmLeavePage: React.FC = () => {
                         )}
                       </td>
                       <td className="py-3 px-4">
-                        {getStatusBadge(l.status)}
+                        <div className="space-y-1">
+                          {getStatusBadge(l.status)}
+                          {l.substituteName && (
+                            <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                              Pengganti: <strong>{l.substituteName}</strong> {l.substituteNip ? `(${l.substituteNip})` : ''}
+                            </div>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-4 text-muted-foreground italic text-[11px]">
                         {l.approvalNotes ? `${l.approvalNotes} (oleh ${l.approvedByName || 'HRD'})` : '-'}
@@ -608,35 +657,44 @@ export const HrmLeavePage: React.FC = () => {
             </div>
 
             {/* ─── KARYAWAN PENGGANTI (ZERO VACANCY RULE) ─── */}
-            <div className="space-y-1.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs">
+            <div className="space-y-1.5 p-3 rounded-xl bg-blue-500/10 border border-blue-500/25 text-xs">
               <div className="flex items-center justify-between">
-                <Label className="text-xs font-bold text-amber-950 dark:text-amber-200 flex items-center gap-1.5">
-                  🛡️ Karyawan Pengganti Pos (Wajib Prosedur)
+                <Label className="text-xs font-bold text-blue-950 dark:text-blue-200 flex items-center gap-1.5">
+                  🛡️ Usulan Rekan Pengganti (Opsional)
                 </Label>
-                <span className="text-[10px] bg-amber-500/20 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded-full font-semibold">
-                  Zero Vacancy
+                <span className="text-[10px] bg-blue-500/20 text-blue-800 dark:text-blue-300 px-2 py-0.5 rounded-full font-semibold">
+                  Penetapan: Korlap / Admin / K3
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Pekerjaan tidak boleh terbengkalai. Pilih rekan kerja yang direkomendasikan sistem untuk bertugas sementara. Jika rekan yang dipilih sedang libur, otomatis dihitung <strong>lembur</strong> saat disetujui.
+                Pekerjaan tidak boleh kosong. Anda dapat mengusulkan rekan kerja pengganti di bawah ini, atau Korlap / Admin / K3 akan merekomendasikan dan menetapkannya secara resmi saat meninjau pengajuan.
               </p>
               <Select
                 value={substituteId}
                 onValueChange={(val) => {
-                  setSubstituteId(val);
-                  const found = allUsers.find((u) => u.id === val);
-                  if (found) {
-                    setSubstituteName(found.fullName);
-                    setSubstituteNip(found.nip);
+                  if (val === 'none') {
+                    setSubstituteId('');
+                    setSubstituteName('');
+                    setSubstituteNip('');
+                  } else {
+                    setSubstituteId(val);
+                    const found = allUsers.find((u) => u.id === val);
+                    if (found) {
+                      setSubstituteName(found.fullName);
+                      setSubstituteNip(found.nip);
+                    }
                   }
                 }}
               >
                 <SelectTrigger className="text-xs rounded-xl bg-card border-border mt-1">
-                  <SelectValue placeholder="-- Pilih Karyawan Pengganti --" />
+                  <SelectValue placeholder="-- Usulkan Rekan Pengganti (Atau serahkan ke Pengawas) --" />
                 </SelectTrigger>
                 <SelectContent className="max-h-60">
+                  <SelectItem value="none" className="text-xs font-semibold text-muted-foreground">
+                    -- Ditetapkan otomatis oleh Korlap / Admin / K3 --
+                  </SelectItem>
                   {allUsers
-                    .filter((u) => u.id !== user?.id)
+                    .filter((u) => u.id !== user?.id && u.isActive)
                     .sort((a, b) => {
                       const aSameDiv = a.divisionId === user?.divisionId ? -1 : 1;
                       const bSameDiv = b.divisionId === user?.divisionId ? -1 : 1;
@@ -647,7 +705,7 @@ export const HrmLeavePage: React.FC = () => {
                       return (
                         <SelectItem key={emp.id} value={emp.id} className="text-xs">
                           {emp.fullName} ({emp.nip}) • {emp.divisionName || 'Operasional'}
-                          {isSameDiv ? ' ★ Rekomendasi 1 Divisi' : ''}
+                          {isSameDiv ? ' ★ 1 Divisi' : ''}
                         </SelectItem>
                       );
                     })}
@@ -670,7 +728,7 @@ export const HrmLeavePage: React.FC = () => {
             {/* Foto Bukti / Surat Dokter Upload */}
             <div className="space-y-1.5 p-3 bg-muted/40 border border-border rounded-xl">
               <Label className="text-xs font-semibold text-foreground">
-                Lampiran Foto / Bukti Dokumen (Surat Dokter, Surat Tugas, dll.)
+                Lampiran Foto / Bukti Dokumen (Surat Dokter, Surat Tugas, Tiket, dll.) <span className="text-rose-500 font-bold">*Wajib</span>
               </Label>
               <div className="flex flex-wrap items-center gap-2">
                 <input
@@ -714,19 +772,19 @@ export const HrmLeavePage: React.FC = () => {
                   ) : (
                     <FileText className="w-6 h-6 text-primary shrink-0" />
                   )}
-                  <span className="text-[11px] text-muted-foreground truncate flex-1">
-                    Berkas foto bukti siap dikirim
+                  <span className="text-[11px] text-muted-foreground truncate flex-1 font-medium">
+                    Foto bukti berhasil diunggah & siap dikirim
                   </span>
                 </div>
               )}
             </div>
 
             <DialogFooter className="gap-2 sm:gap-0 pt-2">
-              <Button type="button" variant="ghost" onClick={() => setModalOpen(false)} className="rounded-xl">
+              <Button type="button" variant="ghost" onClick={() => setModalOpen(false)} className="rounded-xl" disabled={submittingLeave}>
                 Batal
               </Button>
-              <Button type="submit" className="bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl">
-                Kirim Pengajuan
+              <Button type="submit" disabled={submittingLeave} className="bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl">
+                {submittingLeave ? 'Mengirim ke Server...' : 'Kirim Pengajuan Cuti'}
               </Button>
             </DialogFooter>
           </form>

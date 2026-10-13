@@ -5378,8 +5378,107 @@ app.get('/api/leaves', async (req, res) => {
   }
 });
 
+// Rekomendasi Cerdas Karyawan Pengganti (Anti-Kekosongan Pos / Zero Vacancy)
+app.get('/api/leaves/substitute-candidates', async (req, res) => {
+  const { applicantId, startDate, endDate, divisionId } = req.query;
+  try {
+    const targetDate = startDate || new Date().toISOString().split('T')[0];
+
+    let validApplicantId = applicantId;
+    let applicantName = 'Rekan Kerja';
+    let applicantDivId = divisionId;
+
+    if (applicantId) {
+      const aRes = await pool.query(
+        'SELECT id, full_name, division_id FROM hrm_profiles WHERE id::text = $1 OR LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1',
+        [applicantId]
+      );
+      if (aRes.rows.length > 0) {
+        validApplicantId = aRes.rows[0].id;
+        applicantName = aRes.rows[0].full_name;
+        if (!applicantDivId) applicantDivId = aRes.rows[0].division_id;
+      }
+    }
+
+    const query = `
+      SELECT p.id, p.nip, p.full_name, p.phone, p.division_id, d.name as division_name,
+             p.placement_location, s.name as default_shift_name,
+             es.shift_code, es.shift_name, es.is_off, es.start_time, es.end_time
+      FROM hrm_profiles p
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+      LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = $2::date
+      WHERE p.id::text != $1 AND p.is_active = true
+      ORDER BY (p.division_id::text = $3) DESC, p.full_name ASC;
+    `;
+
+    const result = await pool.query(query, [
+      validApplicantId || '00000000-0000-0000-0000-000000000000',
+      targetDate,
+      applicantDivId ? String(applicantDivId) : ''
+    ]);
+
+    const sameDivOff = [];
+    const sameDivShift = [];
+    const globalAll = [];
+
+    for (const row of result.rows) {
+      const isSameDivision = applicantDivId && String(row.division_id) === String(applicantDivId);
+      const isOff = row.is_off === true || row.shift_code === 'OFF' || (!row.shift_code && !row.default_shift_name);
+      const currentShift = isOff ? 'Libur / Off Duty' : (row.shift_name || row.default_shift_name || 'Shift Reguler');
+
+      let cleanPhone = (row.phone || '').replace(/\D/g, '');
+      if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
+      if (cleanPhone && !cleanPhone.startsWith('62')) cleanPhone = '62' + cleanPhone;
+
+      const waText = `Halo Rekan *${row.full_name}*, kami dari Tim Pengawas PT FRP.\n\n` +
+        `Rekan kerja Anda *${applicantName}* mengajukan cuti/izin untuk tanggal *${targetDate}*.\n` +
+        `Sesuai aturan *Zero Vacancy*, pos dinas tidak boleh kosong.\n\n` +
+        `Apakah Anda bersedia bertugas sebagai *Petugas Pengganti Pos* pada tanggal tersebut? (Tugas ini resmi dan dihitung lembur).\n` +
+        `Mohon konfirmasinya. Terima kasih.`;
+
+      const waConfirmUrl = cleanPhone ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(waText)}` : null;
+
+      const candidateObj = {
+        id: row.id,
+        name: row.full_name,
+        nip: row.nip || '-',
+        phone: row.phone || '',
+        divisionId: row.division_id,
+        divisionName: row.division_name || 'Operasional',
+        shiftName: currentShift,
+        isOff,
+        waConfirmUrl,
+      };
+
+      if (isSameDivision) {
+        if (isOff) {
+          sameDivOff.push({ ...candidateObj, category: 'same_div_off', reason: 'Divisi Sama & Sedang Libur/OFF (Kandidat Terbaik)' });
+        } else {
+          sameDivShift.push({ ...candidateObj, category: 'same_div_shift', reason: `Divisi Sama (${currentShift})` });
+        }
+      } else {
+        globalAll.push({ ...candidateObj, category: 'global_all', reason: `Lintas Divisi (${row.division_name || 'Operasional'})` });
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        sameDivOff,
+        sameDivShift,
+        globalAll,
+        total: result.rows.length,
+      }
+    });
+  } catch (err) {
+    console.error('Fetch substitute candidates error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/leaves', async (req, res) => {
-  const { userId, leaveType, startDate, endDate, totalDays, reason, attachmentUrl } = req.body;
+  const { userId, leaveType, startDate, endDate, totalDays, reason, attachmentUrl, substituteId, substituteName, substituteNip } = req.body;
   if (!userId || !startDate || !endDate || !reason) {
     return res.status(400).json({ success: false, error: 'Data pengajuan cuti tidak lengkap (userId, tanggal, alasan wajib diisi)' });
   }
@@ -5423,35 +5522,44 @@ app.post('/api/leaves', async (req, res) => {
     const requestedDays = totalDays ? parseInt(totalDays, 10) : 1;
     const type = leaveType || 'cuti_tahunan';
 
-    // Aturan Cuti Tahunan: H-3 & kuota sisa
-    if (type === 'cuti_tahunan' || type === 'annual_leave') {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const startDt = new Date(startDate);
-      startDt.setHours(0, 0, 0, 0);
-      const diffDays = Math.round((startDt - today) / (1000 * 60 * 60 * 24));
-      if (diffDays < 3) {
-        return res.status(400).json({
-          success: false,
-          error: 'Sesuai regulasi perusahaan, permohonan Cuti Tahunan wajib diajukan minimal 3 hari sebelum pelaksanaan (H-3). Untuk kondisi mendesak silakan pilih jenis Izin atau Izin Darurat.',
-        });
-      }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const startDt = new Date(startDate);
+    startDt.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((startDt - today) / (1000 * 60 * 60 * 24));
 
-      const annualQuota = userProfile.annual_leave_quota || 14;
+    let finalReason = reason.trim();
+    let isUrgentSubmission = false;
+
+    // Aturan Cuti Tahunan: Cek sisa kuota dan tandai jika pengajuan mendesak (< H-3)
+    if (type === 'cuti_tahunan' || type === 'annual_leave') {
+      const annualQuota = userProfile.annual_leave_quota ?? 12;
       const usedDays = userProfile.used_leave_days || 0;
-      const remainingQuota = annualQuota - usedDays;
+      const remainingQuota = Math.max(0, annualQuota - usedDays);
       if (requestedDays > remainingQuota) {
         return res.status(400).json({
           success: false,
           error: `Sisa hak cuti tahunan Anda tidak mencukupi. Kuota tersisa: ${remainingQuota} hari, permohonan: ${requestedDays} hari.`,
         });
       }
+
+      if (diffDays < 3) {
+        isUrgentSubmission = true;
+        const hLabel = diffDays > 0 ? `H-${diffDays}` : (diffDays === 0 ? 'HARI H' : 'DISPENSASI');
+        finalReason = `[PENGAJUAN MENDESAK ${hLabel}] ` + finalReason;
+      }
+    }
+
+    let validSubId = null;
+    if (substituteId && UUID_REGEX.test(substituteId)) {
+      validSubId = substituteId;
     }
 
     const query = `
       INSERT INTO hrm_leave_requests (
-        user_id, leave_type, start_date, end_date, total_days, reason, attachment_url, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+        user_id, leave_type, start_date, end_date, total_days, reason, attachment_url,
+        substitute_id, substitute_name, substitute_nip, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
       RETURNING *;
     `;
     const result = await pool.query(query, [
@@ -5460,64 +5568,69 @@ app.post('/api/leaves', async (req, res) => {
       startDate,
       endDate,
       requestedDays,
-      reason,
+      finalReason,
       attachmentUrl || null,
+      validSubId,
+      substituteName || null,
+      substituteNip || null,
     ]);
 
     const leaveRow = result.rows[0];
     const typeLabel = type.replace(/_/g, ' ').toUpperCase();
-    const submitterRole = (userProfile.role_name || userProfile.role_code || '').toLowerCase();
+    const submitterRole = (userProfile.role_name || '').toLowerCase();
     const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
     const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
 
-    let recipientRoles = [];
-    if (requiresLeadershipApproval) {
-      // 👔 TIER 2: Pengajuan dari 3 Petugas Lapangan Khusus Pimpinan atau Pejabat Pengawas -> ke Direktur Utama (Dirut) & Pimpinan
-      recipientRoles = ['pimpinan', 'dirut', 'superadmin'];
-      const submitterTitle = isSpecial3FieldOfficer ? 'PETUGAS LAPANGAN KHUSUS PIMPINAN' : submitterRole.toUpperCase();
-      const waMsg = `📢 *PENGAJUAN ${typeLabel} DARI ${submitterTitle}*\n\n` +
-        `👤 Pemohon: *${userProfile.full_name}* (NIP: ${userProfile.nip || '-'})\n` +
-        `🏢 Status/Jabatan: *${submitterTitle}* - Divisi: ${userProfile.division_name || 'Operasional'}\n` +
-        `📝 Jenis: *${typeLabel}*\n` +
-        `📅 Periode: *${startDate} s/d ${endDate}* (${requestedDays} Hari)\n` +
-        `💬 Alasan: "${reason}"\n\n` +
-        `⚠️ Pengajuan ini diajukan oleh ${submitterTitle} dan membutuhkan verifikasi serta persetujuan resmi langsung dari *Direktur Utama & Pimpinan*.\n` +
-        `🔗 Mohon konfirmasi persetujuan: https://103.197.188.211/admin/approval`;
+    // 👷 DAFTAR PENERIMA NOTIFIKASI FIRST-RESPONDER: Korlap, Admin, K3, dan Superadmin
+    const officerPhones = new Set(['081355904897']); // Nomor Superadmin selalu ada
+    try {
+      const offRes = await pool.query(`
+        SELECT p.phone, r.name as role_name, p.full_name
+        FROM hrm_profiles p
+        JOIN hrm_roles r ON p.role_id = r.id
+        WHERE LOWER(r.name) IN ('korlap', 'admin', 'k3', 'superadmin')
+          AND p.is_active = true
+          AND p.phone IS NOT NULL AND p.phone != '';
+      `);
+      offRes.rows.forEach((r) => {
+        if (r.phone) officerPhones.add(r.phone.replace(/\D/g, ''));
+      });
+    } catch (_) {}
 
-      await sendWhatsAppAlert({ phone: '082291998026', message: waMsg });
-      await sendWhatsAppAlert({ phone: '082192755755', message: waMsg });
-      await sendWhatsAppAlert({ phone: '081355904897', message: waMsg });
-    } else {
-      // 👷 TIER 1: Pengajuan Karyawan Biasa -> Notifikasi serentak ke Korlap, Admin, dan K3 (First-Responder Rule)
-      recipientRoles = ['korlap', 'admin', 'k3', 'superadmin'];
-      const officerRes = await pool.query(
-        "SELECT p.full_name, p.phone, r.name as role_name FROM hrm_profiles p JOIN hrm_roles r ON p.role_id = r.id WHERE r.name IN ('korlap', 'admin', 'k3') AND p.is_active = true AND p.phone IS NOT NULL AND p.phone != ''"
-      );
+    const urgentWarning = isUrgentSubmission ? `\n🚨 *CATATAN MENDESAK:* Pengajuan ini diajukan mendadak (< H-3) dan membutuhkan tindakan segera!` : '';
+    const subNotice = substituteName ? `\n🛡️ Usulan Pengganti: *${substituteName}* (${substituteNip || '-'})` : `\n⚠️ *Karyawan Pengganti belum ditetapkan.*`;
 
-      const waOfficerMsg = `📋 *PENGAJUAN ${typeLabel} KARYAWAN (BUTUH PERSETUJUAN)*\n\n` +
-        `👤 Karyawan: *${userProfile.full_name}* (NIP: ${userProfile.nip || '-'})\n` +
-        `🏢 Divisi: *${userProfile.division_name || 'Operasional'}*\n` +
-        `📝 Jenis: *${typeLabel}*\n` +
-        `📅 Periode: *${startDate} s/d ${endDate}* (${requestedDays} Hari)\n` +
-        `💬 Alasan: "${reason}"\n\n` +
-        `⚡ *ATURAN PERSETUJUAN:* Salah satu dari *Korlap, Admin, atau K3* dapat langsung melakukan persetujuan melalui portal HRM FRP:\n` +
-        `🔗 https://103.197.188.211/admin/approval`;
+    const waMsgContent = `📋 *PENGAJUAN ${typeLabel} BARU MASUK (BUTUH PERSETUJUAN)*\n\n` +
+      `👤 Pemohon: *${userProfile.full_name}* (NIP: ${userProfile.nip || '-'})\n` +
+      `🏢 Divisi: *${userProfile.division_name || 'Operasional'}*\n` +
+      `📝 Jenis: *${typeLabel}*\n` +
+      `📅 Periode: *${startDate} s/d ${endDate}* (${requestedDays} Hari)\n` +
+      `💬 Alasan: "${finalReason}"\n` +
+      `📷 Lampiran: Ada Foto Bukti Terlampir\n` +
+      subNotice +
+      urgentWarning +
+      `\n\n🛡️ *ATURAN ZERO VACANCY:* Pekerjaan pos dinas tidak boleh kosong! Salah satu dari *Korlap, Admin, atau K3* menetapkan Petugas Pengganti saat menyetujui pengajuan ini melalui aplikasi HRM perusahaan.\n` +
+      `💾 *Status Data:* Tersimpan aman di database perusahaan.`;
 
-      for (const off of officerRes.rows) {
-        if (off.phone) {
-          await sendWhatsAppAlert({ phone: off.phone, message: waOfficerMsg });
-        }
-      }
+    // Kirim serentak ke seluruh Korlap, Admin, K3, dan Superadmin
+    for (const phone of officerPhones) {
+      await sendWhatsAppAlert({ phone, message: waMsgContent });
     }
 
-    // In-app Notification Broadcast
+    // Jika pemohon adalah Petugas Khusus / Pengawas, teruskan tembusan ke Pimpinan & Dirut
+    if (requiresLeadershipApproval) {
+      await sendWhatsAppAlert({ phone: '082291998026', message: waMsgContent }); // Dirut
+      await sendWhatsAppAlert({ phone: '082192755755', message: waMsgContent }); // Pimpinan
+    }
+
+    // In-App Notification Broadcast
     await broadcastNotification({
-      recipientRoles,
-      title: `📋 Pengajuan ${typeLabel} Baru`,
-      message: `${userProfile.full_name} (${userProfile.division_name || 'Operasional'}) mengajukan ${typeLabel} ${requestedDays} hari (${startDate} s/d ${endDate}): "${reason}". Menunggu persetujuan.`,
+      recipientRoles: ['korlap', 'admin', 'k3', 'superadmin', 'pimpinan', 'dirut'],
+      title: `📋 Pengajuan ${typeLabel} Baru: ${userProfile.full_name}`,
+      message: `${userProfile.full_name} (${userProfile.division_name || 'Operasional'}) mengajukan ${typeLabel} ${requestedDays} hari (${startDate} s/d ${endDate}). Segera tetapkan petugas pengganti di menu Approval.`,
       type: 'leave',
       link: '/admin/approval',
-      metadata: { leaveId: leaveRow.id, userId: validUserId, type, totalDays: requestedDays },
+      metadata: { leaveId: leaveRow.id, userId: validUserId, type, totalDays: requestedDays, isUrgent: isUrgentSubmission },
       divisionId: userProfile.division_id || null,
     });
 
@@ -5546,12 +5659,20 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       FROM hrm_leave_requests l
       JOIN hrm_profiles p ON l.user_id = p.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      WHERE l.id = $1 LIMIT 1
+      WHERE l.id::text = $1 LIMIT 1
     `, [id]);
     if (lRes.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Pengajuan cuti tidak ditemukan' });
     }
     const leave = lRes.rows[0];
+
+    // Aturan Zero Vacancy: Jika disetujui, pengganti wajib ada!
+    if (status === 'approved' && !substituteName && !leave.substitute_name) {
+      return res.status(400).json({
+        success: false,
+        error: 'Sesuai aturan Zero Vacancy, pekerjaan tidak boleh kosong! Anda wajib menetapkan Karyawan Pengganti Pos sebelum menyetujui pengajuan cuti.',
+      });
+    }
 
     let validApproverId = approverId;
     if (approverId && !UUID_REGEX.test(approverId)) {
@@ -5559,11 +5680,14 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       if (aRes.rows.length > 0) validApproverId = aRes.rows[0].id;
     }
 
-    let validSubId = substituteId;
-    if (substituteId && !UUID_REGEX.test(substituteId)) {
-      const sRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [substituteId]);
+    let validSubId = substituteId || leave.substitute_id;
+    if (validSubId && !UUID_REGEX.test(validSubId)) {
+      const sRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [validSubId]);
       if (sRes.rows.length > 0) validSubId = sRes.rows[0].id;
     }
+
+    const finalSubName = substituteName || leave.substitute_name;
+    const finalSubNip = substituteNip || leave.substitute_nip;
 
     const updateRes = await pool.query(`
       UPDATE hrm_leave_requests SET
@@ -5578,9 +5702,9 @@ app.put('/api/leaves/:id/status', async (req, res) => {
         updated_at = NOW()
       WHERE id = $7
       RETURNING *;
-    `, [status, validApproverId || null, notes || null, validSubId || null, substituteName || null, substituteNip || null, id]);
+    `, [status, validApproverId || null, notes || null, validSubId || null, finalSubName || null, finalSubNip || null, leave.id]);
 
-    // 1. Jika disetujui & cuti tahunan, otomatis kurangi sisa kuota cuti di profil karyawan secara real-time!
+    // 1. Jika disetujui & cuti tahunan, kurangi sisa kuota cuti di profil karyawan secara real-time!
     if (status === 'approved' && (leave.leave_type === 'cuti_tahunan' || leave.leave_type === 'annual_leave')) {
       await pool.query(`
         UPDATE hrm_profiles SET
@@ -5590,7 +5714,7 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       `, [leave.total_days, leave.user_id]);
     }
 
-    // 2. Jika disetujui & izin darurat, buka kunci kepulangan awal hari ini (izin_darurat aktif)
+    // 2. Jika disetujui & izin darurat, buka kunci kepulangan awal
     if (status === 'approved' && (leave.leave_type === 'izin_darurat' || leave.leave_type === 'emergency_leave')) {
       await pool.query(`
         UPDATE hrm_attendances SET
@@ -5604,59 +5728,92 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       `, [leave.reason, leave.user_id]);
     }
 
-    // 3. FORWARD NOTIFIKASI VIA WHATSAPP KE PIMPINAN (Bpk Reski Faisal) & SUPERADMIN
-    if (status === 'approved') {
-      const fwdMsg = `✅ *PEMBERITAHUAN: PENGAJUAN ${leave.leave_type?.toUpperCase()} TELAH DISETUJUI*\n\n` +
-        `Karyawan: *${leave.user_name}* (NIP: ${leave.user_nip || '-'})\n` +
-        `Divisi: *${leave.division_name || 'Operasional'}*\n` +
-        `Disetujui Oleh: *${approverName || 'Atasan Lapangan'}*\n` +
-        `Periode: *${leave.start_date} s/d ${leave.end_date}* (${leave.total_days} Hari)\n` +
-        `Alasan: "${leave.reason}"\n` +
-        (substituteName ? `Petugas Pengganti Pos: *${substituteName}* (${substituteNip || '-'})\n` : '') +
-        (notes ? `Catatan: "${notes}"\n` : '') +
-        `\nData telah tersimpan di database dan rekapan aktif di sisi Korlap, Admin, dan K3.`;
+    const typeLabel = (leave.leave_type || 'cuti').replace(/_/g, ' ').toUpperCase();
+    const statusText = status === 'approved' ? 'DISETUJUI' : 'DITOLAK';
+    const subNotice = finalSubName ? `\n🛡️ *Petugas Pengganti Pos:* *${finalSubName}* (${finalSubNip || '-'})` : '';
 
-      await sendWhatsAppAlert({ phone: '082291998026', message: fwdMsg });
-      await sendWhatsAppAlert({ phone: '082192755755', message: fwdMsg });
-      await sendWhatsAppAlert({ phone: '081355904897', message: fwdMsg });
+    if (status === 'approved') {
+      // 3. SURAT TUGAS PENGGANTI OTOMATIS: Kirim WhatsApp langsung ke Karyawan Pengganti
+      if (validSubId) {
+        const subProfileRes = await pool.query('SELECT full_name, phone FROM hrm_profiles WHERE id = $1', [validSubId]);
+        if (subProfileRes.rows.length > 0 && subProfileRes.rows[0].phone) {
+          const subEmp = subProfileRes.rows[0];
+          const subWaMsg = `🛡️ *SURAT TUGAS PENGGANTI POS DINAS (ZERO VACANCY)*\n\n` +
+            `Halo *${subEmp.full_name}*,\n` +
+            `Anda telah resmi ditetapkan oleh *${approverName || 'Atasan'}* sebagai *Petugas Pengganti Pos* untuk mengisi kekosongan tugas rekan kerja Anda:\n\n` +
+            `👤 Menggantikan: *${leave.user_name}* (${leave.user_nip || '-'})\n` +
+            `🏢 Divisi: *${leave.division_name || 'Operasional'}*\n` +
+            `📅 Periode: *${leave.start_date} s/d ${leave.end_date}* (${leave.total_days} Hari)\n` +
+            `💬 Kategori: Pengganti ${typeLabel}\n\n` +
+            `⚡ Tugas ini telah tercatat resmi di sistem operasional HRM PT FRP dan dihitung lembur resmi. Mohon hadir tepat waktu dan bertugas dengan penuh tanggung jawab.`;
+
+          await sendWhatsAppAlert({ phone: subEmp.phone, message: subWaMsg });
+        }
+      }
+
+      // 4. NOTIFIKASI WHATSAPP KE KARYAWAN PEMOHON
+      if (leave.user_phone) {
+        const applicantWaMsg = `✅ *PENGAJUAN ${typeLabel} ANDA TELAH DISETUJUI*\n\n` +
+          `Halo *${leave.user_name}*,\n` +
+          `Permohonan ${typeLabel} Anda untuk periode *${leave.start_date} s/d ${leave.end_date}* (${leave.total_days} Hari) telah resmi *DISETUJUI* oleh *${approverName || 'Atasan'}*.\n` +
+          subNotice +
+          (notes ? `\n📝 Catatan: "${notes}"` : '') +
+          `\n\nTerima kasih dan selamat menjalankan cuti/izin Anda.`;
+
+        await sendWhatsAppAlert({ phone: leave.user_phone, message: applicantWaMsg });
+      }
+
+      // 5. NOTIFIKASI WHATSAPP KE KORLAP, ADMIN, K3, SUPERADMIN, PIMPINAN, DAN DIRUT
+      const recapMsg = `✅ *PEMBERITAHUAN: PENGAJUAN ${typeLabel} TELAH DISETUJUI*\n\n` +
+        `👤 Pemohon: *${leave.user_name}* (NIP: ${leave.user_nip || '-'})\n` +
+        `🏢 Divisi: *${leave.division_name || 'Operasional'}*\n` +
+        `📅 Periode: *${leave.start_date} s/d ${leave.end_date}* (${leave.total_days} Hari)\n` +
+        `✍️ Disetujui Oleh: *${approverName || 'Atasan Lapangan'}*\n` +
+        subNotice +
+        (notes ? `\n📝 Catatan: "${notes}"` : '') +
+        `\n\nPos operasional tetap terjaga (Zero Vacancy). Data telah tersinkron ke database perusahaan.`;
+
+      // Kirim serentak ke nomor pejabat operasional
+      const leadershipPhones = ['081355904897', '082291998026', '082192755755'];
+      try {
+        const officers = await pool.query(
+          "SELECT p.phone FROM hrm_profiles p JOIN hrm_roles r ON p.role_id = r.id WHERE LOWER(r.name) IN ('korlap', 'admin', 'k3') AND p.is_active = true AND p.phone IS NOT NULL AND p.phone != ''"
+        );
+        officers.rows.forEach(o => { if (o.phone) leadershipPhones.push(o.phone); });
+      } catch (_) {}
+
+      for (const p of [...new Set(leadershipPhones)]) {
+        await sendWhatsAppAlert({ phone: p, message: recapMsg });
+      }
     }
 
-    // 4. Notifikasi ke pemohon
-    const statusText = status === 'approved' ? 'DISETUJUI' : 'DITOLAK';
-    const subText = substituteName ? ` Karyawan Pengganti Pos: ${substituteName} (${substituteNip || '-'}).` : '';
+    // In-app Notification ke pemohon
     await broadcastNotification({
       targetUserId: leave.user_id,
-      title: `Pengajuan Izin/Cuti ${statusText}`,
-      message: `Permohonan cuti/izin Anda untuk tanggal ${leave.start_date} s/d ${leave.end_date} (${leave.total_days} hari) telah ${statusText} oleh ${approverName || 'Atasan/HRD'}.${subText}${notes ? ' Catatan: ' + notes : ''}`,
+      title: `Pengajuan ${typeLabel} ${statusText}`,
+      message: `Permohonan Anda (${leave.start_date} s/d ${leave.end_date}) telah ${statusText.toLowerCase()} oleh ${approverName || 'Atasan'}.${finalSubName ? ' Petugas Pengganti: ' + finalSubName : ''}`,
       type: status === 'approved' ? 'success' : 'warning',
-      metadata: { leaveId: id, status, approverName, substituteName, substituteId },
+      metadata: { leaveId: leave.id, status, approverName, substituteName: finalSubName, substituteId: validSubId },
     });
 
-    if (leave.user_phone && status === 'approved') {
-      await sendWhatsAppAlert({
-        phone: leave.user_phone,
-        message: `Halo *${leave.user_name}*, permohonan ${leave.leave_type?.toUpperCase()} Anda (${leave.start_date} s/d ${leave.end_date}) telah *DISETUJUI* oleh ${approverName || 'Atasan'}.${subText}`,
-      });
-    }
-
-    // 5. Notifikasi ke pengganti pos
+    // In-app Notification ke pengganti
     if (status === 'approved' && validSubId) {
       await broadcastNotification({
         targetUserId: validSubId,
-        title: '📋 Tugas Pengganti Pos Dinas (Backfill)',
-        message: `Anda ditugaskan oleh ${approverName || 'Korlap'} untuk menggantikan pos rekan kerja pada ${leave.start_date} s/d ${leave.end_date}.`,
+        title: '🛡️ Surat Tugas Pengganti Pos (Zero Vacancy)',
+        message: `Anda ditetapkan oleh ${approverName || 'Atasan'} sebagai Petugas Pengganti Pos untuk ${leave.user_name} pada periode ${leave.start_date} s/d ${leave.end_date}.`,
         type: 'info',
-        metadata: { leaveId: id, substituteFor: leave.user_id },
+        metadata: { leaveId: leave.id, forUser: leave.user_name, startDate: leave.start_date, endDate: leave.end_date },
       });
     }
 
     res.json({
       success: true,
       data: updateRes.rows[0],
-      message: `Pengajuan cuti/izin berhasil di-${status} dan diteruskan ke Pimpinan.`,
+      message: `Permohonan berhasil di-${statusText.toLowerCase()} dan notifikasi WhatsApp & sistem terkirim serentak.`,
     });
   } catch (err) {
-    console.error('Update leave error:', err);
+    console.error('Leave status update error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -5800,7 +5957,7 @@ app.post('/api/overtime', async (req, res) => {
         `📝 Tugas: "${taskDescription}"\n` +
         `💰 Estimasi Kompensasi: Rp ${comp.toLocaleString('id-ID')}\n\n` +
         `⚠️ Pengajuan ini diajukan oleh ${submitterTitle} dan membutuhkan verifikasi serta persetujuan resmi langsung dari *Direktur Utama & Pimpinan*.\n` +
-        `🔗 Mohon konfirmasi: https://103.197.188.211/admin/approval`;
+        `📱 Silakan tinjau dan berikan persetujuan melalui portal aplikasi HRM perusahaan.`;
 
       await sendWhatsAppAlert({ phone: '082291998026', message: waMsg });
       await sendWhatsAppAlert({ phone: '082192755755', message: waMsg });
@@ -5818,8 +5975,7 @@ app.post('/api/overtime', async (req, res) => {
         `📅 Tanggal: *${date}* (${startTime} - ${endTime}, ${hours} Jam)\n` +
         `📝 Uraian Tugas: "${taskDescription}"\n` +
         `💰 Estimasi Kompensasi: Rp ${comp.toLocaleString('id-ID')}\n\n` +
-        `⚡ *ATURAN PERSETUJUAN:* Salah satu dari *Korlap, Admin, atau K3* dapat langsung melakukan verifikasi & persetujuan:\n` +
-        `🔗 https://103.197.188.211/admin/approval`;
+        `⚡ *ATURAN PERSETUJUAN:* Salah satu dari *Korlap, Admin, atau K3* dapat langsung melakukan verifikasi & persetujuan melalui portal aplikasi HRM perusahaan.`;
 
       for (const off of officerRes.rows) {
         if (off.phone) {
@@ -8699,7 +8855,7 @@ app.post('/api/employee-schedules/batch', async (req, res) => {
     res.json({
       success: true,
       count: upsertedCount,
-      message: `Berhasil menyimpan ${upsertedCount} jadwal shift ke database PostgreSQL`,
+      message: `Berhasil menyimpan ${upsertedCount} jadwal shift ke database perusahaan`,
     });
   } catch (err) {
     await client.query('ROLLBACK');

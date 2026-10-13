@@ -175,7 +175,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
                 Radar Perimeter: {activeBreachCount} Karyawan Terdeteksi Meninggalkan Area Kantor!
               </p>
               <p className="text-rose-800 dark:text-rose-300 text-xs mt-0.5">
-                Tombol checkout presensi telah dinonaktifkan secara otomatis. Pelanggaran terekam di database PostgreSQL untuk evaluasi kinerja.
+                Tombol checkout presensi telah dinonaktifkan secara otomatis. Pelanggaran terekam di database perusahaan untuk evaluasi kinerja.
               </p>
             </div>
           </div>
