@@ -669,6 +669,9 @@ app.get('/api/sync/bootstrap', async (req, res) => {
         name: s.name,
         startTime: s.start_time ? s.start_time.substring(0, 5) : '08:00',
         endTime: s.end_time ? s.end_time.substring(0, 5) : '17:00',
+        breakStartTime: s.break_start_time ? s.break_start_time.substring(0, 5) : '12:00',
+        breakEndTime: s.break_end_time ? s.break_end_time.substring(0, 5) : '13:00',
+        breakDurationMinutes: s.break_duration_minutes || 60,
         lateToleranceMinutes: s.late_tolerance_minutes || 15,
         isDefault: s.is_default,
       };
@@ -863,6 +866,9 @@ app.get('/api/shifts', async (req, res) => {
         name: s.name,
         startTime: s.start_time ? s.start_time.substring(0, 5) : '08:00',
         endTime: s.end_time ? s.end_time.substring(0, 5) : '17:00',
+        breakStartTime: s.break_start_time ? s.break_start_time.substring(0, 5) : '12:00',
+        breakEndTime: s.break_end_time ? s.break_end_time.substring(0, 5) : '13:00',
+        breakDurationMinutes: s.break_duration_minutes || 60,
         lateToleranceMinutes: s.late_tolerance_minutes || 15,
         isDefault: s.is_default,
       };
@@ -874,22 +880,25 @@ app.get('/api/shifts', async (req, res) => {
 });
 
 app.post('/api/shifts', async (req, res) => {
-  const { name, startTime, endTime, lateToleranceMinutes, isDefault } = req.body;
+  const { name, startTime, endTime, breakStartTime, breakEndTime, breakDurationMinutes, lateToleranceMinutes, isDefault } = req.body;
   if (!name) return res.status(400).json({ success: false, error: 'Nama shift wajib diisi' });
   try {
     if (isDefault) {
       await pool.query('UPDATE hrm_shifts SET is_default = false');
     }
     const result = await pool.query(
-      `INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO hrm_shifts (name, start_time, end_time, break_start_time, break_end_time, break_duration_minutes, late_tolerance_minutes, is_default)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (name) DO UPDATE SET
          start_time = EXCLUDED.start_time,
          end_time = EXCLUDED.end_time,
+         break_start_time = EXCLUDED.break_start_time,
+         break_end_time = EXCLUDED.break_end_time,
+         break_duration_minutes = EXCLUDED.break_duration_minutes,
          late_tolerance_minutes = EXCLUDED.late_tolerance_minutes,
          is_default = EXCLUDED.is_default
        RETURNING *;`,
-      [name.trim(), startTime || '08:00:00', endTime || '17:00:00', lateToleranceMinutes || 15, isDefault === true]
+      [name.trim(), startTime || '08:00:00', endTime || '17:00:00', breakStartTime || '12:00:00', breakEndTime || '13:00:00', breakDurationMinutes || 60, lateToleranceMinutes || 15, isDefault === true]
     );
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
@@ -899,7 +908,7 @@ app.post('/api/shifts', async (req, res) => {
 
 app.put('/api/shifts/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, startTime, endTime, lateToleranceMinutes, isDefault } = req.body;
+  const { name, startTime, endTime, breakStartTime, breakEndTime, breakDurationMinutes, lateToleranceMinutes, isDefault } = req.body;
   try {
     if (isDefault) {
       await pool.query('UPDATE hrm_shifts SET is_default = false WHERE id != $1', [id]);
@@ -909,11 +918,14 @@ app.put('/api/shifts/:id', async (req, res) => {
          name = COALESCE($1, name),
          start_time = COALESCE($2, start_time),
          end_time = COALESCE($3, end_time),
-         late_tolerance_minutes = COALESCE($4, late_tolerance_minutes),
-         is_default = COALESCE($5, is_default)
-       WHERE id = $6
+         break_start_time = COALESCE($4, break_start_time),
+         break_end_time = COALESCE($5, break_end_time),
+         break_duration_minutes = COALESCE($6, break_duration_minutes),
+         late_tolerance_minutes = COALESCE($7, late_tolerance_minutes),
+         is_default = COALESCE($8, is_default)
+       WHERE id = $9
        RETURNING *;`,
-      [name ? name.trim() : null, startTime || null, endTime || null, lateToleranceMinutes != null ? lateToleranceMinutes : null, isDefault != null ? isDefault : null, id]
+      [name ? name.trim() : null, startTime || null, endTime || null, breakStartTime || null, breakEndTime || null, breakDurationMinutes != null ? breakDurationMinutes : null, lateToleranceMinutes != null ? lateToleranceMinutes : null, isDefault != null ? isDefault : null, id]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Shift tidak ditemukan' });

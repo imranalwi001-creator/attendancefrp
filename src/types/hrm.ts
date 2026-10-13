@@ -311,6 +311,7 @@ export interface Shift {
   endTime: string;              // '17:00'
   breakStartTime?: string;      // '12:00'
   breakEndTime?: string;        // '13:00'
+  breakDurationMinutes?: number;// e.g. 60
   lateToleranceMinutes: number; // e.g. 15
   earliestClockInMinutes?: number; // e.g. 60 mins before start
   isCrossDay?: boolean;         // Shift malam lintas hari (misal 22:00 - 06:00)

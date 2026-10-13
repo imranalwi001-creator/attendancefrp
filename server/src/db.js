@@ -437,30 +437,44 @@ export async function initDb() {
       -- 3. Terapkan indeks unik pada nama shift agar duplikasi tidak pernah terjadi lagi
       CREATE UNIQUE INDEX IF NOT EXISTS idx_hrm_shifts_unique_name ON hrm_shifts(name);
 
+      -- 3b. Pastikan kolom waktu istirahat (break time) tersedia di hrm_shifts
+      ALTER TABLE hrm_shifts
+      ADD COLUMN IF NOT EXISTS break_start_time TIME DEFAULT '12:00:00',
+      ADD COLUMN IF NOT EXISTS break_end_time TIME DEFAULT '13:00:00',
+      ADD COLUMN IF NOT EXISTS break_duration_minutes INT DEFAULT 60;
+
       -- 4. Sinkronisasi 4 shift resmi dengan ON CONFLICT (idempoten)
-      -- Day Shift: Senin s/d Jumat (07:30 - 16:30 WITA)
-      INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
-      VALUES ('Day Shift (07:30 - 16:30 WITA)', '07:30:00', '16:30:00', 15, true)
+      -- Day Shift: Senin s/d Jumat (07:30 - 16:30 WITA, Istirahat: 12:00 - 13:00 WITA)
+      INSERT INTO hrm_shifts (name, start_time, end_time, break_start_time, break_end_time, break_duration_minutes, late_tolerance_minutes, is_default)
+      VALUES ('Day Shift (07:30 - 16:30 WITA)', '07:30:00', '16:30:00', '12:00:00', '13:00:00', 60, 15, true)
       ON CONFLICT (name) DO UPDATE 
-      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time, is_default = EXCLUDED.is_default;
+      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
+          break_start_time = EXCLUDED.break_start_time, break_end_time = EXCLUDED.break_end_time,
+          break_duration_minutes = EXCLUDED.break_duration_minutes, is_default = EXCLUDED.is_default;
 
-      -- Shift I: 07:30 - 15:30 WITA
-      INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
-      VALUES ('Shift I (07:30 - 15:30 WITA)', '07:30:00', '15:30:00', 15, false)
+      -- Shift I: 07:30 - 15:30 WITA (Istirahat: 12:00 - 13:00 WITA)
+      INSERT INTO hrm_shifts (name, start_time, end_time, break_start_time, break_end_time, break_duration_minutes, late_tolerance_minutes, is_default)
+      VALUES ('Shift I (07:30 - 15:30 WITA)', '07:30:00', '15:30:00', '12:00:00', '13:00:00', 60, 15, false)
       ON CONFLICT (name) DO UPDATE 
-      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time;
+      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
+          break_start_time = EXCLUDED.break_start_time, break_end_time = EXCLUDED.break_end_time,
+          break_duration_minutes = EXCLUDED.break_duration_minutes;
 
-      -- Shift II: 15:30 - 22:30 WITA
-      INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
-      VALUES ('Shift II (15:30 - 22:30 WITA)', '15:30:00', '22:30:00', 15, false)
+      -- Shift II: 15:30 - 22:30 WITA (Istirahat: 18:00 - 19:00 WITA)
+      INSERT INTO hrm_shifts (name, start_time, end_time, break_start_time, break_end_time, break_duration_minutes, late_tolerance_minutes, is_default)
+      VALUES ('Shift II (15:30 - 22:30 WITA)', '15:30:00', '22:30:00', '18:00:00', '19:00:00', 60, 15, false)
       ON CONFLICT (name) DO UPDATE 
-      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time;
+      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
+          break_start_time = EXCLUDED.break_start_time, break_end_time = EXCLUDED.break_end_time,
+          break_duration_minutes = EXCLUDED.break_duration_minutes;
 
-      -- Shift III: 22:30 - 07:30 WITA
-      INSERT INTO hrm_shifts (name, start_time, end_time, late_tolerance_minutes, is_default)
-      VALUES ('Shift III (22:30 - 07:30 WITA)', '22:30:00', '07:30:00', 15, false)
+      -- Shift III: 22:30 - 07:30 WITA (Istirahat: 03:00 - 04:00 WITA)
+      INSERT INTO hrm_shifts (name, start_time, end_time, break_start_time, break_end_time, break_duration_minutes, late_tolerance_minutes, is_default)
+      VALUES ('Shift III (22:30 - 07:30 WITA)', '22:30:00', '07:30:00', '03:00:00', '04:00:00', 60, 15, false)
       ON CONFLICT (name) DO UPDATE 
-      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time;
+      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
+          break_start_time = EXCLUDED.break_start_time, break_end_time = EXCLUDED.break_end_time,
+          break_duration_minutes = EXCLUDED.break_duration_minutes;
 
       -- ─── 15. BANK POS TUGAS LAPANGAN & GEOFENCE MULTI-TITIK ───
       CREATE TABLE IF NOT EXISTS hrm_field_assigned_posts (
