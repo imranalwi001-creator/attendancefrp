@@ -611,6 +611,13 @@ export async function initDb() {
       ALTER TABLE hrm_leave_requests
       ADD COLUMN IF NOT EXISTS substitute_nip VARCHAR(50);
 
+      -- Emergency Discretionary Leave Reserve (Admin-only 2 days for bereavement & critical needs)
+      ALTER TABLE hrm_profiles
+      ADD COLUMN IF NOT EXISTS emergency_discretionary_quota INTEGER DEFAULT 2;
+
+      ALTER TABLE hrm_profiles
+      ADD COLUMN IF NOT EXISTS used_emergency_leave_days INTEGER DEFAULT 0;
+
       -- Overtime proof photo and Pimpinan forwarding
       ALTER TABLE hrm_overtime_records
       ADD COLUMN IF NOT EXISTS task_photo_url TEXT;

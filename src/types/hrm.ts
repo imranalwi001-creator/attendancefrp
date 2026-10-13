@@ -371,6 +371,8 @@ export interface UserProfile {
   avatarUrl?: string;
   annualLeaveQuota: number;
   usedLeaveDays: number;
+  emergencyDiscretionaryQuota?: number; // Plafon cuti darurat kedukaan (khusus admin, 2 hari)
+  usedEmergencyLeaveDays?: number;
   isActive: boolean;
   registeredDeviceId?: string; // Device Fingerprint UUID
   deviceModel?: string;        // Browser / Device name

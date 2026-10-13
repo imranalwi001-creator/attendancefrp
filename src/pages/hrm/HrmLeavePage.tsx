@@ -275,8 +275,9 @@ export const HrmLeavePage: React.FC = () => {
     }
   };
 
-  // Kuota cuti tahunan: 12 hari reguler + 2 hari bonus = 14 hari total (sinkron dari database)
-  const annualQuota = user?.annualLeaveQuota || 14;
+  // Kuota cuti tahunan resmi karyawan (12 hari untuk reguler/wisma atau 9 hari untuk shipment)
+  // Catatan: Plafon diskresi darurat kedukaan 2 hari hanya diakses via otoritas admin
+  const annualQuota = user?.annualLeaveQuota || 12;
   const remainingLeave = annualQuota - (user?.usedLeaveDays || 0);
 
   // User personal overtime stats

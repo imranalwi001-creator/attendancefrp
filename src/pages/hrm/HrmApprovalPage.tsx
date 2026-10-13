@@ -338,9 +338,9 @@ export const HrmApprovalPage: React.FC = () => {
     );
     setApplicantHistoryLeaves(applicantAll);
 
-    // Get applicant user profile for accurate quota (12 + 2 = 14)
+    // Get applicant user profile for accurate quota (12 reguler/wisma atau 9 shipment)
     const applicantUser = users.find((u) => u.id === leave.userId);
-    const annualQuota = applicantUser?.annualLeaveQuota || 14;
+    const annualQuota = applicantUser?.annualLeaveQuota || 12;
     const usedDays = applicantUser?.usedLeaveDays || 0;
     setApplicantQuotaInfo({
       totalQuota: annualQuota,

@@ -437,8 +437,10 @@ function formatUserRow(r) {
     contractEndDate: r.contract_end_date,
     bpjsKesehatan: r.bpjs_kesehatan || '',
     bpjsKetenagakerjaan: r.bpjs_ketenagakerjaan || '',
-    annualLeaveQuota: r.annual_leave_quota || 14,
+    annualLeaveQuota: r.annual_leave_quota ?? 12,
     usedLeaveDays: r.used_leave_days || 0,
+    emergencyDiscretionaryQuota: r.emergency_discretionary_quota ?? 2,
+    usedEmergencyLeaveDays: r.used_emergency_leave_days || 0,
     isActive: r.is_active !== false,
     isFaceEnrolled: r.is_face_enrolled === true || !!descriptor || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
     faceDescriptor: null, // Lean payload: AI descriptor disimpan di backend, tidak perlu ditransfer ke browser

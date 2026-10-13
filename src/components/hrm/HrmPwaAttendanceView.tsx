@@ -1658,7 +1658,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const onTimeCount = Math.max(0, presentCount - lateCount);
     const totalLateMins = attendancesHistory.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
 
-    const annualLeaveQuota = user?.annualLeaveQuota || 14;
+    const annualLeaveQuota = user?.annualLeaveQuota || 12;
     const usedLeave = user?.usedLeaveDays || 0;
     const remainingLeave = Math.max(0, annualLeaveQuota - usedLeave);
 
