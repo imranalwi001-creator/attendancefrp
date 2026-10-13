@@ -145,9 +145,27 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (attRes && attRes.success && attRes.attendance) {
             const att = attRes.attendance;
             if (att.clockIn || att.clock_in) {
-              localStorage.setItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`, JSON.stringify(att));
+              const existingLocal =
+                localStorage.getItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`) ||
+                (res.user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`) : null);
+              let toSave = att;
+              if (existingLocal) {
+                try {
+                  const parsed = JSON.parse(existingLocal);
+                  if (parsed.clockOut && !toSave.clockOut) {
+                    toSave = {
+                      ...toSave,
+                      clockOut: parsed.clockOut,
+                      clock_out: parsed.clock_out || parsed.clockOut,
+                      photoOut: parsed.photoOut || toSave.photoOut,
+                      clockOutPhoto: parsed.clockOutPhoto || toSave.clockOutPhoto,
+                    };
+                  }
+                } catch (_) {}
+              }
+              localStorage.setItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`, JSON.stringify(toSave));
               if (res.user.nip) {
-                localStorage.setItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`, JSON.stringify(att));
+                localStorage.setItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`, JSON.stringify(toSave));
               }
             }
           }

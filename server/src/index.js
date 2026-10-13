@@ -4120,8 +4120,15 @@ app.post('/api/attendances/early-leave', async (req, res) => {
       [validUserId]
     );
 
-    // Ambil data profile karyawan untuk format pesan
-    const profRes = await pool.query('SELECT full_name, nip, phone, current_active_post_name FROM hrm_profiles WHERE id = $1', [validUserId]);
+    // Ambil data profile karyawan lengkap (divisi, korlap) untuk format pesan
+    const profRes = await pool.query(
+      `SELECT p.*, d.name as division_name, kr.phone as korlap_phone, kr.full_name as korlap_name
+       FROM hrm_profiles p
+       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+       LEFT JOIN hrm_profiles kr ON p.kepala_regu_id = kr.id
+       WHERE p.id = $1 LIMIT 1;`,
+      [validUserId]
+    );
     const prof = profRes.rows[0] || { full_name: 'Karyawan', nip: 'FRP' };
 
     const witaTimeStr = new Date().toLocaleTimeString('id-ID', {
@@ -4138,26 +4145,29 @@ app.post('/api/attendances/early-leave', async (req, res) => {
       lainnya: 'Keperluan Mendesak Lainnya',
     }[category] || category || 'Darurat';
 
-    // 📲 TRIGGER DUAL-CHANNEL NOTIFIKASI KE PIMPINAN & SUPERADMIN (REKOMENDASI 1)
+    // 📲 FORMAT PESAN WHATSAPP PEMBERITAHUAN RESMI
     const alertTitle = `🚨 Pulang Awal Darurat: ${prof.full_name}`;
-    const alertMsg = `Petugas ${prof.full_name} (${prof.nip}) telah melakukan presensi pulang awal darurat dengan kategori "${categoryLabel}". Alasan: "${reason}". Waktu: ${witaTimeStr}.`;
+    const alertMsg = `Karyawan ${prof.full_name} (${prof.nip}) telah melakukan izin pulang darurat mandiri (${categoryLabel}). Alasan: "${reason}". Waktu: ${witaTimeStr}.`;
 
     const waMsg =
-`🚨 *LAPORAN PULANG AWAL DARURAT PT. FAWWAZ RESKI PERWIRA*
+`🚨 *INFORMASI IZIN PULANG DARURAT (MANDIRI)*
+*PT. FAWWAZ RESKI PERWIRA*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-👤 *Nama Petugas:* ${prof.full_name}
-🆔 *NIP:* ${prof.nip || 'FRP-FIELD'}
-⚠️ *Status:* *PULANG AWAL MANDIRI (DARURAT)*
-🏷️ *Kategori:* ${categoryLabel}
-📝 *Alasan:* ${reason}
-⏰ *Waktu Checkout:* ${witaTimeStr}
+👤 *Nama:* ${prof.full_name}
+🆔 *NIP:* ${prof.nip || '-'}
+🏢 *Divisi:* ${prof.division_name || '-'}
+🏷️ *Kategori Darurat:* ${categoryLabel}
+📝 *Alasan / Keterangan:*
+_"${reason}"_
+⏰ *Waktu Pulang:* ${witaTimeStr}
 📍 *Pos Terakhir:* ${prof.current_active_post_name || 'Lokasi Kerja'}
-🌐 *Koordinat:* ${latitude ? `${latitude}, ${longitude}` : 'Terverifikasi GPS'}
+🌐 *Koordinat GPS:* ${latitude && longitude ? `${latitude}, ${longitude}` : 'Terverifikasi GPS'}
 
 *Catatan Sistem:*
-Presensi kepulangan darurat telah diproses otomatis oleh sistem tanpa memicu alarm pelanggaran perimeter. Mohon Pimpinan, Admin, & Korlap memantau dan berkoordinasi dengan petugas terkait.
+Izin pulang darurat diproses mandiri tanpa konfirmasi agar tidak menghambat penanganan darurat. Pesan ini diteruskan otomatis sebagai informasi dan koordinasi bagi Korlap, Admin, K3, dan Superadmin.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
+    // 1. Simpan notifikasi in-app ke Superadmin
     await alertLeadershipViaWhatsAppAndSystem({
       title: alertTitle,
       message: alertMsg,
@@ -4172,6 +4182,41 @@ Presensi kepulangan darurat telah diproses otomatis oleh sistem tanpa memicu ala
         longitude
       }
     });
+
+    // 2. Dispatch WhatsApp ke Korlap (jika tersedia nomor korlap)
+    if (prof.korlap_phone) {
+      await sendWhatsAppAlert({ phone: prof.korlap_phone, message: waMsg }).catch(e => console.error('[WA Korlap Emergency Error]:', e.message));
+    }
+
+    // 3. Dispatch WhatsApp ke Petugas K3
+    const k3Res = await pool.query(
+      `SELECT p.phone FROM hrm_profiles p
+       JOIN hrm_roles r ON p.role_id = r.id
+       WHERE (r.name ILIKE '%k3%' OR r.label ILIKE '%k3%' OR p.job_title ILIKE '%k3%') AND p.phone IS NOT NULL AND p.phone != ''
+       LIMIT 3;`
+    ).catch(() => ({ rows: [] }));
+
+    for (const k3Row of k3Res.rows) {
+      if (k3Row.phone && k3Row.phone !== '081355904897' && k3Row.phone !== prof.korlap_phone) {
+        await sendWhatsAppAlert({ phone: k3Row.phone, message: waMsg }).catch(e => console.error('[WA K3 Emergency Error]:', e.message));
+      }
+    }
+
+    // 4. Jika karyawan adalah salah satu dari 3 Petugas Lapangan Khusus, teruskan juga ke Dirut & Pimpinan
+    const specialNips = ['FRP 07065', 'FR.07.066', 'FRP.07.046'];
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
+      '0a49f92e-5733-4b72-947c-7361f9490632'  // TAKDIR
+    ];
+    const isSpecialOfficer = specialIds.includes(prof.id) || specialNips.includes(prof.nip?.trim());
+
+    if (isSpecialOfficer) {
+      // Dirut: 082291998026
+      await sendWhatsAppAlert({ phone: '082291998026', message: waMsg }).catch(e => console.error('[WA Dirut Emergency Error]:', e.message));
+      // Pimpinan: 082192755755
+      await sendWhatsAppAlert({ phone: '082192755755', message: waMsg }).catch(e => console.error('[WA Pimpinan Emergency Error]:', e.message));
+    }
 
     res.json({ success: true, data: result.rows[0], message: 'Presensi pulang awal darurat berhasil dicatat dan dilaporkan' });
   } catch (err) {

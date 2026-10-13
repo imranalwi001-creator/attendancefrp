@@ -821,6 +821,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           const parsedConf = JSON.parse(cachedConf);
           if (parsedConf && (parsedConf.clockIn || parsedConf.clock_in)) {
             todayAtt = normalizeAttendanceRecord(parsedConf);
+            // MONOTONIC CLOCK-OUT GUARD: Jangan pernah biarkan clockOut hilang jika di memori sudah ada
+            if (todayAttendance?.clockOut && !todayAtt.clockOut) {
+              todayAtt.clockOut = todayAttendance.clockOut;
+              todayAtt.clock_out = todayAttendance.clock_out || todayAttendance.clockOut;
+            }
             setTodayAttendance(todayAtt);
           }
         }
@@ -841,11 +846,26 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
         if (todayData && todayData.success && todayData.attendance) {
           const normRemote = normalizeAttendanceRecord(todayData.attendance);
-          if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in) && !normRemote.clockIn) {
-            todayAtt = { ...normRemote, ...todayAtt };
-          } else {
-            todayAtt = normRemote;
-          }
+
+          // MONOTONIC ATTENDANCE RETENTION:
+          // Pertahankan jam masuk dan jam pulang dari sumber manapun yang sudah valid agar tidak terjadi flapping
+          const preservedClockIn = todayAtt?.clockIn || normRemote.clockIn || todayAttendance?.clockIn;
+          const preservedClockInFull = todayAtt?.clock_in || normRemote.clock_in || todayAttendance?.clock_in || preservedClockIn;
+          const preservedClockOut = normRemote.clockOut || todayAtt?.clockOut || todayAttendance?.clockOut || (normRemote.clock_out ? String(normRemote.clock_out).substring(0, 5) : undefined) || (todayAtt?.clock_out ? String(todayAtt.clock_out).substring(0, 5) : undefined);
+          const preservedClockOutFull = normRemote.clock_out || todayAtt?.clock_out || todayAttendance?.clock_out || preservedClockOut;
+          const preservedPhotoOut = normRemote.photoOut || todayAtt?.photoOut || todayAttendance?.photoOut || normRemote.clockOutPhoto || todayAtt?.clockOutPhoto;
+
+          todayAtt = {
+            ...todayAtt,
+            ...normRemote,
+            clockIn: preservedClockIn,
+            clock_in: preservedClockInFull,
+            clockOut: preservedClockOut,
+            clock_out: preservedClockOutFull,
+            photoOut: preservedPhotoOut,
+            clockOutPhoto: preservedPhotoOut,
+          };
+
           if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
             setTodayAttendance(todayAtt);
             try {
@@ -894,7 +914,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
         const existingIdx = userAtts.findIndex((a) => a.id === todayAtt?.id || a.date === todayStr || a.attendanceDate === todayStr);
         if (existingIdx >= 0) {
-          userAtts[existingIdx] = { ...userAtts[existingIdx], ...todayAtt };
+          const mergedClockOut = userAtts[existingIdx].clockOut || todayAtt.clockOut || (userAtts[existingIdx].clock_out ? String(userAtts[existingIdx].clock_out).substring(0, 5) : undefined);
+          const mergedClockOutFull = userAtts[existingIdx].clock_out || todayAtt.clock_out || mergedClockOut;
+          userAtts[existingIdx] = {
+            ...userAtts[existingIdx],
+            ...todayAtt,
+            clockOut: mergedClockOut,
+            clock_out: mergedClockOutFull,
+          };
+          if (mergedClockOut) {
+            todayAtt.clockOut = mergedClockOut;
+            todayAtt.clock_out = mergedClockOutFull;
+          }
         } else {
           userAtts.unshift(todayAtt);
         }
@@ -907,8 +938,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       setAttendancesHistory(userAtts);
 
-      // KONSISTENSI TOTAL: Kunci status presensi hari ini jika sudah absen masuk
+      // KONSISTENSI TOTAL: Kunci status presensi hari ini jika sudah absen masuk & absen pulang
       if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
+        // MONOTONIC CLOCK-OUT GUARD: Sekali karyawan clock-out, kunci permanen!
+        if (todayAttendance?.clockOut && !todayAtt.clockOut) {
+          todayAtt.clockOut = todayAttendance.clockOut;
+          todayAtt.clock_out = todayAttendance.clock_out || todayAttendance.clockOut;
+        }
         const finalNormalized = normalizeAttendanceRecord(todayAtt);
         setTodayAttendance(finalNormalized);
         try {
@@ -1217,11 +1253,23 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         if (user) {
           const todayStr = getTodayDateStr();
           try {
-            const cached = localStorage.getItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
+            const cached = localStorage.getItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`) ||
+              (user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`) : null);
             if (cached) {
               const parsed = JSON.parse(cached);
               if (parsed && (parsed.clockIn || parsed.clock_in)) {
-                setTodayAttendance(normalizeAttendanceRecord(parsed));
+                setTodayAttendance((prev) => {
+                  const norm = normalizeAttendanceRecord(parsed);
+                  if (prev?.clockOut && !norm.clockOut) {
+                    norm.clockOut = prev.clockOut;
+                    norm.clock_out = prev.clock_out || prev.clockOut;
+                    if (prev.photoOut && !norm.photoOut) {
+                      norm.photoOut = prev.photoOut;
+                      norm.clockOutPhoto = prev.clockOutPhoto || prev.photoOut;
+                    }
+                  }
+                  return norm;
+                });
               }
             }
           } catch (e) {}
@@ -2588,7 +2636,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         longitude: currentCoords?.lng,
       });
 
-      toast.success('Izin Pulang Darurat Berhasil dicatat. Notifikasi terkirim ke Pimpinan.');
+      toast.success('Izin Pulang Darurat Berhasil dicatat. Notifikasi terkirim ke Korlap, Admin, K3 & Superadmin.');
       setEmergencyModalOpen(false);
       setEmergencyReason('');
       await loadRealData();
@@ -4780,7 +4828,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               Izin Pulang Darurat
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Pilihan khusus kondisi mendadak/sakit. Sistem otomatis mencatat presensi pulang saat ini dan mengirim notifikasi darurat instan ke Pimpinan.
+              Pilihan kondisi mendesak/sakit. Presensi pulang dicatatkan langsung tanpa konfirmasi, dan notifikasi diteruskan via WhatsApp ke Korlap, Admin, K3, dan Superadmin.
             </DialogDescription>
           </DialogHeader>
 

@@ -850,11 +850,18 @@ export const safeSetJson = (key: string, data: any): boolean => {
 // Cache memori lokal agar foto face review resolusi penuh & foto master biometrik tetap tersedia di RAM tanpa terpotong kuota 5MB localStorage HP
 let inMemoryAttendances: AttendanceRecord[] = [];
 let inMemoryUsers: UserProfile[] = [];
+let lastSyncTimestamp = 0;
 
 export const hrmService = {
   // Centralized PostgreSQL Backend Synchronizer
-  syncWithBackend: async (): Promise<boolean> => {
+  syncWithBackend: async (force: boolean = false): Promise<boolean> => {
     try {
+      const now = Date.now();
+      if (!force && now - lastSyncTimestamp < 15000) {
+        return true; // Throttle bootstrap agar tidak memicu infinite ping-pong update loop
+      }
+      lastSyncTimestamp = now;
+
       const res = await api.get<{ success: boolean; data: any }>('/sync/bootstrap');
       if (res && res.success && res.data) {
         const { users, roles, divisions, shifts, office, company, attendances } = res.data;
@@ -893,31 +900,56 @@ export const hrmService = {
         if (Array.isArray(attendances) && attendances.length > 0) {
           const mappedAtts: AttendanceRecord[] = attendances.map((a: any) => normalizeAttendanceRecord(a));
 
-          // Retain any active employee's verified clock-in for today so that bootstrap never overwrites it with an unclocked entry
+          // Retain any active employee's verified clock-in & clock-out for today (Monotonic Attendance Lock)
           const today = getTodayDateStr();
           try {
             const rawCurrent = sessionStorage.getItem('hrm_active_session_user') || localStorage.getItem('hrm_active_session_user');
             if (rawCurrent) {
               const u = JSON.parse(rawCurrent);
               const uId = u?.id;
+              const uNip = u?.nip;
               if (uId) {
                 const confKey = `hrm_confirmed_today_att_${uId}_${today}`;
-                const cachedConf = localStorage.getItem(confKey);
+                const cachedConf = localStorage.getItem(confKey) || (uNip ? localStorage.getItem(`hrm_confirmed_today_att_${uNip}_${today}`) : null);
                 if (cachedConf) {
                   const parsedConf = JSON.parse(cachedConf);
                   if (parsedConf && (parsedConf.clockIn || parsedConf.clock_in)) {
                     const normConf = normalizeAttendanceRecord(parsedConf);
                     const idx = mappedAtts.findIndex((m) =>
-                      (m.userId === uId || m.user_id === uId) &&
+                      (m.userId === uId || m.user_id === uId || (uNip && (m.userNip === uNip || (m as any).user_nip === uNip))) &&
                       (m.date === today || m.attendanceDate === today)
                     );
                     if (idx !== -1) {
+                      // MONOTONIC CLOCK RETENTION:
+                      // Jangan pernah biarkan clock-in atau clock-out yang sah terhapus oleh nilai undefined!
+                      const effectiveClockIn = normConf.clockIn || mappedAtts[idx].clockIn;
+                      const effectiveClockInFull = normConf.clock_in || mappedAtts[idx].clock_in;
+                      const effectiveClockOut = mappedAtts[idx].clockOut || normConf.clockOut || (mappedAtts[idx].clock_out ? String(mappedAtts[idx].clock_out).substring(0, 5) : undefined) || (normConf.clock_out ? String(normConf.clock_out).substring(0, 5) : undefined);
+                      const effectiveClockOutFull = mappedAtts[idx].clock_out || normConf.clock_out || effectiveClockOut;
+                      const effectivePhotoOut = mappedAtts[idx].photoOut || normConf.photoOut || mappedAtts[idx].clockOutPhoto || normConf.clockOutPhoto;
+
+                      // Filter field bernilai undefined/null agar tidak merusak field yang sudah ada di mappedAtts[idx]
+                      const cleanNormConf: any = {};
+                      for (const [k, v] of Object.entries(normConf)) {
+                        if (v !== undefined && v !== null) cleanNormConf[k] = v;
+                      }
+
                       mappedAtts[idx] = {
                         ...mappedAtts[idx],
-                        ...normConf,
-                        clockIn: normConf.clockIn || mappedAtts[idx].clockIn,
-                        clock_in: normConf.clock_in || mappedAtts[idx].clock_in,
+                        ...cleanNormConf,
+                        clockIn: effectiveClockIn,
+                        clock_in: effectiveClockInFull,
+                        clockOut: effectiveClockOut,
+                        clock_out: effectiveClockOutFull,
+                        photoOut: effectivePhotoOut,
+                        clockOutPhoto: effectivePhotoOut,
                       };
+
+                      // Sinkronkan kembali confirmed cache agar tidak tertinggal
+                      try {
+                        localStorage.setItem(confKey, JSON.stringify(mappedAtts[idx]));
+                        if (uNip) localStorage.setItem(`hrm_confirmed_today_att_${uNip}_${today}`, JSON.stringify(mappedAtts[idx]));
+                      } catch (_) {}
                     } else {
                       mappedAtts.unshift(normConf);
                     }
@@ -2389,12 +2421,13 @@ export const hrmService = {
   getUserTodayAttendance: (userId: string): AttendanceRecord | undefined => {
     const today = getTodayDateStr();
     // 1. Cek dedicated persistent key first untuk kepastian tanpa race condition
+    let fromStorage: AttendanceRecord | undefined = undefined;
     try {
       const cached = localStorage.getItem(`hrm_confirmed_today_att_${userId}_${today}`);
       if (cached) {
         const parsed = JSON.parse(cached);
         if (parsed && (parsed.clockIn || parsed.clock_in)) {
-          return normalizeAttendanceRecord(parsed);
+          fromStorage = normalizeAttendanceRecord(parsed);
         }
       }
     } catch (e) {}
@@ -2409,12 +2442,24 @@ export const hrmService = {
     });
 
     if (found && (found.clockIn || found.clock_in)) {
+      const normFound = normalizeAttendanceRecord(found);
+      // Monotonic guard: jika di storage lokal sudah ada clockOut, pertahankan!
+      if (fromStorage?.clockOut && !normFound.clockOut) {
+        normFound.clockOut = fromStorage.clockOut;
+        normFound.clock_out = fromStorage.clock_out || fromStorage.clockOut;
+        if (fromStorage.photoOut && !normFound.photoOut) {
+          normFound.photoOut = fromStorage.photoOut;
+          normFound.clockOutPhoto = fromStorage.clockOutPhoto || fromStorage.photoOut;
+        }
+      }
       try {
-        localStorage.setItem(`hrm_confirmed_today_att_${userId}_${today}`, JSON.stringify(found));
+        localStorage.setItem(`hrm_confirmed_today_att_${userId}_${today}`, JSON.stringify(normFound));
+        if (u?.nip) localStorage.setItem(`hrm_confirmed_today_att_${u.nip}_${today}`, JSON.stringify(normFound));
       } catch (e) {}
+      return normFound;
     }
 
-    return found ? normalizeAttendanceRecord(found) : undefined;
+    return fromStorage;
   },
 
   saveAttendances: (attendances: AttendanceRecord[]): boolean => {
@@ -3127,7 +3172,11 @@ export const hrmService = {
 
     hrmService.saveAttendances(all);
     try {
-      localStorage.setItem(`hrm_confirmed_today_att_${existing.userId}_${existing.attendanceDate || todayStr}`, JSON.stringify(memRec));
+      const attDay = existing.attendanceDate || todayStr;
+      localStorage.setItem(`hrm_confirmed_today_att_${existing.userId}_${attDay}`, JSON.stringify(memRec));
+      if (user?.nip) {
+        localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${attDay}`, JSON.stringify(memRec));
+      }
     } catch (e) {}
     window.dispatchEvent(new Event('hrm_attendance_updated'));
     window.dispatchEvent(new Event('hrm_data_updated'));
