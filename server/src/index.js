@@ -407,10 +407,12 @@ function formatUserRow(r) {
     shiftEndTime: resolvedEnd,
     customStartTime: isSpecial && r.custom_start_time ? r.custom_start_time.substring(0, 5) : null,
     customEndTime: isSpecial && r.custom_end_time ? r.custom_end_time.substring(0, 5) : null,
-    lateToleranceMinutes: r.late_tolerance_minutes != null ? parseInt(r.late_tolerance_minutes) : 15,
     avatarUrl: (() => {
-      const isValid = (s) => typeof s === 'string' && (s.startsWith('http') || s.startsWith('/') || (s.startsWith('data:image/') && s.length > 150));
-      return [r.avatar_url, r.face_photo_url, r.face_enrolled_photo, r.latest_attendance_photo].find(isValid) || null;
+      const hasPhoto = (typeof r.avatar_url === 'string' && r.avatar_url.length > 50) ||
+                       (typeof r.face_photo_url === 'string' && r.face_photo_url.length > 50) ||
+                       (typeof r.face_enrolled_photo === 'string' && r.face_enrolled_photo.length > 50) ||
+                       (typeof r.latest_attendance_photo === 'string' && r.latest_attendance_photo.length > 50);
+      return hasPhoto ? `/api/users/${r.id}/avatar` : null;
     })(),
     gender: r.gender,
     birthPlace: r.birth_place,
@@ -439,11 +441,8 @@ function formatUserRow(r) {
     usedLeaveDays: r.used_leave_days || 0,
     isActive: r.is_active !== false,
     isFaceEnrolled: r.is_face_enrolled === true || !!descriptor || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
-    faceDescriptor: descriptor,
-    faceEnrolledPhoto: (() => {
-      const isValid = (s) => typeof s === 'string' && (s.startsWith('http') || s.startsWith('/') || (s.startsWith('data:image/') && s.length > 150));
-      return [r.face_photo_url, r.face_enrolled_photo, r.avatar_url, r.latest_attendance_photo].find(isValid) || null;
-    })(),
+    faceDescriptor: null, // Lean payload: AI descriptor disimpan di backend, tidak perlu ditransfer ke browser
+    faceEnrolledPhoto: r.avatar_url || null,
     faceEnrolledAt: r.face_enrolled_at || null,
     deviceId: r.device_id || null,
     registeredDeviceId: r.device_id || r.registered_device_id || null,
@@ -556,7 +555,18 @@ app.get('/api/sync/bootstrap', async (req, res) => {
       pool.query('SELECT * FROM hrm_office_locations WHERE is_active = true LIMIT 1'),
       pool.query('SELECT * FROM hrm_company_profile LIMIT 1'),
       pool.query(`
-        SELECT a.*, p.full_name as user_name, p.nip as user_nip, p.avatar_url as user_avatar,
+        SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.clock_out,
+               a.lat_in, a.long_in, a.lat_out, a.long_out, a.status,
+               a.late_minutes, a.early_leaving_minutes, a.work_duration_minutes,
+               a.is_locked, a.is_perimeter_breached, a.perimeter_breach_count, a.time_outside_minutes,
+               a.notes, a.biometric_score, a.biometric_match, a.geofence_distance_meters,
+               a.geofence_valid, a.is_mock_location, a.security_flags,
+               a.is_early_leave, a.early_leave_reason, a.early_leave_category,
+               a.is_remote_unlocked, a.remote_unlocked_by, a.remote_unlocked_at,
+               a.is_on_break, a.break_start_time, a.break_end_time, a.break_duration_minutes,
+               (a.photo_in IS NOT NULL) as has_photo_in,
+               (a.photo_out IS NOT NULL) as has_photo_out,
+               p.full_name as user_name, p.nip as user_nip, CASE WHEN (p.avatar_url IS NOT NULL OR p.face_photo_url IS NOT NULL) THEN '/api/users/' || p.id || '/avatar' ELSE NULL END as user_avatar,
                COALESCE(d.name, p.division_name, 'Umum') as division_name
         FROM hrm_attendances a
         LEFT JOIN hrm_profiles p ON a.user_id = p.id
@@ -707,10 +717,12 @@ app.get('/api/sync/bootstrap', async (req, res) => {
         clock_in: a.clock_in,
         clockOut: a.clock_out ? a.clock_out.substring(0, 5) : undefined,
         clock_out: a.clock_out,
-        photoIn: a.photo_in,
-        photoOut: a.photo_out,
-        clockInPhoto: a.photo_in,
-        clockOutPhoto: a.photo_out,
+        photoIn: (a.has_photo_in || a.photo_in) ? `/api/attendances/${a.id}/photo?type=in` : null,
+        photoOut: (a.has_photo_out || a.photo_out) ? `/api/attendances/${a.id}/photo?type=out` : null,
+        clockInPhoto: (a.has_photo_in || a.photo_in) ? `/api/attendances/${a.id}/photo?type=in` : null,
+        clockOutPhoto: (a.has_photo_out || a.photo_out) ? `/api/attendances/${a.id}/photo?type=out` : null,
+        hasPhotoIn: Boolean(a.has_photo_in || a.photo_in),
+        hasPhotoOut: Boolean(a.has_photo_out || a.photo_out),
         clockInLat: parseFloat(a.lat_in) || undefined,
         clockInLong: parseFloat(a.long_in) || undefined,
         clockOutLat: parseFloat(a.lat_out) || undefined,
@@ -996,6 +1008,42 @@ app.get('/api/users/:id', async (req, res) => {
     }
     const formatted = formatUserRow(result.rows[0]);
     res.json({ success: true, user: formatted, data: formatted });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint avatar foto profil karyawan on-demand dengan HTTP Cache (Fast Native C++ Stream)
+app.get('/api/users/:id/avatar', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT p.id, p.avatar_url, p.face_photo_url,
+              (SELECT a.photo_in FROM hrm_attendances a WHERE a.user_id = p.id AND a.photo_in IS NOT NULL ORDER BY a.attendance_date DESC, a.created_at DESC LIMIT 1) as latest_photo
+       FROM hrm_profiles p
+       WHERE p.id::text = $1 OR p.nip = $1 OR LOWER(p.email) = LOWER($1)
+       LIMIT 1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User tidak ditemukan' });
+    }
+    const r = result.rows[0];
+    const targetAvatar = r.avatar_url || r.face_photo_url || r.latest_photo;
+    if (targetAvatar && typeof targetAvatar === 'string') {
+      const match = targetAvatar.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        const mimeType = match[1];
+        const base64Data = match[2];
+        const imgBuffer = Buffer.from(base64Data, 'base64');
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        return res.send(imgBuffer);
+      } else if (targetAvatar.startsWith('http://') || targetAvatar.startsWith('https://')) {
+        return res.redirect(targetAvatar);
+      }
+    }
+    return res.status(404).json({ success: false, error: 'Avatar belum diset' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1796,9 +1844,10 @@ app.post('/api/attendances/clock-in', async (req, res) => {
   }
 });
 
-// Endpoint untuk mengambil foto verifikasi wajah presensi secara on-demand
+// Endpoint untuk mengambil foto verifikasi wajah presensi secara on-demand (mendukung format Image binary streaming & JSON)
 app.get('/api/attendances/:id/photo', async (req, res) => {
   const { id } = req.params;
+  const { type, format } = req.query; // type: 'in' | 'out', format: 'json' | 'image'
   try {
     const result = await pool.query(
       'SELECT id, photo_in, photo_out FROM hrm_attendances WHERE id = $1',
@@ -1807,10 +1856,38 @@ app.get('/api/attendances/:id/photo', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Foto tidak ditemukan' });
     }
+    const row = result.rows[0];
+    const targetPhoto = type === 'out' ? (row.photo_out || row.photo_in) : (row.photo_in || row.photo_out);
+
+    // Jika client secara eksplisit meminta format JSON:
+    if (format === 'json') {
+      return res.json({
+        success: true,
+        photoIn: row.photo_in,
+        photoOut: row.photo_out,
+      });
+    }
+
+    // Default: Sajikan langsung sebagai binary image jika berupa string data base64 (sangat cepat & ramah tag <img>)
+    if (targetPhoto && typeof targetPhoto === 'string') {
+      const match = targetPhoto.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        const mimeType = match[1];
+        const base64Data = match[2];
+        const imgBuffer = Buffer.from(base64Data, 'base64');
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        return res.send(imgBuffer);
+      } else if (targetPhoto.startsWith('http://') || targetPhoto.startsWith('https://')) {
+        return res.redirect(targetPhoto);
+      }
+    }
+
+    // Fallback JSON jika tidak bisa di-stream sebagai image
     res.json({
       success: true,
-      photoIn: result.rows[0].photo_in,
-      photoOut: result.rows[0].photo_out,
+      photoIn: row.photo_in,
+      photoOut: row.photo_out,
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -4315,15 +4392,32 @@ app.get('/api/attendances/today', async (req, res) => {
 });
 
 app.get('/api/attendances', async (req, res) => {
-  const { date, userId } = req.query;
+  const { date, userId, includePhoto } = req.query;
   try {
-    let query = `
-      SELECT a.*, p.full_name as user_name, p.nip as user_nip, p.avatar_url as user_avatar,
-             COALESCE(d.name, p.division_name, 'Umum') as division_name
-      FROM hrm_attendances a
-      LEFT JOIN hrm_profiles p ON a.user_id = p.id
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-    `;
+    const isFullPhoto = includePhoto === 'true';
+    let query = isFullPhoto
+      ? `SELECT a.*, p.full_name as user_name, p.nip as user_nip, p.avatar_url as user_avatar,
+                COALESCE(d.name, p.division_name, 'Umum') as division_name
+         FROM hrm_attendances a
+         LEFT JOIN hrm_profiles p ON a.user_id = p.id
+         LEFT JOIN hrm_divisions d ON p.division_id = d.id`
+      : `SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.clock_out,
+                a.lat_in, a.long_in, a.lat_out, a.long_out, a.status,
+                a.late_minutes, a.early_leaving_minutes, a.work_duration_minutes,
+                a.is_locked, a.is_perimeter_breached, a.perimeter_breach_count, a.time_outside_minutes,
+                a.notes, a.biometric_score, a.biometric_match, a.geofence_distance_meters,
+                a.geofence_valid, a.is_mock_location, a.security_flags,
+                a.is_early_leave, a.early_leave_reason, a.early_leave_category,
+                a.is_remote_unlocked, a.remote_unlocked_by, a.remote_unlocked_at,
+                a.is_on_break, a.break_start_time, a.break_end_time, a.break_duration_minutes,
+                (a.photo_in IS NOT NULL) as has_photo_in,
+                (a.photo_out IS NOT NULL) as has_photo_out,
+                p.full_name as user_name, p.nip as user_nip,
+                CASE WHEN (p.avatar_url IS NOT NULL OR p.face_photo_url IS NOT NULL) THEN '/api/users/' || p.id || '/avatar' ELSE NULL END as user_avatar,
+                COALESCE(d.name, p.division_name, 'Umum') as division_name
+         FROM hrm_attendances a
+         LEFT JOIN hrm_profiles p ON a.user_id = p.id
+         LEFT JOIN hrm_divisions d ON p.division_id = d.id`;
     const params = [];
     const conditions = [];
     if (date) {
@@ -4352,6 +4446,8 @@ app.get('/api/attendances', async (req, res) => {
     const result = await pool.query(query, params);
     const data = result.rows.map((a) => {
       const attDate = a.attendance_date ? (typeof a.attendance_date === 'string' ? a.attendance_date.substring(0, 10) : new Date(a.attendance_date).toISOString().split('T')[0]) : '';
+      const photoInUrl = (a.has_photo_in || a.photo_in) ? `/api/attendances/${a.id}/photo?type=in` : null;
+      const photoOutUrl = (a.has_photo_out || a.photo_out) ? `/api/attendances/${a.id}/photo?type=out` : null;
       return {
         id: a.id,
         userId: a.user_id,
@@ -4366,10 +4462,12 @@ app.get('/api/attendances', async (req, res) => {
         clock_in: a.clock_in,
         clockOut: a.clock_out ? a.clock_out.substring(0, 5) : undefined,
         clock_out: a.clock_out,
-        photoIn: a.photo_in,
-        photoOut: a.photo_out,
-        clockInPhoto: a.photo_in,
-        clockOutPhoto: a.photo_out,
+        photoIn: isFullPhoto ? a.photo_in : photoInUrl,
+        photoOut: isFullPhoto ? a.photo_out : photoOutUrl,
+        clockInPhoto: isFullPhoto ? a.photo_in : photoInUrl,
+        clockOutPhoto: isFullPhoto ? a.photo_out : photoOutUrl,
+        hasPhotoIn: Boolean(a.has_photo_in || a.photo_in),
+        hasPhotoOut: Boolean(a.has_photo_out || a.photo_out),
         clockInLat: parseFloat(a.lat_in) || undefined,
         clockInLong: parseFloat(a.long_in) || undefined,
         clockOutLat: parseFloat(a.lat_out) || undefined,
