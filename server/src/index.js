@@ -1943,8 +1943,8 @@ async function alertLeadershipViaWhatsAppAndSystem({ title, message, waMessage, 
       }
     }
 
-    // Pastikan nomor pimpinan resmi (Bpk Reski Faisal) & superadmin dari instruksi sistem selalu menerima broadcast
-    const defaultLeadershipPhones = ['082192755755', '081355904897'];
+    // Pastikan nomor Direktur Utama (Dirut: Alam AS simpuang ago, S.Sos), Pimpinan (Bpk Reski Faisal) & superadmin selalu menerima broadcast
+    const defaultLeadershipPhones = ['082291998026', '082192755755', '081355904897'];
     for (const dPhone of defaultLeadershipPhones) {
       const cleanD = dPhone.replace(/\D/g, '');
       const alreadySent = Array.from(sentNumbers).some(n => n.endsWith(cleanD.slice(-9)));
@@ -5289,6 +5289,7 @@ app.post('/api/leaves', async (req, res) => {
         `⚠️ Pengajuan ini diajukan oleh ${submitterTitle} dan membutuhkan verifikasi serta persetujuan resmi langsung dari *Direktur Utama & Pimpinan*.\n` +
         `🔗 Mohon konfirmasi persetujuan: https://103.197.188.211/admin/approval`;
 
+      await sendWhatsAppAlert({ phone: '082291998026', message: waMsg });
       await sendWhatsAppAlert({ phone: '082192755755', message: waMsg });
       await sendWhatsAppAlert({ phone: '081355904897', message: waMsg });
     } else {
@@ -5420,6 +5421,7 @@ app.put('/api/leaves/:id/status', async (req, res) => {
         (notes ? `Catatan: "${notes}"\n` : '') +
         `\nData telah tersimpan di database dan rekapan aktif di sisi Korlap, Admin, dan K3.`;
 
+      await sendWhatsAppAlert({ phone: '082291998026', message: fwdMsg });
       await sendWhatsAppAlert({ phone: '082192755755', message: fwdMsg });
       await sendWhatsAppAlert({ phone: '081355904897', message: fwdMsg });
     }
@@ -5605,6 +5607,7 @@ app.post('/api/overtime', async (req, res) => {
         `⚠️ Pengajuan ini diajukan oleh ${submitterTitle} dan membutuhkan verifikasi serta persetujuan resmi langsung dari *Direktur Utama & Pimpinan*.\n` +
         `🔗 Mohon konfirmasi: https://103.197.188.211/admin/approval`;
 
+      await sendWhatsAppAlert({ phone: '082291998026', message: waMsg });
       await sendWhatsAppAlert({ phone: '082192755755', message: waMsg });
       await sendWhatsAppAlert({ phone: '081355904897', message: waMsg });
     } else {
@@ -5710,6 +5713,7 @@ app.put('/api/overtime/:id/status', async (req, res) => {
         (notes ? `Catatan: "${notes}"\n` : '') +
         `\nData tersimpan di database dan rekapan aktif di sisi Korlap, Admin, dan K3.`;
 
+      await sendWhatsAppAlert({ phone: '082291998026', message: fwdOtMsg });
       await sendWhatsAppAlert({ phone: '082192755755', message: fwdOtMsg });
       await sendWhatsAppAlert({ phone: '081355904897', message: fwdOtMsg });
     }

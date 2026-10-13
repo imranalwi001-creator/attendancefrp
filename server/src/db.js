@@ -519,6 +519,8 @@ export async function initDb() {
         ('wa_gateway_sender', ''),
         ('wa_superadmin_phone', '081355904897'),
         ('wa_pimpinan_phone', '082192755755'),
+        ('wa_dirut_phone', '082291998026'),
+        ('wa_dirut_name', 'Alam AS simpuang ago, S.Sos'),
         ('break_policy_enabled', 'true'),
         ('break_duration_minutes', '60'),
         ('break_allow_outside', 'true'),

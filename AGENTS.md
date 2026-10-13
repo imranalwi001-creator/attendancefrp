@@ -18,9 +18,12 @@ Pimpinan PT FRP memberikan instruksi ketat untuk pengawasan **3 Karyawan Khusus 
   - Setiap penambahan titik baru **TIDAK MENIMPA / MENGHAPUS** titik yang sudah ada sebelumnya. Semua titik tersimpan sekaligus sebagai daftar pos aktif.
   - Karyawan bebas melakukan **Clock-In dan Clock-Out** di titik radius pos manapun yang terdaftar di bank pos mereka.
 - **Deteksi Otomatis & Notifikasi Dual-Channel (In-App + WhatsApp)**:
-  - Begitu karyawan berada di radius Pos A -> Kirim notifikasi sistem dan WhatsApp instan dari nomor sistem (`087812379189`) ke nomor Superadmin (`081355904897`) dan Pimpinan (`082192755755` - Bpk Reski Faisal).
+  - Begitu karyawan berada di radius Pos A -> Kirim notifikasi sistem dan WhatsApp instan dari nomor sistem (`087812379189`) ke nomor Superadmin (`081355904897`), Pimpinan (`082192755755` - Bpk Reski Faisal), dan Direktur Utama (`082291998026` - Bpk Alam AS simpuang ago, S.Sos).
   - Begitu karyawan bergeser dan berada di radius Pos B -> Otomatis perbarui status dan kirim WhatsApp instan bahwa karyawan telah berada di Pos B.
   - Jika karyawan keluar dari seluruh pos (Perimeter Breach) -> Sistem dan WhatsApp memicu alarm pelanggaran area tugas.
+- **Alur Persetujuan Bertingkat (Dual-Tier Approval)**:
+  - **3 Petugas Lapangan Khusus:** Pengajuan cuti/izin/lembur wajib disetujui langsung oleh **Direktur Utama (Dirut: 082291998026)** dan **Pimpinan (082192755755)**, dengan notifikasi instan via WhatsApp dan in-app Superadmin.
+  - **Karyawan Reguler:** Pengajuan diajukan ke **Korlap, K3, dan Admin** (salah satu dari 3 memberikan persetujuan / First-Responder Rule) dengan notifikasi WhatsApp serentak ke ketiganya.
 - **Forensic Watermarking & Spot-Check Biometrik**:
   - Foto verifikasi wajah dilengkapi watermark permanen (Canvas level pixel): Logo Instansi, Nama/NIP, Nama Pos, Latitude, Longitude, Akurasi GPS, Waktu WITA, dan Biometric Confidence Score 1:1.
 
