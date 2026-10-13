@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService } from '@/services/hrmService';
 import { LeaveRequest, LeaveType, OvertimeRecord } from '@/types/hrm';
+import { cn } from '@/lib/utils';
 import {
   CalendarCheck2,
   Plus,
@@ -18,6 +19,13 @@ import {
   Coins,
   Calculator,
   Zap,
+  Users,
+  User,
+  ExternalLink,
+  ShieldCheck,
+  FileCheck2,
+  ArrowRight,
+  Info,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,11 +40,23 @@ import { DatePicker } from '@/components/ui/date-picker';
 
 export const HrmLeavePage: React.FC = () => {
   const { user } = useHrmAuth();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<'leaves' | 'overtime'>('leaves');
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
+
+  // Supervisor & Officer View State
+  const userRole = (user?.roleName || user?.role || '').toLowerCase();
+  const isSupervisorRole = ['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'pengawas', 'korlap', 'k3'].includes(userRole);
+  const [viewScope, setViewScope] = useState<'incoming' | 'personal'>(isSupervisorRole ? 'incoming' : 'personal');
+  const [allLeaves, setAllLeaves] = useState<LeaveRequest[]>([]);
+  const [allOvertimes, setAllOvertimes] = useState<OvertimeRecord[]>([]);
+
+  // Detail Modal States
+  const [selectedDetailLeave, setSelectedDetailLeave] = useState<LeaveRequest | null>(null);
+  const [selectedDetailOt, setSelectedDetailOt] = useState<OvertimeRecord | null>(null);
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -81,6 +101,8 @@ export const HrmLeavePage: React.FC = () => {
     if (!user) return;
     setLeaves(hrmService.getUserLeaves(user.id));
     setOvertimes(hrmService.getUserOvertimeRecords(user.id));
+    setAllLeaves(hrmService.getLeaves());
+    setAllOvertimes(hrmService.getOvertimeRecords());
     setAllUsers(hrmService.getUsers());
   };
 
@@ -419,39 +441,119 @@ export const HrmLeavePage: React.FC = () => {
       {/* History Table: Leaves or Overtime */}
       {activeTab === 'leaves' ? (
         <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
-          <CardHeader>
-            <CardTitle className="text-base font-semibold text-foreground">
-              Riwayat Permohonan Izin & Cuti Anda
-            </CardTitle>
-            <CardDescription className="text-xs">
-              Daftar seluruh pengajuan izin, sakit, dinas luar, dan cuti beserta status persetujuan dari HRD/Atasan.
-            </CardDescription>
+          <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/60 pb-4">
+            <div>
+              <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
+                <CalendarCheck2 className="w-5 h-5 text-primary" />
+                {isSupervisorRole && viewScope === 'incoming'
+                  ? 'Daftar Pengajuan Cuti / Izin Karyawan'
+                  : 'Riwayat Permohonan Izin & Cuti Anda'}
+              </CardTitle>
+              <CardDescription className="text-xs">
+                {isSupervisorRole && viewScope === 'incoming'
+                  ? 'Daftar seluruh permohonan izin, sakit, dan cuti yang diajukan oleh staf dan karyawan lapangan.'
+                  : 'Daftar seluruh pengajuan izin, sakit, dinas luar, dan cuti beserta status persetujuan dari HRD/Atasan.'}
+              </CardDescription>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              {isSupervisorRole && (
+                <div className="flex items-center gap-1 p-1 bg-muted/60 border border-border rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setViewScope('incoming')}
+                    className={cn(
+                      'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5',
+                      viewScope === 'incoming'
+                        ? 'bg-card text-foreground shadow-xs border border-border'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    <Users className="w-3.5 h-3.5 text-primary" />
+                    <span>Masuk Karyawan</span>
+                    {allLeaves.filter((l) => l.status === 'pending').length > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-white text-[10px] font-bold">
+                        {allLeaves.filter((l) => l.status === 'pending').length}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewScope('personal')}
+                    className={cn(
+                      'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5',
+                      viewScope === 'personal'
+                        ? 'bg-card text-foreground shadow-xs border border-border'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    <User className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span>Pribadi Anda</span>
+                  </button>
+                </div>
+              )}
+
+              {isSupervisorRole && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate('/admin/approval?tab=leaves')}
+                  className="rounded-xl text-xs h-8 border-primary/20 text-primary hover:bg-primary/10 gap-1.5 font-semibold"
+                >
+                  <FileCheck2 className="w-3.5 h-3.5" />
+                  Pusat Persetujuan
+                  <ArrowRight className="w-3 h-3 ml-0.5" />
+                </Button>
+              )}
+            </div>
           </CardHeader>
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs text-foreground">
-              <thead className="bg-muted/40 border-y border-border uppercase text-[11px] text-muted-foreground font-medium tracking-wider">
+              <thead className="bg-muted/40 border-b border-border uppercase text-[11px] text-muted-foreground font-medium tracking-wider">
                 <tr>
+                  {isSupervisorRole && viewScope === 'incoming' && (
+                    <th className="py-3 px-4">Karyawan (Pemohon)</th>
+                  )}
                   <th className="py-3 px-4">Jenis Permohonan</th>
                   <th className="py-3 px-4">Rentang Tanggal</th>
                   <th className="py-3 px-4">Durasi</th>
                   <th className="py-3 px-4">Alasan</th>
                   <th className="py-3 px-4">Bukti / Foto</th>
+                  <th className="py-3 px-4">Petugas Pengganti</th>
                   <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Catatan Approver</th>
+                  <th className="py-3 px-4 text-right">Tindakan</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {leaves.length === 0 ? (
+                {(isSupervisorRole && viewScope === 'incoming' ? allLeaves : leaves).length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-8 text-center text-muted-foreground">
-                      Belum ada riwayat permohonan izin atau cuti.
+                    <td
+                      colSpan={isSupervisorRole && viewScope === 'incoming' ? 9 : 8}
+                      className="py-12 text-center text-muted-foreground"
+                    >
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <CalendarCheck2 className="w-8 h-8 text-muted-foreground/40" />
+                        <p className="font-medium text-xs">
+                          {isSupervisorRole && viewScope === 'incoming'
+                            ? 'Belum ada berkas permohonan izin atau cuti yang diajukan oleh staf.'
+                            : 'Belum ada riwayat permohonan izin atau cuti pribadi Anda.'}
+                        </p>
+                      </div>
                     </td>
                   </tr>
                 ) : (
-                  leaves.map((l) => (
-                    <tr key={l.id} className="hover:bg-muted/30">
-                      <td className="py-3 px-4 font-semibold text-foreground">
+                  (isSupervisorRole && viewScope === 'incoming' ? allLeaves : leaves).map((l) => (
+                    <tr key={l.id} className="hover:bg-muted/30 transition-colors">
+                      {isSupervisorRole && viewScope === 'incoming' && (
+                        <td className="py-3 px-4">
+                          <p className="font-semibold text-foreground">{l.userName}</p>
+                          <p className="text-[11px] text-muted-foreground font-mono">
+                            {l.userNip || '-'} • {l.divisionName || 'Operasional'}
+                          </p>
+                        </td>
+                      )}
+                      <td className="py-3 px-4 font-semibold text-foreground uppercase text-[11px]">
                         {getLeaveTypeLabel(l.leaveType)}
                       </td>
                       <td className="py-3 px-4 text-muted-foreground font-mono text-[11px]">
@@ -479,17 +581,46 @@ export const HrmLeavePage: React.FC = () => {
                         )}
                       </td>
                       <td className="py-3 px-4">
-                        <div className="space-y-1">
-                          {getStatusBadge(l.status)}
-                          {l.substituteName && (
-                            <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
-                              Pengganti: <strong>{l.substituteName}</strong> {l.substituteNip ? `(${l.substituteNip})` : ''}
-                            </div>
+                        {l.substituteName ? (
+                          <div className="text-[11px] text-foreground font-medium">
+                            {l.substituteName}
+                            {l.substituteNip && (
+                              <span className="text-[10px] text-muted-foreground block font-mono">
+                                ({l.substituteNip})
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-amber-600 dark:text-amber-400 italic">
+                            Belum ditetapkan
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
+                        {getStatusBadge(l.status)}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSelectedDetailLeave(l)}
+                            className="h-7 text-[11px] gap-1 px-2.5 rounded-lg border-border text-foreground hover:bg-muted font-medium"
+                          >
+                            <Eye className="w-3 h-3 text-primary" />
+                            Detail
+                          </Button>
+                          {isSupervisorRole && l.status === 'pending' && (
+                            <Button
+                              size="sm"
+                              onClick={() => navigate('/admin/approval?tab=leaves')}
+                              className="h-7 text-[11px] gap-1 px-2.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+                            >
+                              <FileCheck2 className="w-3 h-3" />
+                              Tindak Lanjut
+                            </Button>
                           )}
                         </div>
-                      </td>
-                      <td className="py-3 px-4 text-muted-foreground italic text-[11px]">
-                        {l.approvalNotes ? `${l.approvalNotes} (oleh ${l.approvedByName || 'HRD'})` : '-'}
                       </td>
                     </tr>
                   ))
@@ -500,23 +631,70 @@ export const HrmLeavePage: React.FC = () => {
         </Card>
       ) : (
         <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
-          <CardHeader>
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-                  <Coins className="w-4 h-4 text-primary" />
-                  Riwayat Surat Perintah Lembur (SPL) Anda
-                </CardTitle>
-                <CardDescription className="text-xs">
-                  Catatan jam kerja lembur dan rincian uang lembur yang akan diterima pada periode penggajian.
-                </CardDescription>
-              </div>
+          <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/60 pb-4">
+            <div>
+              <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
+                <Coins className="w-5 h-5 text-primary" />
+                {isSupervisorRole && viewScope === 'incoming'
+                  ? 'Daftar Surat Perintah Lembur (SPL) Karyawan'
+                  : 'Riwayat Surat Perintah Lembur (SPL) Anda'}
+              </CardTitle>
+              <CardDescription className="text-xs">
+                {isSupervisorRole && viewScope === 'incoming'
+                  ? 'Catatan jam kerja lembur yang diajukan oleh seluruh staf dan tim lapangan.'
+                  : 'Catatan jam kerja lembur dan rincian uang lembur yang akan diterima pada periode penggajian.'}
+              </CardDescription>
+            </div>
 
-              <div className="flex items-center gap-2">
-                <span className="px-3 py-1 rounded-lg bg-primary/10 text-primary text-xs font-mono font-bold">
-                  Total Disetujui: Rp {Number(approvedUserOtPay || 0).toLocaleString('id-ID')}
-                </span>
-              </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {isSupervisorRole && (
+                <div className="flex items-center gap-1 p-1 bg-muted/60 border border-border rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setViewScope('incoming')}
+                    className={cn(
+                      'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5',
+                      viewScope === 'incoming'
+                        ? 'bg-card text-foreground shadow-xs border border-border'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    <Users className="w-3.5 h-3.5 text-primary" />
+                    <span>Masuk Karyawan</span>
+                    {allOvertimes.filter((o) => o.status === 'pending').length > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-white text-[10px] font-bold">
+                        {allOvertimes.filter((o) => o.status === 'pending').length}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewScope('personal')}
+                    className={cn(
+                      'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5',
+                      viewScope === 'personal'
+                        ? 'bg-card text-foreground shadow-xs border border-border'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    <User className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span>Pribadi Anda</span>
+                  </button>
+                </div>
+              )}
+
+              {isSupervisorRole && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate('/admin/approval?tab=overtime')}
+                  className="rounded-xl text-xs h-8 border-primary/20 text-primary hover:bg-primary/10 gap-1.5 font-semibold"
+                >
+                  <FileCheck2 className="w-3.5 h-3.5" />
+                  Pusat Persetujuan
+                  <ArrowRight className="w-3 h-3 ml-0.5" />
+                </Button>
+              )}
             </div>
           </CardHeader>
 
@@ -524,6 +702,9 @@ export const HrmLeavePage: React.FC = () => {
             <table className="w-full text-left text-xs text-foreground">
               <thead className="bg-muted/40 border-y border-border uppercase text-[11px] text-muted-foreground font-medium tracking-wider">
                 <tr>
+                  {isSupervisorRole && viewScope === 'incoming' && (
+                    <th className="py-3 px-4">Karyawan</th>
+                  )}
                   <th className="py-3 px-4">Tanggal & Jam</th>
                   <th className="py-3 px-4">Kategori Hari</th>
                   <th className="py-3 px-4">Durasi Jam</th>
@@ -531,21 +712,40 @@ export const HrmLeavePage: React.FC = () => {
                   <th className="py-3 px-4">Uraian Tugas Pekerjaan</th>
                   <th className="py-3 px-4">Status Approval</th>
                   <th className="py-3 px-4">Status Pencairan</th>
+                  <th className="py-3 px-4 text-right">Tindakan</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {overtimes.length === 0 ? (
+                {(isSupervisorRole && viewScope === 'incoming' ? allOvertimes : overtimes).length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-8 text-center text-muted-foreground">
-                      Belum ada catatan lembur yang diajukan.
+                    <td
+                      colSpan={isSupervisorRole && viewScope === 'incoming' ? 9 : 8}
+                      className="py-12 text-center text-muted-foreground"
+                    >
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Coins className="w-8 h-8 text-muted-foreground/40" />
+                        <p className="font-medium text-xs">
+                          {isSupervisorRole && viewScope === 'incoming'
+                            ? 'Belum ada catatan lembur yang diajukan oleh staf.'
+                            : 'Belum ada catatan lembur yang Anda ajukan.'}
+                        </p>
+                      </div>
                     </td>
                   </tr>
                 ) : (
-                  overtimes.map((o) => (
-                    <tr key={o.id} className="hover:bg-muted/30">
+                  (isSupervisorRole && viewScope === 'incoming' ? allOvertimes : overtimes).map((o) => (
+                    <tr key={o.id} className="hover:bg-muted/30 transition-colors">
+                      {isSupervisorRole && viewScope === 'incoming' && (
+                        <td className="py-3 px-4">
+                          <p className="font-semibold text-foreground">{o.userName}</p>
+                          <p className="text-[11px] text-muted-foreground font-mono">
+                            {o.userNip || '-'} • {o.divisionName || 'Operasional'}
+                          </p>
+                        </td>
+                      )}
                       <td className="py-3 px-4 font-mono text-[11px]">
                         <p className="font-semibold text-foreground">{o.date}</p>
-                        <p className="text-muted-foreground">{o.startTime} - {o.endTime} WIB</p>
+                        <p className="text-muted-foreground">{o.startTime} - {o.endTime} WITA</p>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
                         {o.isWeekendHoliday ? (
@@ -590,6 +790,29 @@ export const HrmLeavePage: React.FC = () => {
                             Belum Cair
                           </span>
                         )}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSelectedDetailOt(o)}
+                            className="h-7 text-[11px] gap-1 px-2.5 rounded-lg border-border text-foreground hover:bg-muted font-medium"
+                          >
+                            <Eye className="w-3 h-3 text-primary" />
+                            Detail
+                          </Button>
+                          {isSupervisorRole && o.status === 'pending' && (
+                            <Button
+                              size="sm"
+                              onClick={() => navigate('/admin/approval?tab=overtime')}
+                              className="h-7 text-[11px] gap-1 px-2.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+                            >
+                              <FileCheck2 className="w-3 h-3" />
+                              Tindak Lanjut
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -972,6 +1195,269 @@ export const HrmLeavePage: React.FC = () => {
             <Button onClick={() => setPreviewAttachment(null)} className="rounded-xl">
               Tutup
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Leave Detail Modal */}
+      <Dialog open={!!selectedDetailLeave} onOpenChange={() => setSelectedDetailLeave(null)}>
+        <DialogContent className="max-w-xl rounded-2xl p-0 overflow-hidden">
+          <DialogHeader className="p-5 pb-3 bg-muted/30 border-b border-border">
+            <DialogTitle className="flex items-center gap-2 text-base font-bold text-foreground">
+              <CalendarCheck2 className="w-5 h-5 text-primary" />
+              Detail Lengkap Permohonan Cuti / Izin
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Verifikasi rincian data pemohon, alasan, bukti pendukung, dan petugas pengganti pos.
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedDetailLeave && (() => {
+            const applicantUser = allUsers.find(
+              (u) => u.id === selectedDetailLeave.userId || u.nip === selectedDetailLeave.userNip
+            );
+            const quota = applicantUser?.annualLeaveQuota || 12;
+            const used = applicantUser?.usedLeaveDays || 0;
+            const remaining = Math.max(0, quota - used);
+
+            return (
+              <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
+                {/* Applicant Card */}
+                <div className="p-3.5 bg-muted/40 border border-border rounded-xl flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-sm">
+                      {selectedDetailLeave.userName.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="font-bold text-sm text-foreground">{selectedDetailLeave.userName}</p>
+                      <p className="text-[11px] text-muted-foreground font-mono">
+                        NIP: {selectedDetailLeave.userNip || '-'} • Divisi: {selectedDetailLeave.divisionName || 'Operasional'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20 font-mono">
+                      Sisa Cuti: {remaining} Hari
+                    </Badge>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Dari total {quota} hari</p>
+                  </div>
+                </div>
+
+                {/* Leave Info Grid */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 bg-card border border-border rounded-xl space-y-1">
+                    <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Jenis Permohonan</span>
+                    <p className="font-bold text-foreground text-xs uppercase">{getLeaveTypeLabel(selectedDetailLeave.leaveType)}</p>
+                  </div>
+                  <div className="p-3 bg-card border border-border rounded-xl space-y-1">
+                    <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Durasi Permohonan</span>
+                    <p className="font-bold text-foreground text-xs">{selectedDetailLeave.totalDays} Hari Kerja</p>
+                  </div>
+                  <div className="p-3 bg-card border border-border rounded-xl space-y-1 col-span-2">
+                    <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Rentang Tanggal</span>
+                    <p className="font-semibold text-foreground text-xs font-mono">{selectedDetailLeave.startDate} s/d {selectedDetailLeave.endDate}</p>
+                  </div>
+                </div>
+
+                {/* Reason */}
+                <div className="p-3.5 bg-card border border-border rounded-xl space-y-1.5">
+                  <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Alasan Permohonan:</span>
+                  <p className="text-foreground leading-relaxed bg-muted/30 p-2.5 rounded-lg border border-border/50 text-xs">
+                    "{selectedDetailLeave.reason || 'Tidak ada alasan tertulis.'}"
+                  </p>
+                </div>
+
+                {/* Substitute Officer (Zero Vacancy) */}
+                <div className="p-3.5 bg-card border border-border rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10.5px] text-muted-foreground font-medium uppercase flex items-center gap-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                      Petugas Pengganti Pos (Zero Vacancy):
+                    </span>
+                    {selectedDetailLeave.substituteName ? (
+                      <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px]">
+                        Sudah Ditetapkan
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-amber-600 border-amber-500/30 text-[10px]">
+                        Belum Ditetapkan
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-foreground font-semibold text-xs">
+                    {selectedDetailLeave.substituteName ? (
+                      <>
+                        {selectedDetailLeave.substituteName}{' '}
+                        {selectedDetailLeave.substituteNip && (
+                          <span className="font-mono text-muted-foreground">({selectedDetailLeave.substituteNip})</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground italic font-normal">
+                        Belum ada karyawan pengganti yang ditugaskan. Korlap, Admin, atau K3 wajib menetapkan satu pengganti saat menyetujui permohonan.
+                      </span>
+                    )}
+                  </p>
+                </div>
+
+                {/* Attachment */}
+                <div className="p-3.5 bg-card border border-border rounded-xl space-y-2">
+                  <span className="text-[10.5px] text-muted-foreground font-medium uppercase flex items-center gap-1">
+                    <ImageIcon className="w-3.5 h-3.5 text-primary" />
+                    Lampiran Bukti Dokumen / Foto:
+                  </span>
+                  {selectedDetailLeave.attachmentUrl ? (
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={selectedDetailLeave.attachmentUrl}
+                        alt="Bukti"
+                        className="w-16 h-16 rounded-lg object-cover border border-border shadow-xs cursor-pointer hover:opacity-90"
+                        onClick={() => setPreviewAttachment(selectedDetailLeave.attachmentUrl!)}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPreviewAttachment(selectedDetailLeave.attachmentUrl!)}
+                        className="h-8 text-xs gap-1.5 rounded-lg border-border"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-primary" />
+                        Perbesar Lampiran Foto
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground italic text-xs">Tidak ada lampiran foto.</p>
+                  )}
+                </div>
+
+                {/* Status & Approver */}
+                <div className="p-3.5 bg-card border border-border rounded-xl flex items-center justify-between">
+                  <div>
+                    <span className="text-[10.5px] text-muted-foreground font-medium uppercase block">Status Persetujuan:</span>
+                    <div className="mt-1">{getStatusBadge(selectedDetailLeave.status)}</div>
+                  </div>
+                  {selectedDetailLeave.approvedByName && (
+                    <div className="text-right">
+                      <span className="text-[10.5px] text-muted-foreground font-medium uppercase block">Diproses Oleh:</span>
+                      <p className="font-semibold text-foreground text-xs mt-0.5">{selectedDetailLeave.approvedByName}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          <DialogFooter className="p-4 bg-muted/20 border-t border-border flex items-center justify-between gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setSelectedDetailLeave(null)} className="rounded-xl text-xs">
+              Tutup
+            </Button>
+            {isSupervisorRole && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setSelectedDetailLeave(null);
+                  navigate('/admin/approval?tab=leaves');
+                }}
+                className="bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs gap-1.5 font-semibold"
+              >
+                <FileCheck2 className="w-3.5 h-3.5" />
+                Buka di Pusat Persetujuan
+                <ArrowRight className="w-3 h-3 ml-0.5" />
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Overtime Detail Modal */}
+      <Dialog open={!!selectedDetailOt} onOpenChange={() => setSelectedDetailOt(null)}>
+        <DialogContent className="max-w-xl rounded-2xl p-0 overflow-hidden">
+          <DialogHeader className="p-5 pb-3 bg-muted/30 border-b border-border">
+            <DialogTitle className="flex items-center gap-2 text-base font-bold text-foreground">
+              <Coins className="w-5 h-5 text-primary" />
+              Detail Surat Perintah Lembur (SPL)
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Rincian jam pelaksanaan lembur, estimasi upah kompensasi, dan tugas pekerjaan.
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedDetailOt && (
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
+              {/* Applicant Card */}
+              <div className="p-3.5 bg-muted/40 border border-border rounded-xl flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-sm">
+                    {selectedDetailOt.userName.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="font-bold text-sm text-foreground">{selectedDetailOt.userName}</p>
+                    <p className="text-[11px] text-muted-foreground font-mono">
+                      NIP: {selectedDetailOt.userNip || '-'} • Divisi: {selectedDetailOt.divisionName || 'Operasional'}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-bold text-primary font-mono block">
+                    Rp {Number(selectedDetailOt.totalPay ?? selectedDetailOt.compensationAmount ?? 0).toLocaleString('id-ID')}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">Kompensasi Upah</span>
+                </div>
+              </div>
+
+              {/* Time & Duration */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-card border border-border rounded-xl space-y-1">
+                  <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Tanggal Lembur</span>
+                  <p className="font-bold text-foreground text-xs font-mono">{selectedDetailOt.date}</p>
+                </div>
+                <div className="p-3 bg-card border border-border rounded-xl space-y-1">
+                  <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Durasi Jam</span>
+                  <p className="font-bold text-foreground text-xs">{selectedDetailOt.durationHours} Jam ({selectedDetailOt.startTime} - {selectedDetailOt.endTime} WITA)</p>
+                </div>
+              </div>
+
+              {/* Task Description */}
+              <div className="p-3.5 bg-card border border-border rounded-xl space-y-1.5">
+                <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Uraian Tugas Pekerjaan:</span>
+                <p className="text-foreground leading-relaxed bg-muted/30 p-2.5 rounded-lg border border-border/50 text-xs">
+                  "{selectedDetailOt.taskDescription || 'Tidak ada deskripsi pekerjaan.'}"
+                </p>
+              </div>
+
+              {/* Status */}
+              <div className="p-3.5 bg-card border border-border rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="text-[10.5px] text-muted-foreground font-medium uppercase block">Status Verifikasi:</span>
+                  <div className="mt-1">{getStatusBadge(selectedDetailOt.status)}</div>
+                </div>
+                <div>
+                  <span className="text-[10.5px] text-muted-foreground font-medium uppercase block">Pencairan Dana:</span>
+                  <span className="text-xs font-semibold text-foreground mt-0.5 block">
+                    {selectedDetailOt.paymentStatus === 'paid' ? 'Sudah Ditransfer' : 'Belum Dicairkan'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="p-4 bg-muted/20 border-t border-border flex items-center justify-between gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setSelectedDetailOt(null)} className="rounded-xl text-xs">
+              Tutup
+            </Button>
+            {isSupervisorRole && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setSelectedDetailOt(null);
+                  navigate('/admin/approval?tab=overtime');
+                }}
+                className="bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs gap-1.5 font-semibold"
+              >
+                <FileCheck2 className="w-3.5 h-3.5" />
+                Buka di Pusat Persetujuan
+                <ArrowRight className="w-3 h-3 ml-0.5" />
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

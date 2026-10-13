@@ -138,6 +138,10 @@ export const HrmApprovalPage: React.FC = () => {
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<string | null>(null);
 
+  // Leave Detail View Modal State
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const [leaveForDetail, setLeaveForDetail] = useState<LeaveRequest | null>(null);
+
   // Substitute & 1-Year History State for Leave Approval
   const [applicantHistoryLeaves, setApplicantHistoryLeaves] = useState<LeaveRequest[]>([]);
   const [applicantQuotaInfo, setApplicantQuotaInfo] = useState<{ totalQuota: number; usedDays: number; remaining: number }>({ totalQuota: 14, usedDays: 0, remaining: 14 });
@@ -906,42 +910,58 @@ export const HrmApprovalPage: React.FC = () => {
                         )}
                       </td>
                       <td className="py-3 px-4 text-right">
-                        {l.status === 'pending' ? (
-                          canCurrentApproveThis ? (
-                            <div className="flex items-center justify-end gap-1">
-                              <Button
-                                size="sm"
-                                onClick={() => handleOpenProcess(l, 'approved')}
-                                className="h-8 w-8 p-0 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors"
-                                title={isSup ? "Setujui Tingkat Direksi" : "Setujui Pengajuan (First-Responder)"}
-                              >
-                                <CheckCircle2 className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleOpenProcess(l, 'rejected')}
-                                className="h-8 w-8 p-0 text-destructive border-destructive/20 hover:bg-destructive/10 rounded-lg transition-colors"
-                                title="Tolak Pengajuan"
-                              >
-                                <XCircle className="w-4 h-4" />
-                              </Button>
-                            </div>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setLeaveForDetail(l);
+                              setDetailModalOpen(true);
+                            }}
+                            className="h-8 text-[11px] gap-1 px-2.5 rounded-lg border-border text-foreground hover:bg-muted font-medium"
+                            title="Lihat Detail Lengkap Pengajuan"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-primary" />
+                            Detail
+                          </Button>
+
+                          {l.status === 'pending' ? (
+                            canCurrentApproveThis ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleOpenProcess(l, 'approved')}
+                                  className="h-8 w-8 p-0 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors"
+                                  title={isSup ? "Setujui Tingkat Direksi" : "Setujui Pengajuan (First-Responder)"}
+                                >
+                                  <CheckCircle2 className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleOpenProcess(l, 'rejected')}
+                                  className="h-8 w-8 p-0 text-destructive border-destructive/20 hover:bg-destructive/10 rounded-lg transition-colors"
+                                  title="Tolak Pengajuan"
+                                >
+                                  <XCircle className="w-4 h-4" />
+                                </Button>
+                              </>
+                            ) : (
+                              <div className="flex flex-col items-end gap-0.5">
+                                <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30">
+                                  Wewenang Direksi
+                                </Badge>
+                                <span className="text-[9px] text-muted-foreground text-right">
+                                  Menunggu Dirut / Pimpinan
+                                </span>
+                              </div>
+                            )
                           ) : (
-                            <div className="flex flex-col items-end gap-0.5">
-                              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30">
-                                Wewenang Direksi
-                              </Badge>
-                              <span className="text-[9px] text-muted-foreground text-right">
-                                Menunggu Dirut / Pimpinan
-                              </span>
-                            </div>
-                          )
-                        ) : (
-                          <span className="text-[11px] text-muted-foreground italic">
-                            Selesai oleh {l.approvedByName || 'Approver'}
-                          </span>
-                        )}
+                            <span className="text-[10.5px] text-muted-foreground italic pl-1">
+                              {l.status === 'approved' ? 'Disetujui' : 'Ditolak'} ({l.approvedByName || 'Approver'})
+                            </span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                     );
@@ -1814,6 +1834,203 @@ export const HrmApprovalPage: React.FC = () => {
         </div>
       </div>
       )}
+
+      {/* Leave Detail View Dialog */}
+      <Dialog open={detailModalOpen} onOpenChange={setDetailModalOpen}>
+        <DialogContent className="max-w-xl rounded-2xl p-0 overflow-hidden">
+          <DialogHeader className="p-5 pb-3 bg-muted/30 border-b border-border">
+            <DialogTitle className="flex items-center gap-2 text-base font-bold text-foreground">
+              <CalendarCheck2 className="w-5 h-5 text-primary" />
+              Detail Lengkap Permohonan Cuti / Izin
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Verifikasi rincian data pemohon, alasan, bukti pendukung, dan petugas pengganti pos.
+            </DialogDescription>
+          </DialogHeader>
+
+          {leaveForDetail && (() => {
+            const applicantUser = users.find(
+              (u) => u.id === leaveForDetail.userId || u.nip === leaveForDetail.userNip
+            );
+            const quota = applicantUser?.annualLeaveQuota || 12;
+            const used = applicantUser?.usedLeaveDays || 0;
+            const remaining = Math.max(0, quota - used);
+            const isSup = isSupervisorApplicant(leaveForDetail.userId, leaveForDetail.userNip, (leaveForDetail as any).forwardedToPimpinan);
+
+            return (
+              <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
+                {/* Applicant Profile Card */}
+                <div className="p-3.5 bg-muted/40 border border-border rounded-xl flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-sm">
+                      {leaveForDetail.userName.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="font-bold text-sm text-foreground">{leaveForDetail.userName}</p>
+                      <p className="text-[11px] text-muted-foreground font-mono">
+                        NIP: {leaveForDetail.userNip || '-'} • Divisi: {leaveForDetail.divisionName || 'Operasional'}
+                      </p>
+                      {isSup && (
+                        <Badge variant="outline" className="mt-1 bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[9.5px] rounded-md font-semibold">
+                          👑 Pejabat Pengawas (Tier 2 Direksi)
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20 font-mono">
+                      Sisa Cuti: {remaining} Hari
+                    </Badge>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Dari total {quota} hari</p>
+                  </div>
+                </div>
+
+                {/* Grid Info */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 bg-card border border-border rounded-xl space-y-1">
+                    <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Jenis Permohonan</span>
+                    <p className="font-bold text-foreground text-xs uppercase">{leaveForDetail.leaveType.replace('_', ' ')}</p>
+                  </div>
+                  <div className="p-3 bg-card border border-border rounded-xl space-y-1">
+                    <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Durasi Permohonan</span>
+                    <p className="font-bold text-foreground text-xs">{leaveForDetail.totalDays} Hari Kerja</p>
+                  </div>
+                  <div className="p-3 bg-card border border-border rounded-xl space-y-1 col-span-2">
+                    <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Rentang Tanggal</span>
+                    <p className="font-semibold text-foreground text-xs font-mono">{leaveForDetail.startDate} s/d {leaveForDetail.endDate}</p>
+                  </div>
+                </div>
+
+                {/* Reason */}
+                <div className="p-3.5 bg-card border border-border rounded-xl space-y-1.5">
+                  <span className="text-[10.5px] text-muted-foreground font-medium uppercase">Alasan Karyawan:</span>
+                  <p className="text-foreground leading-relaxed bg-muted/30 p-2.5 rounded-lg border border-border/50 text-xs">
+                    "{leaveForDetail.reason || 'Tidak ada alasan tertulis.'}"
+                  </p>
+                </div>
+
+                {/* Substitute Officer (Zero Vacancy) */}
+                <div className="p-3.5 bg-card border border-border rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10.5px] text-muted-foreground font-medium uppercase flex items-center gap-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                      Petugas Pengganti Pos (Zero Vacancy):
+                    </span>
+                    {leaveForDetail.substituteName ? (
+                      <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px]">
+                        Sudah Ditetapkan
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-amber-600 border-amber-500/30 text-[10px]">
+                        Belum Ditetapkan
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-foreground font-semibold text-xs">
+                    {leaveForDetail.substituteName ? (
+                      <>
+                        {leaveForDetail.substituteName}{' '}
+                        {leaveForDetail.substituteNip && (
+                          <span className="font-mono text-muted-foreground">({leaveForDetail.substituteNip})</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground italic font-normal">
+                        Belum ada karyawan pengganti yang ditugaskan. Korlap, Admin, atau K3 wajib menetapkan satu pengganti saat menyetujui.
+                      </span>
+                    )}
+                  </p>
+                </div>
+
+                {/* Attachment */}
+                <div className="p-3.5 bg-card border border-border rounded-xl space-y-2">
+                  <span className="text-[10.5px] text-muted-foreground font-medium uppercase flex items-center gap-1">
+                    <ImageIcon className="w-3.5 h-3.5 text-primary" />
+                    Lampiran Bukti Dokumen / Foto:
+                  </span>
+                  {leaveForDetail.attachmentUrl ? (
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={leaveForDetail.attachmentUrl}
+                        alt="Bukti"
+                        className="w-16 h-16 rounded-lg object-cover border border-border shadow-xs cursor-pointer hover:opacity-90"
+                        onClick={() => setPreviewAttachment(leaveForDetail.attachmentUrl!)}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPreviewAttachment(leaveForDetail.attachmentUrl!)}
+                        className="h-8 text-xs gap-1.5 rounded-lg border-border"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-primary" />
+                        Perbesar Lampiran Foto
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground italic text-xs">Tidak ada lampiran foto.</p>
+                  )}
+                </div>
+
+                {/* Status & Approver */}
+                <div className="p-3.5 bg-card border border-border rounded-xl flex items-center justify-between">
+                  <div>
+                    <span className="text-[10.5px] text-muted-foreground font-medium uppercase block">Status Persetujuan:</span>
+                    <Badge variant="outline" className={`mt-1 text-[10px] rounded-md ${
+                      leaveForDetail.status === 'approved' ? 'bg-primary/10 text-primary border-primary/20' :
+                      leaveForDetail.status === 'rejected' ? 'bg-destructive/10 text-destructive border-destructive/20' :
+                      'bg-muted text-muted-foreground border-border'
+                    }`}>
+                      {leaveForDetail.status === 'approved' ? 'Disetujui' : leaveForDetail.status === 'rejected' ? 'Ditolak' : 'Menunggu Persetujuan (Pending)'}
+                    </Badge>
+                  </div>
+                  {leaveForDetail.approvedByName && (
+                    <div className="text-right">
+                      <span className="text-[10.5px] text-muted-foreground font-medium uppercase block">Diproses Oleh:</span>
+                      <p className="font-semibold text-foreground text-xs mt-0.5">{leaveForDetail.approvedByName}</p>
+                      {leaveForDetail.approvalNotes && (
+                        <p className="text-[10.5px] text-muted-foreground italic mt-0.5">"{leaveForDetail.approvalNotes}"</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          <DialogFooter className="p-4 bg-muted/20 border-t border-border flex items-center justify-between gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setDetailModalOpen(false)} className="rounded-xl text-xs">
+              Tutup
+            </Button>
+            {leaveForDetail && leaveForDetail.status === 'pending' && canApprove && (
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const l = leaveForDetail;
+                    setDetailModalOpen(false);
+                    handleOpenProcess(l, 'rejected');
+                  }}
+                  className="rounded-xl text-xs text-destructive border-destructive/20 hover:bg-destructive/10"
+                >
+                  Tolak
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    const l = leaveForDetail;
+                    setDetailModalOpen(false);
+                    handleOpenProcess(l, 'approved');
+                  }}
+                  className="bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl text-xs font-semibold"
+                >
+                  Setujui Permohonan
+                </Button>
+              </div>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Leave Decision Dialog */}
       <Dialog open={modalOpen} onOpenChange={setModalOpen}>

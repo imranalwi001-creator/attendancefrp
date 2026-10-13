@@ -220,13 +220,13 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       label: 'Persetujuan Izin',
       path: '/admin/approval',
       icon: FileCheck2,
-      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu'],
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'k3', 'kepala_regu'],
     },
     {
       label: 'Monitoring Presensi',
       path: '/admin/monitoring',
       icon: UserCheck,
-      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu'],
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'k3', 'kepala_regu'],
     },
     {
       label: 'Data Presensi',
@@ -429,7 +429,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
                   refreshNotifications();
                   
                   // Role-based smart tab routing
-                  if (['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas'].includes(currentRole)) {
+                  if (['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'pengawas', 'korlap', 'k3'].includes(currentRole)) {
                     const isOt = n.type === 'overtime' || (n.title || '').toLowerCase().includes('lembur');
                     navigate(`/admin/approval?tab=${isOt ? 'overtime' : 'leaves'}`);
                   } else {
@@ -488,7 +488,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
             ))}
           </div>
         )}
-        {['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas'].includes(currentRole) && (
+        {['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'pengawas', 'korlap', 'k3'].includes(currentRole) && (
           <div className="p-2 border-t border-border bg-muted/20 text-center sticky bottom-0 backdrop-blur-xs">
             <Button
               variant="outline"
