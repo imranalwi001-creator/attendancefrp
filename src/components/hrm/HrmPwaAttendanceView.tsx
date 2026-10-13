@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
-import { hrmService, getTodayDateStr, normalizeAttendanceRecord } from '@/services/hrmService';
+import { hrmService, getTodayDateStr, normalizeAttendanceRecord, normalizeDateString } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
 import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
 import {
