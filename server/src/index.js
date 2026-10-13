@@ -3601,8 +3601,8 @@ app.post('/api/attendances/clock-out', async (req, res) => {
 
     const isExempt = isExemptFieldOfficer(userProfile);
 
-    // Validasi Jam Pulang Shift Karyawan (Server-side Clock-Out Enforcement)
-    if (!isExempt && userProfile) {
+    // Validasi Jam Pulang Shift Karyawan (Server-side Clock-Out Enforcement - Berlaku untuk Seluruh Karyawan Termasuk 3 Petugas Lapangan)
+    if (userProfile) {
       const leaveRes = await pool.query(
         `SELECT id FROM hrm_leave_requests WHERE user_id = $1 AND leave_type IN ('emergency_leave', 'izin_darurat') AND status = 'approved' AND $2 BETWEEN start_date AND end_date LIMIT 1`,
         [userId, date]
@@ -5272,19 +5272,21 @@ app.post('/api/leaves', async (req, res) => {
     const leaveRow = result.rows[0];
     const typeLabel = type.replace(/_/g, ' ').toUpperCase();
     const submitterRole = (userProfile.role_name || userProfile.role_code || '').toLowerCase();
-    const isOfficer = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r));
+    const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
+    const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
 
     let recipientRoles = [];
-    if (isOfficer) {
-      // 👔 TIER 2: Pengajuan dari Pejabat Pengawas (Korlap, Admin, K3) -> ke Direktur Utama (Dirut) & Pimpinan
+    if (requiresLeadershipApproval) {
+      // 👔 TIER 2: Pengajuan dari 3 Petugas Lapangan Khusus Pimpinan atau Pejabat Pengawas -> ke Direktur Utama (Dirut) & Pimpinan
       recipientRoles = ['pimpinan', 'dirut', 'superadmin'];
-      const waMsg = `📢 *PENGAJUAN ${typeLabel} DARI PEJABAT PENGAWAS (${submitterRole.toUpperCase()})*\n\n` +
+      const submitterTitle = isSpecial3FieldOfficer ? 'PETUGAS LAPANGAN KHUSUS PIMPINAN' : submitterRole.toUpperCase();
+      const waMsg = `📢 *PENGAJUAN ${typeLabel} DARI ${submitterTitle}*\n\n` +
         `👤 Pemohon: *${userProfile.full_name}* (NIP: ${userProfile.nip || '-'})\n` +
-        `🏢 Jabatan/Peran: *${submitterRole.toUpperCase()}* - Divisi: ${userProfile.division_name || 'Operasional'}\n` +
+        `🏢 Status/Jabatan: *${submitterTitle}* - Divisi: ${userProfile.division_name || 'Operasional'}\n` +
         `📝 Jenis: *${typeLabel}*\n` +
         `📅 Periode: *${startDate} s/d ${endDate}* (${requestedDays} Hari)\n` +
         `💬 Alasan: "${reason}"\n\n` +
-        `⚠️ Pengajuan ini diajukan oleh pejabat pengawas (${submitterRole.toUpperCase()}) dan membutuhkan verifikasi serta persetujuan resmi dari *Direktur Utama & Pimpinan*.\n` +
+        `⚠️ Pengajuan ini diajukan oleh ${submitterTitle} dan membutuhkan verifikasi serta persetujuan resmi langsung dari *Direktur Utama & Pimpinan*.\n` +
         `🔗 Mohon konfirmasi persetujuan: https://103.197.188.211/admin/approval`;
 
       await sendWhatsAppAlert({ phone: '082192755755', message: waMsg });
@@ -5586,19 +5588,21 @@ app.post('/api/overtime', async (req, res) => {
 
     const otRow = result.rows[0];
     const submitterRole = (userProfile.role_name || userProfile.role_code || '').toLowerCase();
-    const isOfficer = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r));
+    const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
+    const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
 
     let recipientRoles = [];
-    if (isOfficer) {
-      // 👔 TIER 2: Diajukan oleh Korlap/Admin/K3 -> ajukan ke Dirut & Pimpinan konfirmasi via WA!
+    if (requiresLeadershipApproval) {
+      // 👔 TIER 2: Diajukan oleh 3 Petugas Lapangan Khusus Pimpinan atau Pejabat Pengawas -> ke Direktur Utama & Pimpinan via WA
       recipientRoles = ['pimpinan', 'dirut', 'superadmin'];
-      const waMsg = `📢 *PENGAJUAN LEMBUR (SPL) DARI PEJABAT PENGAWAS (${submitterRole.toUpperCase()})*\n\n` +
+      const submitterTitle = isSpecial3FieldOfficer ? 'PETUGAS LAPANGAN KHUSUS PIMPINAN' : submitterRole.toUpperCase();
+      const waMsg = `📢 *PENGAJUAN LEMBUR (SPL) DARI ${submitterTitle}*\n\n` +
         `👤 Pemohon: *${userProfile.full_name}* (${userProfile.nip || '-'})\n` +
-        `🏢 Jabatan: *${submitterRole.toUpperCase()}* - Divisi: ${userProfile.division_name || 'Operasional'}\n` +
+        `🏢 Jabatan: *${submitterTitle}* - Divisi: ${userProfile.division_name || 'Operasional'}\n` +
         `📅 Tanggal: *${date}* (${startTime} - ${endTime}, ${hours} Jam)\n` +
         `📝 Tugas: "${taskDescription}"\n` +
         `💰 Estimasi Kompensasi: Rp ${comp.toLocaleString('id-ID')}\n\n` +
-        `⚠️ Pengajuan ini diajukan oleh pejabat pengawas (${submitterRole.toUpperCase()}) dan membutuhkan verifikasi serta persetujuan resmi dari *Direktur Utama & Pimpinan*.\n` +
+        `⚠️ Pengajuan ini diajukan oleh ${submitterTitle} dan membutuhkan verifikasi serta persetujuan resmi langsung dari *Direktur Utama & Pimpinan*.\n` +
         `🔗 Mohon konfirmasi: https://103.197.188.211/admin/approval`;
 
       await sendWhatsAppAlert({ phone: '082192755755', message: waMsg });

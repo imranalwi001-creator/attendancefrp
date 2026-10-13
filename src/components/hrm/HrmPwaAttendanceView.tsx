@@ -1733,7 +1733,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       }
       if (type === 'clock_out') {
         if (!isClockOutAllowed) {
-          if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave && !isFieldSpecial) {
+          if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
             toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
           } else {
             toast.error(clockOutDisabledReason || 'Presensi Pulang belum dapat dilakukan.');
@@ -2785,19 +2785,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   }, [hasClockedIn, todayAttendance, isShiftAssigned, isFieldSpecial, hasActiveLeaveToday, activeLeaveToday, isInsideCoordinates, isShiftWindowActive, hasApprovedOvertimeOrSubstituteToday, userShift, currentTime]);
 
   // Tombol Absen Pulang:
-  // Terkunci sebelum jam pulang shift (kecuali izin darurat atau petugas lapangan khusus)
+  // Terkunci sebelum jam pulang shift (Anti-Early Leave berlaku untuk seluruh karyawan termasuk petugas lapangan)
   const isClockOutAllowed =
     hasClockedIn &&
     !hasClockedOut &&
-    (clockOutWindow.isAllowed || hasApprovedEmergencyLeave || isFieldSpecial);
+    (clockOutWindow.isAllowed || hasApprovedEmergencyLeave);
 
   const clockOutDisabledReason = useMemo(() => {
     if (!hasClockedIn) return 'BELUM ABSEN MASUK';
     if (hasClockedOut) return `SUDAH PULANG (${todayAttendance?.clockOut?.substring(0, 5)})`;
-    if (hasApprovedEmergencyLeave || isFieldSpecial) return null;
+    if (hasApprovedEmergencyLeave) return null;
     if (!clockOutWindow.isAllowed) return clockOutWindow.reason || 'BELUM JAM PULANG';
     return null;
-  }, [hasClockedIn, hasClockedOut, hasApprovedEmergencyLeave, isFieldSpecial, clockOutWindow, todayAttendance]);
+  }, [hasClockedIn, hasClockedOut, hasApprovedEmergencyLeave, clockOutWindow, todayAttendance]);
 
   // Aksi Cerdas Gabungan Masuk & Pulang di Tombol Tengah Menu Bawah
   const handleCenterAttendanceClick = () => {
@@ -2809,10 +2809,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       openLiveCamera('clock_in');
     } else if (!hasClockedOut) {
       if (!isClockOutAllowed) {
-        if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave && !isFieldSpecial) {
+        if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
           toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
         } else {
-          toast.error('Belum memenuhi syarat untuk absen pulang.');
+          toast.error(clockOutDisabledReason || 'Belum memenuhi syarat untuk absen pulang.');
         }
         return;
       }
@@ -3484,11 +3484,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               <div
                 onClick={() => {
                   if (hasClockedIn && !hasClockedOut) {
-                    if (!isClockOutAllowed && !isFieldSpecial) {
+                    if (!isClockOutAllowed) {
                       if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
-                        toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA.`);
+                        toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
                         return;
                       }
+                      toast.error(clockOutDisabledReason || 'Presensi pulang belum dibuka.');
+                      return;
                     }
                     openLiveCamera('clock_out');
                   } else if (!hasClockedIn) {
@@ -3902,13 +3904,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </span>
               </button>
 
-              {/* Tombol Absen Pulang (Terkunci Sebelum Waktunya Kecuali Izin Darurat atau Petugas Lapangan/Khusus) */}
+              {/* Tombol Absen Pulang (Terkunci Sebelum Waktunya Kecuali Izin Darurat - Anti-Early Leave Berlaku Semua Karyawan) */}
               <button
                 type="button"
                 disabled={!isClockOutAllowed}
                 onClick={() => {
                   if (!isClockOutAllowed) {
-                    if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave && !isFieldSpecial) {
+                    if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
                       toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
                     }
                     return;
@@ -3923,7 +3925,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-80'
                 }`}
               >
-                {isBeforeShiftEndTime && !hasApprovedEmergencyLeave && !isFieldSpecial && hasClockedIn && !hasClockedOut ? (
+                {isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut ? (
                   <Lock className="w-4 h-4 shrink-0 text-amber-500" />
                 ) : (
                   <LogOut className="w-4 h-4 shrink-0" />
@@ -3933,19 +3935,17 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     ? `PULANG (${todayAttendance?.clockOut?.substring(0, 5) || todayAttendance?.clockOut})`
                     : !hasClockedIn
                     ? 'ABSEN PULANG'
-                    : isBeforeShiftEndTime && !hasApprovedEmergencyLeave && !isFieldSpecial
+                    : isBeforeShiftEndTime && !hasApprovedEmergencyLeave
                     ? `TERKUNCI (${userShift?.endTime?.substring(0, 5) || '16:30'})`
                     : hasApprovedEmergencyLeave
                     ? 'PULANG (IZIN DARURAT)'
-                    : isFieldSpecial
-                    ? 'ABSEN PULANG (LAPANGAN)'
                     : 'ABSEN PULANG'}
                 </span>
               </button>
             </div>
 
             {/* Status Kunci Absen Pulang & Jam Istirahat Otomatis */}
-            {isBeforeShiftEndTime && !hasApprovedEmergencyLeave && !isFieldSpecial && hasClockedIn && !hasClockedOut && (
+            {isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut && (
               <div className="bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl p-2.5 flex items-center justify-between gap-2 text-[10.5px] text-amber-800 dark:text-amber-200">
                 <div className="flex items-center gap-2 min-w-0">
                   <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />

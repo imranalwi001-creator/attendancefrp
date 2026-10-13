@@ -15,9 +15,9 @@ export const pool = new Pool({
   user: process.env.DB_USER || 'hrm_user',
   password: process.env.DB_PASSWORD || 'hrm_secure_password_2026',
   database: process.env.DB_NAME || 'hrm_db',
-  max: 20,
+  max: 50,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  connectionTimeoutMillis: 10000,
 });
 
 export async function initDb() {
