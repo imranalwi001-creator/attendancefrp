@@ -3298,22 +3298,27 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               <div className="relative shrink-0 w-12 h-12 min-w-[48px] min-h-[48px]">
                 <img
                   src={
-                    (user?.avatarUrl && user.avatarUrl.length > 150 ? user.avatarUrl : null) ||
-                    (user?.faceEnrolledPhoto && user.faceEnrolledPhoto.length > 150 ? user.faceEnrolledPhoto : null) ||
-                    (todayAttendance?.clockInPhoto && todayAttendance.clockInPhoto.length > 150 ? todayAttendance.clockInPhoto : null) ||
-                    (todayAttendance?.photoIn && todayAttendance.photoIn.length > 150 ? todayAttendance.photoIn : null) ||
-                    user?.avatarUrl ||
-                    user?.faceEnrolledPhoto ||
-                    defaultAvatar
+                    (() => {
+                      const uPhoto = user?.avatarUrl || user?.faceEnrolledPhoto;
+                      if (uPhoto && (uPhoto.startsWith('/') || uPhoto.startsWith('http') || (uPhoto.startsWith('data:image/') && uPhoto.length > 50))) {
+                        return uPhoto;
+                      }
+                      if (user?.id) {
+                        return `/api/users/${user.id}/avatar`;
+                      }
+                      return defaultAvatar;
+                    })()
                   }
                   alt={user?.fullName}
                   className="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-full object-cover border-2 border-emerald-500/40 shadow-sm bg-slate-100"
                   style={{ width: '48px', height: '48px', objectFit: 'cover' }}
                   onError={(e) => {
                     const el = e.target as HTMLImageElement;
-                    const fallback = todayAttendance?.clockInPhoto || todayAttendance?.photoIn;
-                    if (fallback && el.src !== fallback) {
-                      el.src = fallback;
+                    const avatarApi = user?.id ? `/api/users/${user.id}/avatar` : '';
+                    if (avatarApi && !el.src.includes(avatarApi)) {
+                      el.src = avatarApi;
+                    } else if (todayAttendance?.clockInPhoto || todayAttendance?.photoIn) {
+                      el.src = (todayAttendance.clockInPhoto || todayAttendance.photoIn)!;
                     } else {
                       el.src = defaultAvatar;
                     }

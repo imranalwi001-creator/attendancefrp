@@ -1018,7 +1018,7 @@ app.get('/api/users/:id/avatar', async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
-      `SELECT p.id, p.avatar_url, p.face_photo_url,
+      `SELECT p.id, p.avatar_url, p.face_photo_url, p.face_enrolled_photo,
               (SELECT a.photo_in FROM hrm_attendances a WHERE a.user_id = p.id AND a.photo_in IS NOT NULL ORDER BY a.attendance_date DESC, a.created_at DESC LIMIT 1) as latest_photo
        FROM hrm_profiles p
        WHERE p.id::text = $1 OR p.nip = $1 OR LOWER(p.email) = LOWER($1)
@@ -1029,7 +1029,8 @@ app.get('/api/users/:id/avatar', async (req, res) => {
       return res.status(404).json({ success: false, error: 'User tidak ditemukan' });
     }
     const r = result.rows[0];
-    const targetAvatar = r.avatar_url || r.face_photo_url || r.latest_photo;
+    const candidateList = [r.avatar_url, r.face_enrolled_photo, r.face_photo_url, r.latest_photo];
+    const targetAvatar = candidateList.find(s => typeof s === 'string' && (s.startsWith('data:image/') || s.startsWith('http://') || s.startsWith('https://')));
     if (targetAvatar && typeof targetAvatar === 'string') {
       const match = targetAvatar.match(/^data:([^;]+);base64,(.+)$/);
       if (match) {
