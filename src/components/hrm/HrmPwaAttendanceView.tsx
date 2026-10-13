@@ -73,6 +73,7 @@ import { HrmPwaSplashScreen } from '@/components/pwa/HrmPwaSplashScreen';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import defaultAvatar from '@/assets/logo.png';
 import { resolveEffectiveShift, checkShiftClockInWindow, checkShiftClockOutWindow } from '@/lib/hrmShiftResolver';
