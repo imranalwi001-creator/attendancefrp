@@ -1689,7 +1689,13 @@ export const hrmService = {
         let isNight = false;
         let isOff = true;
 
-        if (code === 'P') {
+        if (code === 'DAY') {
+          sName = 'Day Shift (07:30 - 16:30 WITA)';
+          sStart = '07:30';
+          sEnd = '16:30';
+          duration = 9;
+          isOff = false;
+        } else if (code === 'P') {
           sName = 'Shift I (07:30 - 15:30 WITA)';
           sStart = '07:30';
           sEnd = '15:30';
@@ -1710,7 +1716,9 @@ export const hrmService = {
           isOff = false;
         }
 
-        const matchedMasterShift = shifts.find((sh) => sh.code === code);
+        const matchedMasterShift = shifts.find(
+          (sh) => sh.code === code || (code === 'DAY' && (sh.code === 'DAY' || sh.name?.toLowerCase().includes('day')))
+        );
 
         scheduleItems.push({
           id: `sched-${r.employeeId}-${dateStr}`,

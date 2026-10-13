@@ -215,16 +215,17 @@ export const HrmDivisionsPage: React.FC = () => {
     const dayOfWeek = dt.getDay();
 
     const nextShiftMap: Record<string, string> = {
+      DAY: 'P',
       P: 'S',
       S: 'M',
       M: 'OFF',
-      OFF: 'P',
+      OFF: 'DAY',
     };
 
     const updatedRosters = rosterResult.rosters.map((r) => {
       if (r.employeeId !== employeeId) return r;
       const currentCode = r.assignments[dateStr]?.shiftCode || 'OFF';
-      const nextCode = nextShiftMap[currentCode] || 'P';
+      const nextCode = nextShiftMap[currentCode] || 'DAY';
 
       const newAssignments = {
         ...r.assignments,
@@ -242,7 +243,10 @@ export const HrmDivisionsPage: React.FC = () => {
       let totalOffDays = 0;
 
       Object.values(newAssignments).forEach((asg) => {
-        if (asg.shiftCode === 'P') {
+        if (asg.shiftCode === 'DAY') {
+          totalWorkHours += 9;
+          totalWorkDays += 1;
+        } else if (asg.shiftCode === 'P') {
           totalWorkHours += 8;
           totalWorkDays += 1;
         } else if (asg.shiftCode === 'S') {
@@ -301,14 +305,34 @@ export const HrmDivisionsPage: React.FC = () => {
     const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
     const targetEmployees = getTargetEmployees();
     const allUsers = users.length > 0 ? users : hrmService.getUsers();
+    const dayNamesShort = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 
-    const headers = ['NIP', 'Nama Karyawan', 'Divisi', ...days.map((d) => `Tgl_${d}`)];
+    // Header memuat NIP, Nama, Divisi, dan kolom tanggal lengkap dengan nama hari kalender bulan berjalan
+    // Contoh: Tgl_1_Kam, Tgl_2_Jum, Tgl_3_Sab, Tgl_4_Min, dst.
+    const headers = [
+      'NIP',
+      'Nama Karyawan',
+      'Divisi',
+      ...days.map((d) => {
+        const dt = new Date(rosterYear, rosterMonth - 1, d);
+        return `Tgl_${d}_${dayNamesShort[dt.getDay()]}`;
+      }),
+    ];
+
     const rows = targetEmployees.map((emp) => {
       const userObj = allUsers.find((u) => u.id === emp.id);
-      const defaultShifts = days.map((_, idx) => {
-        const mod = (idx + (emp.name.charCodeAt(0) % 4)) % 4;
-        return mod === 0 ? 'P' : mod === 1 ? 'S' : mod === 2 ? 'M' : 'OFF';
+      // Pola jadwal default mengikuti hari dalam bulan berjalan:
+      // Hari kerja Senin-Jumat -> DAY (Day Shift 07:30 - 16:30)
+      // Hari libur Sabtu & Minggu -> OFF
+      const defaultShifts = days.map((d) => {
+        const dt = new Date(rosterYear, rosterMonth - 1, d);
+        const dayOfWeek = dt.getDay(); // 0: Minggu, 6: Sabtu
+        if (dayOfWeek === 0 || dayOfWeek === 6) {
+          return 'OFF';
+        }
+        return 'DAY';
       });
+
       return [
         `"${userObj?.nip || ''}"`,
         `"${emp.name.replace(/"/g, '""')}"`,
@@ -317,7 +341,12 @@ export const HrmDivisionsPage: React.FC = () => {
       ];
     });
 
-    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const csvContent = [
+      '# PETUNJUK KODE SHIFT: DAY = Day Shift (07:30-16:30 WITA) | P = Shift I (07:30-15:30 WITA) | S = Shift II (15:30-22:30 WITA) | M = Shift III (22:30-07:30 WITA) | OFF = Libur',
+      headers.join(','),
+      ...rows.map((r) => r.join(',')),
+    ].join('\n');
+
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -354,15 +383,21 @@ export const HrmDivisionsPage: React.FC = () => {
 
   const normalizeShiftCode = (val: string): string => {
     const raw = (val || '').toUpperCase().trim();
-    if (['P', 'PAGI', 'P1', 'MORNING', '1'].includes(raw)) return 'P';
-    if (['S', 'SIANG', 'S1', 'AFTERNOON', 'SORE', '2'].includes(raw)) return 'S';
-    if (['M', 'MALAM', 'M1', 'NIGHT', '3'].includes(raw)) return 'M';
+    if (['DAY', 'DAYSHIFT', 'DAY_SHIFT', 'DAY SHIFT', 'D', 'DS', 'PAGI_DAY', 'DAY_OFFICE'].includes(raw)) return 'DAY';
+    if (['P', 'PAGI', 'P1', 'MORNING', '1', 'SHIFT 1', 'SHIFT I'].includes(raw)) return 'P';
+    if (['S', 'SIANG', 'S1', 'AFTERNOON', 'SORE', '2', 'SHIFT 2', 'SHIFT II'].includes(raw)) return 'S';
+    if (['M', 'MALAM', 'M1', 'NIGHT', '3', 'SHIFT 3', 'SHIFT III'].includes(raw)) return 'M';
     if (['OFF', 'LIBUR', 'L', 'O', '0', '-', 'REST'].includes(raw)) return 'OFF';
     return 'OFF';
   };
 
   const handleParseImportCsv = (csvText: string) => {
-    const lines = csvText.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    // Filter komentar dan baris kosong
+    const lines = csvText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith('#'));
+
     if (lines.length < 2) {
       setImportErrors(['File CSV kosong atau tidak memiliki baris data']);
       setImportPreviewRows([]);
@@ -385,8 +420,8 @@ export const HrmDivisionsPage: React.FC = () => {
       } else if (clean === 'nip' || clean.includes('nomor induk')) {
         nipIdx = idx;
       } else {
-        // Match day number
-        const match = clean.match(/(\d+)/);
+        // Match day number: dapat mengenali "tgl 1 kam", "tgl 1", "1", "tanggal 1", dsb.
+        const match = clean.match(/(?:tgl[_\s]*)?(\d+)/i);
         if (match) {
           const num = parseInt(match[1], 10);
           if (num >= 1 && num <= daysInMonth) {
@@ -409,6 +444,7 @@ export const HrmDivisionsPage: React.FC = () => {
       nip: string;
       matched: boolean;
       shifts: Record<string, string>;
+      totalDay: number;
       totalPagi: number;
       totalSiang: number;
       totalMalam: number;
@@ -435,7 +471,7 @@ export const HrmDivisionsPage: React.FC = () => {
       }
 
       const shifts: Record<string, string> = {};
-      let pagi = 0, siang = 0, malam = 0, off = 0;
+      let day = 0, pagi = 0, siang = 0, malam = 0, off = 0;
 
       for (let d = 1; d <= daysInMonth; d++) {
         const colIdx = dayIndices[d];
@@ -443,7 +479,8 @@ export const HrmDivisionsPage: React.FC = () => {
         const code = normalizeShiftCode(val);
         shifts[String(d)] = code;
 
-        if (code === 'P') pagi++;
+        if (code === 'DAY') day++;
+        else if (code === 'P') pagi++;
         else if (code === 'S') siang++;
         else if (code === 'M') malam++;
         else off++;
@@ -455,6 +492,7 @@ export const HrmDivisionsPage: React.FC = () => {
         nip: matchedUser?.nip || rawNip || '-',
         matched: Boolean(matchedUser),
         shifts,
+        totalDay: day,
         totalPagi: pagi,
         totalSiang: siang,
         totalMalam: malam,
@@ -469,6 +507,7 @@ export const HrmDivisionsPage: React.FC = () => {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
     setImportFileName(file.name);
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -509,8 +548,11 @@ export const HrmDivisionsPage: React.FC = () => {
           shiftCode: code,
         };
 
-        if (code === 'P' || code === 'S' || code === 'M') {
-          totalWorkHours += 8;
+        if (code === 'DAY') {
+          totalWorkHours += 9;
+          totalWorkDays += 1;
+        } else if (code === 'P' || code === 'S' || code === 'M') {
+          totalWorkHours += (code === 'M' ? 9 : code === 'S' ? 7 : 8);
           totalWorkDays += 1;
           if (code === 'M') totalNightShifts += 1;
         } else {
@@ -2168,11 +2210,25 @@ export const HrmDivisionsPage: React.FC = () => {
                     <th className="sticky left-0 bg-muted/95 z-20 px-3 py-2 text-left font-bold min-w-[170px] border-r border-border">
                       Karyawan
                     </th>
-                    {Array.from({ length: rosterResult.daysInMonth }, (_, i) => i + 1).map((d) => (
-                      <th key={d} className="px-1 py-1.5 text-center font-mono min-w-[32px] border-r border-border/40">
-                        {d}
-                      </th>
-                    ))}
+                    {Array.from({ length: rosterResult.daysInMonth }, (_, i) => i + 1).map((d) => {
+                      const dt = new Date(rosterResult.year, rosterResult.month - 1, d);
+                      const dayOfWeek = dt.getDay();
+                      const dayNamesShort = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+                      const dayName = dayNamesShort[dayOfWeek];
+                      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+                      return (
+                        <th
+                          key={d}
+                          className={`px-1 py-1 text-center font-mono min-w-[34px] border-r border-border/40 ${
+                            isWeekend ? 'bg-rose-50/70 dark:bg-rose-950/25 text-rose-600 dark:text-rose-400 font-bold' : ''
+                          }`}
+                        >
+                          <div className="font-bold text-[11px] leading-tight">{d}</div>
+                          <div className="text-[9px] font-sans font-medium opacity-80 leading-tight">{dayName}</div>
+                        </th>
+                      );
+                    })}
                     <th className="px-2 py-2 text-center font-bold bg-muted/80 min-w-[65px] border-r border-border/60">
                       Total Jam
                     </th>
@@ -2196,7 +2252,8 @@ export const HrmDivisionsPage: React.FC = () => {
                         const code = asg?.shiftCode || 'OFF';
 
                         let badgeCls = 'bg-muted text-muted-foreground/60 hover:bg-muted/80';
-                        if (code === 'P') badgeCls = 'bg-blue-500/20 text-blue-700 dark:text-blue-300 font-bold hover:bg-blue-500/30';
+                        if (code === 'DAY') badgeCls = 'bg-emerald-500/25 text-emerald-800 dark:text-emerald-300 font-extrabold hover:bg-emerald-500/35 border border-emerald-500/40';
+                        else if (code === 'P') badgeCls = 'bg-blue-500/20 text-blue-700 dark:text-blue-300 font-bold hover:bg-blue-500/30';
                         else if (code === 'S') badgeCls = 'bg-amber-500/20 text-amber-700 dark:text-amber-300 font-bold hover:bg-amber-500/30';
                         else if (code === 'M') badgeCls = 'bg-purple-500/25 text-purple-700 dark:text-purple-300 font-extrabold hover:bg-purple-500/35';
 
@@ -2205,7 +2262,7 @@ export const HrmDivisionsPage: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => handleToggleCellShift(r.employeeId, d)}
-                              title="Klik untuk ubah giliran (P -> S -> M -> OFF)"
+                              title="Klik untuk ubah giliran (DAY -> P -> S -> M -> OFF)"
                               className={`inline-block w-full py-1 rounded text-[10px] cursor-pointer transition-all active:scale-95 focus:outline-hidden ${badgeCls}`}
                             >
                               {code}
@@ -2233,17 +2290,20 @@ export const HrmDivisionsPage: React.FC = () => {
           <div className="pt-2 border-t border-border/70 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs shrink-0">
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-muted-foreground text-[11px] font-semibold">Keterangan Shift:</span>
-              <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-blue-500" /> P (Shift I: 07:30-15:30 WITA)
+              <span className="flex items-center gap-1 font-medium">
+                <span className="w-2.5 h-2.5 rounded bg-emerald-500 shrink-0" /> DAY (Day Shift: 07:30-16:30 WITA)
               </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-amber-500" /> S (Shift II: 15:30-22:30 WITA)
+              <span className="flex items-center gap-1 font-medium">
+                <span className="w-2.5 h-2.5 rounded bg-blue-500 shrink-0" /> P (Shift I: 07:30-15:30 WITA)
               </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-purple-600" /> M (Shift III: 22:30-07:30 WITA)
+              <span className="flex items-center gap-1 font-medium">
+                <span className="w-2.5 h-2.5 rounded bg-amber-500 shrink-0" /> S (Shift II: 15:30-22:30 WITA)
               </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-muted-foreground/40" /> OFF (Libur)
+              <span className="flex items-center gap-1 font-medium">
+                <span className="w-2.5 h-2.5 rounded bg-purple-600 shrink-0" /> M (Shift III: 22:30-07:30 WITA)
+              </span>
+              <span className="flex items-center gap-1 font-medium">
+                <span className="w-2.5 h-2.5 rounded bg-muted-foreground/40 shrink-0" /> OFF (Libur)
               </span>
               <span className="text-muted-foreground text-[10px] italic">
                 *Klik kotak tanggal pada tabel untuk mengganti shift secara manual.
@@ -2348,9 +2408,10 @@ export const HrmDivisionsPage: React.FC = () => {
                       <tr>
                         <th className="px-3 py-2 text-left font-bold">Karyawan</th>
                         <th className="px-2 py-2 text-center font-bold">NIP</th>
-                        <th className="px-2 py-2 text-center font-bold">Pagi (P)</th>
-                        <th className="px-2 py-2 text-center font-bold">Siang (S)</th>
-                        <th className="px-2 py-2 text-center font-bold">Malam (M)</th>
+                        <th className="px-2 py-2 text-center font-bold text-emerald-600">Day (DAY)</th>
+                        <th className="px-2 py-2 text-center font-bold text-blue-600">Pagi (P)</th>
+                        <th className="px-2 py-2 text-center font-bold text-amber-600">Siang (S)</th>
+                        <th className="px-2 py-2 text-center font-bold text-purple-600">Malam (M)</th>
                         <th className="px-2 py-2 text-center font-bold">Libur (OFF)</th>
                         <th className="px-2 py-2 text-center font-bold">Status</th>
                       </tr>
@@ -2363,6 +2424,9 @@ export const HrmDivisionsPage: React.FC = () => {
                           </td>
                           <td className="px-2 py-2 text-center font-mono text-muted-foreground">
                             {r.nip}
+                          </td>
+                          <td className="px-2 py-2 text-center font-mono font-semibold text-emerald-600">
+                            {r.totalDay || 0}
                           </td>
                           <td className="px-2 py-2 text-center font-mono font-semibold text-blue-600">
                             {r.totalPagi}

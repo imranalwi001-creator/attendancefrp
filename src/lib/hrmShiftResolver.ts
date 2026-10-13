@@ -45,7 +45,7 @@ export function resolveEffectiveShift(
       lateToleranceMinutes: 15,
       earliestClockInMinutes: 120, // 2 Jam (120 menit) Datang Lebih Cepat Boleh Absen Masuk!
       isCrossDay: isNight,
-      colorTag: dailySchedule.shiftCode === 'P' ? '#3b82f6' : dailySchedule.shiftCode === 'S' ? '#f59e0b' : '#8b5cf6',
+      colorTag: dailySchedule.shiftCode === 'DAY' ? '#10b981' : dailySchedule.shiftCode === 'P' ? '#3b82f6' : dailySchedule.shiftCode === 'S' ? '#f59e0b' : '#8b5cf6',
     };
   }
 

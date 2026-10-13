@@ -8682,10 +8682,10 @@ app.post('/api/employee-schedules/batch', async (req, res) => {
         item.scheduleDate,
         item.shiftId || null,
         item.shiftCode || 'OFF',
-        item.shiftName || (item.shiftCode === 'OFF' ? 'Libur / Off' : `Shift ${item.shiftCode}`),
+        item.shiftName || (item.shiftCode === 'OFF' ? 'Libur / Off' : item.shiftCode === 'DAY' ? 'Day Shift (07:30 - 16:30 WITA)' : `Shift ${item.shiftCode}`),
         item.startTime || (item.shiftCode === 'M' ? '22:30' : item.shiftCode === 'S' ? '15:30' : '07:30'),
-        item.endTime || (item.shiftCode === 'M' ? '07:30' : item.shiftCode === 'S' ? '22:30' : '15:30'),
-        item.durationHours ?? (item.shiftCode === 'OFF' ? 0 : item.shiftCode === 'M' ? 9 : item.shiftCode === 'S' ? 7 : 8),
+        item.endTime || (item.shiftCode === 'DAY' ? '16:30' : item.shiftCode === 'M' ? '07:30' : item.shiftCode === 'S' ? '22:30' : '15:30'),
+        item.durationHours ?? (item.shiftCode === 'OFF' ? 0 : item.shiftCode === 'DAY' ? 9 : item.shiftCode === 'M' ? 9 : item.shiftCode === 'S' ? 7 : 8),
         Boolean(item.isNightShift || item.shiftCode === 'M'),
         Boolean(item.isOff || item.shiftCode === 'OFF'),
         item.notes || 'Disusun via Smart Roster Scheduler'

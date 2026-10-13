@@ -62,6 +62,7 @@ export interface GenerationResult {
 }
 
 export const DEFAULT_SHIFTS: ShiftDefinition[] = [
+  { id: 'shift-day', name: 'Day Shift (07:30 - 16:30 WITA)', code: 'DAY', startTime: '07:30', endTime: '16:30', durationHours: 9, isNightShift: false, color: '#10b981' },
   { id: 'shift-pagi', name: 'Shift I (07:30 - 15:30 WITA)', code: 'P', startTime: '07:30', endTime: '15:30', durationHours: 8, isNightShift: false, color: '#3b82f6' },
   { id: 'shift-siang', name: 'Shift II (15:30 - 22:30 WITA)', code: 'S', startTime: '15:30', endTime: '22:30', durationHours: 7, isNightShift: false, color: '#f59e0b' },
   { id: 'shift-malam', name: 'Shift III (22:30 - 07:30 WITA)', code: 'M', startTime: '22:30', endTime: '07:30', durationHours: 9, isNightShift: true, color: '#8b5cf6' },
