@@ -909,6 +909,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(finalNormalized));
           if (user.nip) localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`, JSON.stringify(finalNormalized));
         } catch (e) {}
+      } else if (initialAtt && (initialAtt.clockIn || initialAtt.clock_in)) {
+        setTodayAttendance(initialAtt);
       } else if (!todayAttendance || !todayAttendance.clockIn) {
         setTodayAttendance(null);
       }
@@ -2483,6 +2485,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         setTodayAttendance(normSaved);
         try {
           localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(normSaved));
+          if (user.nip) {
+            localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`, JSON.stringify(normSaved));
+          }
         } catch (e) {}
       }
 

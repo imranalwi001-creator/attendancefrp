@@ -64,7 +64,7 @@ app.post('/api/auth/login', async (req, res) => {
              d.allowed_posts as division_allowed_posts,
              s.name as shift_name, s.start_time as shift_start_time, s.end_time as shift_end_time,
              sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme,
-             (SELECT a.photo_in FROM hrm_attendances a WHERE (a.user_id = p.id OR a.user_id = p.nip) AND a.photo_in IS NOT NULL ORDER BY a.attendance_date DESC, a.created_at DESC LIMIT 1) as latest_attendance_photo
+             (SELECT a.photo_in FROM hrm_attendances a WHERE a.user_id = p.id AND a.photo_in IS NOT NULL ORDER BY a.attendance_date DESC, a.created_at DESC LIMIT 1) as latest_attendance_photo
       FROM hrm_profiles p
       LEFT JOIN hrm_roles r ON p.role_id = r.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
@@ -982,7 +982,7 @@ app.get('/api/users/:id', async (req, res) => {
              s.start_time as shift_start_time,
              s.end_time as shift_end_time,
              sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme,
-             (SELECT a.photo_in FROM hrm_attendances a WHERE (a.user_id = p.id OR a.user_id = p.nip) AND a.photo_in IS NOT NULL ORDER BY a.attendance_date DESC, a.created_at DESC LIMIT 1) as latest_attendance_photo
+             (SELECT a.photo_in FROM hrm_attendances a WHERE a.user_id = p.id AND a.photo_in IS NOT NULL ORDER BY a.attendance_date DESC, a.created_at DESC LIMIT 1) as latest_attendance_photo
       FROM hrm_profiles p
       LEFT JOIN hrm_roles r ON p.role_id = r.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
@@ -1362,13 +1362,18 @@ app.post('/api/attendances/clock-in', async (req, res) => {
   } = req.body;
   try {
     // 0. Profile & Device Binding Check (1 Karyawan = 1 HP Terdaftar)
+    let validUserId = userId;
     let userProfile = null;
     const userRes = await pool.query(
-      `SELECT id, full_name, email, nip, division_id, shift_id, custom_start_time, custom_end_time, late_tolerance_minutes, device_id, device_model, is_device_bound, face_embedding, allowed_posts, allow_ogs_clock_out FROM hrm_profiles WHERE id = $1`,
+      `SELECT id, full_name, email, nip, division_id, shift_id, custom_start_time, custom_end_time, late_tolerance_minutes, device_id, device_model, is_device_bound, face_embedding, allowed_posts, allow_ogs_clock_out 
+       FROM hrm_profiles 
+       WHERE id::text = $1 OR nip = $1 OR LOWER(email) = LOWER($1) 
+       LIMIT 1`,
       [userId]
     );
     if (userRes.rows.length > 0) {
       userProfile = userRes.rows[0];
+      validUserId = userProfile.id;
     }
 
     const isExempt = isExemptFieldOfficer(userProfile);
@@ -1745,7 +1750,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       RETURNING *;
     `;
     const result = await pool.query(query, [
-      userId,
+      validUserId,
       date,
       time,
       photo,
@@ -1764,20 +1769,20 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     const insertedAttendance = result.rows[0];
 
     // Ephemeral Rolling Photo Replacement: Foto check-in yang lalu otomatis dihapus dan digantikan hanya dengan foto check-in terbaru
-    if (photo && userId && insertedAttendance?.id) {
+    if (photo && validUserId && insertedAttendance?.id) {
       await pool.query(
         `UPDATE hrm_attendances 
          SET photo_in = NULL 
          WHERE user_id = $1 AND id != $2 AND photo_in IS NOT NULL;`,
-        [userId, insertedAttendance.id]
+        [validUserId, insertedAttendance.id]
       ).catch((err) => console.warn('[Photo Retention] Error clearing older clock-in photos:', err));
 
       // Jika user belum memiliki foto profil atau avatar yang valid (>150 char), perbarui juga avatar_url di hrm_profiles
       await pool.query(
         `UPDATE hrm_profiles 
          SET avatar_url = $1, face_photo_url = COALESCE(face_photo_url, $1) 
-         WHERE (id = $2 OR nip = $2) AND (avatar_url IS NULL OR LENGTH(avatar_url) < 150);`,
-        [photo, userId]
+         WHERE id = $2 AND (avatar_url IS NULL OR LENGTH(avatar_url) < 150);`,
+        [photo, validUserId]
       ).catch((err) => console.warn('[Photo Retention] Error syncing avatar to profile:', err));
     }
 
@@ -3576,13 +3581,18 @@ app.post('/api/attendances/clock-out', async (req, res) => {
     let isServerGeofenceValid = geofenceValid !== false;
 
     // Ambil info profil karyawan
+    let validUserId = userId;
     let userProfile = null;
     const userRes = await pool.query(
-      `SELECT id, full_name, email, nip, division_id, shift_id, custom_start_time, custom_end_time, allowed_posts, allow_ogs_clock_out FROM hrm_profiles WHERE id = $1`,
+      `SELECT id, full_name, email, nip, division_id, shift_id, custom_start_time, custom_end_time, allowed_posts, allow_ogs_clock_out 
+       FROM hrm_profiles 
+       WHERE id::text = $1 OR nip = $1 OR LOWER(email) = LOWER($1) 
+       LIMIT 1`,
       [userId]
     );
     if (userRes.rows.length > 0) {
       userProfile = userRes.rows[0];
+      validUserId = userProfile.id;
     }
 
     const isExempt = isExemptFieldOfficer(userProfile);
@@ -3870,7 +3880,7 @@ app.post('/api/attendances/clock-out', async (req, res) => {
       longitude,
       earlyLeavingMinutes || 0,
       workDurationMinutes || 0,
-      userId,
+      validUserId,
       date,
       computedClockOutScore != null ? computedClockOutScore : (biometricScore != null ? biometricScore : null),
       computedClockOutMatch != null ? computedClockOutMatch : (biometricMatch != null ? biometricMatch : null),
@@ -3882,12 +3892,12 @@ app.post('/api/attendances/clock-out', async (req, res) => {
     const updatedAttendance = result.rows[0];
 
     // Ephemeral Rolling Photo Replacement: Foto checkout (pulang) yang lalu otomatis dihapus dan digantikan hanya dengan foto checkout terbaru
-    if (photo && userId && updatedAttendance?.id) {
+    if (photo && validUserId && updatedAttendance?.id) {
       await pool.query(
         `UPDATE hrm_attendances 
          SET photo_out = NULL 
          WHERE user_id = $1 AND id != $2 AND photo_out IS NOT NULL;`,
-        [userId, updatedAttendance.id]
+        [validUserId, updatedAttendance.id]
       ).catch((err) => console.warn('[Photo Retention] Error clearing older clock-out photos:', err));
     }
 
