@@ -144,7 +144,9 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ).then((attRes) => {
           if (attRes && attRes.success && attRes.attendance) {
             const att = attRes.attendance;
-            if (att.clockIn || att.clock_in) {
+            const attDate = att.attendanceDate || att.date || (att as any).attendance_date;
+            const normDate = attDate ? String(attDate).substring(0, 10) : '';
+            if ((att.clockIn || att.clock_in) && (!normDate || normDate === todayStr)) {
               const existingLocal =
                 localStorage.getItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`) ||
                 (res.user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`) : null);
@@ -167,6 +169,25 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
               if (res.user.nip) {
                 localStorage.setItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`, JSON.stringify(toSave));
               }
+            } else {
+              // Remote returned data from another date, clean up any stale cache
+              localStorage.removeItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`);
+              if (res.user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`);
+            }
+          } else if (attRes && attRes.success && !attRes.attendance) {
+            // Server explicitly states no attendance today, check and purge if local cache was dirty with another date
+            const existingLocal =
+              localStorage.getItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`) ||
+              (res.user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`) : null);
+            if (existingLocal) {
+              try {
+                const parsed = JSON.parse(existingLocal);
+                const pDate = parsed?.attendanceDate || parsed?.date || parsed?.attendance_date;
+                if (pDate && String(pDate).substring(0, 10) !== todayStr) {
+                  localStorage.removeItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`);
+                  if (res.user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`);
+                }
+              } catch (_) {}
             }
           }
         }).catch(() => null);

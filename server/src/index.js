@@ -244,7 +244,7 @@ app.post('/api/users/:id/reset-security', async (req, res) => {
     // 3. Reset / Buka Kunci Lokasi & Pelanggaran Perimeter
     if (target === 'location' || target === 'all') {
       await pool.query(
-        `UPDATE hrm_attendances SET is_locked = false, is_perimeter_breached = false, notes = COALESCE(notes, '') || ' [Dispensasi Kunci Lokasi oleh ' || $1 || ']', updated_at = NOW() WHERE user_id = $2 AND attendance_date >= CURRENT_DATE - INTERVAL '1 day'`,
+        `UPDATE hrm_attendances SET is_locked = false, is_perimeter_breached = false, notes = COALESCE(notes, '') || ' [Dispensasi Kunci Lokasi oleh ' || $1 || ']', updated_at = NOW() WHERE user_id = $2 AND attendance_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '1 day'`,
         [adminName, validUserId]
       );
       await pool.query(
@@ -2275,7 +2275,7 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
 
     // Check today's break time & early leave status
     const todayAttRes = await pool.query(
-      `SELECT is_on_break, is_early_leave, clock_out FROM hrm_attendances WHERE user_id = $1 AND attendance_date = CURRENT_DATE LIMIT 1`,
+      `SELECT is_on_break, is_early_leave, clock_out FROM hrm_attendances WHERE user_id = $1 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date LIMIT 1`,
       [validUserId]
     );
     const isOnBreakToday = todayAttRes.rows[0]?.is_on_break === true;
@@ -2541,7 +2541,7 @@ Mohon segera pantau posisi petugas melalui menu Live Monitoring HRM.`;
            is_perimeter_breached = true,
            perimeter_breach_count = COALESCE(perimeter_breach_count, 0) + 1,
            updated_at = NOW()
-         WHERE user_id = $1 AND attendance_date = CURRENT_DATE AND clock_out IS NULL;`,
+         WHERE user_id = $1 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date AND clock_out IS NULL;`,
         [validUserId]
       );
 
@@ -4426,10 +4426,7 @@ app.get('/api/attendances/today', async (req, res) => {
       LEFT JOIN hrm_profiles p ON a.user_id = p.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
       WHERE (a.user_id::text = $1 OR a.user_id::text = $3 OR LOWER(p.nip) = LOWER($3) OR LOWER(p.email) = LOWER($3)) 
-        AND (
-          a.attendance_date = COALESCE($2::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
-          OR a.attendance_date = CURRENT_DATE
-        )
+        AND a.attendance_date = COALESCE(NULLIF($2, '')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
       ORDER BY a.clock_in DESC NULLS LAST, a.created_at DESC
       LIMIT 1;
     `;
@@ -5724,7 +5721,7 @@ app.put('/api/leaves/:id/status', async (req, res) => {
           is_locked = false,
           is_perimeter_breached = false,
           updated_at = NOW()
-        WHERE user_id = $2 AND attendance_date >= CURRENT_DATE;
+        WHERE user_id = $2 AND attendance_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date;
       `, [leave.reason, leave.user_id]);
     }
 
@@ -8216,7 +8213,7 @@ app.get('/api/analytics/summary', async (req, res) => {
           attendance_date,
           COUNT(DISTINCT user_id) as hadir
         FROM hrm_attendances
-        WHERE attendance_date >= (CURRENT_DATE - INTERVAL '6 days')
+        WHERE attendance_date >= ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '6 days')
         GROUP BY attendance_date, EXTRACT(DOW FROM attendance_date)
         ORDER BY attendance_date
       `),
@@ -8621,7 +8618,7 @@ app.get('/api/analytics/self', async (req, res) => {
       pool.query(`
         SELECT attendance_date, status
         FROM hrm_attendances
-        WHERE user_id = $1 AND attendance_date >= (CURRENT_DATE - INTERVAL '13 days')
+        WHERE user_id = $1 AND attendance_date >= ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '13 days')
         ORDER BY attendance_date DESC
         LIMIT 14
       `, [validUserId]),
@@ -9307,7 +9304,7 @@ app.post('/api/attendances/submit-breach-report', async (req, res) => {
     // 2. Ambil presensi hari ini
     const todayRes = await pool.query(
       `SELECT * FROM hrm_attendances
-       WHERE user_id = $1 AND attendance_date = CURRENT_DATE
+       WHERE user_id = $1 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
        ORDER BY created_at DESC LIMIT 1;`,
       [userId]
     );
@@ -9467,7 +9464,7 @@ async function runAutoCloseCompliantAttendance() {
       FROM hrm_attendances a
       JOIN hrm_profiles p ON a.user_id = p.id
       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
-      WHERE a.attendance_date = CURRENT_DATE
+      WHERE a.attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
         AND a.clock_in IS NOT NULL
         AND a.clock_out IS NULL
         AND (a.is_locked = false OR a.is_locked IS NULL)

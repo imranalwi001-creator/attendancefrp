@@ -125,13 +125,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const cached = localStorage.getItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (parsed && (parsed.clockIn || parsed.clock_in)) {
+        const parsedDate = normalizeDateString(parsed?.attendanceDate || parsed?.date || (parsed as any)?.attendance_date);
+        if (parsed && (parsed.clockIn || parsed.clock_in) && (!parsedDate || parsedDate === todayStr)) {
           return normalizeAttendanceRecord(parsed);
+        } else {
+          localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
         }
       }
     } catch (e) {}
     const existing = hrmService.getUserTodayAttendance(user.id);
-    return existing ? normalizeAttendanceRecord(existing) : undefined;
+    if (existing) {
+      const existDate = normalizeDateString(existing.attendanceDate || existing.date || (existing as any)?.attendance_date);
+      if (!existDate || existDate === todayStr) {
+        return normalizeAttendanceRecord(existing);
+      }
+    }
+    return undefined;
   });
 
   // Jaga konsistensi persisten agar tidak hilang saat sleep / minimize / reload
@@ -815,14 +824,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           (user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`) : null);
         if (cachedConf) {
           const parsedConf = JSON.parse(cachedConf);
-          if (parsedConf && (parsedConf.clockIn || parsedConf.clock_in)) {
+          const cachedDate = normalizeDateString(parsedConf?.attendanceDate || parsedConf?.date || (parsedConf as any)?.attendance_date);
+          if (parsedConf && (parsedConf.clockIn || parsedConf.clock_in) && (!cachedDate || cachedDate === todayStr)) {
             todayAtt = normalizeAttendanceRecord(parsedConf);
-            // MONOTONIC CLOCK-OUT GUARD: Jangan pernah biarkan clockOut hilang jika di memori sudah ada
-            if (todayAttendance?.clockOut && !todayAtt.clockOut) {
+            // MONOTONIC CLOCK-OUT GUARD: Hanya pertahankan jika state memori saat ini benar-benar tanggal hari ini
+            const memDate = normalizeDateString(todayAttendance?.attendanceDate || todayAttendance?.date);
+            if (todayAttendance?.clockOut && !todayAtt.clockOut && (!memDate || memDate === todayStr)) {
               todayAtt.clockOut = todayAttendance.clockOut;
               todayAtt.clock_out = todayAttendance.clock_out || todayAttendance.clockOut;
             }
             setTodayAttendance(todayAtt);
+          } else {
+            // Data basi bukan tanggal hari ini, hapus dari storage!
+            localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
+            if (user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`);
           }
         }
       } catch (e) {}
@@ -842,32 +857,51 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
         if (todayData && todayData.success && todayData.attendance) {
           const normRemote = normalizeAttendanceRecord(todayData.attendance);
+          const remoteAttDate = normalizeDateString(normRemote.attendanceDate || normRemote.date || (normRemote as any)?.attendance_date);
 
-          // MONOTONIC ATTENDANCE RETENTION:
-          // Pertahankan jam masuk dan jam pulang dari sumber manapun yang sudah valid agar tidak terjadi flapping
-          const preservedClockIn = todayAtt?.clockIn || normRemote.clockIn || todayAttendance?.clockIn;
-          const preservedClockInFull = todayAtt?.clock_in || normRemote.clock_in || todayAttendance?.clock_in || preservedClockIn;
-          const preservedClockOut = normRemote.clockOut || todayAtt?.clockOut || todayAttendance?.clockOut || (normRemote.clock_out ? String(normRemote.clock_out).substring(0, 5) : undefined) || (todayAtt?.clock_out ? String(todayAtt.clock_out).substring(0, 5) : undefined);
-          const preservedClockOutFull = normRemote.clock_out || todayAtt?.clock_out || todayAttendance?.clock_out || preservedClockOut;
-          const preservedPhotoOut = normRemote.photoOut || todayAtt?.photoOut || todayAttendance?.photoOut || normRemote.clockOutPhoto || todayAtt?.clockOutPhoto;
+          // VALIDASI TANGGAL KETAT: Hanya proses jika tanggal presensi benar-benar tanggal hari ini
+          if (!remoteAttDate || remoteAttDate === todayStr) {
+            const preservedClockIn = todayAtt?.clockIn || normRemote.clockIn;
+            const preservedClockInFull = todayAtt?.clock_in || normRemote.clock_in || preservedClockIn;
+            const preservedClockOut = normRemote.clockOut || (normRemote.clock_out ? String(normRemote.clock_out).substring(0, 5) : undefined) || (todayAtt?.clockOut);
+            const preservedClockOutFull = normRemote.clock_out || todayAtt?.clock_out || preservedClockOut;
+            const preservedPhotoOut = normRemote.photoOut || normRemote.clockOutPhoto || todayAtt?.photoOut;
 
-          todayAtt = {
-            ...todayAtt,
-            ...normRemote,
-            clockIn: preservedClockIn,
-            clock_in: preservedClockInFull,
-            clockOut: preservedClockOut,
-            clock_out: preservedClockOutFull,
-            photoOut: preservedPhotoOut,
-            clockOutPhoto: preservedPhotoOut,
-          };
+            todayAtt = {
+              ...todayAtt,
+              ...normRemote,
+              attendanceDate: todayStr,
+              date: todayStr,
+              clockIn: preservedClockIn,
+              clock_in: preservedClockInFull,
+              clockOut: preservedClockOut,
+              clock_out: preservedClockOutFull,
+              photoOut: preservedPhotoOut,
+              clockOutPhoto: preservedPhotoOut,
+            };
 
-          if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
-            setTodayAttendance(todayAtt);
-            try {
-              localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(todayAtt));
-              if (user.nip) localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`, JSON.stringify(todayAtt));
-            } catch (e) {}
+            if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
+              setTodayAttendance(todayAtt);
+              try {
+                localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(todayAtt));
+                if (user.nip) localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`, JSON.stringify(todayAtt));
+              } catch (e) {}
+            }
+          } else {
+            console.warn(`[PWA] Remote attendance date (${remoteAttDate}) does not match today (${todayStr}), discarding.`);
+            // Jika data remote ternyata tanggal kemarin dan di local ada data stale, bersihkan!
+            setTodayAttendance(undefined);
+            localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
+            if (user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`);
+          }
+        } else if (todayData && todayData.success && !todayData.attendance) {
+          // Server mengonfirmasi belum ada presensi untuk hari ini
+          // Bersihkan jika ada residu lokal yang bukan hari ini
+          const localAttDate = normalizeDateString(todayAtt?.attendanceDate || todayAtt?.date || todayAttendance?.attendanceDate || todayAttendance?.date);
+          if (localAttDate && localAttDate !== todayStr) {
+            setTodayAttendance(undefined);
+            localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
+            if (user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`);
           }
         }
       } catch (err) {
@@ -936,8 +970,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       // KONSISTENSI TOTAL: Kunci status presensi hari ini jika sudah absen masuk & absen pulang
       if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
-        // MONOTONIC CLOCK-OUT GUARD: Sekali karyawan clock-out, kunci permanen!
-        if (todayAttendance?.clockOut && !todayAtt.clockOut) {
+        // MONOTONIC CLOCK-OUT GUARD: Sekali karyawan clock-out pada hari ini, kunci permanen!
+        const memDate = normalizeDateString(todayAttendance?.attendanceDate || todayAttendance?.date);
+        if (todayAttendance?.clockOut && !todayAtt.clockOut && (!memDate || memDate === todayStr)) {
           todayAtt.clockOut = todayAttendance.clockOut;
           todayAtt.clock_out = todayAttendance.clock_out || todayAttendance.clockOut;
         }
@@ -948,9 +983,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           if (user.nip) localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`, JSON.stringify(finalNormalized));
         } catch (e) {}
       } else if (todayAttendance && (todayAttendance.clockIn || (todayAttendance as any).clock_in)) {
-        // Pertahankan status kehadiran yang sudah aktif di memori sesi saat ini
+        // Pertahankan status kehadiran hanya jika tanggalnya sesuai hari ini
+        const curDate = normalizeDateString(todayAttendance.attendanceDate || todayAttendance.date || (todayAttendance as any).attendance_date);
+        if (curDate && curDate !== todayStr) {
+          setTodayAttendance(undefined);
+          localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
+          if (user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`);
+        }
       } else {
-        setTodayAttendance(null);
+        setTodayAttendance(undefined);
       }
 
       if (todayAtt?.isOnBreak && todayAtt.breakStartTime) {

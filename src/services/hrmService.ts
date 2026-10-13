@@ -913,7 +913,8 @@ export const hrmService = {
                 const cachedConf = localStorage.getItem(confKey) || (uNip ? localStorage.getItem(`hrm_confirmed_today_att_${uNip}_${today}`) : null);
                 if (cachedConf) {
                   const parsedConf = JSON.parse(cachedConf);
-                  if (parsedConf && (parsedConf.clockIn || parsedConf.clock_in)) {
+                  const parsedConfDate = normalizeDateString(parsedConf?.attendanceDate || parsedConf?.date || (parsedConf as any)?.attendance_date);
+                  if (parsedConf && (parsedConf.clockIn || parsedConf.clock_in) && (!parsedConfDate || parsedConfDate === today)) {
                     const normConf = normalizeAttendanceRecord(parsedConf);
                     const idx = mappedAtts.findIndex((m) =>
                       (m.userId === uId || m.user_id === uId || (uNip && (m.userNip === uNip || (m as any).user_nip === uNip))) &&
@@ -953,6 +954,10 @@ export const hrmService = {
                     } else {
                       mappedAtts.unshift(normConf);
                     }
+                  } else {
+                    // Stale cache from another date, purge immediately
+                    localStorage.removeItem(confKey);
+                    if (uNip) localStorage.removeItem(`hrm_confirmed_today_att_${uNip}_${today}`);
                   }
                 }
               }
@@ -2444,8 +2449,11 @@ export const hrmService = {
       const cached = localStorage.getItem(`hrm_confirmed_today_att_${userId}_${today}`);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (parsed && (parsed.clockIn || parsed.clock_in)) {
+        const parsedDate = normalizeDateString(parsed?.attendanceDate || parsed?.date || (parsed as any)?.attendance_date);
+        if (parsed && (parsed.clockIn || parsed.clock_in) && (!parsedDate || parsedDate === today)) {
           fromStorage = normalizeAttendanceRecord(parsed);
+        } else {
+          localStorage.removeItem(`hrm_confirmed_today_att_${userId}_${today}`);
         }
       }
     } catch (e) {}
@@ -2456,11 +2464,16 @@ export const hrmService = {
     const validTargets = [userId, u?.id, u?.email, u?.nip].filter(Boolean);
     const found = list.find((a) => {
       const aUser = a.userId || (a as any).user_id;
-      return validTargets.includes(aUser);
+      const aDate = normalizeDateString(a.attendanceDate || a.date || (a as any).attendance_date);
+      return validTargets.includes(aUser) && (!aDate || aDate === today);
     });
 
     if (found && (found.clockIn || found.clock_in)) {
       const normFound = normalizeAttendanceRecord(found);
+      const foundDate = normalizeDateString(normFound.attendanceDate || normFound.date);
+      if (foundDate && foundDate !== today) {
+        return undefined;
+      }
       // Monotonic guard: jika di storage lokal sudah ada clockOut, pertahankan!
       if (fromStorage?.clockOut && !normFound.clockOut) {
         normFound.clockOut = fromStorage.clockOut;
@@ -2475,6 +2488,14 @@ export const hrmService = {
         if (u?.nip) localStorage.setItem(`hrm_confirmed_today_att_${u.nip}_${today}`, JSON.stringify(normFound));
       } catch (e) {}
       return normFound;
+    }
+
+    if (fromStorage) {
+      const storageDate = normalizeDateString(fromStorage.attendanceDate || fromStorage.date);
+      if (storageDate && storageDate !== today) {
+        localStorage.removeItem(`hrm_confirmed_today_att_${userId}_${today}`);
+        return undefined;
+      }
     }
 
     return fromStorage;
