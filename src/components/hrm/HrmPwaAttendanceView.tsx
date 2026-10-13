@@ -67,7 +67,6 @@ import { livenessEngine } from '@/services/livenessEngine';
 import { geofenceService, GeofenceEvaluation } from '@/services/geofenceService';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { emergencyAlertService } from '@/services/emergencyAlertAudioService';
-import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
 import { HrmFieldAuthorityMobileModal } from '@/components/hrm/HrmFieldAuthorityMobileModal';
 import { HrmPwaSplashScreen } from '@/components/pwa/HrmPwaSplashScreen';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -426,9 +425,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       setShowPwaInstallModal(true);
     }
   };
-
-  // Master Face Enrollment Modal
-  const [enrollModalOpen, setEnrollModalOpen] = useState(false);
 
   // Master Face Descriptor from Database (128-D Normalized Vector)
   const masterDescriptor = useMemo<number[] | null>(() => {
@@ -4583,48 +4579,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </p>
               </div>
 
-              {/* Master Face Biometric Card */}
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <ScanFace className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    <p className="text-xs font-bold text-slate-800 dark:text-white">Master Biometrik Wajah</p>
-                  </div>
-                  <Badge
-                    variant="outline"
-                    className={
-                      masterDescriptor && (masterDescriptor.length === 512 || masterDescriptor.length === 128)
-                        ? 'border-emerald-500/40 text-emerald-600 bg-emerald-500/10 text-[10px]'
-                        : 'border-amber-500/40 text-amber-600 bg-amber-500/10 text-[10px]'
-                    }
-                  >
-                    {masterDescriptor && masterDescriptor.length === 512
-                      ? 'Terdaftar di DB (AI 512-D)'
-                      : masterDescriptor && masterDescriptor.length === 128
-                      ? 'Terdaftar di DB (128-D)'
-                      : 'Belum Terdaftar'}
-                  </Badge>
-                </div>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  {masterDescriptor && masterDescriptor.length === 512
-                    ? 'Vektor biometrik InsightFace AI 512-D aktif dan diverifikasi server-side saat presensi.'
-                    : masterDescriptor && masterDescriptor.length === 128
-                    ? 'Vektor biometrik 128-D aktif dan terverifikasi di database presensi.'
-                    : 'Wajah Anda belum terdaftar. Hubungi Superadmin atau daftarkan wajah Anda agar presensi wajah aktif.'}
-                </p>
-                {(!masterDescriptor || (masterDescriptor.length !== 512 && masterDescriptor.length !== 128)) && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setEnrollModalOpen(true)}
-                    className="w-full rounded-xl text-xs gap-1.5 border-emerald-600/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 font-bold"
-                  >
-                    <ScanFace className="w-3.5 h-3.5" />
-                    Daftarkan Wajah Sekarang
-                  </Button>
-                )}
-              </div>
-
               {/* Perangkat Terdaftar Binding */}
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-1">
                 <div className="flex items-center justify-between">
@@ -5647,19 +5601,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* ─── MODAL ENROLLMENT WAJAH BIOMETRIK MASTER ─── */}
-      <HrmFaceEnrollmentModal
-        open={enrollModalOpen}
-        user={user}
-        onClose={() => setEnrollModalOpen(false)}
-        onSuccess={() => {
-          setEnrollModalOpen(false);
-          refreshUser?.();
-          loadRealData();
-          toast.success('Pendaftaran Biometrik Master Berhasil Disimpan ke Database!');
-        }}
-      />
 
       {/* ─── MODAL PUSAT OTORITAS LAPANGAN & REKAP TIM (PWA MOBILE) ─── */}
       <HrmFieldAuthorityMobileModal
