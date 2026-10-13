@@ -119,6 +119,25 @@ export const HrmLeavePage: React.FC = () => {
     };
   }, [user]);
 
+  // Auto-focus and open targeted request when navigated with id parameter
+  useEffect(() => {
+    const idParam = searchParams.get('id');
+    if (idParam) {
+      if (allLeaves.length > 0) {
+        const match = allLeaves.find((l) => l.id === idParam);
+        if (match) {
+          setSelectedDetailLeave(match);
+        }
+      }
+      if (allOvertimes.length > 0) {
+        const matchOt = allOvertimes.find((o) => o.id === idParam);
+        if (matchOt) {
+          setSelectedDetailOt(matchOt);
+        }
+      }
+    }
+  }, [searchParams, allLeaves, allOvertimes]);
+
   const handleOpenModal = () => {
     const today = new Date().toISOString().split('T')[0];
     setLeaveType('cuti_tahunan');

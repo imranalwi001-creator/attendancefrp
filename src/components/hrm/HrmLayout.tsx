@@ -428,13 +428,31 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
                   hrmService.markNotificationAsRead(n.id);
                   refreshNotifications();
                   
-                  // Role-based smart tab routing
+                  // Extract targeted id and metadata
+                  const meta = n.metadata || {};
+                  const targetId = meta.leaveId || meta.overtimeId || meta.id || '';
+                  const targetUserId = meta.userId || '';
+                  
+                  // Extract employee name from title (e.g. "Budi Prakoso")
+                  let targetName = '';
+                  const titleMatch = (n.title || '').match(/:\s*([A-Za-z\s]+?)(?:\s*\(|$)/);
+                  if (titleMatch && titleMatch[1]) {
+                    targetName = titleMatch[1].trim();
+                  }
+
+                  const isOt = n.type === 'overtime' || (n.title || '').toLowerCase().includes('lembur');
+                  const tabParam = isOt ? 'overtime' : 'leaves';
+                  
+                  const params = new URLSearchParams();
+                  params.set('tab', tabParam);
+                  if (targetId) params.set('id', targetId);
+                  if (targetUserId) params.set('userId', targetUserId);
+                  if (targetName) params.set('search', targetName);
+
                   if (['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'pengawas', 'korlap', 'k3'].includes(currentRole)) {
-                    const isOt = n.type === 'overtime' || (n.title || '').toLowerCase().includes('lembur');
-                    navigate(`/admin/approval?tab=${isOt ? 'overtime' : 'leaves'}`);
+                    navigate(`/admin/approval?${params.toString()}`);
                   } else {
-                    const isOt = n.type === 'overtime' || (n.title || '').toLowerCase().includes('lembur');
-                    navigate(`/pengajuan?tab=${isOt ? 'overtime' : 'leaves'}`);
+                    navigate(`/pengajuan?${params.toString()}`);
                   }
                 }}
                 className={cn(

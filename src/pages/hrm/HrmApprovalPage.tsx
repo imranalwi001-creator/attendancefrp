@@ -42,6 +42,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DatePicker } from '@/components/ui/date-picker';
+import { cn } from '@/lib/utils';
 
 export const HrmApprovalPage: React.FC = () => {
   const { user } = useHrmAuth();
@@ -120,15 +121,35 @@ export const HrmApprovalPage: React.FC = () => {
     }
   }, [searchParams]);
 
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [filterStatus, setFilterStatus] = useState<string>('pending');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Auto-focus and open targeted request when navigated from notifications
+  useEffect(() => {
+    const idParam = searchParams.get('id');
+    const searchParam = searchParams.get('search');
+    if (searchParam) {
+      setSearchQuery(searchParam);
+      setFilterStatus('all');
+    }
+    if (idParam) {
+      setFilterStatus('all');
+      if (leaves.length > 0) {
+        const match = leaves.find((l) => l.id === idParam);
+        if (match) {
+          setLeaveForDetail(match);
+          setDetailModalOpen(true);
+        }
+      }
+    }
+  }, [searchParams, leaves]);
+
   useEffect(() => {
     if (activeTab === 'recap') {
       loadFieldRecap();
     }
   }, [activeTab, fieldRecapPeriod, fieldRecapDivision]);
-
-  const [users, setUsers] = useState<UserProfile[]>([]);
-  const [filterStatus, setFilterStatus] = useState<string>('pending');
-  const [searchQuery, setSearchQuery] = useState('');
 
   // Leave Approval Modal State
   const [modalOpen, setModalOpen] = useState(false);
@@ -541,7 +562,10 @@ export const HrmApprovalPage: React.FC = () => {
     (s) => s.status === 'pending_danru' || s.status === 'pending_korlap' || s.status === 'pending'
   ).length;
 
+  const targetHighlightId = searchParams.get('id');
+
   const filteredLeaves = leaves.filter((l) => {
+    if (targetHighlightId && l.id === targetHighlightId) return true;
     const matchStatus = filterStatus === 'all' || l.status === filterStatus;
     const q = (searchQuery || '').toLowerCase();
     const matchSearch =
@@ -554,6 +578,7 @@ export const HrmApprovalPage: React.FC = () => {
   });
 
   const filteredOvertime = overtimeList.filter((o) => {
+    if (targetHighlightId && o.id === targetHighlightId) return true;
     const matchStatus = filterStatus === 'all' || o.status === filterStatus;
     const q = (searchQuery || '').toLowerCase();
     const matchSearch =
@@ -851,8 +876,9 @@ export const HrmApprovalPage: React.FC = () => {
                     const isSup = isSupervisorApplicant(l.userId, l.userNip, (l as any).forwardedToPimpinan || (l as any).forwarded_to_pimpinan);
                     const canCurrentApproveThis = isSup ? (isPimpinan || isDirut || isSuperAdmin) : canApprove;
 
+                    const isTargetRow = targetHighlightId === l.id;
                     return (
-                    <tr key={l.id} className="hover:bg-muted/30">
+                    <tr key={l.id} className={cn("hover:bg-muted/30 transition-all", isTargetRow && "bg-primary/10 ring-2 ring-primary/40 font-semibold shadow-xs")}>
                       <td className="py-3 px-4">
                         <p className="font-semibold text-foreground">{l.userName}</p>
                         <p className="text-[11px] text-muted-foreground font-mono">{l.userNip} • {l.divisionName}</p>
@@ -1001,8 +1027,9 @@ export const HrmApprovalPage: React.FC = () => {
                     const isSup = isSupervisorApplicant(o.userId, o.userNip, (o as any).forwardedToPimpinan || (o as any).forwarded_to_pimpinan);
                     const canCurrentApproveThis = isSup ? (isPimpinan || isDirut || isSuperAdmin) : canApprove;
 
+                    const isTargetRow = targetHighlightId === o.id;
                     return (
-                    <tr key={o.id} className="hover:bg-muted/30">
+                    <tr key={o.id} className={cn("hover:bg-muted/30 transition-all", isTargetRow && "bg-primary/10 ring-2 ring-primary/40 font-semibold shadow-xs")}>
                       <td className="py-3 px-4">
                         <p className="font-semibold text-foreground">{o.userName}</p>
                         <p className="text-[11px] text-muted-foreground font-mono">{o.userNip} • {o.divisionName}</p>
