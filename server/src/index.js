@@ -1691,12 +1691,14 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         if (aiRes.ok) {
           const aiData = await aiRes.json();
           if (aiData.success) {
-            if (aiData.is_spoof) {
+            if (aiData.is_spoof && !aiData.is_match) {
               return res.status(400).json({
                 success: false,
                 error: `Presensi Ditolak! ${aiData.error || 'Terdeteksi kecurangan: citra berasal dari layar HP / rekaman video sekunder.'}`,
                 code: 'PRESENTATION_ATTACK_DETECTED'
               });
+            } else if (aiData.is_spoof) {
+              detectedFlags.push('ENVIRONMENT_LINE_FLAG');
             }
             computedBiometricMatch = aiData.is_match;
             computedBiometricScore = aiData.confidence;
