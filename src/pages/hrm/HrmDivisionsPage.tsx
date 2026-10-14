@@ -622,29 +622,33 @@ export const HrmDivisionsPage: React.FC = () => {
   const loadPosts = async () => {
     try {
       const dbPosts = await fieldSentinelService.getFieldPosts();
+      const map = new Map<string, DivisionAssignedPost>();
+      
+      // 1. Masukkan preset resmi sistem
+      FIELD_SENTINEL_6_POST_PRESETS.forEach((p) => {
+        const key = (p.code || p.name).trim().toUpperCase();
+        map.set(key, { ...p });
+      });
+
+      // 2. Gabungkan dengan data dari database (hrm_field_assigned_posts)
       if (Array.isArray(dbPosts) && dbPosts.length > 0) {
-        const map = new Map<string, DivisionAssignedPost>();
-        FIELD_SENTINEL_6_POST_PRESETS.forEach((p) => {
-          const key = `${p.latitude.toFixed(6)}_${p.longitude.toFixed(6)}`;
-          map.set(key, p);
-        });
         dbPosts.forEach((p) => {
-          const key = `${Number(p.latitude).toFixed(6)}_${Number(p.longitude).toFixed(6)}`;
+          const key = (p.postCode || p.postName || `${Number(p.latitude).toFixed(6)}_${Number(p.longitude).toFixed(6)}`).trim().toUpperCase();
           const existing = map.get(key);
           map.set(key, {
             code: p.postCode || existing?.code || p.postName.toUpperCase(),
             name: p.postName,
             latitude: Number(p.latitude),
             longitude: Number(p.longitude),
-            radiusMeters: Number(p.radiusMeters) || 50,
+            radiusMeters: Number(p.radiusMeters) || existing?.radiusMeters || 50,
             description: p.description || existing?.description || p.postName,
             allowClockIn: existing ? existing.allowClockIn : true,
             allowClockOut: existing ? existing.allowClockOut : true,
             isClockOutOnly: existing ? existing.isClockOutOnly : false,
           });
         });
-        setOfficialPostsList(Array.from(map.values()));
       }
+      setOfficialPostsList(Array.from(map.values()));
     } catch (err) {
       console.warn('Gagal memuat pos lapangan dinamis:', err);
     }
@@ -1334,17 +1338,22 @@ export const HrmDivisionsPage: React.FC = () => {
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {officialPostsList.map((preset) => {
                     const isSelected = allowedPosts.some(
-                      (p) => p.code === preset.code || (p.latitude === preset.latitude && p.longitude === preset.longitude)
+                      (p) =>
+                        (p.code && preset.code && p.code.trim().toUpperCase() === preset.code.trim().toUpperCase()) ||
+                        (p.name && preset.name && p.name.trim().toLowerCase() === preset.name.trim().toLowerCase())
                     );
                     const isPrimary = latitude === preset.latitude && longitude === preset.longitude;
 
                     return (
                       <div
-                        key={preset.code}
+                        key={preset.code || preset.name}
                         onClick={() => {
                           if (isSelected) {
                             const next = allowedPosts.filter(
-                              (p) => !(p.code === preset.code || (p.latitude === preset.latitude && p.longitude === preset.longitude))
+                              (p) => !(
+                                (p.code && preset.code && p.code.trim().toUpperCase() === preset.code.trim().toUpperCase()) ||
+                                (p.name && preset.name && p.name.trim().toLowerCase() === preset.name.trim().toLowerCase())
+                              )
                             );
                             setAllowedPosts(next);
                             if (isPrimary && next.length > 0) {
@@ -1512,7 +1521,9 @@ export const HrmDivisionsPage: React.FC = () => {
                 <div className="space-y-2 mt-2">
                   {officialPostsList.map((preset) => {
                     const existingIdx = allowedPosts.findIndex(
-                      (p) => p.code === preset.code || (p.latitude === preset.latitude && p.longitude === preset.longitude)
+                      (p) =>
+                        (p.code && preset.code && p.code.trim().toUpperCase() === preset.code.trim().toUpperCase()) ||
+                        (p.name && preset.name && p.name.trim().toLowerCase() === preset.name.trim().toLowerCase())
                     );
                     const isChecked = existingIdx !== -1;
                     const currentPost = isChecked ? allowedPosts[existingIdx] : preset;
@@ -1522,7 +1533,7 @@ export const HrmDivisionsPage: React.FC = () => {
 
                     return (
                       <div
-                        key={preset.code}
+                        key={preset.code || preset.name}
                         className={`p-2.5 rounded-xl border transition-all text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
                           isChecked ? 'bg-card border-primary/40 shadow-xs' : 'bg-muted/20 border-border/60 opacity-70'
                         }`}
