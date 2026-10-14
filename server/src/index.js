@@ -8729,6 +8729,7 @@ app.get('/api/employee-schedules', async (req, res) => {
         s.user_id as "userId",
         p.full_name as "userName",
         p.nip as "userNip",
+        p.employee_sequence_no as "employeeSequenceNo",
         p.division_id as "divisionId",
         p.division_name as "divisionName",
         TO_CHAR(s.schedule_date, 'YYYY-MM-DD') as "scheduleDate",
@@ -8768,7 +8769,7 @@ app.get('/api/employee-schedules', async (req, res) => {
       query += ` AND EXTRACT(YEAR FROM s.schedule_date) = $${params.length}`;
     }
 
-    query += ` ORDER BY s.schedule_date ASC, p.full_name ASC`;
+    query += ` ORDER BY s.schedule_date ASC, COALESCE(p.employee_sequence_no, 999) ASC, p.nip ASC, p.full_name ASC`;
     const result = await pool.query(query, params);
     res.json({ success: true, data: result.rows });
   } catch (err) {

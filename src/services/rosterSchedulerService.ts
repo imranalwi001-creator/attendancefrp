@@ -35,6 +35,8 @@ export interface DailyAssignment {
 export interface EmployeeRoster {
   employeeId: string;
   employeeName: string;
+  userNip?: string;
+  sequenceNo?: number;
   assignments: Record<string, DailyAssignment>; // key is YYYY-MM-DD
   totalWorkHours: number;
   totalWorkDays: number;

@@ -1740,6 +1740,7 @@ export const hrmService = {
           userId: r.employeeId,
           userName: r.employeeName,
           userNip: u?.nip || '',
+          employeeSequenceNo: (u as any)?.employeeSequenceNo || 999,
           divisionId: userDivId,
           scheduleDate: dateStr,
           shiftId: matchedMasterShift?.id || asg?.shiftId || undefined,
@@ -1786,11 +1787,27 @@ export const hrmService = {
     const daysInMonth = new Date(year, month, 0).getDate();
     const rosterMap: Record<string, any> = {};
 
+    // Lookup master user order (by employeeSequenceNo or NIP)
+    const allUsers = hrmService.getUsers();
+    const userMetaMap = new Map<string, { seq: number; nip: string }>();
+    allUsers.forEach((u) => {
+      userMetaMap.set(u.id, {
+        seq: (u as any).employeeSequenceNo ?? 999,
+        nip: u.nip || '',
+      });
+    });
+
     schedules.forEach((s) => {
       if (!rosterMap[s.userId]) {
+        const uMeta = userMetaMap.get(s.userId);
+        const seq = (s as any).employeeSequenceNo ?? uMeta?.seq ?? 999;
+        const nip = s.userNip || uMeta?.nip || '';
+
         rosterMap[s.userId] = {
           employeeId: s.userId,
           employeeName: s.userName,
+          userNip: nip,
+          sequenceNo: seq,
           assignments: {},
           totalWorkHours: 0,
           totalWorkDays: 0,
@@ -1818,11 +1835,25 @@ export const hrmService = {
       }
     });
 
+    const sortedRosters = Object.values(rosterMap).sort((a: any, b: any) => {
+      const seqA = a.sequenceNo ?? 999;
+      const seqB = b.sequenceNo ?? 999;
+      if (seqA !== seqB) {
+        return seqA - seqB;
+      }
+      const nipA = a.userNip || '';
+      const nipB = b.userNip || '';
+      if (nipA && nipB) {
+        return nipA.localeCompare(nipB);
+      }
+      return a.employeeName.localeCompare(b.employeeName);
+    });
+
     return {
       month,
       year,
       daysInMonth,
-      rosters: Object.values(rosterMap),
+      rosters: sortedRosters,
       audit: {
         violations: [],
         fairnessIndex: 90,
@@ -1847,6 +1878,7 @@ export const hrmService = {
           userId: s.userId || s.user_id,
           userName: s.userName || s.user_name || s.full_name,
           userNip: s.userNip || s.user_nip || s.nip,
+          employeeSequenceNo: Number(s.employeeSequenceNo ?? s.employee_sequence_no ?? 999),
           divisionId: s.divisionId || s.division_id,
           scheduleDate: (s.scheduleDate || s.schedule_date || '').split('T')[0],
           shiftId: s.shiftId || s.shift_id,

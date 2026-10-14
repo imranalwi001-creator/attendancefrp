@@ -144,7 +144,17 @@ export const HrmDivisionsPage: React.FC = () => {
   const [importDirectSave, setImportDirectSave] = useState(true);
 
   const getTargetEmployees = (divId: string = rosterSelectedDivId): EmployeeScheduleTarget[] => {
-    const allUsers = users.length > 0 ? users : hrmService.getUsers();
+    const rawUsers = users.length > 0 ? users : hrmService.getUsers();
+    const allUsers = [...rawUsers].sort((a, b) => {
+      const seqA = (a as any).employeeSequenceNo ?? 999;
+      const seqB = (b as any).employeeSequenceNo ?? 999;
+      if (seqA !== seqB) return seqA - seqB;
+      const nipA = a.nip || '';
+      const nipB = b.nip || '';
+      if (nipA && nipB) return nipA.localeCompare(nipB);
+      return a.fullName.localeCompare(b.fullName);
+    });
+
     if (divId === 'all') {
       return allUsers.map((u) => ({
         id: u.id,
@@ -154,7 +164,16 @@ export const HrmDivisionsPage: React.FC = () => {
       }));
     } else {
       const emps = divisionEmployeesMap[divId] || allUsers.filter((u) => u.divisionId === divId);
-      return emps.map((u) => ({
+      const sortedEmps = [...emps].sort((a, b) => {
+        const seqA = (a as any).employeeSequenceNo ?? 999;
+        const seqB = (b as any).employeeSequenceNo ?? 999;
+        if (seqA !== seqB) return seqA - seqB;
+        const nipA = a.nip || '';
+        const nipB = b.nip || '';
+        if (nipA && nipB) return nipA.localeCompare(nipB);
+        return a.fullName.localeCompare(b.fullName);
+      });
+      return sortedEmps.map((u) => ({
         id: u.id,
         name: u.fullName,
         position: u.roleName,

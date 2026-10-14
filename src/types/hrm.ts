@@ -369,6 +369,7 @@ export interface EmployeeSchedule {
   durationHours: number;
   isNightShift: boolean;
   isOff: boolean;
+  employeeSequenceNo?: number;
   notes?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -401,6 +402,7 @@ export interface UserProfile {
   originalDivisionName?: string;
   assignmentNotes?: string;      // Catatan penugasan lokasi kerja baru
   shiftId?: string;
+  employeeSequenceNo?: number;
   avatarUrl?: string;
   annualLeaveQuota: number;
   usedLeaveDays: number;
