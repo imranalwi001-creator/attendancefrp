@@ -152,6 +152,13 @@ export const HrmDivisionsPage: React.FC = () => {
       const isFrB = nipB.startsWith('FR');
       if (isFrA && !isFrB) return -1;
       if (!isFrA && isFrB) return 1;
+
+      const numA = parseInt(nipA.replace(/[^0-9]/g, ''), 10);
+      const numB = parseInt(nipB.replace(/[^0-9]/g, ''), 10);
+      if (!isNaN(numA) && !isNaN(numB) && numA !== numB) {
+        return numA - numB;
+      }
+
       if (nipA && nipB) {
         return nipA.localeCompare(nipB, undefined, { numeric: true, sensitivity: 'base' });
       }

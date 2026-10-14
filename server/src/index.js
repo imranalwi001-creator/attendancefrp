@@ -8769,7 +8769,7 @@ app.get('/api/employee-schedules', async (req, res) => {
       query += ` AND EXTRACT(YEAR FROM s.schedule_date) = $${params.length}`;
     }
 
-    query += ` ORDER BY s.schedule_date ASC, CASE WHEN p.nip LIKE 'FR%' THEN 0 ELSE 1 END, p.nip ASC, p.full_name ASC`;
+    query += ` ORDER BY s.schedule_date ASC, CASE WHEN p.nip LIKE 'FR%' THEN 0 ELSE 1 END, NULLIF(REGEXP_REPLACE(p.nip, '[^0-9]', '', 'g'), '')::INT ASC NULLS LAST, p.nip ASC, p.full_name ASC`;
     const result = await pool.query(query, params);
     res.json({ success: true, data: result.rows });
   } catch (err) {
