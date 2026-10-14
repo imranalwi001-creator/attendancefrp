@@ -145,15 +145,22 @@ export const HrmDivisionsPage: React.FC = () => {
 
   const getTargetEmployees = (divId: string = rosterSelectedDivId): EmployeeScheduleTarget[] => {
     const rawUsers = users.length > 0 ? users : hrmService.getUsers();
-    const allUsers = [...rawUsers].sort((a, b) => {
-      const seqA = (a as any).employeeSequenceNo ?? 999;
-      const seqB = (b as any).employeeSequenceNo ?? 999;
-      if (seqA !== seqB) return seqA - seqB;
+    const sortFn = (a: any, b: any) => {
       const nipA = a.nip || '';
       const nipB = b.nip || '';
-      if (nipA && nipB) return nipA.localeCompare(nipB);
+      const isFrA = nipA.startsWith('FR');
+      const isFrB = nipB.startsWith('FR');
+      if (isFrA && !isFrB) return -1;
+      if (!isFrA && isFrB) return 1;
+      if (nipA && nipB) {
+        return nipA.localeCompare(nipB, undefined, { numeric: true, sensitivity: 'base' });
+      }
+      if (nipA) return -1;
+      if (nipB) return 1;
       return a.fullName.localeCompare(b.fullName);
-    });
+    };
+
+    const allUsers = [...rawUsers].sort(sortFn);
 
     if (divId === 'all') {
       return allUsers.map((u) => ({
@@ -164,15 +171,7 @@ export const HrmDivisionsPage: React.FC = () => {
       }));
     } else {
       const emps = divisionEmployeesMap[divId] || allUsers.filter((u) => u.divisionId === divId);
-      const sortedEmps = [...emps].sort((a, b) => {
-        const seqA = (a as any).employeeSequenceNo ?? 999;
-        const seqB = (b as any).employeeSequenceNo ?? 999;
-        if (seqA !== seqB) return seqA - seqB;
-        const nipA = a.nip || '';
-        const nipB = b.nip || '';
-        if (nipA && nipB) return nipA.localeCompare(nipB);
-        return a.fullName.localeCompare(b.fullName);
-      });
+      const sortedEmps = [...emps].sort(sortFn);
       return sortedEmps.map((u) => ({
         id: u.id,
         name: u.fullName,
@@ -2248,8 +2247,8 @@ export const HrmDivisionsPage: React.FC = () => {
               <table className="w-full border-collapse text-xs">
                 <thead>
                   <tr className="bg-muted/60 border-b border-border text-[11px]">
-                    <th className="sticky left-0 bg-muted/95 z-20 px-3 py-2 text-left font-bold min-w-[170px] border-r border-border">
-                      Karyawan
+                    <th className="sticky left-0 bg-muted/95 z-20 px-3 py-2 text-left font-bold min-w-[220px] border-r border-border">
+                      NIP & Karyawan
                     </th>
                     {Array.from({ length: rosterResult.daysInMonth }, (_, i) => i + 1).map((d) => {
                       const dt = new Date(rosterResult.year, rosterResult.month - 1, d);
@@ -2285,7 +2284,14 @@ export const HrmDivisionsPage: React.FC = () => {
                   {rosterResult.rosters.map((r) => (
                     <tr key={r.employeeId} className="hover:bg-muted/20 transition-colors">
                       <td className="sticky left-0 bg-card z-10 px-3 py-2 font-sans font-semibold text-foreground border-r border-border truncate">
-                        {r.employeeName}
+                        <div className="flex items-center gap-1.5">
+                          {r.userNip && (
+                            <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 px-1 py-0.5 rounded font-bold border border-emerald-500/20 shrink-0">
+                              {r.userNip}
+                            </span>
+                          )}
+                          <span className="truncate">{r.employeeName}</span>
+                        </div>
                       </td>
                       {Array.from({ length: rosterResult.daysInMonth }, (_, i) => i + 1).map((d) => {
                         const dateStr = `${rosterResult.year}-${String(rosterResult.month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;

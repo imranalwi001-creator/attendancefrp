@@ -1836,15 +1836,21 @@ export const hrmService = {
     });
 
     const sortedRosters = Object.values(rosterMap).sort((a: any, b: any) => {
+      const nipA = a.userNip || '';
+      const nipB = b.userNip || '';
+      const isFrA = nipA.startsWith('FR');
+      const isFrB = nipB.startsWith('FR');
+      if (isFrA && !isFrB) return -1;
+      if (!isFrA && isFrB) return 1;
+      if (nipA && nipB) {
+        return nipA.localeCompare(nipB, undefined, { numeric: true, sensitivity: 'base' });
+      }
+      if (nipA) return -1;
+      if (nipB) return 1;
       const seqA = a.sequenceNo ?? 999;
       const seqB = b.sequenceNo ?? 999;
       if (seqA !== seqB) {
         return seqA - seqB;
-      }
-      const nipA = a.userNip || '';
-      const nipB = b.userNip || '';
-      if (nipA && nipB) {
-        return nipA.localeCompare(nipB);
       }
       return a.employeeName.localeCompare(b.employeeName);
     });
