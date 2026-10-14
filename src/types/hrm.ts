@@ -448,6 +448,7 @@ export interface UserProfile {
   contractEndDate?: string;      // YYYY-MM-DD (untuk PKWT)
   bpjsKesehatan?: string;        // No. BPJS Kesehatan
   bpjsKetenagakerjaan?: string;  // No. BPJS Ketenagakerjaan
+  operationalGroup?: 'RUMAH TANGGA' | 'SHIPMENT' | string; // RUMAH TANGGA (FR07001-FR07033) vs SHIPMENT (FR07034-FR07080)
   kepalaReguId?: string;         // UUID of assigned Kepala Regu (Danru)
   kepalaReguName?: string;       // Name of assigned Kepala Regu (Danru)
 
@@ -656,6 +657,7 @@ export interface EmployeeSalaryProfile {
   bankName: string;
   bankAccount: string;
   bankAccountName: string;
+  operationalGroup?: 'RUMAH TANGGA' | 'SHIPMENT' | string;
   effectiveDate: string;           // YYYY-MM-DD, sejak kapan berlaku
   updatedAt: string;
 }

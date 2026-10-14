@@ -437,6 +437,7 @@ function formatUserRow(r) {
     contractEndDate: r.contract_end_date,
     bpjsKesehatan: r.bpjs_kesehatan || '',
     bpjsKetenagakerjaan: r.bpjs_ketenagakerjaan || '',
+    operationalGroup: r.operational_group || (r.nip >= 'FR07034' && r.nip <= 'FR07080' ? 'SHIPMENT' : (r.nip >= 'FR07001' && r.nip <= 'FR07033' ? 'RUMAH TANGGA' : null)),
     annualLeaveQuota: r.annual_leave_quota ?? 12,
     usedLeaveDays: r.used_leave_days || 0,
     emergencyDiscretionaryQuota: r.emergency_discretionary_quota ?? 2,
