@@ -19,7 +19,9 @@ import {
   FileCheck2,
   CalendarCheck,
   Paperclip,
+  Plus,
 } from 'lucide-react';
+import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
 
 export const HrmCutiManagementTab: React.FC = () => {
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
@@ -39,6 +41,9 @@ export const HrmCutiManagementTab: React.FC = () => {
 
   // Attachment Preview Modal
   const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
+
+  // Manual Leave Modal State
+  const [manualLeaveModalOpen, setManualLeaveModalOpen] = useState(false);
 
   const loadData = () => {
     setIsLoading(true);
@@ -229,16 +234,26 @@ export const HrmCutiManagementTab: React.FC = () => {
               </CardDescription>
             </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={loadData}
-              disabled={isLoading}
-              className="h-8 text-xs rounded-xl gap-1.5"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-              Muat Ulang
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadData}
+                disabled={isLoading}
+                className="h-8 text-xs rounded-xl gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                Muat Ulang
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setManualLeaveModalOpen(true)}
+                className="h-8 text-xs rounded-xl gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Input Cuti / Izin Manual
+              </Button>
+            </div>
           </div>
         </CardHeader>
 
@@ -476,6 +491,13 @@ export const HrmCutiManagementTab: React.FC = () => {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Modal Input Cuti / Izin Manual Superadmin */}
+      <HrmManualLeaveModal
+        open={manualLeaveModalOpen}
+        onClose={() => setManualLeaveModalOpen(false)}
+        onSuccess={() => loadData()}
+      />
     </div>
   );
 };

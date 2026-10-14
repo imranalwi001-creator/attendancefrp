@@ -39,10 +39,14 @@ import {
   KeyRound,
   Crosshair,
   Sliders,
+  Clock,
+  CalendarCheck,
 } from 'lucide-react';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
 import { HrmAssignFieldLocationModal } from '@/components/hrm/HrmAssignFieldLocationModal';
 import { HrmEmployeePolicyModal } from '@/components/hrm/HrmEmployeePolicyModal';
+import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
+import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
 import {
   preprocessKtpImage,
   parseAndValidateNik,
@@ -97,6 +101,12 @@ export const HrmEmployeesPage: React.FC = () => {
   // Individual Employee Policy Modal State (Cuti, Izin & Lembur)
   const [policyModalOpen, setPolicyModalOpen] = useState(false);
   const [policyModalUser, setPolicyModalUser] = useState<UserProfile | null>(null);
+
+  // Manual Overtime & Leave Modals
+  const [manualLemburModalOpen, setManualLemburModalOpen] = useState(false);
+  const [manualLemburUser, setManualLemburUser] = useState<UserProfile | null>(null);
+  const [manualLeaveModalOpen, setManualLeaveModalOpen] = useState(false);
+  const [manualLeaveUser, setManualLeaveUser] = useState<UserProfile | null>(null);
 
   // Bulk Import State
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
@@ -1100,6 +1110,34 @@ export const HrmEmployeesPage: React.FC = () => {
                             title={`Pengaturan Cuti, Izin & Lembur Khusus - ${u.fullName}`}
                           >
                             <Sliders className="w-4 h-4 text-purple-600" />
+                          </Button>
+
+                          {/* Input SPKL Lembur Manual Button */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setManualLemburUser(u);
+                              setManualLemburModalOpen(true);
+                            }}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-blue-600 hover:bg-blue-500/10 rounded-lg transition-colors"
+                            title={`Input SPKL Lembur Manual - ${u.fullName}`}
+                          >
+                            <Clock className="w-4 h-4 text-blue-600" />
+                          </Button>
+
+                          {/* Input Cuti / Izin Manual Button */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setManualLeaveUser(u);
+                              setManualLeaveModalOpen(true);
+                            }}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-500/10 rounded-lg transition-colors"
+                            title={`Input Cuti & Izin Manual - ${u.fullName}`}
+                          >
+                            <CalendarCheck className="w-4 h-4 text-indigo-600" />
                           </Button>
 
                           {/* Mutasi / Pindah Lokasi Button */}
@@ -2441,6 +2479,26 @@ export const HrmEmployeesPage: React.FC = () => {
         onClose={() => setPolicyModalOpen(false)}
         user={policyModalUser}
         onSaved={() => {
+          loadData();
+        }}
+      />
+
+      {/* Manual Lembur Modal */}
+      <HrmManualLemburModal
+        open={manualLemburModalOpen}
+        onClose={() => setManualLemburModalOpen(false)}
+        preselectedUser={manualLemburUser}
+        onSuccess={() => {
+          loadData();
+        }}
+      />
+
+      {/* Manual Leave Modal */}
+      <HrmManualLeaveModal
+        open={manualLeaveModalOpen}
+        onClose={() => setManualLeaveModalOpen(false)}
+        preselectedUser={manualLeaveUser}
+        onSuccess={() => {
           loadData();
         }}
       />

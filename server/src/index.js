@@ -5571,18 +5571,23 @@ app.get('/api/leaves/substitute-candidates', async (req, res) => {
 });
 
 app.post('/api/leaves', async (req, res) => {
-  const { userId, leaveType, startDate, endDate, totalDays, reason, attachmentUrl, substituteId, substituteName, substituteNip } = req.body;
+  const { userId, leaveType, startDate, endDate, totalDays, reason, attachmentUrl, substituteId, substituteName, substituteNip, assignedByAdmin, isManualAdmin, status: requestedStatus, approvalNotes, adminId, adminName } = req.body;
   if (!userId || !startDate || !endDate || !reason) {
     return res.status(400).json({ success: false, error: 'Data pengajuan cuti tidak lengkap (userId, tanggal, alasan wajib diisi)' });
   }
 
-  // Wajib Upload Foto Bukti Pendukung & Alasan
-  if (!attachmentUrl || !attachmentUrl.trim()) {
+  const isAdminDirect = Boolean(assignedByAdmin || isManualAdmin || requestedStatus === 'approved');
+  const targetStatus = isAdminDirect ? (requestedStatus || 'approved') : 'pending';
+
+  // Wajib Upload Foto Bukti Pendukung & Alasan (kecuali jika input manual superadmin)
+  if (!isAdminDirect && (!attachmentUrl || !attachmentUrl.trim())) {
     return res.status(400).json({
       success: false,
       error: 'Semua pengajuan cuti, izin, dan izin darurat WAJIB melampirkan foto bukti pendukung (surat sakit/foto kondisi/bukti kegiatan) dan alasan jelas.',
     });
   }
+
+  const finalAttachment = attachmentUrl?.trim() || (isAdminDirect ? 'DISPENSASI_MANUAL_SUPERADMIN' : null);
 
   try {
     let validUserId = userId;
@@ -5624,8 +5629,8 @@ app.post('/api/leaves', async (req, res) => {
     let finalReason = reason.trim();
     let isUrgentSubmission = false;
 
-    // Aturan Cuti Tahunan: Cek sisa kuota dan tandai jika pengajuan mendesak (< H-3)
-    if (type === 'cuti_tahunan' || type === 'annual_leave') {
+    // Aturan Cuti Tahunan: Cek sisa kuota jika bukan bypass admin
+    if ((type === 'cuti_tahunan' || type === 'annual_leave') && !isAdminDirect) {
       const annualQuota = userProfile.annual_leave_quota ?? 12;
       const usedDays = userProfile.used_leave_days || 0;
       const remainingQuota = Math.max(0, annualQuota - usedDays);
@@ -5648,11 +5653,18 @@ app.post('/api/leaves', async (req, res) => {
       validSubId = substituteId;
     }
 
+    let validApproverId = null;
+    if (adminId && UUID_REGEX.test(adminId)) {
+      validApproverId = adminId;
+    }
+
+    const finalNotes = approvalNotes || (targetStatus === 'approved' ? 'Disetujui langsung oleh Super Administrator' : null);
+
     const query = `
       INSERT INTO hrm_leave_requests (
         user_id, leave_type, start_date, end_date, total_days, reason, attachment_url,
-        substitute_id, substitute_name, substitute_nip, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
+        substitute_id, substitute_name, substitute_nip, status, approved_by, approved_at, approval_notes
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *;
     `;
     const result = await pool.query(query, [
@@ -5662,11 +5674,34 @@ app.post('/api/leaves', async (req, res) => {
       endDate,
       requestedDays,
       finalReason,
-      attachmentUrl || null,
+      finalAttachment,
       validSubId,
       substituteName || null,
       substituteNip || null,
+      targetStatus,
+      targetStatus === 'approved' ? validApproverId : null,
+      targetStatus === 'approved' ? new Date() : null,
+      finalNotes,
     ]);
+
+    // Update real-time kuota cuti / izin di profil jika langsung approved
+    if (targetStatus === 'approved') {
+      if (type === 'cuti_tahunan' || type === 'annual_leave') {
+        await pool.query(`
+          UPDATE hrm_profiles SET
+            used_leave_days = COALESCE(used_leave_days, 0) + $1,
+            updated_at = NOW()
+          WHERE id = $2;
+        `, [requestedDays, validUserId]);
+      } else if (type === 'izin' || type === 'permission') {
+        await pool.query(`
+          UPDATE hrm_profiles SET
+            used_permission_days = COALESCE(used_permission_days, 0) + $1,
+            updated_at = NOW()
+          WHERE id = $2;
+        `, [requestedDays, validUserId]);
+      }
+    }
 
     const leaveRow = result.rows[0];
     const typeLabel = type.replace(/_/g, ' ').toUpperCase();
@@ -5964,21 +5999,32 @@ app.post('/api/overtime', async (req, res) => {
     supervisorName,
     supervisorSignature,
     scheduledEndTime,
+    assignedByAdmin,
+    isManualAdmin,
+    status: requestedStatus,
+    approvalNotes,
+    adminId,
+    adminName,
   } = req.body;
 
   if (!userId || !date || !startTime || !endTime) {
     return res.status(400).json({ success: false, error: 'Data pengajuan lembur tidak lengkap (userId, tanggal, jam mulai & selesai wajib diisi)' });
   }
 
-  // Wajib uraian tugas dan foto bukti lembur
+  // Wajib uraian tugas lembur
   if (!taskDescription || !taskDescription.trim()) {
     return res.status(400).json({ success: false, error: 'Uraian tugas/pekerjaan lembur wajib diisi sebelum mengajukan SPL.' });
   }
 
+  const isAdminDirect = Boolean(assignedByAdmin || isManualAdmin || requestedStatus === 'approved');
+  const targetStatus = isAdminDirect ? (requestedStatus || 'approved') : 'pending';
+
   const proofPhoto = taskPhotoUrl || attachmentUrl;
-  if (!proofPhoto || !proofPhoto.trim()) {
+  if (!isAdminDirect && (!proofPhoto || !proofPhoto.trim())) {
     return res.status(400).json({ success: false, error: 'Pengajuan lembur WAJIB melampirkan foto bukti pekerjaan / lokasi tugas sebelum submit.' });
   }
+
+  const finalProofPhoto = proofPhoto?.trim() || (isAdminDirect ? 'MANDAT_MANUAL_SUPERADMIN' : null);
 
   try {
     let validUserId = userId;
@@ -6044,10 +6090,19 @@ app.post('/api/overtime', async (req, res) => {
       }
     }
 
+    let validApproverId = null;
+    if (adminId && UUID_REGEX.test(adminId)) {
+      validApproverId = adminId;
+    }
+
+    const finalApproverName = targetStatus === 'approved' ? (adminName || 'Super Administrator') : null;
+    const finalApprovalNotes = targetStatus === 'approved' ? (approvalNotes || 'Ditugaskan dan disahkan langsung oleh Super Administrator') : null;
+    const finalPhase = targetStatus === 'approved' ? 'completed' : 'requested';
+
     const query = `
       INSERT INTO hrm_overtime_records (
-        user_id, date, start_time, end_time, scheduled_end_time, duration_hours, task_description, rate_applied, compensation_amount, status, supervisor_name, supervisor_signature, task_photo_url, overtime_phase
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11, $12, 'requested')
+        user_id, date, start_time, end_time, scheduled_end_time, duration_hours, approved_hours, task_description, rate_applied, compensation_amount, status, supervisor_name, supervisor_signature, task_photo_url, overtime_phase, approved_by, approved_by_name, approval_notes
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING *;
     `;
     const result = await pool.query(query, [
@@ -6057,15 +6112,52 @@ app.post('/api/overtime', async (req, res) => {
       endTime,
       scheduledEndTime || endTime,
       hours,
+      targetStatus === 'approved' ? hours : null,
       taskDescription.trim(),
       officialRate,
       comp,
+      targetStatus,
       supervisorName || null,
       supervisorSignature || null,
-      proofPhoto || null,
+      finalProofPhoto,
+      finalPhase,
+      targetStatus === 'approved' ? validApproverId : null,
+      finalApproverName,
+      finalApprovalNotes,
     ]);
 
     const otRow = result.rows[0];
+
+    if (isAdminDirect && targetStatus === 'approved') {
+      if (userProfile.phone) {
+        const empWaMsg = `⏱️ *SURAT PERINTAH KERJA LEMBUR (SPKL) RESMI DITERBITKAN*\n\n` +
+          `Halo *${userProfile.full_name}*,\n` +
+          `Anda telah resmi ditugaskan lembur oleh *${finalApproverName}*:\n\n` +
+          `📅 Tanggal: *${date}* (${startTime} - ${endTime}, ${hours} Jam)\n` +
+          `📝 Tugas: "${taskDescription}"\n` +
+          `📌 Status: *DISETUJUI RESMI*\n` +
+          `💬 Catatan: "${finalApprovalNotes}"\n\n` +
+          `⚡ Surat perintah lembur ini telah tercatat resmi di database operasional HRM PT FRP.`;
+        sendWhatsAppAlert({ phone: userProfile.phone, message: empWaMsg }).catch(() => {});
+      }
+
+      await broadcastNotification({
+        recipientRoles: ['superadmin', 'admin', 'pimpinan'],
+        title: `⏱️ SPKL Lembur Manual Disahkan: ${userProfile.full_name}`,
+        message: `${userProfile.full_name} ditugaskan lembur ${hours} Jam pada ${date} oleh ${finalApproverName}.`,
+        type: 'overtime',
+        link: '/admin/lembur',
+        metadata: { overtimeId: otRow.id, userId: validUserId, date, hours },
+        divisionId: userProfile.division_id || null,
+      });
+
+      return res.json({
+        success: true,
+        data: otRow,
+        message: 'Surat Perintah Lembur berhasil diterbitkan dan langsung disetujui.',
+      });
+    }
+
     const submitterRole = (userProfile.role_name || userProfile.role_code || '').toLowerCase();
     const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
     const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;

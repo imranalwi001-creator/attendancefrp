@@ -20,7 +20,9 @@ import {
   RefreshCw,
   AlertCircle,
   Briefcase,
+  Plus,
 } from 'lucide-react';
+import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
 
 export const HrmLemburManagementTab: React.FC = () => {
   const [records, setRecords] = useState<OvertimeRecord[]>([]);
@@ -40,6 +42,9 @@ export const HrmLemburManagementTab: React.FC = () => {
 
   // Photo Preview Modal
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
+  // Manual Overtime Modal
+  const [manualModalOpen, setManualModalOpen] = useState(false);
 
   const loadData = () => {
     setIsLoading(true);
@@ -296,16 +301,26 @@ export const HrmLemburManagementTab: React.FC = () => {
               </CardDescription>
             </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={loadData}
-              disabled={isLoading}
-              className="h-8 text-xs rounded-xl gap-1.5"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-              Muat Ulang
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadData}
+                disabled={isLoading}
+                className="h-8 text-xs rounded-xl gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                Muat Ulang
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setManualModalOpen(true)}
+                className="h-8 text-xs rounded-xl gap-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Input Lembur Manual
+              </Button>
+            </div>
           </div>
         </CardHeader>
 
@@ -552,6 +567,13 @@ export const HrmLemburManagementTab: React.FC = () => {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Modal Input Lembur Manual Superadmin */}
+      <HrmManualLemburModal
+        open={manualModalOpen}
+        onClose={() => setManualModalOpen(false)}
+        onSuccess={() => loadData()}
+      />
     </div>
   );
 };

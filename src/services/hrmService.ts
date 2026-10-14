@@ -3957,6 +3957,107 @@ export const hrmService = {
     return newLeave;
   },
 
+  createManualLeaveRequest: async (req: {
+    userId: string;
+    leaveType: LeaveRequest['leaveType'];
+    startDate: string;
+    endDate: string;
+    reason: string;
+    attachmentUrl?: string;
+    substituteId?: string;
+    substituteName?: string;
+    substituteNip?: string;
+    status?: LeaveStatus;
+    approvalNotes?: string;
+    adminId?: string;
+    adminName?: string;
+  }): Promise<{ success: boolean; leave: LeaveRequest }> => {
+    hrmService.init();
+    const users = hrmService.getUsers();
+    const user = users.find((u) => u.id === req.userId);
+    if (!user) throw new Error('Karyawan tidak ditemukan');
+
+    if (!req.reason || !req.reason.trim()) {
+      throw new Error('Alasan pengajuan cuti/izin wajib diisi');
+    }
+
+    const start = new Date(req.startDate);
+    const end = new Date(req.endDate);
+    const diffTime = Math.abs(end.getTime() - start.getTime());
+    const totalDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+    const finalStatus: LeaveStatus = req.status || 'approved';
+
+    let backendLeave: any = null;
+    try {
+      const res = await api.post<{ success: boolean; data: any; leave: any }>('/leaves', {
+        userId: user.id,
+        leaveType: req.leaveType,
+        startDate: req.startDate,
+        endDate: req.endDate,
+        totalDays,
+        reason: req.reason,
+        attachmentUrl: req.attachmentUrl || 'DISPENSASI_MANUAL_SUPERADMIN',
+        substituteId: req.substituteId,
+        substituteName: req.substituteName,
+        substituteNip: req.substituteNip,
+        assignedByAdmin: true,
+        isManualAdmin: true,
+        status: finalStatus,
+        approvalNotes: req.approvalNotes || 'Disetujui langsung melalui Dashboard Superadmin',
+        adminId: req.adminId,
+        adminName: req.adminName || 'Super Administrator',
+      });
+      backendLeave = res?.data || res?.leave;
+    } catch (err: any) {
+      console.warn('[HRM] Warning submitting manual leave to backend:', err);
+    }
+
+    const newLeave: LeaveRequest = {
+      id: backendLeave?.id || `leave-${Date.now()}`,
+      userId: user.id,
+      userName: user.fullName,
+      userNip: user.nip,
+      divisionName: user.divisionName || '-',
+      leaveType: req.leaveType,
+      startDate: req.startDate,
+      endDate: req.endDate,
+      totalDays,
+      reason: req.reason,
+      attachmentUrl: req.attachmentUrl || 'DISPENSASI_MANUAL_SUPERADMIN',
+      status: finalStatus,
+      approvedBy: req.adminId,
+      approvedByName: req.adminName || 'Super Administrator',
+      approvalNotes: req.approvalNotes || 'Disetujui langsung melalui Dashboard Superadmin',
+      approvedAt: finalStatus === 'approved' ? new Date().toISOString() : undefined,
+      substituteId: req.substituteId,
+      substituteName: req.substituteName,
+      substituteNip: req.substituteNip,
+      createdAt: backendLeave?.created_at || new Date().toISOString(),
+    };
+
+    const leaves = hrmService.getLeaves().filter((l) => l.id !== newLeave.id);
+    leaves.unshift(newLeave);
+    safeSetJson(STORAGE_KEYS.LEAVES, leaves);
+
+    // Update kuota cuti / izin di profil lokal
+    if (finalStatus === 'approved') {
+      const uIndex = users.findIndex((u) => u.id === user.id);
+      if (uIndex !== -1) {
+        if (req.leaveType === 'cuti_tahunan' || (req.leaveType as any) === 'annual_leave') {
+          users[uIndex].usedLeaveDays = (users[uIndex].usedLeaveDays || 0) + totalDays;
+        } else if (req.leaveType === 'izin' || (req.leaveType as any) === 'permission') {
+          users[uIndex].usedPermissionDays = (users[uIndex].usedPermissionDays || 0) + totalDays;
+        }
+        safeSetJson(STORAGE_KEYS.USERS, users);
+      }
+    }
+
+    window.dispatchEvent(new Event('hrm_leaves_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+
+    return { success: true, leave: newLeave };
+  },
+
   getLeaveSubstituteCandidates: async (params: {
     applicantId: string;
     startDate: string;
@@ -4500,6 +4601,103 @@ export const hrmService = {
     });
 
     return record;
+  },
+
+  createManualOvertimeRequest: async (req: {
+    userId: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    durationHours: number;
+    taskDescription: string;
+    attachmentUrl?: string;
+    status?: OvertimeStatus;
+    approvalNotes?: string;
+    adminId?: string;
+    adminName?: string;
+    isWeekendHoliday?: boolean;
+    supervisorName?: string;
+  }): Promise<{ success: boolean; record: OvertimeRecord }> => {
+    hrmService.init();
+    const users = hrmService.getUsers();
+    const user = users.find((u) => u.id === req.userId);
+    if (!user) throw new Error('Karyawan tidak ditemukan');
+
+    const finalStatus: OvertimeStatus = req.status || 'approved';
+    const hours = req.durationHours || 2.0;
+
+    const dateObj = new Date(req.date);
+    const day = dateObj.getDay();
+    const isWeekend = req.isWeekendHoliday !== undefined ? req.isWeekendHoliday : (day === 0 || day === 6);
+
+    const calc = hrmService.calculateOvertime(req.startTime, req.endTime, isWeekend);
+    const hourlyRate = user.overtimeRateOverride || calc.hourlyRate || 23381.79;
+    const rateMultiplier = calc.rateMultiplier;
+    const totalPay = Math.round(hours * hourlyRate * rateMultiplier);
+
+    let backendOt: any = null;
+    try {
+      const res = await api.post<{ success: boolean; data: any }>('/overtime', {
+        userId: user.id,
+        date: req.date,
+        startTime: req.startTime,
+        endTime: req.endTime,
+        scheduledEndTime: req.endTime,
+        durationHours: hours,
+        taskDescription: req.taskDescription,
+        taskPhotoUrl: req.attachmentUrl || 'MANDAT_MANUAL_SUPERADMIN',
+        assignedByAdmin: true,
+        isManualAdmin: true,
+        status: finalStatus,
+        adminId: req.adminId,
+        adminName: req.adminName || 'Super Administrator',
+        approvalNotes: req.approvalNotes || 'Ditugaskan & disahkan langsung oleh Super Administrator',
+        supervisorName: req.supervisorName || req.adminName || 'Super Administrator',
+      });
+      backendOt = res?.data;
+    } catch (err) {
+      console.warn('[HRM] Warning submitting manual overtime to backend:', err);
+    }
+
+    const newRecord: OvertimeRecord = {
+      id: backendOt?.id || `ot-${Date.now()}`,
+      userId: user.id,
+      userName: user.fullName,
+      userNip: user.nip,
+      divisionId: user.divisionId,
+      divisionName: user.divisionName,
+      date: req.date,
+      startTime: req.startTime,
+      endTime: req.endTime,
+      durationMinutes: Math.round(hours * 60),
+      durationHours: hours,
+      requestedHours: hours,
+      approvedHours: finalStatus === 'approved' ? hours : 0,
+      hourlyRate,
+      rateMultiplier,
+      totalPay,
+      compensationAmount: totalPay,
+      taskDescription: req.taskDescription,
+      status: finalStatus,
+      paymentStatus: 'unpaid',
+      assignedByAdmin: true,
+      isWeekendHoliday: isWeekend,
+      taskPhotoUrl: req.attachmentUrl,
+      approvedBy: req.adminId,
+      approvedByName: req.adminName || 'Super Administrator',
+      approvalNotes: req.approvalNotes || 'Ditugaskan & disahkan langsung oleh Super Administrator',
+      overtimePhase: finalStatus === 'approved' ? 'completed' : 'requested',
+      createdAt: backendOt?.created_at || new Date().toISOString(),
+    };
+
+    const records = hrmService.getOvertimeRecords().filter((o) => o.id !== newRecord.id);
+    records.unshift(newRecord);
+    safeSetJson(STORAGE_KEYS.OVERTIME_RECORDS, records);
+
+    window.dispatchEvent(new Event('hrm_overtime_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+
+    return { success: true, record: newRecord };
   },
 
   // Employee Overtime Request (dengan Paraf & Nama Kepala Regu)

@@ -37,6 +37,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DatePicker } from '@/components/ui/date-picker';
+import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
+import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
 
 export const HrmLeavePage: React.FC = () => {
   const { user } = useHrmAuth();
@@ -57,6 +59,10 @@ export const HrmLeavePage: React.FC = () => {
   // Detail Modal States
   const [selectedDetailLeave, setSelectedDetailLeave] = useState<LeaveRequest | null>(null);
   const [selectedDetailOt, setSelectedDetailOt] = useState<OvertimeRecord | null>(null);
+
+  // Superadmin Manual Entry Modals
+  const [manualLeaveModalOpen, setManualLeaveModalOpen] = useState(false);
+  const [manualLemburModalOpen, setManualLemburModalOpen] = useState(false);
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -431,21 +437,45 @@ export const HrmLeavePage: React.FC = () => {
           </div>
 
           {activeTab === 'leaves' ? (
-            <Button
-              onClick={handleOpenModal}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground font-medium rounded-xl shadow-sm gap-2 text-xs"
-            >
-              <Plus className="w-4 h-4" />
-              Ajukan Izin / Cuti
-            </Button>
+            <div className="flex items-center gap-2">
+              {isSupervisorRole && (
+                <Button
+                  onClick={() => setManualLeaveModalOpen(true)}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl shadow-xs gap-1.5 text-xs"
+                >
+                  <Plus className="w-4 h-4" />
+                  Input Cuti/Izin Karyawan
+                </Button>
+              )}
+              <Button
+                onClick={handleOpenModal}
+                variant={isSupervisorRole ? 'outline' : 'default'}
+                className="font-medium rounded-xl shadow-sm gap-2 text-xs"
+              >
+                <Plus className="w-4 h-4" />
+                {isSupervisorRole ? 'Ajukan Cuti Sendiri' : 'Ajukan Izin / Cuti'}
+              </Button>
+            </div>
           ) : (
-            <Button
-              onClick={handleOpenOtModal}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground font-medium rounded-xl shadow-sm gap-2 text-xs"
-            >
-              <Plus className="w-4 h-4" />
-              Ajukan Lembur (SPL)
-            </Button>
+            <div className="flex items-center gap-2">
+              {isSupervisorRole && (
+                <Button
+                  onClick={() => setManualLemburModalOpen(true)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl shadow-xs gap-1.5 text-xs"
+                >
+                  <Plus className="w-4 h-4" />
+                  Input Lembur Karyawan
+                </Button>
+              )}
+              <Button
+                onClick={handleOpenOtModal}
+                variant={isSupervisorRole ? 'outline' : 'default'}
+                className="font-medium rounded-xl shadow-sm gap-2 text-xs"
+              >
+                <Plus className="w-4 h-4" />
+                {isSupervisorRole ? 'Ajukan Lembur Sendiri' : 'Ajukan Lembur (SPL)'}
+              </Button>
+            </div>
           )}
         </div>
       </div>
@@ -1480,6 +1510,18 @@ export const HrmLeavePage: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Superadmin Manual Modals */}
+      <HrmManualLeaveModal
+        open={manualLeaveModalOpen}
+        onClose={() => setManualLeaveModalOpen(false)}
+        onSuccess={() => loadData()}
+      />
+      <HrmManualLemburModal
+        open={manualLemburModalOpen}
+        onClose={() => setManualLemburModalOpen(false)}
+        onSuccess={() => loadData()}
+      />
     </div>
   );
 };
