@@ -142,6 +142,81 @@ export const HrmLemburManagementTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* ═══ RADAR PLAFON & ANGGARAN LEMBUR PIMPINAN (STRICT BUDGET CAPS) ═══ */}
+      <Card className="border-border bg-gradient-to-br from-card via-card to-blue-500/5 rounded-2xl shadow-xs overflow-hidden border-blue-500/30">
+        <CardHeader className="pb-3 border-b border-border/80 bg-blue-500/5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+                <Briefcase className="w-4 h-4" />
+              </div>
+              <div>
+                <CardTitle className="text-sm font-bold text-foreground flex items-center gap-2">
+                  Plafon &amp; Batasan Anggaran Lembur Pimpinan (Strict Overtime Cap)
+                  <Badge variant="outline" className="border-blue-500/40 text-blue-700 dark:text-blue-300 text-[10px]">
+                    Aturan Baku FRP
+                  </Badge>
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Sistem pengawasan ketat plafon lembur agar realisasi pembayaran tidak melampaui nominal yang telah ditetapkan Pimpinan.
+                </CardDescription>
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+            {/* Box 1: Shiftman Total */}
+            <div className="p-3.5 rounded-xl border border-blue-500/30 bg-blue-500/5 space-y-1.5 md:col-span-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-blue-900 dark:text-blue-300">Total Shiftman FRP</span>
+                <Badge className="bg-blue-600 text-white text-[10px]">47 Karyawan</Badge>
+              </div>
+              <p className="text-xl font-extrabold text-foreground font-mono">Rp 72.000.000</p>
+              <p className="text-[11px] text-muted-foreground leading-tight">
+                Plafon maksimal gabungan untuk <strong>47 orang</strong> (44 Shift Normal + 3 Day Shift). Realisasi tidak boleh melebihi 72jt.
+              </p>
+            </div>
+
+            {/* Box 2: Shift Normal */}
+            <div className="p-3.5 rounded-xl border border-emerald-500/20 bg-card/60 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-emerald-900 dark:text-emerald-300">A. Shift Normal (213 Jam)</span>
+                <Badge className="bg-emerald-600 text-white text-[10px]">44 Karyawan</Badge>
+              </div>
+              <p className="text-lg font-extrabold text-emerald-600 font-mono">30 Jam Real (x2)</p>
+              <p className="text-[11px] text-muted-foreground leading-tight">
+                Bagian dari 47 shiftman. Dibayar <strong>2x nominal tarif area kerja</strong> (total 60 jam bayar).
+              </p>
+            </div>
+
+            {/* Box 3: Day Shift */}
+            <div className="p-3.5 rounded-xl border border-purple-500/20 bg-card/60 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-purple-900 dark:text-purple-300">B. Day Shift Normal</span>
+                <Badge className="bg-purple-600 text-white text-[10px]">3 Karyawan</Badge>
+              </div>
+              <p className="text-lg font-extrabold text-purple-600 font-mono">56 Jam Real (x2)</p>
+              <p className="text-[11px] text-muted-foreground leading-tight">
+                Bagian dari 47 shiftman. Dibayar dikali 2 menjadi <strong>112 jam bayar x nominal upah per jam</strong>.
+              </p>
+            </div>
+
+            {/* Box 4: Wisma Biring Ere */}
+            <div className="p-3.5 rounded-xl border border-amber-500/20 bg-card/60 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-amber-900 dark:text-amber-300">Petugas Wisma Biring Ere</span>
+                <Badge className="bg-amber-600 text-white text-[10px]">33 Karyawan</Badge>
+              </div>
+              <p className="text-lg font-extrabold text-amber-600 font-mono">Rp 4.000.000 (Rata)</p>
+              <p className="text-[11px] text-muted-foreground leading-tight">
+                Budget 4jt <strong>dibagi rata 33 orang</strong>. Kelebihan jam jadi <strong>Flexytime (Libur)</strong> bulan berjalan, tidak diambil = <strong>HANGUS</strong>.
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Metric Overview Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5">
         <Card className="border-border bg-card shadow-xs">

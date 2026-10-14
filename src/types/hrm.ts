@@ -565,6 +565,7 @@ export interface AttendanceRecord {
   breakDurationMinutes?: number;
   breakLateMinutes?: number;
   earlyLeaveApproved?: boolean;
+  autoClosedType?: string;
 }
 
 export type ViolationStatus = 'active' | 'resolved' | 'penalized';

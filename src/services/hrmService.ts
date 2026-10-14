@@ -614,6 +614,8 @@ export const normalizeAttendanceRecord = (a: any): AttendanceRecord => {
     isEarlyLeave: a.isEarlyLeave === true || a.is_early_leave === true,
     earlyLeaveApproved: a.earlyLeaveApproved === true || a.early_leave_approved === true,
     isRemoteUnlocked: a.isRemoteUnlocked === true || a.is_remote_unlocked === true,
+    autoClosedType: a.autoClosedType || a.auto_closed_type || undefined,
+    notes: a.notes || undefined,
   };
 };
 
@@ -5050,21 +5052,31 @@ export const hrmService = {
       ['izin', 'sakit', 'cuti'].includes(a.status)
     ).length;
 
-    // ── Overtime in this period ──
+    // ── Overtime in this period (ATURAN PT FRP: Pembayaran lembur adalah BULAN MUNDUR N-1) ──
     const allOt = hrmService.getOvertimeRecords();
+    
+    // Hitung tanggal rentang bulan mundur (1 bulan sebelum periode berjalan)
+    const pStart = new Date(period.startDate);
+    const prevMonthDate = new Date(pStart.getFullYear(), pStart.getMonth() - 1, 1);
+    const prevYear = prevMonthDate.getFullYear();
+    const prevMonth = String(prevMonthDate.getMonth() + 1).padStart(2, '0');
+    const lastDayPrevMonth = new Date(prevYear, prevMonthDate.getMonth() + 1, 0).getDate();
+    const prevMonthStartStr = `${prevYear}-${prevMonth}-01`;
+    const prevMonthEndStr = `${prevYear}-${prevMonth}-${String(lastDayPrevMonth).padStart(2, '0')}`;
+
     const periodOt = settings.includeOvertimeInPayroll
       ? allOt.filter(
           (r) =>
             r.userId === userId &&
-            r.date >= period.startDate &&
-            r.date <= period.endDate &&
-            r.status === 'approved' &&
-            r.paymentStatus === 'unpaid'
+            r.date >= prevMonthStartStr &&
+            r.date <= prevMonthEndStr &&
+            (r.status === 'approved' || (r as any).status === 'completed') &&
+            r.paymentStatus !== 'paid'
         )
       : [];
 
-    const overtimePay = periodOt.reduce((s, r) => s + (r.totalPay || 0), 0);
-    const overtimeHours = periodOt.reduce((s, r) => s + (r.durationHours || 0), 0);
+    const overtimePay = periodOt.reduce((s, r) => s + (Number(r.totalPay ?? (r as any).compensationAmount) || 0), 0);
+    const overtimeHours = periodOt.reduce((s, r) => s + (Number((r as any).approvedHours ?? r.durationHours) || 0), 0);
     const overtimeRecordIds = periodOt.map((r) => r.id);
 
     // ── Income ──

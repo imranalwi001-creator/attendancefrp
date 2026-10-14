@@ -1619,10 +1619,25 @@ export const HrmPayrollPage: React.FC = () => {
       )}
 
       {/* ════════════════════════════════════════════════════════════════════════ */}
-      {/* TAB 2: SLIP GAJI                                                        */}
+      {/* TAB 2: SLIP GAJI (ON-DEMAND: HANYA DITERBITKAN ATAS PERMINTAAN KARYAWAN) */}
       {/* ════════════════════════════════════════════════════════════════════════ */}
       {activeTab === 'slips' && (
         <div className="space-y-4">
+          {/* SOP On-Demand Alert Banner */}
+          <div className="p-3.5 bg-blue-500/10 border border-blue-500/20 rounded-2xl flex items-start gap-3">
+            <div className="w-8 h-8 rounded-xl bg-blue-600/10 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
+              <FileCheck2 className="w-4 h-4" />
+            </div>
+            <div className="space-y-0.5 text-xs">
+              <p className="font-bold text-blue-900 dark:text-blue-300">
+                🔒 Kebijakan Penerbitan Slip Gaji On-Demand PT. Fawwaz Reski Perwira
+              </p>
+              <p className="text-blue-800/90 dark:text-blue-200/90 text-[11px] leading-relaxed">
+                Slip gaji resmi <strong>hanya diterbitkan oleh Admin apabila ada permintaan resmi dari karyawan</strong>. Perhitungan uang lembur dihitung berdasarkan <strong>rekapitulasi bulan mundur (N-1)</strong>, dan aplikasi PWA mobile tidak menampilkan nominal upah demi menjaga kerahasiaan &amp; ketertiban lingkungan kerja.
+              </p>
+            </div>
+          </div>
+
           {/* Filters Bar */}
           <div className="flex flex-wrap gap-2.5 items-center bg-card p-3.5 rounded-2xl border border-border/80 shadow-xs">
             <div className="relative min-w-[200px] flex-1">

@@ -361,9 +361,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [userOvertimeList, setUserOvertimeList] = useState<OvertimeRecord[]>([]);
   const [userSubstitutions, setUserSubstitutions] = useState<any[]>([]);
   const [otDate, setOtDate] = useState(getTodayDateStr());
-  const [otStartTime, setOtStartTime] = useState('17:00');
-  const [otEndTime, setOtEndTime] = useState('19:00');
-  const [otHours, setOtHours] = useState(2);
+  const [otCategory, setOtCategory] = useState<'shift1' | 'shift2' | 'shift3' | 'dayshift' | 'darurat_wajib' | 'custom'>('shift1');
+  const [otStartTime, setOtStartTime] = useState('07:30');
+  const [otEndTime, setOtEndTime] = useState('15:30');
+  const [otHours, setOtHours] = useState(8);
   const [otTaskDescription, setOtTaskDescription] = useState('');
   const [otProofPhoto, setOtProofPhoto] = useState('');
   const [isSubmittingOvertime, setIsSubmittingOvertime] = useState(false);
@@ -2732,6 +2733,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       toast.error('Uraian tugas lembur wajib diisi!');
       return;
     }
+    if (otCategory === 'darurat_wajib' && otHours > 3) {
+      toast.error('Lembur wajib (perintah langsung / darurat) maksimal 3 jam sesuai aturan perusahaan!');
+      return;
+    }
+    if (otHours <= 0) {
+      toast.error('Durasi jam lembur harus lebih besar dari 0!');
+      return;
+    }
     if (!otProofPhoto) {
       toast.error('Foto bukti kegiatan/lokasi lembur WAJIB dilampirkan!');
       return;
@@ -2744,7 +2753,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         startTime: otStartTime,
         endTime: otEndTime,
         durationHours: otHours,
-        taskDescription: otTaskDescription.trim(),
+        taskDescription: `[${otCategory.toUpperCase()}] ${otTaskDescription.trim()}`,
         attachmentUrl: otProofPhoto,
         taskPhotoUrl: otProofPhoto,
       } as any);
@@ -5168,6 +5177,48 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           <div className="space-y-3 py-2 text-xs">
             <div>
               <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Kategori / Jenis Lembur:
+              </label>
+              <select
+                value={otCategory}
+                onChange={(e) => {
+                  const cat = e.target.value as any;
+                  setOtCategory(cat);
+                  if (cat === 'shift1') {
+                    setOtStartTime('07:30');
+                    setOtEndTime('15:30');
+                    setOtHours(8);
+                  } else if (cat === 'shift2') {
+                    setOtStartTime('15:30');
+                    setOtEndTime('22:30');
+                    setOtHours(7);
+                  } else if (cat === 'shift3') {
+                    setOtStartTime('22:30');
+                    setOtEndTime('07:30');
+                    setOtHours(9);
+                  } else if (cat === 'dayshift') {
+                    setOtStartTime('07:30');
+                    setOtEndTime('16:30');
+                    setOtHours(8);
+                  } else if (cat === 'darurat_wajib') {
+                    setOtStartTime('16:30');
+                    setOtEndTime('19:30');
+                    setOtHours(3);
+                  }
+                }}
+                className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs bg-slate-50 dark:bg-slate-900 font-semibold text-slate-800 dark:text-slate-200"
+              >
+                <option value="shift1">Lembur Penuh Shift 1 (07:30 - 15:30 • 8 Jam)</option>
+                <option value="shift2">Lembur Penuh Shift 2 (15:30 - 22:30 • 7 Jam)</option>
+                <option value="shift3">Lembur Penuh Shift 3 (22:30 - 07:30 • 9 Jam)</option>
+                <option value="dayshift">Lembur Day Shift (07:30 - 16:30 • 8 Jam Dinamis)</option>
+                <option value="darurat_wajib">Lembur Wajib / Perintah Langsung Darurat (Maks 3 Jam)</option>
+                <option value="custom">Lembur Kustom / Jam Tertentu</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
                 Tanggal Lembur:
               </label>
               <input
@@ -5204,17 +5255,34 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             </div>
 
             <div>
-              <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                Estimasi Durasi (Jam):
-              </label>
-              <input
-                type="number"
-                min={0.5}
-                step={0.5}
-                value={otHours}
-                onChange={(e) => setOtHours(Number(e.target.value))}
-                className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
-              />
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                  Durasi Lembur Diakui:
+                </label>
+                {otCategory === 'darurat_wajib' && (
+                  <span className="text-[10px] text-amber-600 font-bold">*Maks. 3 Jam</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0.5}
+                  max={otCategory === 'darurat_wajib' ? 3 : 12}
+                  step={0.5}
+                  value={otHours}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    if (otCategory === 'darurat_wajib' && val > 3) {
+                      toast.warning('Lembur wajib dibatasi maksimal 3 jam!');
+                      setOtHours(3);
+                    } else {
+                      setOtHours(val);
+                    }
+                  }}
+                  className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold"
+                />
+                <span className="text-xs font-bold text-slate-500 whitespace-nowrap">Jam Kerja</span>
+              </div>
             </div>
 
             <div>

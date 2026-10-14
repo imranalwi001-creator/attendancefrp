@@ -509,6 +509,9 @@ async function resolveShiftId(shiftId) {
 // ─── 2. BOOTSTRAP INITIAL SYNC ───────────────────────────────────────────────
 app.get('/api/sync/bootstrap', async (req, res) => {
   try {
+    // Jalankan auto-close rekonsiliasi presensi pulang sebelum mengambil snapshot data
+    await runAutoCloseCompliantAttendance().catch(() => {});
+
     const [
       usersRes,
       rolesRes,
@@ -2540,23 +2543,78 @@ Mohon segera pantau posisi petugas melalui menu Live Monitoring HRM.`;
 
     // Jika terdeteksi di luar area kerja dan tidak sedang izin/excused:
     if (isOutOfBounds && !isExcusedFromBreach) {
-      await pool.query(
-        `UPDATE hrm_attendances SET
-           is_locked = true,
-           is_perimeter_breached = true,
-           perimeter_breach_count = COALESCE(perimeter_breach_count, 0) + 1,
-           updated_at = NOW()
-         WHERE user_id = $1 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date AND clock_out IS NULL;`,
-        [validUserId]
-      );
+      // 1. Ambil jam shift karyawan hari ini
+      const schedRes = await pool.query(`
+        SELECT COALESCE(es.end_time, p.custom_end_time, s.end_time, '16:30') as shift_end_time,
+               COALESCE(es.start_time, p.custom_start_time, s.start_time, '07:30') as shift_start_time,
+               COALESCE(s.is_cross_day, false) as is_cross_day
+        FROM hrm_profiles p
+        LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+        LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
+        WHERE p.id = $1 LIMIT 1;
+      `, [validUserId]);
 
-      // 📲 REMINDER WHATSAPP LANGSUNG KE HP KARYAWAN (Jika HP di saku / aplikasi sleep)
-      if (prof.phone) {
-        const lastRem = prof.last_breach_reminder_at ? new Date(prof.last_breach_reminder_at).getTime() : 0;
-        const nowMs = Date.now();
-        // Cooldown 30 menit agar tidak spamming
-        if (nowMs - lastRem > 30 * 60 * 1000) {
-          const waEmployeeReminder =
+      const shiftInfo = schedRes.rows[0];
+      const shiftEndStr = (shiftInfo?.shift_end_time || '16:30').substring(0, 5);
+      const [endH, endM] = shiftEndStr.split(':').map(Number);
+      const endTotalMins = endH * 60 + endM;
+
+      const nowWitaDate = new Date(Date.now() + 8 * 60 * 60 * 1000);
+      const nowH = nowWitaDate.getUTCHours();
+      const nowM = nowWitaDate.getUTCMinutes();
+      let nowTotalMins = nowH * 60 + nowM;
+
+      const isCrossDay = Boolean(shiftInfo?.is_cross_day);
+      if (isCrossDay && nowTotalMins < 720 && endTotalMins >= 720) {
+        nowTotalMins += 1440;
+      }
+
+      // JIKA WAKTU SUDAH MELEWATI JAM SELESAI SHIFT (misal >= 16:30):
+      // Karyawan meninggalkan area kerja karena jam shift sudah usai (Auto-Clock Out Otomatis Opsi 2)
+      if (nowTotalMins >= endTotalMins) {
+        const clockOutTime = `${shiftEndStr}:00`;
+        const autoNote = ` [Auto-Clock Out: Karyawan telah meninggalkan area kerja setelah jam shift (${shiftEndStr} WITA) usai]`;
+
+        const autoCloseRes = await pool.query(
+          `UPDATE hrm_attendances SET
+             clock_out = $1,
+             status = 'hadir',
+             is_locked = false,
+             is_perimeter_breached = false,
+             auto_closed_type = 'AUTO_CLOCKOUT_OUT_OF_BOUNDS',
+             notes = TRIM(COALESCE(notes, '') || $2),
+             updated_at = NOW()
+           WHERE user_id = $3 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date AND clock_out IS NULL
+           RETURNING id;`,
+          [clockOutTime, autoNote, validUserId]
+        );
+
+        if (autoCloseRes.rows.length > 0) {
+          console.log(`[Auto-Clock Out On Leaving] Berhasil auto clock-out ${prof.full_name} (${prof.nip}) pk ${shiftEndStr} WITA.`);
+          if (prof.phone) {
+            const waAutoOut = `✅ *PRESENSI PULANG TERCATAT OTOMATIS (HRM FRP)*\n\nHalo *${prof.full_name}*,\nSistem mendeteksi Anda telah menyelesaikan jam kerja shift (${shiftEndStr} WITA) dan telah meninggalkan area penugasan.\n\nPresensi pulang Anda hari ini telah **otomatis dicatat resmi pada pk ${shiftEndStr} WITA**. Hak jam kerja Anda tetap aman dan lengkap.\n\nSelamat beristirahat!\n_Sistem Absensi Cerdas PT Fawwaz Reski Perwira_`;
+            sendWhatsAppAlert({ phone: prof.phone, message: waAutoOut }).catch(() => null);
+          }
+        }
+      } else {
+        // MASIH DALAM JAM KERJA (sebelum jam shift berakhir) -> Ini benar pelanggaran batas pos kerja
+        await pool.query(
+          `UPDATE hrm_attendances SET
+             is_locked = true,
+             is_perimeter_breached = true,
+             perimeter_breach_count = COALESCE(perimeter_breach_count, 0) + 1,
+             updated_at = NOW()
+           WHERE user_id = $1 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date AND clock_out IS NULL;`,
+          [validUserId]
+        );
+
+        // 📲 REMINDER WHATSAPP LANGSUNG KE HP KARYAWAN (Jika HP di saku / aplikasi sleep)
+        if (prof.phone) {
+          const lastRem = prof.last_breach_reminder_at ? new Date(prof.last_breach_reminder_at).getTime() : 0;
+          const nowMs = Date.now();
+          // Cooldown 30 menit agar tidak spamming
+          if (nowMs - lastRem > 30 * 60 * 1000) {
+            const waEmployeeReminder =
 `⚠️ *PERINGATAN RADAR PRESENSI PT. FAWWAZ RESKI PERWIRA*
 
 Halo *${prof.full_name}*,
@@ -2566,11 +2624,12 @@ Jika Anda sedang menjalankan tugas dinas luar, keperluan darurat, atau terjadi k
 
 Tautan Aplikasi: https://hrm.ptfrp.co.id`;
 
-          sendWhatsAppAlert({ phone: prof.phone, message: waEmployeeReminder })
-            .then(() => console.log(`[Breach Reminder sent to ${prof.full_name} (${prof.phone})]`))
-            .catch(e => console.error('[Breach Reminder Error]:', e.message));
+            sendWhatsAppAlert({ phone: prof.phone, message: waEmployeeReminder })
+              .then(() => console.log(`[Breach Reminder sent to ${prof.full_name} (${prof.phone})]`))
+              .catch(e => console.error('[Breach Reminder Error]:', e.message));
 
-          await pool.query('UPDATE hrm_profiles SET last_breach_reminder_at = NOW() WHERE id = $1;', [validUserId]);
+            await pool.query('UPDATE hrm_profiles SET last_breach_reminder_at = NOW() WHERE id = $1;', [validUserId]);
+          }
         }
       }
     }
@@ -5933,8 +5992,40 @@ app.post('/api/overtime', async (req, res) => {
     }
 
     const officialRate = parseFloat(userProfile.hourly_overtime_rate) || 23381.79;
-    const hours = durationHours !== undefined ? parseFloat(durationHours) : 2.0;
-    const comp = Math.round(hours * officialRate);
+    let hours = durationHours !== undefined ? parseFloat(durationHours) : 2.0;
+
+    // Batasan lembur wajib / perintah langsung maksimal 3 jam
+    const isWajibDarurat = (taskDescription || '').toLowerCase().includes('wajib') || 
+                           (taskDescription || '').toLowerCase().includes('darurat') ||
+                           (taskDescription || '').toLowerCase().includes('darurat_wajib');
+    if (isWajibDarurat && hours > 3) {
+      hours = 3.0;
+    }
+
+    // Cek apakah tanggal lembur adalah hari libur / istirahat mingguan
+    const otDateObj = new Date(date);
+    const dayOfWeek = otDateObj.getDay();
+    const isHolidayOrWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+    // Formula Lembur Berjenjang Resmi Kepmenakertrans No. 102/2004 & PP 35/2021
+    let comp = 0;
+    if (!isHolidayOrWeekend) {
+      // Hari Kerja: Jam ke-1 = 1.5x, jam ke-2+ = 2.0x
+      if (hours <= 1) {
+        comp = Math.round(hours * 1.5 * officialRate);
+      } else {
+        comp = Math.round((1 * 1.5 * officialRate) + ((hours - 1) * 2.0 * officialRate));
+      }
+    } else {
+      // Hari Libur / Off Shift: Jam 1-7 = 2.0x, Jam 8 = 3.0x, Jam 9+ = 4.0x
+      if (hours <= 7) {
+        comp = Math.round(hours * 2.0 * officialRate);
+      } else if (hours <= 8) {
+        comp = Math.round((7 * 2.0 * officialRate) + ((hours - 7) * 3.0 * officialRate));
+      } else {
+        comp = Math.round((7 * 2.0 * officialRate) + (1 * 3.0 * officialRate) + ((hours - 8) * 4.0 * officialRate));
+      }
+    }
 
     const query = `
       INSERT INTO hrm_overtime_records (
@@ -6051,7 +6142,28 @@ app.put('/api/overtime/:id/status', async (req, res) => {
     }
 
     const finalHours = approvedHours !== undefined ? Number(approvedHours) : Number(ot.duration_hours);
-    const compensation = Math.round(finalHours * Number(ot.rate_applied || 30000));
+    const officialRate = Number(ot.rate_applied || 23381.79);
+
+    const otDateObj = new Date(ot.date);
+    const dayOfWeek = otDateObj.getDay();
+    const isHolidayOrWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+    let compensation = 0;
+    if (!isHolidayOrWeekend) {
+      if (finalHours <= 1) {
+        compensation = Math.round(finalHours * 1.5 * officialRate);
+      } else {
+        compensation = Math.round((1 * 1.5 * officialRate) + ((finalHours - 1) * 2.0 * officialRate));
+      }
+    } else {
+      if (finalHours <= 7) {
+        compensation = Math.round(finalHours * 2.0 * officialRate);
+      } else if (finalHours <= 8) {
+        compensation = Math.round((7 * 2.0 * officialRate) + ((finalHours - 7) * 3.0 * officialRate));
+      } else {
+        compensation = Math.round((7 * 2.0 * officialRate) + (1 * 3.0 * officialRate) + ((finalHours - 8) * 4.0 * officialRate));
+      }
+    }
     const nextPhase = status === 'approved' ? 'in_progress' : 'rejected';
 
     const updateRes = await pool.query(`
@@ -9476,21 +9588,27 @@ Tembusan: Korlap, K3 & Admin HRD.`;
   }
 });
 
-// ─── 18. AUTO-CLOSE SERVICE: KARYAWAN DISIPLIN YANG LUPA CEKOUT (LOWBAT/TERKENDALA) ───
+// ─── 18. AUTO-CLOSE SERVICE: AUTO-CLOCK OUT OTOMATIS (OPSI 2) ───
+// Menutup presensi pulang secara otomatis di jam akhir shift bagi karyawan yang:
+// a) Sudah lewat jam shift >= 2 jam (diffMins >= 120), ATAU
+// b) Terdeteksi di luar area kerja (is_out_of_bounds) setelah jam shift usai, ATAU
+// c) Presensi hari kemarin yang belum ditutup (isPastDate)
 async function runAutoCloseCompliantAttendance() {
   try {
     const candidates = await pool.query(`
       SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.notes,
-             p.custom_end_time, s.end_time, s.is_cross_day, p.full_name
+             COALESCE(es.end_time, p.custom_end_time, s.end_time, '16:30') as shift_end_time,
+             COALESCE(es.start_time, p.custom_start_time, s.start_time, '07:30') as shift_start_time,
+             COALESCE(s.is_cross_day, false) as is_cross_day,
+             p.full_name, p.nip, p.phone, p.is_out_of_bounds,
+             (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date as today_wita
       FROM hrm_attendances a
       JOIN hrm_profiles p ON a.user_id = p.id
       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
-      WHERE a.attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
+      LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = a.attendance_date
+      WHERE a.attendance_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
         AND a.clock_in IS NOT NULL
-        AND a.clock_out IS NULL
-        AND (a.is_locked = false OR a.is_locked IS NULL)
-        AND (a.is_perimeter_breached = false OR a.is_perimeter_breached IS NULL)
-        AND (a.perimeter_breach_count = 0 OR a.perimeter_breach_count IS NULL);
+        AND a.clock_out IS NULL;
     `);
 
     if (candidates.rows.length === 0) return;
@@ -9501,22 +9619,33 @@ async function runAutoCloseCompliantAttendance() {
     const nowTotalMins = nowH * 60 + nowM;
 
     for (const row of candidates.rows) {
-      const shiftEndStr = row.custom_end_time || (row.end_time ? row.end_time.substring(0, 5) : '16:30');
+      const shiftEndStr = (row.shift_end_time || '16:30').substring(0, 5);
       const [endH, endM] = shiftEndStr.split(':').map(Number);
       const shiftEndTotalMins = endH * 60 + endM;
 
-      // Jika sudah lewat jam akhir shift + 30 menit atau sudah malam hari (>= 23:00 WITA)
-      const isPastShift = !row.is_cross_day
-        ? (nowTotalMins >= shiftEndTotalMins + 30 || nowTotalMins >= 23 * 60)
-        : (nowTotalMins >= 8 * 60);
+      let effectiveNowMins = nowTotalMins;
+      if (row.is_cross_day && effectiveNowMins < 720 && shiftEndTotalMins >= 720) {
+        effectiveNowMins += 1440;
+      }
 
-      if (isPastShift) {
+      const diffMins = effectiveNowMins - shiftEndTotalMins;
+      const isPastDate = row.attendance_date < row.today_wita;
+
+      // Kondisi Opsi 2 (Auto-Clock Out Otomatis):
+      // 1. Sudah berganti hari (kemarin belum clock-out)
+      // 2. Karyawan sudah keluar radius area kerja setelah jam shift berakhir
+      // 3. Jam shift sudah berakhir lebih dari 2 jam (120 menit)
+      const shouldAutoClose = isPastDate || 
+                              (row.is_out_of_bounds && diffMins >= 0) || 
+                              (diffMins >= 120);
+
+      if (shouldAutoClose) {
         const [inH, inM] = (row.clock_in || '08:00:00').split(':').map(Number);
         let workDur = shiftEndTotalMins - (inH * 60 + inM);
         if (row.is_cross_day && workDur < 0) workDur += 24 * 60;
         workDur = Math.max(0, workDur);
 
-        const autoCloseNote = '[AUTO-CLOSED: STANDBY VALID DI POS HINGGA SHIFT BERAKHIR]';
+        const autoCloseNote = `[AUTO-CLOSED: JAM SHIFT USAI (${shiftEndStr} WITA) & TINGGALKAN AREA]`;
         const updatedNotes = row.notes ? `${row.notes} | ${autoCloseNote}` : autoCloseNote;
         const clockOutTime = shiftEndStr.length === 5 ? `${shiftEndStr}:00` : shiftEndStr;
 
@@ -9524,20 +9653,39 @@ async function runAutoCloseCompliantAttendance() {
           UPDATE hrm_attendances SET
             clock_out = $1,
             work_duration_minutes = $2,
-            status = 'present',
-            auto_closed_type = 'COMPLIANT_ON_SITE',
+            status = 'hadir',
+            is_locked = false,
+            is_perimeter_breached = false,
+            auto_closed_type = 'AUTO_CLOCKOUT_OPTION_2',
             notes = $3,
             updated_at = NOW()
           WHERE id = $4;
         `, [clockOutTime, workDur, updatedNotes, row.id]);
 
-        console.log(`[Auto-Close Compliant] Sukses menutup presensi ${row.full_name} jam ${clockOutTime}`);
+        console.log(`[Auto-Close Option 2] Sukses menutup presensi ${row.full_name} (${row.nip}) jam ${clockOutTime}`);
+
+        // Kirim WhatsApp pemberitahuan santun
+        if (row.phone) {
+          const dateLabel = row.attendance_date.toISOString ? row.attendance_date.toISOString().split('T')[0] : row.attendance_date;
+          const waAutoMsg = `✅ *NOTIFIKASI ABSEN PULANG OTOMATIS (HRM FRP)*\n\nHalo *${row.full_name}*,\nSistem mendeteksi Anda telah menyelesaikan jam kerja shift (${shiftEndStr} WITA) dan telah meninggalkan lokasi penugasan.\n\nPresensi pulang Anda untuk tanggal *${dateLabel}* telah **otomatis ditutup resmi pada pk ${shiftEndStr} WITA**. Jam kerja dan hak kehadiran Anda aman.\n\nSelamat beristirahat!\n_Sistem Absensi Cerdas PT Fawwaz Reski Perwira_`;
+          sendWhatsAppAlert({ phone: row.phone, message: waAutoMsg }).catch(() => null);
+        }
       }
     }
   } catch (err) {
     console.error('[runAutoCloseCompliantAttendance Error]:', err.message);
   }
 }
+
+// Endpoint manual reconcile auto clock-out
+app.post('/api/attendances/auto-close-reconcile', async (req, res) => {
+  try {
+    await runAutoCloseCompliantAttendance();
+    res.json({ success: true, message: 'Rekonsiliasi auto-clock out berhasil diproses.' });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
 
 // Start Server
 async function start() {
