@@ -28,7 +28,30 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
   const [employees, setEmployees] = useState<UserProfile[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [filterMonth, setFilterMonth] = useState<string>('');
+  const [filterMonth, setFilterMonth] = useState<string>('all');
+
+  const availableMonths = React.useMemo(() => {
+    const monthsSet = new Set<string>();
+    const d = new Date();
+    for (let i = 0; i < 12; i++) {
+      const dt = new Date(d.getFullYear(), d.getMonth() - i, 1);
+      const val = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+      monthsSet.add(val);
+    }
+    history.forEach((h) => {
+      const dt = (h.attendanceDate || (h as any).date || '').slice(0, 7);
+      if (dt && dt.length === 7) monthsSet.add(dt);
+    });
+    return Array.from(monthsSet).sort().reverse();
+  }, [history]);
+
+  const formatMonthLabel = (mStr: string) => {
+    if (!mStr || mStr === 'all') return 'Semua Periode Bulan';
+    const [y, m] = mStr.split('-');
+    const mNames = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+    const idx = parseInt(m, 10) - 1;
+    return `${mNames[idx] || m} ${y}`;
+  };
   const [previewPhoto, setPreviewPhoto] = useState<{
     url: string;
     type: 'Masuk' | 'Pulang';
@@ -116,7 +139,7 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
     if (!rawDate) return false;
 
     // Filter by Month (YYYY-MM)
-    if (filterMonth && !rawDate.startsWith(filterMonth)) {
+    if (filterMonth && filterMonth !== 'all' && !rawDate.startsWith(filterMonth)) {
       return false;
     }
 
@@ -169,22 +192,31 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
             Sinkronkan Realtime
           </Button>
 
-          <Input
-            type="month"
-            value={filterMonth}
-            onChange={(e) => setFilterMonth(e.target.value)}
-            className="text-xs bg-card rounded-xl border-border w-36 sm:w-44 h-9"
-            placeholder="Pilih Bulan..."
-          />
-          {filterMonth && (
+          <Select value={filterMonth} onValueChange={setFilterMonth}>
+            <SelectTrigger className="text-xs bg-card rounded-xl border-border w-44 sm:w-52 h-9">
+              <SelectValue placeholder="Pilih Periode Bulan..." />
+            </SelectTrigger>
+            <SelectContent className="max-h-60 rounded-xl">
+              <SelectItem value="all" className="text-xs font-semibold">
+                Semua Periode Bulan
+              </SelectItem>
+              {availableMonths.map((m) => (
+                <SelectItem key={m} value={m} className="text-xs">
+                  {formatMonthLabel(m)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {filterMonth && filterMonth !== 'all' && (
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => setFilterMonth('')}
+              onClick={() => setFilterMonth('all')}
               className="text-xs h-9 px-2 text-muted-foreground hover:text-foreground"
             >
-              Reset Bulan
+              Reset
             </Button>
           )}
         </div>

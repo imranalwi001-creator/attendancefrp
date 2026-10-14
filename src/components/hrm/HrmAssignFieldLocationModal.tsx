@@ -8,6 +8,8 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { MapPin, Navigation, Crosshair, CheckCircle2, Radio, Loader2, Trash2, Plus, Building2, BellRing, Smartphone, Clock } from 'lucide-react';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
+import { toast } from 'sonner';
+import { TimePicker } from '@/components/ui/time-picker';
 
 interface HrmAssignFieldLocationModalProps {
   open: boolean;
@@ -98,7 +100,7 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
   // 2. Read live device GPS
   const handleUseCurrentGps = () => {
     if (!navigator.geolocation) {
-      alert('Peramban Anda tidak mendukung geolokasi GPS.');
+      toast.error('Peramban Anda tidak mendukung geolokasi GPS.');
       return;
     }
     setIsDetectingGps(true);
@@ -108,10 +110,11 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
         setIsDetectingGps(false);
         setLatitude(pos.coords.latitude.toFixed(6));
         setLongitude(pos.coords.longitude.toFixed(6));
+        toast.success('Koordinat GPS berhasil diperoleh.');
       },
       (err) => {
         setIsDetectingGps(false);
-        alert('Gagal mendeteksi koordinat GPS: ' + err.message);
+        toast.error('Gagal mendeteksi koordinat GPS: ' + err.message);
       },
       { enableHighAccuracy: true, timeout: 8000 }
     );
@@ -200,19 +203,26 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
   };
 
   // 4. Delete post from bank
-  const handleDeletePost = async (postId: string, pName: string) => {
-    if (!confirm(`Hapus titik pos "${pName}" dari Bank Pos Lapangan?`)) return;
-    setDeletingId(postId);
-    try {
-      await fieldSentinelService.deleteFieldPost(postId);
-      await loadPosts();
-      if (typeof onSuccess === 'function') onSuccess();
-      if (typeof onSaved === 'function') onSaved();
-    } catch (err: any) {
-      alert(err.message || 'Gagal menghapus pos.');
-    } finally {
-      setDeletingId(null);
-    }
+  const handleDeletePost = (postId: string, pName: string) => {
+    toast.warning(`Hapus titik pos "${pName}" dari Bank Pos Lapangan?`, {
+      action: {
+        label: 'Hapus',
+        onClick: async () => {
+          setDeletingId(postId);
+          try {
+            await fieldSentinelService.deleteFieldPost(postId);
+            await loadPosts();
+            if (typeof onSuccess === 'function') onSuccess();
+            if (typeof onSaved === 'function') onSaved();
+            toast.success('Pos tugas berhasil dihapus.');
+          } catch (err: any) {
+            toast.error(err.message || 'Gagal menghapus pos.');
+          } finally {
+            setDeletingId(null);
+          }
+        },
+      },
+    });
   };
 
   if (!user) return null;
@@ -319,12 +329,9 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
                     <span className="w-2 h-2 rounded-full bg-emerald-500" />
                     Jam Masuk (Target Clock-In):
                   </Label>
-                  <Input
-                    type="time"
+                  <TimePicker
                     value={workStartTime}
-                    onChange={(e) => setWorkStartTime(e.target.value)}
-                    required
-                    className="h-10 text-sm font-mono rounded-xl bg-background border-border"
+                    onChange={(val) => setWorkStartTime(val)}
                   />
                   <p className="text-[10px] text-muted-foreground">
                     Petugas wajib melakukan absen masuk sebelum jam ini.
@@ -336,12 +343,9 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
                     <span className="w-2 h-2 rounded-full bg-indigo-500" />
                     Jam Pulang (Target Clock-Out):
                   </Label>
-                  <Input
-                    type="time"
+                  <TimePicker
                     value={workEndTime}
-                    onChange={(e) => setWorkEndTime(e.target.value)}
-                    required
-                    className="h-10 text-sm font-mono rounded-xl bg-background border-border"
+                    onChange={(val) => setWorkEndTime(val)}
                   />
                   <p className="text-[10px] text-muted-foreground">
                     Tombol presensi pulang baru terbuka setelah jam ini.

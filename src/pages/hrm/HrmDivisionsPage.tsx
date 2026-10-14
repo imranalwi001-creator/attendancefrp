@@ -237,8 +237,9 @@ export const HrmDivisionsPage: React.FC = () => {
       setIsSavedInDb(true);
       setApplySuccessMsg(res.message || 'Jadwal shift berhasil diterapkan ke database!');
       setTimeout(() => setApplySuccessMsg(null), 6000);
+      toast.success('Jadwal shift berhasil diterapkan ke database!');
     } catch (err: any) {
-      alert('Gagal menerapkan jadwal ke database: ' + (err.message || 'Kesalahan sistem'));
+      toast.error('Gagal menerapkan jadwal ke database: ' + (err.message || 'Kesalahan sistem'));
     } finally {
       setIsApplying(false);
     }
@@ -558,7 +559,7 @@ export const HrmDivisionsPage: React.FC = () => {
     if (importPreviewRows.length === 0) return;
     const validRows = importPreviewRows.filter((r) => r.matched);
     if (validRows.length === 0) {
-      alert('Tidak ada baris karyawan yang cocok dengan database sistem untuk diimpor.');
+      toast.error('Tidak ada baris karyawan yang cocok dengan database sistem untuk diimpor.');
       return;
     }
 
@@ -628,8 +629,9 @@ export const HrmDivisionsPage: React.FC = () => {
         setIsSavedInDb(true);
         setApplySuccessMsg(`Berhasil mengimpor dan menyimpan ${res.count} jadwal shift ke database!`);
         setTimeout(() => setApplySuccessMsg(null), 6000);
+        toast.success(`Berhasil mengimpor dan menyimpan ${res.count} jadwal shift ke database!`);
       } catch (err: any) {
-        alert('Jadwal berhasil dimuat ke matriks, namun gagal simpan otomatis ke database: ' + err.message);
+        toast.error('Jadwal berhasil dimuat ke matriks, namun gagal simpan otomatis ke database: ' + err.message);
         setIsSavedInDb(false);
       } finally {
         setIsApplying(false);
@@ -882,17 +884,23 @@ export const HrmDivisionsPage: React.FC = () => {
   const handleDelete = async (d: Division) => {
     const emps = divisionEmployeesMap[d.id] || [];
     if (emps.length > 0) {
-      alert(`Divisi "${d.name}" tidak dapat dihapus karena masih memiliki ${emps.length} karyawan terdaftar.`);
+      toast.error(`Divisi "${d.name}" tidak dapat dihapus karena masih memiliki ${emps.length} karyawan terdaftar.`);
       return;
     }
-    if (confirm(`Hapus divisi "${d.name}"? Data akan dihapus permanen dari database.`)) {
-      try {
-        await hrmService.deleteDivision(d.id);
-        loadData();
-      } catch (err: any) {
-        alert('Gagal menghapus divisi: ' + (err.message || 'Terjadi kesalahan database'));
-      }
-    }
+    toast.warning(`Hapus divisi "${d.name}"? Data akan dihapus permanen dari database.`, {
+      action: {
+        label: 'Hapus',
+        onClick: async () => {
+          try {
+            await hrmService.deleteDivision(d.id);
+            loadData();
+            toast.success(`Divisi "${d.name}" berhasil dihapus.`);
+          } catch (err: any) {
+            toast.error('Gagal menghapus divisi: ' + (err.message || 'Terjadi kesalahan database'));
+          }
+        },
+      },
+    });
   };
 
   const handleViewEmployees = (d: Division) => {
@@ -906,18 +914,23 @@ export const HrmDivisionsPage: React.FC = () => {
 
   const handleRemoveEmployeeFromDivision = async (emp: UserProfile) => {
     if (!viewEmployeesDiv) return;
-    if (confirm(`Keluarkan karyawan "${emp.fullName}" (${emp.nip}) dari divisi "${viewEmployeesDiv.name}"? Karyawan ini tidak lagi bernaung di divisi ini.`)) {
-      try {
-        hrmService.updateUser(emp.id, {
-          divisionId: undefined,
-          divisionName: undefined,
-        });
-        loadData();
-        toast.success(`Karyawan ${emp.fullName} berhasil dikeluarkan dari divisi ${viewEmployeesDiv.name}.`);
-      } catch (err: any) {
-        toast.error(err.message || 'Gagal mengeluarkan karyawan dari divisi.');
-      }
-    }
+    toast.warning(`Keluarkan karyawan "${emp.fullName}" (${emp.nip}) dari divisi "${viewEmployeesDiv.name}"?`, {
+      action: {
+        label: 'Keluarkan',
+        onClick: () => {
+          try {
+            hrmService.updateUser(emp.id, {
+              divisionId: undefined,
+              divisionName: undefined,
+            });
+            loadData();
+            toast.success(`Karyawan ${emp.fullName} berhasil dikeluarkan dari divisi ${viewEmployeesDiv.name}.`);
+          } catch (err: any) {
+            toast.error(err.message || 'Gagal mengeluarkan karyawan dari divisi.');
+          }
+        },
+      },
+    });
   };
 
   const handleAddEmployeeToDivision = async () => {

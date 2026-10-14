@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { DatePicker } from '@/components/ui/date-picker';
 import { HrmEmployeeSearchInput } from '@/components/hrm/HrmEmployeeSearchInput';
 import { customNotify } from '@/lib/customNotification';
+import { toast } from 'sonner';
 import {
   ShieldAlert,
   AlertTriangle,
@@ -146,19 +147,25 @@ export const HrmPelanggaranManagementTab: React.FC = () => {
     }
   };
 
-  const handleDeleteSP = async (id: string) => {
-    if (!confirm('Apakah Anda yakin ingin menghapus data surat peringatan ini?')) return;
-    try {
-      const res = await hrmService.deleteDisciplinaryRecord(id);
-      if (res.success) {
-        customNotify.success('SP Dihapus', 'Surat peringatan berhasil dihapus.');
-        loadData();
-      } else {
-        customNotify.error('Gagal Hapus', res.error || 'Gagal menghapus');
-      }
-    } catch (err: any) {
-      customNotify.error('Gagal Hapus', 'Terjadi kesalahan saat menghapus');
-    }
+  const handleDeleteSP = (id: string) => {
+    toast.warning('Apakah Anda yakin ingin menghapus data surat peringatan ini?', {
+      action: {
+        label: 'Hapus',
+        onClick: async () => {
+          try {
+            const res = await hrmService.deleteDisciplinaryRecord(id);
+            if (res.success) {
+              customNotify.success('SP Dihapus', 'Surat peringatan berhasil dihapus.');
+              loadData();
+            } else {
+              customNotify.error('Gagal Hapus', res.error || 'Gagal menghapus');
+            }
+          } catch (err: any) {
+            customNotify.error('Gagal Hapus', 'Terjadi kesalahan saat menghapus');
+          }
+        },
+      },
+    });
   };
 
   const filteredRecords = records.filter((r) => {

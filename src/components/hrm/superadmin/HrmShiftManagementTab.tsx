@@ -23,6 +23,7 @@ import {
   Search,
   Building2,
 } from 'lucide-react';
+import { TimePicker } from '@/components/ui/time-picker';
 
 export const HrmShiftManagementTab: React.FC = () => {
   const [shifts, setShifts] = useState<Shift[]>([]);
@@ -507,20 +508,16 @@ export const HrmShiftManagementTab: React.FC = () => {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Jam Mulai</Label>
-                <Input
-                  type="time"
+                <TimePicker
                   value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                  className="h-9 text-xs rounded-xl font-mono"
+                  onChange={(val) => setStartTime(val)}
                 />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Jam Selesai</Label>
-                <Input
-                  type="time"
+                <TimePicker
                   value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                  className="h-9 text-xs rounded-xl font-mono"
+                  onChange={(val) => setEndTime(val)}
                 />
               </div>
             </div>

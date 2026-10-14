@@ -77,6 +77,8 @@ import { Badge } from '@/components/ui/badge';
 import defaultAvatar from '@/assets/logo.png';
 import { resolveEffectiveShift, checkShiftClockInWindow, checkShiftClockOutWindow, determineNextContinuousShift, NextContinuousShiftInfo } from '@/lib/hrmShiftResolver';
 import { compressImageFile } from '@/lib/imageCompressor';
+import { DatePicker } from '@/components/ui/date-picker';
+import { TimePicker } from '@/components/ui/time-picker';
 
 interface HrmPwaAttendanceViewProps {
   onSwitchToDesktop?: () => void;
@@ -4989,22 +4991,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
                   Mulai Tanggal:
                 </label>
-                <input
-                  type="date"
+                <DatePicker
                   value={leaveStartDate}
-                  onChange={(e) => setLeaveStartDate(e.target.value)}
-                  className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+                  onChange={(val) => setLeaveStartDate(val)}
+                  placeholder="Mulai..."
+                  className="w-full text-xs h-9 rounded-xl border-slate-200 dark:border-slate-800"
                 />
               </div>
               <div>
                 <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
                   Sampai Tanggal:
                 </label>
-                <input
-                  type="date"
+                <DatePicker
                   value={leaveEndDate}
-                  onChange={(e) => setLeaveEndDate(e.target.value)}
-                  className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+                  onChange={(val) => setLeaveEndDate(val)}
+                  placeholder="Selesai..."
+                  className="w-full text-xs h-9 rounded-xl border-slate-200 dark:border-slate-800"
                 />
               </div>
             </div>
@@ -5221,11 +5223,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
                 Tanggal Lembur:
               </label>
-              <input
-                type="date"
+              <DatePicker
                 value={otDate}
-                onChange={(e) => setOtDate(e.target.value)}
-                className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+                onChange={(val) => setOtDate(val)}
+                placeholder="Pilih tanggal lembur"
+                className="w-full text-xs h-9 rounded-xl border-slate-200 dark:border-slate-800"
               />
             </div>
 
@@ -5234,22 +5236,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
                   Jam Mulai:
                 </label>
-                <input
-                  type="time"
+                <TimePicker
                   value={otStartTime}
-                  onChange={(e) => setOtStartTime(e.target.value)}
-                  className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+                  onChange={(val) => setOtStartTime(val)}
+                  placeholder="Jam mulai"
+                  className="w-full text-xs h-9 rounded-xl"
                 />
               </div>
               <div>
                 <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
                   Jam Selesai:
                 </label>
-                <input
-                  type="time"
+                <TimePicker
                   value={otEndTime}
-                  onChange={(e) => setOtEndTime(e.target.value)}
-                  className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+                  onChange={(val) => setOtEndTime(val)}
+                  placeholder="Jam selesai"
+                  className="w-full text-xs h-9 rounded-xl"
                 />
               </div>
             </div>

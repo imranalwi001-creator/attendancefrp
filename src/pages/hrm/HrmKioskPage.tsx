@@ -23,6 +23,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
 import defaultLogo from '@/assets/logo.png';
 import { biometricService, BiometricMatchResult, parseFaceDescriptor } from '@/services/biometricService';
@@ -301,7 +302,7 @@ export const HrmKioskPage: React.FC = () => {
 
     // Enforce Biometric Mismatch Guard
     if (biometricResult && !biometricResult.isMatch) {
-      alert(`Presensi Ditolak! Wajah tidak cocok dengan data master biometrik ${selectedUser.fullName} (Kemiripan ${biometricResult.confidence}%).`);
+      toast.error(`Presensi Ditolak! Wajah tidak cocok dengan data master biometrik ${selectedUser.fullName} (Kemiripan ${biometricResult.confidence}%).`);
       return;
     }
 
@@ -360,7 +361,7 @@ export const HrmKioskPage: React.FC = () => {
         setSuccessResult(null);
       }, 4000);
     } catch (err: any) {
-      alert(err.message || 'Gagal mencatat presensi');
+      toast.error(err.message || 'Gagal mencatat presensi');
     } finally {
       setSubmitting(false);
     }

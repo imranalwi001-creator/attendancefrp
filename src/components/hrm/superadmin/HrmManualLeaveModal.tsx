@@ -24,6 +24,7 @@ import {
   HeartPulse,
   Flame,
 } from 'lucide-react';
+import { DatePicker } from '@/components/ui/date-picker';
 
 interface HrmManualLeaveModalProps {
   open: boolean;
@@ -286,23 +287,19 @@ export const HrmManualLeaveModal: React.FC<HrmManualLeaveModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="space-y-1">
               <Label className="text-xs font-semibold">Tanggal Mulai <span className="text-destructive">*</span></Label>
-              <Input
-                type="date"
+              <DatePicker
                 value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="h-9 text-xs rounded-xl font-mono"
-                required
+                onChange={(val) => setStartDate(val || '')}
+                className="h-9"
               />
             </div>
 
             <div className="space-y-1">
               <Label className="text-xs font-semibold">Tanggal Selesai <span className="text-destructive">*</span></Label>
-              <Input
-                type="date"
+              <DatePicker
                 value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="h-9 text-xs rounded-xl font-mono"
-                required
+                onChange={(val) => setEndDate(val || '')}
+                className="h-9"
               />
             </div>
 

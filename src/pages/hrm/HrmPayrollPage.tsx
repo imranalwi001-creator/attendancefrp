@@ -3,6 +3,7 @@ import { hrmService } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { toast as sonnerToast } from 'sonner';
 import defaultLogo from '@/assets/logo.png';
 import { payrollTaxEngine, PTKP_CATEGORIES, TerCategory } from '@/services/payrollTaxEngine';
 import {
@@ -1236,11 +1237,16 @@ export const HrmPayrollPage: React.FC = () => {
   };
 
   const handleDeletePeriod = (id: string) => {
-    if (window.confirm('Apakah Anda yakin ingin menghapus periode ini? Semua slip yang terkait akan dihapus.')) {
-      hrmService.deletePayrollPeriod(id);
-      toast({ title: 'Periode berhasil dihapus' });
-      refresh();
-    }
+    sonnerToast.warning('Apakah Anda yakin ingin menghapus periode ini? Semua slip yang terkait akan dihapus.', {
+      action: {
+        label: 'Hapus',
+        onClick: () => {
+          hrmService.deletePayrollPeriod(id);
+          toast({ title: 'Periode berhasil dihapus' });
+          refresh();
+        },
+      },
+    });
   };
 
   const handleSaveSettings = () => {

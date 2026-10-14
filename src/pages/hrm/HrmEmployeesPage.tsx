@@ -63,6 +63,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DatePicker } from '@/components/ui/date-picker';
+import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 
 export const HrmEmployeesPage: React.FC = () => {
@@ -221,12 +222,12 @@ export const HrmEmployeesPage: React.FC = () => {
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
-      alert('Silakan pilih file gambar yang valid (PNG, JPG, WebP).');
+      toast.error('Silakan pilih file gambar yang valid (PNG, JPG, WebP).');
       return;
     }
 
     if (file.size > 2 * 1024 * 1024) {
-      alert('Ukuran foto maksimal 2 MB.');
+      toast.error('Ukuran foto maksimal 2 MB.');
       return;
     }
 
@@ -420,22 +421,29 @@ export const HrmEmployeesPage: React.FC = () => {
 
   const handleToggleStatus = (user: UserProfile) => {
     if (user.roleName === 'superadmin') {
-      alert('Akun Super Admin utama tidak dapat dinonaktifkan.');
+      toast.error('Akun Super Admin utama tidak dapat dinonaktifkan.');
       return;
     }
     hrmService.updateUser(user.id, { isActive: !user.isActive });
     loadData();
+    toast.success(`Status karyawan ${user.fullName} berhasil diperbarui.`);
   };
 
   const handleDelete = (user: UserProfile) => {
     if (user.roleName === 'superadmin') {
-      alert('Akun Super Admin tidak dapat dihapus');
+      toast.error('Akun Super Admin tidak dapat dihapus');
       return;
     }
-    if (confirm(`Hapus karyawan "${user.fullName}" (${user.nip}) dari sistem?`)) {
-      hrmService.deleteUser(user.id);
-      loadData();
-    }
+    toast.warning(`Hapus karyawan "${user.fullName}" (${user.nip}) dari sistem?`, {
+      action: {
+        label: 'Hapus',
+        onClick: () => {
+          hrmService.deleteUser(user.id);
+          loadData();
+          toast.success(`Karyawan ${user.fullName} berhasil dihapus.`);
+        },
+      },
+    });
   };
 
   // Reassignment & Mutation Handlers
@@ -459,9 +467,9 @@ export const HrmEmployeesPage: React.FC = () => {
       );
       setReassignModalOpen(false);
       loadData();
-      alert(`Berhasil memindahkan ${reassignUser.fullName}. Notifikasi otomatis telah dikirim ke karyawan dan log admin.`);
+      toast.success(`Berhasil memindahkan ${reassignUser.fullName}. Notifikasi otomatis telah dikirim.`);
     } catch (err: any) {
-      alert(err.message || 'Gagal memindahkan lokasi karyawan.');
+      toast.error(err.message || 'Gagal memindahkan lokasi karyawan.');
     } finally {
       setReassignSubmitting(false);
     }
@@ -469,19 +477,20 @@ export const HrmEmployeesPage: React.FC = () => {
 
   const handleRestoreDivision = (user: UserProfile) => {
     if (!user.originalDivisionId) return;
-    if (
-      confirm(
-        `Kembalikan ${user.fullName} ke divisi asalnya (${user.originalDivisionName || 'Divisi Asal'})?`
-      )
-    ) {
-      try {
-        hrmService.restoreUserOriginalDivision(user.id, 'Admin HRD');
-        loadData();
-        alert(`Karyawan ${user.fullName} telah dikembalikan ke divisi asal. Notifikasi telah dikirimkan.`);
-      } catch (err: any) {
-        alert(err.message || 'Gagal mengembalikan karyawan ke divisi asal.');
-      }
-    }
+    toast.warning(`Kembalikan ${user.fullName} ke divisi asalnya (${user.originalDivisionName || 'Divisi Asal'})?`, {
+      action: {
+        label: 'Kembalikan',
+        onClick: () => {
+          try {
+            hrmService.restoreUserOriginalDivision(user.id, 'Admin HRD');
+            loadData();
+            toast.success(`Karyawan ${user.fullName} telah dikembalikan ke divisi asal.`);
+          } catch (err: any) {
+            toast.error(err.message || 'Gagal mengembalikan karyawan ke divisi asal.');
+          }
+        },
+      },
+    });
   };
 
   // Bulk Import Handlers
@@ -695,7 +704,7 @@ export const HrmEmployeesPage: React.FC = () => {
   const handleExecuteBulkImport = () => {
     const validRows = bulkParsedRows.filter((r) => r._isValid);
     if (validRows.length === 0) {
-      alert('Tidak ada data valid yang dapat diimpor. Silakan periksa kembali daftar data.');
+      toast.error('Tidak ada data valid yang dapat diimpor. Silakan periksa kembali daftar data.');
       return;
     }
 
@@ -746,19 +755,21 @@ export const HrmEmployeesPage: React.FC = () => {
   const [isResettingSecurity, setIsResettingSecurity] = useState(false);
 
   const handleResetDevice = async (u: UserProfile) => {
-    if (window.confirm(`Reset kunci perangkat fisik untuk ${u.fullName}?\n\nKaryawan akan dapat menautkan HP baru pada saat login berikutnya.`)) {
-      setIsResettingSecurity(true);
-      try {
-        const ok = await hrmService.resetUserDeviceBinding(u.id);
-        await loadData();
-        if (securityModalUser && securityModalUser.id === u.id) {
-          const fresh = hrmService.getUsers().find((x) => x.id === u.id);
-          if (fresh) setSecurityModalUser(fresh);
-        }
-        alert(ok ? `Kunci perangkat untuk ${u.fullName} berhasil di-reset.` : 'Gagal mereset kunci perangkat.');
-      } finally {
-        setIsResettingSecurity(false);
+    setIsResettingSecurity(true);
+    try {
+      const ok = await hrmService.resetUserDeviceBinding(u.id);
+      await loadData();
+      if (securityModalUser && securityModalUser.id === u.id) {
+        const fresh = hrmService.getUsers().find((x) => x.id === u.id);
+        if (fresh) setSecurityModalUser(fresh);
       }
+      if (ok) {
+        toast.success(`Kunci perangkat untuk ${u.fullName} berhasil di-reset.`);
+      } else {
+        toast.error('Gagal mereset kunci perangkat.');
+      }
+    } finally {
+      setIsResettingSecurity(false);
     }
   };
 
@@ -768,53 +779,51 @@ export const HrmEmployeesPage: React.FC = () => {
   };
 
   const handleResetFace = async (u: UserProfile) => {
-    if (window.confirm(`Reset data biometrik wajah master untuk ${u.fullName}?\n\nKaryawan harus mendaftarkan wajahnya kembali agar bisa presensi.`)) {
-      setIsResettingSecurity(true);
-      try {
-        await hrmService.resetMasterFace(u.id);
-        await loadData();
-        if (securityModalUser && securityModalUser.id === u.id) {
-          const fresh = hrmService.getUsers().find((x) => x.id === u.id);
-          if (fresh) setSecurityModalUser(fresh);
-        }
-        alert(`Wajah master untuk ${u.fullName} berhasil di-reset.`);
-      } finally {
-        setIsResettingSecurity(false);
+    setIsResettingSecurity(true);
+    try {
+      await hrmService.resetMasterFace(u.id);
+      await loadData();
+      if (securityModalUser && securityModalUser.id === u.id) {
+        const fresh = hrmService.getUsers().find((x) => x.id === u.id);
+        if (fresh) setSecurityModalUser(fresh);
       }
+      toast.success(`Wajah master untuk ${u.fullName} berhasil di-reset.`);
+    } finally {
+      setIsResettingSecurity(false);
     }
   };
 
   const handleResetLocation = async (u: UserProfile) => {
-    if (window.confirm(`Buka kunci lokasi & pelanggaran perimeter untuk ${u.fullName}?\n\nStatus presensi hari ini yang terkunci akan dipulihkan.`)) {
-      setIsResettingSecurity(true);
-      try {
-        const ok = await hrmService.resetUserLocationLock(u.id, currentUser?.fullName || 'Superadmin');
-        await loadData();
-        if (securityModalUser && securityModalUser.id === u.id) {
-          const fresh = hrmService.getUsers().find((x) => x.id === u.id);
-          if (fresh) setSecurityModalUser(fresh);
-        }
-        alert(ok ? `Kunci lokasi untuk ${u.fullName} berhasil dibuka.` : 'Gagal membuka kunci lokasi.');
-      } finally {
-        setIsResettingSecurity(false);
+    setIsResettingSecurity(true);
+    try {
+      const ok = await hrmService.resetUserLocationLock(u.id, currentUser?.fullName || 'Superadmin');
+      await loadData();
+      if (securityModalUser && securityModalUser.id === u.id) {
+        const fresh = hrmService.getUsers().find((x) => x.id === u.id);
+        if (fresh) setSecurityModalUser(fresh);
       }
+      if (ok) {
+        toast.success(`Kunci lokasi untuk ${u.fullName} berhasil dibuka.`);
+      } else {
+        toast.error('Gagal membuka kunci lokasi.');
+      }
+    } finally {
+      setIsResettingSecurity(false);
     }
   };
 
   const handleResetAllSecurity = async (u: UserProfile) => {
-    if (window.confirm(`Reset SEMUA keamanan (Kunci HP, Wajah Master, dan Lokasi) untuk ${u.fullName}?\n\nSemua penguncian keamanan akan di-reset total.`)) {
-      setIsResettingSecurity(true);
-      try {
-        await hrmService.resetUserSecurityAll(u.id, currentUser?.fullName || 'Superadmin');
-        await loadData();
-        if (securityModalUser && securityModalUser.id === u.id) {
-          const fresh = hrmService.getUsers().find((x) => x.id === u.id);
-          if (fresh) setSecurityModalUser(fresh);
-        }
-        alert(`Semua kunci keamanan untuk ${u.fullName} berhasil di-reset total.`);
-      } finally {
-        setIsResettingSecurity(false);
+    setIsResettingSecurity(true);
+    try {
+      await hrmService.resetUserSecurityAll(u.id, currentUser?.fullName || 'Superadmin');
+      await loadData();
+      if (securityModalUser && securityModalUser.id === u.id) {
+        const fresh = hrmService.getUsers().find((x) => x.id === u.id);
+        if (fresh) setSecurityModalUser(fresh);
       }
+      toast.success(`Semua kunci keamanan untuk ${u.fullName} berhasil di-reset total.`);
+    } finally {
+      setIsResettingSecurity(false);
     }
   };
 
@@ -831,21 +840,21 @@ export const HrmEmployeesPage: React.FC = () => {
   const handleConfirmResetPassword = async () => {
     if (!resetPasswordUser) return;
     if (!newResetPassword || newResetPassword.length < 6) {
-      alert('Kata sandi minimal 6 karakter.');
+      toast.error('Kata sandi minimal 6 karakter.');
       return;
     }
     setIsResettingPassword(true);
     try {
       const res = await hrmService.resetPassword(resetPasswordUser.id, newResetPassword);
       if (res.success) {
-        alert(`Kata sandi untuk ${resetPasswordUser.fullName} berhasil di-reset menjadi "${newResetPassword}". Karyawan dapat langsung masuk menggunakan sandi baru.`);
+        toast.success(`Kata sandi untuk ${resetPasswordUser.fullName} berhasil di-reset menjadi "${newResetPassword}".`);
         setResetPasswordUser(null);
         loadData();
       } else {
-        alert(res.error || 'Gagal mereset kata sandi');
+        toast.error(res.error || 'Gagal mereset kata sandi');
       }
     } catch (err: any) {
-      alert(err.message || 'Gagal mereset kata sandi');
+      toast.error(err.message || 'Gagal mereset kata sandi');
     } finally {
       setIsResettingPassword(false);
     }
@@ -1563,8 +1572,8 @@ export const HrmEmployeesPage: React.FC = () => {
                       <input type="file" ref={fileInputRef} onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (!file) return;
-                        if (!file.type.startsWith('image/')) { alert('Pilih file gambar'); return; }
-                        if (file.size > 2 * 1024 * 1024) { alert('Maks 2MB'); return; }
+                        if (!file.type.startsWith('image/')) { toast.error('Pilih file gambar yang valid'); return; }
+                        if (file.size > 2 * 1024 * 1024) { toast.error('Ukuran file maksimal 2 MB'); return; }
                         const reader = new FileReader();
                         reader.onload = () => setAvatarUrl(reader.result as string);
                         reader.readAsDataURL(file);
@@ -1676,7 +1685,7 @@ export const HrmEmployeesPage: React.FC = () => {
               <input type="file" ref={empDocFileRef} onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (!file) return;
-                if (file.size > 5 * 1024 * 1024) { alert('Maks 5 MB'); return; }
+                if (file.size > 5 * 1024 * 1024) { toast.error('Ukuran file maksimal 5 MB'); return; }
                 const reader = new FileReader();
                 reader.onload = () => {
                   setEmpDocFileUrl(reader.result as string);
@@ -1709,8 +1718,8 @@ export const HrmEmployeesPage: React.FC = () => {
           <DialogFooter>
             <Button variant="ghost" onClick={() => setEmpDocModalOpen(false)} className="text-xs rounded-xl">Batal</Button>
             <Button onClick={() => {
-              if (!empDocName.trim()) { alert('Nama dokumen wajib diisi'); return; }
-              if (!empDocFileUrl) { alert('Pilih file terlebih dahulu'); return; }
+              if (!empDocName.trim()) { toast.error('Nama dokumen wajib diisi'); return; }
+              if (!empDocFileUrl) { toast.error('Pilih file terlebih dahulu'); return; }
               const newDoc: EmployeeDocument = {
                 id: `edoc-${Date.now()}`,
                 userId: editingUser?.id || 'new',
@@ -2166,11 +2175,11 @@ export const HrmEmployeesPage: React.FC = () => {
 
               <div className="space-y-1">
                 <Label className="text-[11px] font-semibold text-muted-foreground">Tanggal Lahir</Label>
-                <Input
-                  type="date"
-                  className="rounded-xl text-xs h-8 font-mono"
+                <DatePicker
                   value={ocrParsed?.birthDate || ''}
-                  onChange={(e) => setOcrParsed((p) => (p ? { ...p, birthDate: e.target.value } : null))}
+                  onChange={(val) => setOcrParsed((p) => (p ? { ...p, birthDate: val } : null))}
+                  className="rounded-xl text-xs h-8 font-mono"
+                  placeholder="Pilih tanggal lahir"
                 />
               </div>
 

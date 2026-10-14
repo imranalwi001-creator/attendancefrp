@@ -24,6 +24,8 @@ import {
   Info,
   X,
 } from 'lucide-react';
+import { DatePicker } from '@/components/ui/date-picker';
+import { TimePicker } from '@/components/ui/time-picker';
 
 interface HrmManualLemburModalProps {
   open: boolean;
@@ -309,12 +311,10 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs font-semibold">Tanggal Lembur <span className="text-destructive">*</span></Label>
-              <Input
-                type="date"
+              <DatePicker
                 value={date}
-                onChange={(e) => handleDateChange(e.target.value)}
-                className="h-9 text-xs rounded-xl font-mono"
-                required
+                onChange={(val) => handleDateChange(val || new Date().toISOString().split('T')[0])}
+                className="h-9"
               />
             </div>
 
@@ -378,31 +378,25 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1">
               <Label className="text-xs font-semibold">Jam Mulai</Label>
-              <Input
-                type="time"
+              <TimePicker
                 value={startTime}
-                onChange={(e) => {
-                  setStartTime(e.target.value);
+                onChange={(val) => {
+                  setStartTime(val);
                   setShiftPreset('custom');
-                  calculateCustomDuration(e.target.value, endTime);
+                  calculateCustomDuration(val, endTime);
                 }}
-                className="h-9 text-xs rounded-xl font-mono"
-                required
               />
             </div>
 
             <div className="space-y-1">
               <Label className="text-xs font-semibold">Jam Selesai</Label>
-              <Input
-                type="time"
+              <TimePicker
                 value={endTime}
-                onChange={(e) => {
-                  setEndTime(e.target.value);
+                onChange={(val) => {
+                  setEndTime(val);
                   setShiftPreset('custom');
-                  calculateCustomDuration(startTime, e.target.value);
+                  calculateCustomDuration(startTime, val);
                 }}
-                className="h-9 text-xs rounded-xl font-mono"
-                required
               />
             </div>
 

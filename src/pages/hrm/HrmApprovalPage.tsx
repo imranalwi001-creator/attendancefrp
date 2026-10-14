@@ -42,6 +42,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DatePicker } from '@/components/ui/date-picker';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
 export const HrmApprovalPage: React.FC = () => {
@@ -272,7 +273,7 @@ export const HrmApprovalPage: React.FC = () => {
   const handleConfirmDanruRecommendation = async () => {
     if (!selectedSwapForDanru || !user) return;
     if (!danruRecommendedSubstituteId) {
-      alert('Pilih kandidat pengganti yang direkomendasikan.');
+      toast.error('Pilih kandidat pengganti yang direkomendasikan.');
       return;
     }
     setSubmittingDanru(true);
@@ -285,13 +286,14 @@ export const HrmApprovalPage: React.FC = () => {
       if (res.success) {
         setDanruModalOpen(false);
         setActionSuccess('Rekomendasi pengganti berhasil dikirimkan ke Koordinator Lapangan (Korlap)!');
+        toast.success('Rekomendasi pengganti berhasil dikirimkan ke Korlap!');
         setTimeout(() => setActionSuccess(null), 4000);
         loadShiftSwaps();
       } else {
-        alert(res.error || 'Gagal mengirim rekomendasi');
+        toast.error(res.error || 'Gagal mengirim rekomendasi');
       }
     } catch (err: any) {
-      alert(err.message || 'Gagal mengirim rekomendasi');
+      toast.error(err.message || 'Gagal mengirim rekomendasi');
     } finally {
       setSubmittingDanru(false);
     }
@@ -331,7 +333,7 @@ export const HrmApprovalPage: React.FC = () => {
   const handleConfirmKorlapDecision = async () => {
     if (!selectedSwapForKorlap || !user) return;
     if (korlapDecision === 'approved' && !korlapSubstituteId) {
-      alert('Pilih karyawan pengganti resmi yang ditetapkan untuk mengisi kekosongan pos.');
+      toast.error('Pilih karyawan pengganti resmi yang ditetapkan untuk mengisi kekosongan pos.');
       return;
     }
     setSubmittingKorlap(true);
@@ -344,18 +346,18 @@ export const HrmApprovalPage: React.FC = () => {
       });
       if (res.success) {
         setKorlapModalOpen(false);
-        setActionSuccess(
-          korlapDecision === 'approved'
-            ? 'Pengajuan resmi disetujui Korlap! Notifikasi penugasan pos telah otomatis terkirim ke karyawan pemohon dan karyawan pengganti.'
-            : 'Pengajuan tukar shift ditolak oleh Korlap.'
-        );
+        const msg = korlapDecision === 'approved'
+          ? 'Pengajuan resmi disetujui Korlap! Notifikasi penugasan pos telah otomatis terkirim ke karyawan pemohon dan karyawan pengganti.'
+          : 'Pengajuan tukar shift ditolak oleh Korlap.';
+        setActionSuccess(msg);
+        toast.success(msg);
         setTimeout(() => setActionSuccess(null), 4000);
         loadShiftSwaps();
       } else {
-        alert(res.error || 'Gagal memproses persetujuan Korlap');
+        toast.error(res.error || 'Gagal memproses persetujuan Korlap');
       }
     } catch (err: any) {
-      alert(err.message || 'Gagal memproses persetujuan Korlap');
+      toast.error(err.message || 'Gagal memproses persetujuan Korlap');
     } finally {
       setSubmittingKorlap(false);
     }
@@ -441,7 +443,7 @@ export const HrmApprovalPage: React.FC = () => {
     if (!selectedLeave || !user) return;
 
     if (decision === 'approved' && !selectedSubstituteId) {
-      alert('Sesuai aturan operasional PT FRP, pekerjaan tidak boleh kosong saat karyawan cuti/izin. Korlap, Admin, atau K3 wajib menetapkan satu karyawan pengganti sebelum menyetujui pengajuan.');
+      toast.error('Sesuai aturan operasional PT FRP, pekerjaan tidak boleh kosong saat karyawan cuti/izin. Tetapkan satu karyawan pengganti sebelum menyetujui.');
       return;
     }
 
@@ -461,17 +463,19 @@ export const HrmApprovalPage: React.FC = () => {
       );
 
       setModalOpen(false);
+      const leaveSuccessMsg = `Pengajuan ${selectedLeave.userName} berhasil di-${decision === 'approved' ? 'setujui' : 'tolak'}.`;
       setActionSuccess(
-        `Pengajuan ${selectedLeave.userName} berhasil di-${decision === 'approved' ? 'setujui' : 'tolak'}. ${
+        `${leaveSuccessMsg} ${
           decision === 'approved' && selectedSub
             ? `Karyawan Pengganti Resmi: ${selectedSub.fullName || selectedSub.name} (${selectedSub.nip}). Notifikasi WhatsApp & aplikasi telah dikirimkan ke seluruh pihak.`
             : ''
         }`
       );
+      toast.success(leaveSuccessMsg);
       setTimeout(() => setActionSuccess(null), 5000);
       loadData();
     } catch (err: any) {
-      alert(err.message || 'Gagal memproses permohonan');
+      toast.error(err.message || 'Gagal memproses permohonan');
     } finally {
       setSubmittingDecision(false);
     }
@@ -507,20 +511,21 @@ export const HrmApprovalPage: React.FC = () => {
         setActionSuccess(`Lembur ${selectedOvertime.userName} ditolak.`);
       }
       setOtModalOpen(false);
+      toast.success(otDecision === 'approved' ? `Lembur disetujui ${otApprovedHours} Jam` : 'Lembur ditolak');
       setTimeout(() => setActionSuccess(null), 4000);
       loadData();
     } catch (err: any) {
-      alert(err.message || 'Gagal memproses permohonan lembur');
+      toast.error(err.message || 'Gagal memproses permohonan lembur');
     }
   };
 
   const handleConfirmDirectOvertime = () => {
     if (!directUserId) {
-      alert('Pilih karyawan yang ditugaskan lembur.');
+      toast.error('Pilih karyawan yang ditugaskan lembur.');
       return;
     }
     if (!directReason.trim()) {
-      alert('Tuliskan alasan / rincian pekerjaan lembur.');
+      toast.error('Tuliskan alasan / rincian pekerjaan lembur.');
       return;
     }
     setSubmittingDirectOt(true);
@@ -536,10 +541,11 @@ export const HrmApprovalPage: React.FC = () => {
       setDirectOtModalOpen(false);
       setDirectReason('');
       setActionSuccess(`Mandat lembur resmi ${directHours} Jam untuk ${assigned.userName} berhasil diaktifkan. Notifikasi dikirimkan.`);
+      toast.success(`Mandat lembur resmi ${directHours} Jam untuk ${assigned.userName} berhasil diaktifkan.`);
       setTimeout(() => setActionSuccess(null), 4000);
       loadData();
     } catch (err: any) {
-      alert(err.message || 'Gagal mengaktifkan mandat lembur.');
+      toast.error(err.message || 'Gagal mengaktifkan mandat lembur.');
     } finally {
       setSubmittingDirectOt(false);
     }
@@ -549,10 +555,11 @@ export const HrmApprovalPage: React.FC = () => {
     try {
       hrmService.updateOvertimePaymentStatus(id, paymentStatus);
       setActionSuccess('Status pencairan uang lembur berhasil diperbarui!');
+      toast.success('Status pencairan uang lembur berhasil diperbarui!');
       setTimeout(() => setActionSuccess(null), 4000);
       loadData();
     } catch (err: any) {
-      alert(err.message || 'Gagal mengubah status pembayaran');
+      toast.error(err.message || 'Gagal mengubah status pembayaran');
     }
   };
 

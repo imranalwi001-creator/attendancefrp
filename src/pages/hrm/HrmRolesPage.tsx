@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { toast } from 'sonner';
 
 const AVAILABLE_PERMISSIONS = [
   { id: 'all', label: 'Akses Penuh (Full Administrator)' },
@@ -135,17 +136,23 @@ export const HrmRolesPage: React.FC = () => {
 
   const handleDelete = (role: Role) => {
     if (role.isSystem) {
-      alert('Role sistem bawaan tidak dapat dihapus');
+      toast.error('Role sistem bawaan tidak dapat dihapus');
       return;
     }
-    if (confirm(`Apakah Anda yakin ingin menghapus role "${role.label}"?`)) {
-      try {
-        hrmService.deleteRole(role.id);
-        loadRoles();
-      } catch (err: any) {
-        alert(err.message || 'Gagal menghapus role');
-      }
-    }
+    toast.warning(`Apakah Anda yakin ingin menghapus role "${role.label}"?`, {
+      action: {
+        label: 'Hapus',
+        onClick: () => {
+          try {
+            hrmService.deleteRole(role.id);
+            loadRoles();
+            toast.success(`Role "${role.label}" berhasil dihapus.`);
+          } catch (err: any) {
+            toast.error(err.message || 'Gagal menghapus role');
+          }
+        },
+      },
+    });
   };
 
   return (

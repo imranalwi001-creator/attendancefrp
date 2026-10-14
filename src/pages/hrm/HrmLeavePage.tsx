@@ -37,6 +37,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DatePicker } from '@/components/ui/date-picker';
+import { TimePicker } from '@/components/ui/time-picker';
 import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
 import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
 
@@ -1128,23 +1129,17 @@ export const HrmLeavePage: React.FC = () => {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs font-semibold">Jam Mulai</Label>
-                <Input
-                  type="time"
+                <TimePicker
                   value={otStartTime}
-                  onChange={(e) => setOtStartTime(e.target.value)}
-                  className="text-xs rounded-xl font-mono"
-                  required
+                  onChange={(val) => setOtStartTime(val)}
                 />
               </div>
 
               <div className="space-y-1">
                 <Label className="text-xs font-semibold">Jam Selesai</Label>
-                <Input
-                  type="time"
+                <TimePicker
                   value={otEndTime}
-                  onChange={(e) => setOtEndTime(e.target.value)}
-                  className="text-xs rounded-xl font-mono"
-                  required
+                  onChange={(val) => setOtEndTime(val)}
                 />
               </div>
             </div>

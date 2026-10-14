@@ -1171,9 +1171,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         setRequestingAgentId(agent.id);
                         try {
                           await fieldSentinelService.requestSpotCheck(agent.id, 'Verifikasi Lapangan Mendadak dari Pimpinan / Superadmin');
-                          alert(`Instruksi verifikasi spot-check telah dikirim ke perangkat ${agent.fullName}. Layar kamera forensik otomatis muncul pada HP petugas.`);
+                          toast.success(`Instruksi verifikasi spot-check telah dikirim ke perangkat ${agent.fullName}. Layar kamera forensik otomatis muncul pada HP petugas.`);
                         } catch (err: any) {
-                          alert(err.message || 'Gagal mengirim instruksi spot-check.');
+                          toast.error(err.message || 'Gagal mengirim instruksi spot-check.');
                         } finally {
                           setRequestingAgentId(null);
                         }
@@ -1474,7 +1474,6 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                   variant="outline"
                                   className="h-7 px-2 text-[10px] rounded-lg gap-1 border-primary/40 text-primary hover:bg-primary/10 font-semibold"
                                   onClick={() => {
-                                    if (!confirm(`Buka kunci presensi kepulangan untuk ${u.fullName}? Karyawan dapat langsung melakukan Clock Out.`)) return;
                                     const adminName = user?.fullName || 'Admin / Korlap';
                                     hrmService.remoteUnlockAttendance(u.id, adminName, 'Izin kepulangan dibuka via Monitoring');
                                     toast.success(`Kunci checkout ${u.fullName} berhasil dibuka! Notifikasi telah dikirim ke perangkat karyawan.`);
@@ -2010,8 +2009,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   });
                   setUnlockModalOpen(false);
                   loadData();
+                  toast.success('Kunci presensi berhasil dibuka.');
                 } catch (err: any) {
-                  alert(err.message || 'Gagal membuka kunci presensi.');
+                  toast.error(err.message || 'Gagal membuka kunci presensi.');
                 } finally {
                   setIsUnlocking(false);
                 }

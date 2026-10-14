@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { DatePicker } from '@/components/ui/date-picker';
+import { TimePicker } from '@/components/ui/time-picker';
 import { HrmEmployeeSearchInput } from '@/components/hrm/HrmEmployeeSearchInput';
 import { customNotify } from '@/lib/customNotification';
 import {
@@ -488,20 +489,16 @@ export const HrmPresensiManagementTab: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-semibold">Jam Masuk</Label>
-                  <Input
-                    type="time"
+                  <TimePicker
                     value={editClockIn}
-                    onChange={(e) => setEditClockIn(e.target.value)}
-                    className="h-9 text-xs rounded-xl font-mono"
+                    onChange={(val) => setEditClockIn(val)}
                   />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs font-semibold">Jam Pulang</Label>
-                  <Input
-                    type="time"
+                  <TimePicker
                     value={editClockOut}
-                    onChange={(e) => setEditClockOut(e.target.value)}
-                    className="h-9 text-xs rounded-xl font-mono"
+                    onChange={(val) => setEditClockOut(val)}
                   />
                 </div>
               </div>
@@ -599,20 +596,16 @@ export const HrmPresensiManagementTab: React.FC = () => {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Jam Masuk</Label>
-                <Input
-                  type="time"
+                <TimePicker
                   value={manualClockIn}
-                  onChange={(e) => setManualClockIn(e.target.value)}
-                  className="h-9 text-xs rounded-xl font-mono"
+                  onChange={(val) => setManualClockIn(val)}
                 />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Jam Pulang</Label>
-                <Input
-                  type="time"
+                <TimePicker
                   value={manualClockOut}
-                  onChange={(e) => setManualClockOut(e.target.value)}
-                  className="h-9 text-xs rounded-xl font-mono"
+                  onChange={(val) => setManualClockOut(val)}
                 />
               </div>
             </div>

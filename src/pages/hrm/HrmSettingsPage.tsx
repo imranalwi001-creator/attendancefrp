@@ -54,6 +54,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DatePicker } from '@/components/ui/date-picker';
+import { TimePicker } from '@/components/ui/time-picker';
 
 const COMPANY_DOC_LABELS: Record<CompanyDocumentType, string> = {
   akta_pendirian: 'Akta Pendirian',
@@ -198,8 +199,8 @@ export const HrmSettingsPage: React.FC = () => {
   const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith('image/')) { alert('Silakan pilih file gambar yang valid (PNG, JPG, SVG, WebP).'); return; }
-    if (file.size > 2 * 1024 * 1024) { alert('Ukuran file maksimal 2 MB.'); return; }
+    if (!file.type.startsWith('image/')) { toast.error('Silakan pilih file gambar yang valid (PNG, JPG, SVG, WebP).'); return; }
+    if (file.size > 2 * 1024 * 1024) { toast.error('Ukuran file maksimal 2 MB.'); return; }
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
@@ -274,8 +275,8 @@ export const HrmSettingsPage: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-    if (!allowedTypes.includes(file.type)) { alert('Format file: PDF, JPG, PNG, DOC/DOCX'); return; }
-    if (file.size > 5 * 1024 * 1024) { alert('Ukuran file maksimal 5 MB.'); return; }
+    if (!allowedTypes.includes(file.type)) { toast.error('Format file: PDF, JPG, PNG, DOC/DOCX'); return; }
+    if (file.size > 5 * 1024 * 1024) { toast.error('Ukuran file maksimal 5 MB.'); return; }
     const reader = new FileReader();
     reader.onload = () => {
       setDocFileUrl(reader.result as string);
@@ -287,8 +288,8 @@ export const HrmSettingsPage: React.FC = () => {
   };
 
   const handleAddDocument = () => {
-    if (!docName.trim()) { alert('Nama dokumen wajib diisi.'); return; }
-    if (!docFileUrl) { alert('Silakan pilih file dokumen terlebih dahulu.'); return; }
+    if (!docName.trim()) { toast.error('Nama dokumen wajib diisi.'); return; }
+    if (!docFileUrl) { toast.error('Silakan pilih file dokumen terlebih dahulu.'); return; }
     try {
       hrmService.addCompanyDocument({
         name: docName.trim(),
@@ -304,10 +305,9 @@ export const HrmSettingsPage: React.FC = () => {
       setCompanyDocs(hrmService.getCompanyDocuments());
       setDocModalOpen(false);
       resetDocForm();
-      setDocMessage({ type: 'success', text: `Dokumen "${docName}" berhasil diunggah!` });
-      setTimeout(() => setDocMessage(null), 4000);
+      toast.success(`Dokumen "${docName}" berhasil diunggah!`);
     } catch (err: any) {
-      alert(err.message || 'Gagal mengunggah dokumen.');
+      toast.error(err.message || 'Gagal mengunggah dokumen.');
     }
   };
 
@@ -318,10 +318,16 @@ export const HrmSettingsPage: React.FC = () => {
   };
 
   const handleDeleteDocument = (docId: string, docName: string) => {
-    if (confirm(`Hapus dokumen "${docName}"?`)) {
-      hrmService.deleteCompanyDocument(docId);
-      setCompanyDocs(hrmService.getCompanyDocuments());
-    }
+    toast.warning(`Hapus dokumen "${docName}"?`, {
+      action: {
+        label: 'Hapus',
+        onClick: () => {
+          hrmService.deleteCompanyDocument(docId);
+          setCompanyDocs(hrmService.getCompanyDocuments());
+          toast.success(`Dokumen "${docName}" berhasil dihapus.`);
+        },
+      },
+    });
   };
 
   const handleGetCurrentLocation = () => {
@@ -412,7 +418,7 @@ export const HrmSettingsPage: React.FC = () => {
   };
 
   const handleSaveShiftModal = () => {
-    if (!shiftName.trim()) { alert('Nama shift wajib diisi.'); return; }
+    if (!shiftName.trim()) { toast.error('Nama shift wajib diisi.'); return; }
     try {
       const payload: Omit<Shift, 'id'> = {
         code: shiftCode.trim().toUpperCase(), name: shiftName.trim(),
@@ -429,22 +435,27 @@ export const HrmSettingsPage: React.FC = () => {
       }
       setShifts(hrmService.getShifts());
       setShiftModalOpen(false);
-      setShiftMessage({ type: 'success', text: `Shift "${shiftName}" berhasil disimpan!` });
-      setTimeout(() => setShiftMessage(null), 4000);
+      toast.success(`Shift "${shiftName}" berhasil disimpan!`);
     } catch (err: any) {
-      alert(err.message || 'Gagal menyimpan shift.');
+      toast.error(err.message || 'Gagal menyimpan shift.');
     }
   };
 
   const handleDeleteShift = (shift: Shift) => {
-    if (confirm(`Hapus shift "${shift.name}"?`)) {
-      try {
-        hrmService.deleteShift(shift.id);
-        setShifts(hrmService.getShifts());
-      } catch (err: any) {
-        alert(err.message || 'Gagal menghapus shift.');
-      }
-    }
+    toast.warning(`Hapus shift "${shift.name}"?`, {
+      action: {
+        label: 'Hapus',
+        onClick: () => {
+          try {
+            hrmService.deleteShift(shift.id);
+            setShifts(hrmService.getShifts());
+            toast.success(`Shift "${shift.name}" berhasil dihapus.`);
+          } catch (err: any) {
+            toast.error(err.message || 'Gagal menghapus shift.');
+          }
+        },
+      },
+    });
   };
 
   const handleSetDefaultShift = (shiftId: string) => {
@@ -1131,21 +1142,21 @@ export const HrmSettingsPage: React.FC = () => {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <Label className="text-xs font-semibold">Jam Masuk</Label>
-                    <Input type="time" value={shiftStartTime} onChange={(e) => setShiftStartTime(e.target.value)} className="text-xs rounded-xl" />
+                    <TimePicker value={shiftStartTime} onChange={(val) => setShiftStartTime(val)} className="text-xs rounded-xl" />
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs font-semibold">Jam Pulang</Label>
-                    <Input type="time" value={shiftEndTime} onChange={(e) => setShiftEndTime(e.target.value)} className="text-xs rounded-xl" />
+                    <TimePicker value={shiftEndTime} onChange={(val) => setShiftEndTime(val)} className="text-xs rounded-xl" />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <Label className="text-xs font-semibold">Mulai Istirahat</Label>
-                    <Input type="time" value={shiftBreakStart} onChange={(e) => setShiftBreakStart(e.target.value)} className="text-xs rounded-xl" />
+                    <TimePicker value={shiftBreakStart} onChange={(val) => setShiftBreakStart(val)} className="text-xs rounded-xl" />
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs font-semibold">Selesai Istirahat</Label>
-                    <Input type="time" value={shiftBreakEnd} onChange={(e) => setShiftBreakEnd(e.target.value)} className="text-xs rounded-xl" />
+                    <TimePicker value={shiftBreakEnd} onChange={(val) => setShiftBreakEnd(val)} className="text-xs rounded-xl" />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -1253,12 +1264,10 @@ export const HrmSettingsPage: React.FC = () => {
                     <Label className="text-xs font-semibold text-foreground">
                       Jam Mulai Istirahat (WITA)
                     </Label>
-                    <Input
-                      type="time"
+                    <TimePicker
                       value={appSettings.breakStartTime || '12:00'}
-                      onChange={(e) => setAppSettings({ ...appSettings, breakStartTime: e.target.value })}
-                      className="text-xs rounded-xl font-mono"
-                      required
+                      onChange={(val) => setAppSettings({ ...appSettings, breakStartTime: val })}
+                      className="text-xs rounded-xl"
                     />
                     <p className="text-[11px] text-muted-foreground">
                       Waktu tombol istirahat mulai otomatis aktif di aplikasi presensi karyawan.
@@ -1269,12 +1278,10 @@ export const HrmSettingsPage: React.FC = () => {
                     <Label className="text-xs font-semibold text-foreground">
                       Jam Selesai Istirahat (WITA)
                     </Label>
-                    <Input
-                      type="time"
+                    <TimePicker
                       value={appSettings.breakEndTime || '13:00'}
-                      onChange={(e) => setAppSettings({ ...appSettings, breakEndTime: e.target.value })}
-                      className="text-xs rounded-xl font-mono"
-                      required
+                      onChange={(val) => setAppSettings({ ...appSettings, breakEndTime: val })}
+                      className="text-xs rounded-xl"
                     />
                     <p className="text-[11px] text-muted-foreground">
                       Batas akhir jam istirahat resmi (Default: 12.00 - 13.00 WITA).
