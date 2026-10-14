@@ -343,3 +343,129 @@ export function checkShiftClockOutWindow(
     isBeforeEndTime: false,
   };
 }
+
+export interface NextContinuousShiftInfo {
+  isNextShiftAvailable: boolean;
+  nextShiftCode: 'SHF-I' | 'SHF-II' | 'SHF-III' | 'DAY';
+  nextShiftName: string;
+  nextShiftStart: string;
+  nextShiftEnd: string;
+  isNextShiftCrossDay: boolean;
+  isNextShiftWindowOpen: boolean;
+  nextShiftOpenTimeStr?: string;
+  nextShiftDisabledReason?: string;
+}
+
+/**
+ * Aturan Siklus Kontinu Shift Perusahaan:
+ * 1. Day Shift (07:30 - 16:30): Berakhir hari ini, berlanjut esok lagi untuk ceklok masuk.
+ * 2. Shift I (07:30 - 15:30): Berakhir Shift I -> Tombol ceklok masuk Shift II (15:30 - 22:30) otomatis aktif.
+ * 3. Shift II (15:30 - 22:30): Berakhir Shift II -> Tombol ceklok masuk Shift III (22:30 - 07:30) otomatis aktif.
+ * 4. Shift III (22:30 - 07:30): Berakhir Shift III -> Tombol ceklok masuk Shift I (07:30 - 15:30) otomatis aktif.
+ * Pengecualian: Karyawan yang bersangkutan sedang Libur (Off Duty), Cuti, atau Izin.
+ */
+export function determineNextContinuousShift(
+  currentShift: Shift | null,
+  completedAttendance?: any | null,
+  currentTime: Date = new Date(),
+  allShifts: Shift[] = []
+): NextContinuousShiftInfo {
+  const completedShiftName = (completedAttendance?.shiftName || completedAttendance?.shift_name || currentShift?.name || '').toUpperCase();
+  const completedShiftCode = (completedAttendance?.shiftCode || completedAttendance?.shift_code || currentShift?.code || '').toUpperCase();
+
+  // 1. Day Shift: Berakhir hari ini, berlanjut esok hari
+  if (completedShiftCode.includes('DAY') || completedShiftName.includes('DAY')) {
+    const dayShift = allShifts.find(s => s.name?.toUpperCase().includes('DAY')) || currentShift;
+    return {
+      isNextShiftAvailable: false, // Day shift selesai hari ini, berlanjut esok hari
+      nextShiftCode: 'DAY',
+      nextShiftName: dayShift?.name || 'Day Shift (07:30 - 16:30 WITA)',
+      nextShiftStart: '07:30',
+      nextShiftEnd: '16:30',
+      isNextShiftCrossDay: false,
+      isNextShiftWindowOpen: false,
+      nextShiftOpenTimeStr: '05:30 WITA',
+      nextShiftDisabledReason: 'Presensi Day Shift hari ini telah selesai. Jadwal shift berikutnya dimulai esok hari pk 07:30 WITA (Buka pk 05:30 WITA).',
+    };
+  }
+
+  // 2. Shift I (07:30 - 15:30) -> Berlanjut ke Shift II (15:30 - 22:30)
+  if (
+    completedShiftCode.includes('SHF-I') ||
+    completedShiftCode.includes('PAGI') ||
+    completedShiftName.includes('SHIFT I ') ||
+    completedShiftName.includes('SHIFT I(') ||
+    completedShiftName.includes('SHIFT 1')
+  ) {
+    const shift2 = allShifts.find(s => s.name?.toUpperCase().includes('SHIFT II') || s.name?.toUpperCase().includes('SHIFT 2') || s.code === 'SIANG');
+    const start = (shift2?.startTime || '15:30').substring(0, 5);
+    const end = (shift2?.endTime || '22:30').substring(0, 5);
+    return {
+      isNextShiftAvailable: true,
+      nextShiftCode: 'SHF-II',
+      nextShiftName: shift2?.name || 'Shift II (15:30 - 22:30 WITA)',
+      nextShiftStart: start,
+      nextShiftEnd: end,
+      isNextShiftCrossDay: false,
+      isNextShiftWindowOpen: true, // Otomatis aktif begitu Shift I berakhir
+      nextShiftOpenTimeStr: '13:30 WITA',
+    };
+  }
+
+  // 3. Shift II (15:30 - 22:30) -> Berlanjut ke Shift III (22:30 - 07:30)
+  if (
+    completedShiftCode.includes('SHF-II') ||
+    completedShiftCode.includes('SIANG') ||
+    completedShiftName.includes('SHIFT II') ||
+    completedShiftName.includes('SHIFT 2')
+  ) {
+    const shift3 = allShifts.find(s => s.name?.toUpperCase().includes('SHIFT III') || s.name?.toUpperCase().includes('SHIFT 3') || s.code === 'MALAM');
+    const start = (shift3?.startTime || '22:30').substring(0, 5);
+    const end = (shift3?.endTime || '07:30').substring(0, 5);
+    return {
+      isNextShiftAvailable: true,
+      nextShiftCode: 'SHF-III',
+      nextShiftName: shift3?.name || 'Shift III (22:30 - 07:30 WITA)',
+      nextShiftStart: start,
+      nextShiftEnd: end,
+      isNextShiftCrossDay: true,
+      isNextShiftWindowOpen: true, // Otomatis aktif begitu Shift II berakhir
+      nextShiftOpenTimeStr: '20:30 WITA',
+    };
+  }
+
+  // 4. Shift III (22:30 - 07:30) -> Berlanjut ke Shift I (07:30 - 15:30)
+  if (
+    completedShiftCode.includes('SHF-III') ||
+    completedShiftCode.includes('MALAM') ||
+    completedShiftName.includes('SHIFT III') ||
+    completedShiftName.includes('SHIFT 3')
+  ) {
+    const shift1 = allShifts.find(s => s.name?.toUpperCase().includes('SHIFT I ') || s.name?.toUpperCase().includes('SHIFT I(') || s.name?.toUpperCase().includes('SHIFT 1') || s.code === 'PAGI');
+    const start = (shift1?.startTime || '07:30').substring(0, 5);
+    const end = (shift1?.endTime || '15:30').substring(0, 5);
+    return {
+      isNextShiftAvailable: true,
+      nextShiftCode: 'SHF-I',
+      nextShiftName: shift1?.name || 'Shift I (07:30 - 15:30 WITA)',
+      nextShiftStart: start,
+      nextShiftEnd: end,
+      isNextShiftCrossDay: false,
+      isNextShiftWindowOpen: true, // Otomatis aktif begitu Shift III berakhir
+      nextShiftOpenTimeStr: '05:30 WITA',
+    };
+  }
+
+  // Default fallback
+  return {
+    isNextShiftAvailable: false,
+    nextShiftCode: 'DAY',
+    nextShiftName: 'Day Shift (07:30 - 16:30 WITA)',
+    nextShiftStart: '07:30',
+    nextShiftEnd: '16:30',
+    isNextShiftCrossDay: false,
+    isNextShiftWindowOpen: false,
+    nextShiftOpenTimeStr: '05:30 WITA',
+  };
+}
+

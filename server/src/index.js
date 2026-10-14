@@ -1789,49 +1789,54 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       }
     }
 
-    const flagsJson = JSON.stringify(detectedFlags);
-    const query = `
-      INSERT INTO hrm_attendances (
-        user_id, attendance_date, clock_in, photo_in, lat_in, long_in, status, late_minutes, notes,
-        biometric_score, biometric_match, geofence_distance_meters, geofence_valid, is_mock_location, security_flags
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-      ON CONFLICT (user_id, attendance_date) DO UPDATE SET
-        clock_in = COALESCE(hrm_attendances.clock_in, EXCLUDED.clock_in),
-        photo_in = COALESCE(hrm_attendances.photo_in, EXCLUDED.photo_in),
-        lat_in = COALESCE(hrm_attendances.lat_in, EXCLUDED.lat_in),
-        long_in = COALESCE(hrm_attendances.long_in, EXCLUDED.long_in),
-        status = CASE WHEN hrm_attendances.clock_in IS NOT NULL THEN hrm_attendances.status ELSE EXCLUDED.status END,
-        late_minutes = CASE WHEN hrm_attendances.clock_in IS NOT NULL THEN hrm_attendances.late_minutes ELSE EXCLUDED.late_minutes END,
-        notes = CASE 
-          WHEN hrm_attendances.notes IS NOT NULL AND LENGTH(hrm_attendances.notes) > 0 
-          THEN hrm_attendances.notes 
-          ELSE EXCLUDED.notes 
-        END,
-        biometric_score = COALESCE(hrm_attendances.biometric_score, EXCLUDED.biometric_score),
-        biometric_match = COALESCE(hrm_attendances.biometric_match, EXCLUDED.biometric_match),
-        geofence_distance_meters = COALESCE(hrm_attendances.geofence_distance_meters, $12, EXCLUDED.geofence_distance_meters),
-        geofence_valid = COALESCE(hrm_attendances.geofence_valid, $13, EXCLUDED.geofence_valid),
-        is_mock_location = COALESCE(EXCLUDED.is_mock_location, hrm_attendances.is_mock_location),
-        security_flags = COALESCE(EXCLUDED.security_flags, hrm_attendances.security_flags)
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [
-      validUserId,
-      date,
-      time,
-      photo,
-      latitude,
-      longitude,
-      status || 'hadir',
-      lateMinutes || 0,
-      notes || '',
-      computedBiometricScore != null ? computedBiometricScore : null,
-      computedBiometricMatch != null ? computedBiometricMatch : null,
-      serverDistance != null ? serverDistance : geofenceDistance,
-      isServerGeofenceValid,
-      isMockLocation === true,
-      flagsJson,
-    ]);
+    const { shiftId, shiftName } = req.body;
+    let resolvedShiftId = shiftId;
+    let resolvedShiftName = shiftName;
+    if (!resolvedShiftId && userProfile.shift_id) {
+      resolvedShiftId = userProfile.shift_id;
+      resolvedShiftName = userProfile.shift_name;
+    }
+
+    // Cek apakah karyawan masih memiliki presensi aktif yang belum clock-out
+    const openAttRes = await pool.query(
+      `SELECT * FROM hrm_attendances WHERE user_id = $1 AND clock_out IS NULL ORDER BY created_at DESC LIMIT 1`,
+      [validUserId]
+    );
+
+    let result;
+    if (openAttRes.rows.length > 0) {
+      // Jika karyawan sudah dalam status clock-in dan belum clock-out, pertahankan rekaman aktif
+      result = openAttRes;
+    } else {
+      // Buat rekaman presensi baru (mendukung multi-shift berurutan: Shift 1 -> Shift 2 -> Shift 3)
+      const query = `
+        INSERT INTO hrm_attendances (
+          user_id, attendance_date, clock_in, photo_in, lat_in, long_in, status, late_minutes, notes,
+          biometric_score, biometric_match, geofence_distance_meters, geofence_valid, is_mock_location, security_flags,
+          shift_id, shift_name
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        RETURNING *;
+      `;
+      result = await pool.query(query, [
+        validUserId,
+        date,
+        time,
+        photo,
+        latitude,
+        longitude,
+        status || 'hadir',
+        lateMinutes || 0,
+        notes || '',
+        computedBiometricScore != null ? computedBiometricScore : null,
+        computedBiometricMatch != null ? computedBiometricMatch : null,
+        serverDistance != null ? serverDistance : geofenceDistance,
+        isServerGeofenceValid,
+        isMockLocation === true,
+        flagsJson,
+        resolvedShiftId || null,
+        resolvedShiftName || null
+      ]);
+    }
     const insertedAttendance = result.rows[0];
 
     // Ephemeral Rolling Photo Replacement: Foto check-in yang lalu otomatis dihapus dan digantikan hanya dengan foto check-in terbaru
@@ -4003,7 +4008,13 @@ app.post('/api/attendances/clock-out', async (req, res) => {
         is_mock_location = COALESCE($13, is_mock_location),
         security_flags = COALESCE($14, security_flags),
         updated_at = NOW()
-      WHERE user_id = $7 AND attendance_date = $8
+      WHERE id = (
+        SELECT id FROM hrm_attendances
+        WHERE user_id = $7 AND (attendance_date = $8 OR attendance_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '1 day')
+          AND clock_out IS NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
       RETURNING *;
     `;
     const result = await pool.query(query, [
@@ -4095,7 +4106,13 @@ app.post('/api/attendances/early-leave', async (req, res) => {
         is_on_break = false,
         notes = COALESCE(notes, '') || ' [PULANG AWAL DARURAT: ' || $14 || '] ' || $15,
         updated_at = NOW()
-      WHERE user_id = $12 AND attendance_date = $13
+      WHERE id = (
+        SELECT id FROM hrm_attendances
+        WHERE user_id = $12 AND (attendance_date = $13 OR attendance_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '1 day')
+          AND clock_out IS NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
       RETURNING *;
     `;
     const result = await pool.query(query, [
@@ -4427,7 +4444,10 @@ app.get('/api/attendances/today', async (req, res) => {
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
       WHERE (a.user_id::text = $1 OR a.user_id::text = $3 OR LOWER(p.nip) = LOWER($3) OR LOWER(p.email) = LOWER($3)) 
         AND a.attendance_date = COALESCE(NULLIF($2, '')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
-      ORDER BY a.clock_in DESC NULLS LAST, a.created_at DESC
+      ORDER BY 
+        CASE WHEN a.clock_out IS NULL THEN 0 ELSE 1 END,
+        a.clock_in DESC NULLS LAST,
+        a.created_at DESC
       LIMIT 1;
     `;
     const result = await pool.query(query, [String(validUserId), date || null, String(userId)]);

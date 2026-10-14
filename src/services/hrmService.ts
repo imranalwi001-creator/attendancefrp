@@ -2872,8 +2872,8 @@ export const hrmService = {
   }): Promise<AttendanceRecord> => {
     const today = getTodayDateStr();
     const existing = hrmService.getUserTodayAttendance(data.userId);
-    if (existing && existing.clockIn) {
-      throw new Error('Anda sudah melakukan presensi masuk hari ini');
+    if (existing && existing.clockIn && !existing.clockOut) {
+      throw new Error('Anda masih aktif dalam presensi shift saat ini. Silakan lakukan presensi pulang terlebih dahulu.');
     }
 
     const users = hrmService.getUsers();
@@ -3004,7 +3004,7 @@ export const hrmService = {
       isMockLocation: data.isMockLocation,
     };
 
-    if (existing) {
+    if (existing && !existing.clockOut) {
       const idx = all.findIndex((a) => a.id === existing.id);
       all[idx] = newRecord;
     } else {
@@ -3063,6 +3063,8 @@ export const hrmService = {
       securityFlags: flags,
       deviceId: currentDeviceId,
       deviceModel: currentModel,
+      shiftId: (data as any).shiftId || userShift.id,
+      shiftName: (data as any).shiftName || activeShiftName,
     };
 
     try {
@@ -3299,7 +3301,7 @@ export const hrmService = {
       }
     }
 
-    if (existing && existing.clockIn && !data.clockOutPhoto) {
+    if (existing && existing.clockIn && !existing.clockOut && !data.clockOutPhoto) {
       if (data.clockInPhoto) {
         existing.clockInPhoto = data.clockInPhoto as any;
         existing.photoIn = data.clockInPhoto;

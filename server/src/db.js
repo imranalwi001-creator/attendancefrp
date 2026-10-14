@@ -595,6 +595,13 @@ export async function initDb() {
       ALTER TABLE hrm_attendances
       ADD COLUMN IF NOT EXISTS early_leave_approved BOOLEAN DEFAULT false;
 
+      -- Multi-shift attendance support: allow subsequent shifts on same day and guard single active shift
+      ALTER TABLE hrm_attendances DROP CONSTRAINT IF EXISTS unique_user_date;
+      ALTER TABLE hrm_attendances ADD COLUMN IF NOT EXISTS shift_id UUID REFERENCES hrm_shifts(id) ON DELETE SET NULL;
+      ALTER TABLE hrm_attendances ADD COLUMN IF NOT EXISTS shift_name VARCHAR(100);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_hrm_attendances_active_open ON hrm_attendances (user_id) WHERE clock_out IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_hrm_attendances_user_date ON hrm_attendances (user_id, attendance_date);
+
       -- Leave requests proof photo, substitute, and Pimpinan forwarding
       ALTER TABLE hrm_leave_requests
       ADD COLUMN IF NOT EXISTS attachment_url TEXT;
