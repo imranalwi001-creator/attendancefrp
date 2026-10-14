@@ -442,6 +442,11 @@ function formatUserRow(r) {
     usedLeaveDays: r.used_leave_days || 0,
     emergencyDiscretionaryQuota: r.emergency_discretionary_quota ?? 2,
     usedEmergencyLeaveDays: r.used_emergency_leave_days || 0,
+    permissionQuota: r.permission_quota ?? 5,
+    usedPermissionDays: r.used_permission_days || 0,
+    overtimeEligible: r.overtime_eligible !== false,
+    maxDailyOvertimeHours: r.max_daily_overtime_hours ? parseFloat(r.max_daily_overtime_hours) : 4.0,
+    overtimeRateOverride: r.overtime_rate_override ? parseFloat(r.overtime_rate_override) : null,
     isActive: r.is_active !== false,
     isFaceEnrolled: r.is_face_enrolled === true || !!descriptor || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
     faceDescriptor: null, // Lean payload: AI descriptor disimpan di backend, tidak perlu ditransfer ke browser
@@ -1313,12 +1318,17 @@ app.put('/api/users/:id', async (req, res) => {
         birth_place = COALESCE($17, birth_place),
         birth_date = COALESCE($18, birth_date),
         emergency_contact = COALESCE($19, emergency_contact),
-        emergency_phone = COALESCE($20, emergency_phone),
         annual_leave_quota = COALESCE($21, annual_leave_quota),
-        avatar_url = COALESCE($22, avatar_url),
-        kepala_regu_id = CASE WHEN $23 = '__SET_NULL__' THEN NULL WHEN $23 IS NOT NULL THEN $23::uuid ELSE kepala_regu_id END,
+        used_leave_days = COALESCE($22, used_leave_days),
+        permission_quota = COALESCE($23, permission_quota),
+        used_permission_days = COALESCE($24, used_permission_days),
+        overtime_eligible = COALESCE($25, overtime_eligible),
+        max_daily_overtime_hours = COALESCE($26, max_daily_overtime_hours),
+        overtime_rate_override = COALESCE($27, overtime_rate_override),
+        avatar_url = COALESCE($28, avatar_url),
+        kepala_regu_id = CASE WHEN $29 = '__SET_NULL__' THEN NULL WHEN $29 IS NOT NULL THEN $29::uuid ELSE kepala_regu_id END,
         updated_at = NOW()
-      WHERE id = $24
+      WHERE id = $30
       RETURNING id;
     `;
     await pool.query(query, [
@@ -1342,7 +1352,13 @@ app.put('/api/users/:id', async (req, res) => {
       u.birthDate,
       u.emergencyContact || u.emergencyContactName,
       u.emergencyPhone || u.emergencyContactPhone,
-      u.annualLeaveQuota,
+      u.annualLeaveQuota !== undefined ? Number(u.annualLeaveQuota) : undefined,
+      u.usedLeaveDays !== undefined ? Number(u.usedLeaveDays) : undefined,
+      u.permissionQuota !== undefined ? Number(u.permissionQuota) : undefined,
+      u.usedPermissionDays !== undefined ? Number(u.usedPermissionDays) : undefined,
+      u.overtimeEligible !== undefined ? Boolean(u.overtimeEligible) : undefined,
+      u.maxDailyOvertimeHours !== undefined ? Number(u.maxDailyOvertimeHours) : undefined,
+      u.overtimeRateOverride !== undefined ? (u.overtimeRateOverride ? Number(u.overtimeRateOverride) : null) : undefined,
       u.avatarUrl,
       krParam,
       targetId,

@@ -474,6 +474,13 @@ export interface UserProfile {
   allowedPosts?: DivisionAssignedPost[];
   allowOgsClockOut?: boolean;
 
+  // ─── Pengaturan Lembur, Cuti & Izin Khusus per Karyawan ───
+  permissionQuota?: number;          // Kuota izin per tahun (misal 5 hari)
+  usedPermissionDays?: number;        // Hari izin yang sudah terpakai
+  overtimeEligible?: boolean;         // Apakah karyawan berhak lembur (default: true)
+  maxDailyOvertimeHours?: number;     // Batas maksimal jam lembur per hari khusus karyawan ini (default: 4 jam / 3 jam darurat)
+  overtimeRateOverride?: number;      // Override tarif upah lembur per jam (jika ada ketentuan khusus)
+
   // ─── Documents ──────────────────────────────────────────
   employeeDocuments?: EmployeeDocument[];
 }

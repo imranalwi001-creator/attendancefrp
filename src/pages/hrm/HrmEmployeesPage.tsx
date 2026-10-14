@@ -38,9 +38,11 @@ import {
   ScanFace,
   KeyRound,
   Crosshair,
+  Sliders,
 } from 'lucide-react';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
 import { HrmAssignFieldLocationModal } from '@/components/hrm/HrmAssignFieldLocationModal';
+import { HrmEmployeePolicyModal } from '@/components/hrm/HrmEmployeePolicyModal';
 import {
   preprocessKtpImage,
   parseAndValidateNik,
@@ -91,6 +93,10 @@ export const HrmEmployeesPage: React.FC = () => {
   // Field Sentinel Dynamic Geofence Modal State
   const [fieldLocationModalOpen, setFieldLocationModalOpen] = useState(false);
   const [fieldLocationUser, setFieldLocationUser] = useState<UserProfile | null>(null);
+
+  // Individual Employee Policy Modal State (Cuti, Izin & Lembur)
+  const [policyModalOpen, setPolicyModalOpen] = useState(false);
+  const [policyModalUser, setPolicyModalUser] = useState<UserProfile | null>(null);
 
   // Bulk Import State
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
@@ -1080,6 +1086,20 @@ export const HrmEmployeesPage: React.FC = () => {
                             title={`Bank Pos Tugas Lapangan (Multi-Titik A, B, C) - ${u.fullName}`}
                           >
                             <Crosshair className="w-4 h-4" />
+                          </Button>
+
+                          {/* Pengaturan Cuti, Izin & Lembur Karyawan */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setPolicyModalUser(u);
+                              setPolicyModalOpen(true);
+                            }}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-purple-600 hover:bg-purple-500/10 rounded-lg transition-colors"
+                            title={`Pengaturan Cuti, Izin & Lembur Khusus - ${u.fullName}`}
+                          >
+                            <Sliders className="w-4 h-4 text-purple-600" />
                           </Button>
 
                           {/* Mutasi / Pindah Lokasi Button */}
@@ -2410,6 +2430,16 @@ export const HrmEmployeesPage: React.FC = () => {
         open={fieldLocationModalOpen}
         onClose={() => setFieldLocationModalOpen(false)}
         user={fieldLocationUser}
+        onSaved={() => {
+          loadData();
+        }}
+      />
+
+      {/* Individual Employee Policy Modal (Cuti, Izin & Lembur) */}
+      <HrmEmployeePolicyModal
+        open={policyModalOpen}
+        onClose={() => setPolicyModalOpen(false)}
+        user={policyModalUser}
         onSaved={() => {
           loadData();
         }}
