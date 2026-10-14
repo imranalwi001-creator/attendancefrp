@@ -183,7 +183,18 @@ export const HrmDivisionsPage: React.FC = () => {
     setIsSavedInDb(false);
   };
 
-  const loadOrRunRoster = (divId: string = rosterSelectedDivId, month: number = rosterMonth) => {
+  const loadOrRunRoster = async (divId: string = rosterSelectedDivId, month: number = rosterMonth) => {
+    try {
+      const backendSaved = await hrmService.fetchSavedRosterResult(month, rosterYear, divId);
+      if (backendSaved && backendSaved.rosters.length > 0) {
+        setRosterResult(backendSaved);
+        setIsSavedInDb(true);
+        return;
+      }
+    } catch (e) {
+      console.warn('Gagal memuat jadwal tersimpan dari backend:', e);
+    }
+
     const saved = hrmService.getSavedRosterResult(month, rosterYear, divId);
     if (saved && saved.rosters.length > 0) {
       setRosterResult(saved);

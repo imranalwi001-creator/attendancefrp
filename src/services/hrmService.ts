@@ -1831,6 +1831,50 @@ export const hrmService = {
     };
   },
 
+  fetchSavedRosterResult: async (
+    month: number,
+    year: number,
+    divisionId?: string
+  ): Promise<GenerationResult | null> => {
+    try {
+      const divQuery = divisionId && divisionId !== 'all' ? `&divisionId=${encodeURIComponent(divisionId)}` : '';
+      const res = await api.get<{ success: boolean; data: any[] }>(
+        `/employee-schedules?month=${month}&year=${year}${divQuery}`
+      );
+      if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+        const rawSchedules = res.data.map((s: any) => ({
+          id: s.id,
+          userId: s.userId || s.user_id,
+          userName: s.userName || s.user_name || s.full_name,
+          userNip: s.userNip || s.user_nip || s.nip,
+          divisionId: s.divisionId || s.division_id,
+          scheduleDate: (s.scheduleDate || s.schedule_date || '').split('T')[0],
+          shiftId: s.shiftId || s.shift_id,
+          shiftCode: s.shiftCode || s.shift_code,
+          shiftName: s.shiftName || s.shift_name,
+          startTime: s.startTime || s.start_time,
+          endTime: s.endTime || s.end_time,
+          durationHours: Number(s.durationHours || s.duration_hours || 8),
+          isNightShift: Boolean(s.isNightShift ?? s.is_night_shift),
+          isOff: Boolean(s.isOff ?? s.is_off),
+          notes: s.notes || '',
+        }));
+
+        hrmService.init();
+        const existing = safeGetJson<any[]>(STORAGE_KEYS.EMPLOYEE_SCHEDULES, []);
+        const map = new Map<string, any>();
+        existing.forEach((item) => map.set(`${item.userId}_${item.scheduleDate}`, item));
+        rawSchedules.forEach((item) => map.set(`${item.userId}_${item.scheduleDate}`, item));
+        localStorage.setItem(STORAGE_KEYS.EMPLOYEE_SCHEDULES, JSON.stringify(Array.from(map.values())));
+
+        return hrmService.getSavedRosterResult(month, year, divisionId);
+      }
+    } catch (err: any) {
+      console.warn('[HRM] Fetch saved roster from backend error:', err.message);
+    }
+    return hrmService.getSavedRosterResult(month, year, divisionId);
+  },
+
   // ─── HRM IN-APP NOTIFICATIONS ─────────────────────────────────────────────
   getNotifications: (userId?: string, role?: string): HrmNotification[] => {
     hrmService.init();
