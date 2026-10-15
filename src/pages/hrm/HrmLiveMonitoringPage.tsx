@@ -3,7 +3,7 @@ import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { toast } from 'sonner';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation } from '@/types/hrm';
+import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer } from '@/types/hrm';
 import {
   UserCheck,
   Clock,
@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   AlertTriangle,
   Smartphone,
+  Wifi,
   Eye,
   CheckCircle2,
   X,
@@ -889,7 +890,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           {/* Cards Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {(fieldAgents.length > 0 ? fieldAgents : users.filter((u) => u.isFieldSentinelEnabled)).map((agent: any) => {
-              const isBreached = agent.isOutOfBounds;
+              const isMobileSpecialist = isMobileOnlineOfficer(agent);
+              const isBreached = agent.isOutOfBounds && !isMobileSpecialist;
               const pingTime = agent.lastKnownPingAt ? new Date(agent.lastKnownPingAt).getTime() : null;
               const pingAgeMinutes = pingTime ? Math.floor((Date.now() - pingTime) / 60000) : null;
               const isLiveNow = pingAgeMinutes !== null && pingAgeMinutes <= 15;
@@ -967,6 +969,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         <Badge className="bg-rose-600 text-white text-[10px] font-bold gap-1 animate-pulse">
                           <AlertTriangle size={11} /> KELUAR ({Math.round(agent.outOfBoundsDistance || 0)}m)
                         </Badge>
+                      ) : isMobileSpecialist ? (
+                        <Badge className="bg-sky-600 text-white text-[10px] font-bold gap-1">
+                          <Wifi size={11} /> WFA SAH (MOBILE)
+                        </Badge>
                       ) : isLiveNow ? (
                         <Badge className="bg-emerald-600 text-white text-[10px] font-semibold gap-1">
                           <CheckCircle2 size={11} /> DI PERIMETER
@@ -992,6 +998,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           {isLiveNow && agent.currentActivePostName ? (
                             <span className="text-emerald-600 dark:text-emerald-400 font-bold">
                               🟢 {agent.currentActivePostName} (Live)
+                            </span>
+                          ) : isMobileSpecialist ? (
+                            <span className="text-sky-600 dark:text-sky-400 font-bold flex items-center gap-1">
+                              📶 Hub Jaringan / Mobile WFA (Sah)
                             </span>
                           ) : isBreached ? (
                             <span className="text-rose-600 dark:text-rose-400 font-bold">
@@ -1042,11 +1052,13 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                 className={`text-[9px] font-mono py-0 px-1.5 ${
                                   isLiveNow && agent.currentActivePostName === p.postName
                                     ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-bold'
+                                    : p.isRelief
+                                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-700 dark:text-amber-300 font-bold'
                                     : 'bg-muted/40 border-border text-muted-foreground'
                                 }`}
-                                title={`${p.postName} (Radius: ${p.radiusMeters}m)`}
+                                title={`${p.postName} (Radius: ${p.radiusMeters}m)${p.isRelief ? ` [Relief Duty s/d ${p.reliefUntil || 'Selesai'}]` : ''}`}
                               >
-                                {p.postCode}: {p.postName}
+                                {p.isRelief ? '⭐ ' : ''}{p.postCode}: {p.postName}
                               </Badge>
                             ))}
                           </div>

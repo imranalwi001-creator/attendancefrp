@@ -3213,6 +3213,9 @@ export const hrmService = {
     geofenceDistance?: number;
     geofenceValid?: boolean;
     isMockLocation?: boolean;
+    isEmergencyOvertime?: boolean;
+    emergencyOvertimeHours?: number;
+    emergencyOvertimeReason?: string;
   }): Promise<AttendanceRecord> => {
     const existing = hrmService.getUserTodayAttendance(data.userId);
     if (!existing || !existing.clockIn) {
@@ -3332,6 +3335,9 @@ export const hrmService = {
       securityFlags: flags,
       deviceId: currentDeviceId,
       deviceModel: hrmService.getDeviceModel(),
+      isEmergencyOvertime: data.isEmergencyOvertime,
+      emergencyOvertimeHours: data.emergencyOvertimeHours,
+      emergencyOvertimeReason: data.emergencyOvertimeReason,
     };
 
     try {
@@ -3366,6 +3372,9 @@ export const hrmService = {
     biometricConfidence?: number;
     isVerifiedBiometric?: boolean;
     notes?: string;
+    isEmergencyOvertime?: boolean;
+    emergencyOvertimeHours?: number;
+    emergencyOvertimeReason?: string;
   }): Promise<AttendanceRecord> => {
     const today = data.date || getTodayDateStr();
     const existing = hrmService.getUserTodayAttendance(data.userId);
@@ -3388,6 +3397,9 @@ export const hrmService = {
           biometricScore: data.biometricConfidence,
           biometricMatch: data.isVerifiedBiometric,
           geofenceValid: true,
+          isEmergencyOvertime: data.isEmergencyOvertime,
+          emergencyOvertimeHours: data.emergencyOvertimeHours,
+          emergencyOvertimeReason: data.emergencyOvertimeReason,
         });
       }
     }

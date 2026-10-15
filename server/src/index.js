@@ -1599,7 +1599,9 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
     if (latitude && longitude && userId) {
       const fieldPosts = await pool.query(
-        'SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true',
+        `SELECT * FROM hrm_field_assigned_posts 
+         WHERE user_id = $1 AND is_active = true 
+           AND (is_relief IS NOT TRUE OR relief_until >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)`,
         [userId]
       );
       if (fieldPosts.rows.length > 0) {
@@ -2082,10 +2084,13 @@ app.get('/api/field-sentinel/posts', async (req, res) => {
   const { userId } = req.query;
   try {
     let query = `
-      SELECT fp.*, p.full_name as user_name, p.nip as user_nip
+      SELECT fp.*, p.full_name as user_name, p.nip as user_nip,
+             orig.full_name as relief_original_user_name, orig.nip as relief_original_user_nip
       FROM hrm_field_assigned_posts fp
       JOIN hrm_profiles p ON fp.user_id = p.id
+      LEFT JOIN hrm_profiles orig ON fp.relief_original_user_id = orig.id
       WHERE fp.is_active = true
+        AND (fp.is_relief IS NOT TRUE OR fp.relief_until >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
     `;
     const params = [];
     if (userId) {
@@ -2319,7 +2324,10 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
 
     // ─── QUERY ALL REGISTERED ACTIVE POSTS IN THE BANK (Titik A, Titik B, Titik C, ...) ───
     const postsRes = await pool.query(
-      `SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true ORDER BY post_code ASC, created_at ASC;`,
+      `SELECT * FROM hrm_field_assigned_posts 
+       WHERE user_id = $1 AND is_active = true 
+         AND (is_relief IS NOT TRUE OR relief_until >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
+       ORDER BY post_code ASC, created_at ASC;`,
       [validUserId]
     );
 
@@ -2746,7 +2754,9 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
     } else {
       // 2. Cek Bank Multi-Titik Pos Penugasan Karyawan (hrm_field_assigned_posts)
       const fieldPosts = await pool.query(
-        'SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true',
+        `SELECT * FROM hrm_field_assigned_posts 
+         WHERE user_id = $1 AND is_active = true 
+           AND (is_relief IS NOT TRUE OR relief_until >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)`,
         [validUserId]
       );
 
@@ -3171,11 +3181,14 @@ app.get('/api/field-sentinel/active-agents', async (req, res) => {
                    'radiusMeters', fp.radius_meters,
                    'description', fp.description,
                    'isActive', fp.is_active,
+                   'isRelief', fp.is_relief,
+                   'reliefUntil', fp.relief_until,
                    'createdAt', fp.created_at
                  ) ORDER BY fp.post_code ASC, fp.created_at ASC
                ), '[]'::json)
                FROM hrm_field_assigned_posts fp
                WHERE fp.user_id = p.id AND fp.is_active = true
+                 AND (fp.is_relief IS NOT TRUE OR fp.relief_until >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
              ) as assigned_posts
       FROM hrm_profiles p
       LEFT JOIN hrm_roles r ON p.role_id = r.id
@@ -3895,7 +3908,9 @@ app.post('/api/attendances/clock-out', async (req, res) => {
 
     if (latitude && longitude && userId) {
       const fieldPosts = await pool.query(
-        'SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true',
+        `SELECT * FROM hrm_field_assigned_posts 
+         WHERE user_id = $1 AND is_active = true 
+           AND (is_relief IS NOT TRUE OR relief_until >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)`,
         [userId]
       );
       if (fieldPosts.rows.length > 0) {
@@ -4111,6 +4126,77 @@ app.post('/api/attendances/clock-out', async (req, res) => {
     ]);
     const updatedAttendance = result.rows[0];
 
+    // ─── 3. EMERGENCY POST-SHIFT OVERTIME (LAPORAN LEMBUR DARURAT PASCA-SHIFT) ───
+    let emergencyOtRecord = null;
+    const isEmergencyOvertime = req.body.isEmergencyOvertime === true || req.body.isEmergencyOvertime === 'true';
+    const rawEmergencyHours = parseFloat(req.body.emergencyOvertimeHours) || 0;
+
+    if (isEmergencyOvertime && rawEmergencyHours > 0 && updatedAttendance?.id) {
+      // 3-Hour Hard Safety Cap Enforced (Instruksi Ketat Pimpinan PT FRP)
+      const clampedEmergencyHours = Math.min(Math.max(rawEmergencyHours, 0.5), 3.0);
+      const emergencyReason = (req.body.emergencyOvertimeReason || 'Tugas operasional darurat pasca-shift').trim();
+
+      // Update Attendance record
+      await pool.query(`
+        UPDATE hrm_attendances SET
+          is_emergency_overtime = true,
+          emergency_overtime_hours = $1,
+          emergency_overtime_reason = $2,
+          emergency_overtime_status = 'pending_verification',
+          updated_at = NOW()
+        WHERE id = $3;
+      `, [clampedEmergencyHours, emergencyReason, updatedAttendance.id]);
+
+      // Generate Ticket in hrm_overtime_records
+      const otInsertRes = await pool.query(`
+        INSERT INTO hrm_overtime_records (
+          user_id, date, start_time, end_time, duration_hours, requested_hours, approved_hours,
+          task_description, task_photo_url, is_emergency, source, status, overtime_phase,
+          emergency_reported_at, approval_notes
+        ) VALUES (
+          $1, $2::date, COALESCE($3, '16:30'), COALESCE($4, '19:30'), $5, $5, $5,
+          $6, $7, true, 'emergency_post_shift', 'pending', 'completed',
+          NOW(), 'Lembur Darurat Pasca-Shift dilaporkan otomatis saat Clock-Out (Maks 3 Jam)'
+        ) RETURNING *;
+      `, [
+        validUserId,
+        date,
+        userProfile?.custom_end_time || '16:30',
+        time || '19:30',
+        clampedEmergencyHours,
+        emergencyReason,
+        photo || null
+      ]);
+      emergencyOtRecord = otInsertRes.rows[0];
+
+      // Dispatch WhatsApp Alert to Korlap, K3, Admin, Superadmin, Pimpinan, Dirut
+      const empName = userProfile?.full_name || 'Petugas Lapangan';
+      const empNip = userProfile?.nip || '-';
+      const posName = locationName || 'Pos Tugas Lapangan';
+      const waMsgEmergency = `🚨 *LAPORAN LEMBUR DARURAT PASCA-SHIFT (MAKS 3 JAM)*\n\n` +
+        `👤 *Karyawan:* ${empName} (NIP: ${empNip})\n` +
+        `🏢 *Divisi:* ${userProfile?.division_name || 'Operasional'}\n` +
+        `📍 *Pos Presensi:* ${posName}\n` +
+        `⏱️ *Jam Pulang:* ${time || '-'} WITA\n` +
+        `⚡ *Durasi Lembur:* +${clampedEmergencyHours} Jam (Terkunci Hard-Cap 3 Jam)\n` +
+        `📝 *Alasan Lapangan:* _"${emergencyReason}"_\n` +
+        `📸 *Bukti Forensik:* Selfie Pulang Ber-Watermark GPS Tersimpan\n` +
+        `⏳ *Status:* Menunggu konfirmasi Korlap / Admin di Dashboard.`;
+
+      // Alert leadership
+      alertLeadershipViaWhatsAppAndSystem({
+        title: 'Laporan Lembur Darurat Pasca-Shift',
+        message: `${empName} lapor lembur darurat +${clampedEmergencyHours} jam di ${posName}`,
+        waMessage: waMsgEmergency,
+        metadata: {
+          attendanceId: updatedAttendance.id,
+          overtimeRecordId: emergencyOtRecord?.id,
+          userId: validUserId,
+          hours: clampedEmergencyHours
+        }
+      }).catch(err => console.error('[Emergency OT Alert Error]:', err.message));
+    }
+
     // Ephemeral Rolling Photo Replacement: Foto checkout (pulang) yang lalu otomatis dihapus dan digantikan hanya dengan foto checkout terbaru
     if (photo && validUserId && updatedAttendance?.id) {
       await pool.query(
@@ -4121,7 +4207,7 @@ app.post('/api/attendances/clock-out', async (req, res) => {
       ).catch((err) => console.warn('[Photo Retention] Error clearing older clock-out photos:', err));
     }
 
-    res.json({ success: true, data: updatedAttendance });
+    res.json({ success: true, data: updatedAttendance, emergencyOvertime: emergencyOtRecord });
   } catch (err) {
     console.error('Clock-out error:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -5471,104 +5557,482 @@ app.get('/api/leaves', async (req, res) => {
   }
 });
 
-// Rekomendasi Cerdas Karyawan Pengganti (Anti-Kekosongan Pos / Zero Vacancy)
-app.get('/api/leaves/substitute-candidates', async (req, res) => {
-  const { applicantId, startDate, endDate, divisionId } = req.query;
-  try {
-    const targetDate = startDate || new Date().toISOString().split('T')[0];
+// ─── SMART RELIEF VACANCY ENGINE (AI SMART MATCHING 4 TIERS) ────────────────
+async function getSmartReliefRecommendations({ applicantId, startDate, endDate, divisionId, shiftId }) {
+  const targetStart = startDate || new Date().toISOString().split('T')[0];
+  const targetEnd = endDate || targetStart;
 
-    let validApplicantId = applicantId;
-    let applicantName = 'Rekan Kerja';
-    let applicantDivId = divisionId;
+  let validApplicantId = applicantId;
+  let applicantName = 'Karyawan Pemohon';
+  let applicantDivId = divisionId;
+  let applicantShiftId = shiftId;
+  let applicantPosts = [];
 
-    if (applicantId) {
-      const aRes = await pool.query(
-        'SELECT id, full_name, division_id FROM hrm_profiles WHERE id::text = $1 OR LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1',
-        [applicantId]
+  if (applicantId) {
+    const aRes = await pool.query(
+      `SELECT p.id, p.full_name, p.division_id, p.shift_id, p.placement_location,
+              d.name as division_name
+       FROM hrm_profiles p
+       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+       WHERE p.id::text = $1 OR LOWER(p.email) = LOWER($1) OR LOWER(p.nip) = LOWER($1) LIMIT 1`,
+      [applicantId]
+    );
+    if (aRes.rows.length > 0) {
+      const a = aRes.rows[0];
+      validApplicantId = a.id;
+      applicantName = a.full_name;
+      if (!applicantDivId) applicantDivId = a.division_id;
+      if (!applicantShiftId) applicantShiftId = a.shift_id;
+
+      const pRes = await pool.query(
+        `SELECT post_code, post_name, latitude, longitude, radius_meters
+         FROM hrm_field_assigned_posts 
+         WHERE user_id = $1 AND is_active = true`,
+        [a.id]
       );
-      if (aRes.rows.length > 0) {
-        validApplicantId = aRes.rows[0].id;
-        applicantName = aRes.rows[0].full_name;
-        if (!applicantDivId) applicantDivId = aRes.rows[0].division_id;
-      }
+      applicantPosts = pRes.rows;
     }
+  }
 
-    const query = `
-      SELECT p.id, p.nip, p.full_name, p.phone, p.division_id, d.name as division_name,
-             p.placement_location, s.name as default_shift_name,
-             es.shift_code, es.shift_name, es.is_off, es.start_time, es.end_time
-      FROM hrm_profiles p
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
-      LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = $2::date
-      WHERE p.id::text != $1 AND p.is_active = true
-      ORDER BY (p.division_id::text = $3) DESC, p.full_name ASC;
-    `;
+  // HARD CONSTRAINTS:
+  // 1. Exclude applicant themselves
+  // 2. BLOKIR TOTAL Karyawan yang sedang Cuti / Izin / Sakit pada rentang tanggal tersebut
+  const query = `
+    SELECT p.id, p.nip, p.full_name, p.phone, p.avatar_url, p.division_id, 
+           COALESCE(d.name, 'Operasional') as division_name,
+           p.placement_location, p.job_title,
+           s.name as default_shift_name, s.start_time as default_shift_start, s.end_time as default_shift_end,
+           es.shift_code, es.shift_name, es.is_off, es.start_time, es.end_time,
+           COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate,
+           COALESCE((SELECT SUM(o.duration_hours) FROM hrm_overtime_records o 
+                     WHERE o.user_id = p.id AND o.status = 'approved' 
+                     AND DATE_TRUNC('month', o.date) = DATE_TRUNC('month', $2::date)), 0) as ot_hours_month
+    FROM hrm_profiles p
+    LEFT JOIN hrm_divisions d ON p.division_id = d.id
+    LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+    LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = $2::date
+    LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+    WHERE p.id::text != $1 
+      AND p.is_active = true
+      AND NOT EXISTS (
+        SELECT 1 FROM hrm_leave_requests lr
+        WHERE lr.user_id = p.id
+          AND lr.status IN ('approved', 'pending')
+          AND (
+            (lr.start_date <= $3::date AND lr.end_date >= $2::date)
+          )
+      )
+    ORDER BY (p.division_id::text = $4) DESC, p.full_name ASC;
+  `;
 
-    const result = await pool.query(query, [
-      validApplicantId || '00000000-0000-0000-0000-000000000000',
-      targetDate,
-      applicantDivId ? String(applicantDivId) : ''
-    ]);
+  const result = await pool.query(query, [
+    validApplicantId || '00000000-0000-0000-0000-000000000000',
+    targetStart,
+    targetEnd,
+    applicantDivId ? String(applicantDivId) : ''
+  ]);
 
-    const sameDivOff = [];
-    const sameDivShift = [];
-    const globalAll = [];
+  const offDutyList = [];
+  const differentShiftList = [];
+  const extendedShiftList = [];
+  const shiftTransitionList = [];
+  const allRanked = [];
 
-    for (const row of result.rows) {
-      const isSameDivision = applicantDivId && String(row.division_id) === String(applicantDivId);
-      const isOff = row.is_off === true || row.shift_code === 'OFF' || (!row.shift_code && !row.default_shift_name);
-      const currentShift = isOff ? 'Libur / Off Duty' : (row.shift_name || row.default_shift_name || 'Shift Reguler');
+  // Legacy groupings for backward compatibility
+  const sameDivOff = [];
+  const sameDivShift = [];
+  const globalAll = [];
 
-      let cleanPhone = (row.phone || '').replace(/\D/g, '');
-      if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
-      if (cleanPhone && !cleanPhone.startsWith('62')) cleanPhone = '62' + cleanPhone;
+  for (const row of result.rows) {
+    const isSameDivision = applicantDivId && String(row.division_id) === String(applicantDivId);
+    const isOff = row.is_off === true || row.shift_code === 'OFF' || (!row.shift_code && !row.default_shift_name);
+    const currentShift = isOff ? 'Libur / Off Duty' : (row.shift_name || row.default_shift_name || 'Shift Reguler');
+    const otMonth = parseFloat(row.ot_hours_month || 0);
 
-      const waText = `Halo Rekan *${row.full_name}*, kami dari Tim Pengawas PT FRP.\n\n` +
-        `Rekan kerja Anda *${applicantName}* mengajukan cuti/izin untuk tanggal *${targetDate}*.\n` +
-        `Sesuai aturan *Zero Vacancy*, pos dinas tidak boleh kosong.\n\n` +
-        `Apakah Anda bersedia bertugas sebagai *Petugas Pengganti Pos* pada tanggal tersebut? (Tugas ini resmi dan dihitung lembur).\n` +
-        `Mohon konfirmasinya. Terima kasih.`;
+    let cleanPhone = (row.phone || '').replace(/\D/g, '');
+    if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
+    if (cleanPhone && !cleanPhone.startsWith('62')) cleanPhone = '62' + cleanPhone;
 
-      const waConfirmUrl = cleanPhone ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(waText)}` : null;
+    let recommendationType = 'shift_transition';
+    let baseScore = 65;
+    let categoryTitle = 'Prioritas 4: Peralihan Shift';
+    let compensationLabel = 'Rotasi Tugas Reguler';
 
-      const candidateObj = {
-        id: row.id,
-        name: row.full_name,
-        nip: row.nip || '-',
-        phone: row.phone || '',
-        divisionId: row.division_id,
-        divisionName: row.division_name || 'Operasional',
-        shiftName: currentShift,
-        isOff,
-        waConfirmUrl,
-      };
-
-      if (isSameDivision) {
-        if (isOff) {
-          sameDivOff.push({ ...candidateObj, category: 'same_div_off', reason: 'Divisi Sama & Sedang Libur/OFF (Kandidat Terbaik)' });
-        } else {
-          sameDivShift.push({ ...candidateObj, category: 'same_div_shift', reason: `Divisi Sama (${currentShift})` });
-        }
+    if (isOff) {
+      recommendationType = 'off_duty';
+      baseScore = 95;
+      categoryTitle = 'Prioritas 1: Sedang Libur / Off-Duty';
+      compensationLabel = 'Lembur Resmi Pengganti Pos (SPKL 1 Shift Penuh - 8 Jam)';
+    } else {
+      const sStart = row.start_time || row.default_shift_start || '07:30';
+      const sEnd = row.end_time || row.default_shift_end || '15:30';
+      const isAdjacent = (sStart.startsWith('15:') || sEnd.startsWith('15:') || sStart.startsWith('22:') || sEnd.startsWith('22:') || sEnd.startsWith('07:'));
+      if (isAdjacent) {
+        recommendationType = 'extended_shift';
+        baseScore = 75;
+        categoryTitle = 'Prioritas 3: Karyawan Lanjut Shift';
+        compensationLabel = 'Lembur Sambung Shift (SPKL Tambahan)';
       } else {
-        globalAll.push({ ...candidateObj, category: 'global_all', reason: `Lintas Divisi (${row.division_name || 'Operasional'})` });
+        recommendationType = 'different_shift';
+        baseScore = 85;
+        categoryTitle = 'Prioritas 2: Karyawan Beda Shift';
+        compensationLabel = 'Tukar Jadwal / Lembur Pengganti';
       }
     }
 
+    let finalScore = baseScore;
+    const reasons = [categoryTitle];
+
+    if (isSameDivision) {
+      finalScore += 4;
+      reasons.push(`Divisi Sama (${row.division_name})`);
+    } else {
+      reasons.push(`Lintas Divisi (${row.division_name})`);
+    }
+
+    if (otMonth === 0) {
+      finalScore += 3;
+      reasons.push('Pemerataan lembur: 0 jam bulan ini');
+    } else if (otMonth > 14) {
+      finalScore -= 8;
+      reasons.push(`Lembur tinggi (${otMonth} jam)`);
+    }
+
+    finalScore = Math.max(50, Math.min(99, Math.round(finalScore)));
+
+    const waText = `Halo Rekan *${row.full_name}*, kami dari Tim Pengawas PT FRP.\n\n` +
+      `Rekan kerja Anda *${applicantName}* mengajukan cuti/izin untuk tanggal *${targetStart}* s/d *${targetEnd}*.\n` +
+      `Sesuai aturan *Zero Vacancy*, pos dinas tidak boleh kosong.\n\n` +
+      `📋 *Status Anda:* ${categoryTitle}\n` +
+      `💰 *Kompensasi:* ${compensationLabel}\n\n` +
+      `Apakah Anda bersedia bertugas sebagai *Petugas Pengganti Pos* pada tanggal tersebut? (Tugas ini resmi dan dihitung lembur).\n` +
+      `Mohon konfirmasinya. Terima kasih.`;
+
+    const waConfirmUrl = cleanPhone ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(waText)}` : null;
+
+    const candidate = {
+      id: row.id,
+      name: row.full_name,
+      nip: row.nip || '-',
+      phone: row.phone || '',
+      avatarUrl: row.avatar_url,
+      divisionId: row.division_id,
+      divisionName: row.division_name || 'Operasional',
+      shiftName: currentShift,
+      isOff,
+      recommendationType,
+      categoryTitle,
+      compensationLabel,
+      score: finalScore,
+      reasons,
+      hourlyOvertimeRate: Number(row.hourly_overtime_rate || 23381.79),
+      otHoursMonth: otMonth,
+      waConfirmUrl,
+      applicantPosts
+    };
+
+    allRanked.push(candidate);
+    if (recommendationType === 'off_duty') offDutyList.push(candidate);
+    else if (recommendationType === 'different_shift') differentShiftList.push(candidate);
+    else if (recommendationType === 'extended_shift') extendedShiftList.push(candidate);
+    else shiftTransitionList.push(candidate);
+
+    // Legacy support
+    if (isSameDivision) {
+      if (isOff) {
+        sameDivOff.push({ ...candidate, category: 'same_div_off', reason: 'Divisi Sama & Sedang Libur/OFF (Kandidat Terbaik)' });
+      } else {
+        sameDivShift.push({ ...candidate, category: 'same_div_shift', reason: `Divisi Sama (${currentShift})` });
+      }
+    } else {
+      globalAll.push({ ...candidate, category: 'global_all', reason: `Lintas Divisi (${row.division_name || 'Operasional'})` });
+    }
+  }
+
+  allRanked.sort((a, b) => b.score - a.score);
+  offDutyList.sort((a, b) => b.score - a.score);
+  differentShiftList.sort((a, b) => b.score - a.score);
+  extendedShiftList.sort((a, b) => b.score - a.score);
+  shiftTransitionList.sort((a, b) => b.score - a.score);
+
+  return {
+    allRanked,
+    offDutyList,
+    differentShiftList,
+    extendedShiftList,
+    shiftTransitionList,
+    sameDivOff,
+    sameDivShift,
+    globalAll,
+    total: allRanked.length,
+    applicantPosts
+  };
+}
+
+// ─── HELPER: ASSIGN RELIEF SUBSTITUTE & AUTO-INHERIT GEOFENCE ────────────────
+async function assignReliefSubstituteHelper({
+  leaveId,
+  originalUserId,
+  reliefUserId,
+  startDate,
+  endDate,
+  notes,
+  adminId,
+  adminName
+}) {
+  const origRes = await pool.query(
+    `SELECT p.id, p.full_name, p.nip, p.phone, p.division_id, d.name as division_name, p.shift_id
+     FROM hrm_profiles p
+     LEFT JOIN hrm_divisions d ON p.division_id = d.id
+     WHERE p.id = $1`,
+    [originalUserId]
+  );
+  if (origRes.rows.length === 0) throw new Error('Karyawan yang digantikan tidak ditemukan');
+  const originalUser = origRes.rows[0];
+
+  const reliefRes = await pool.query(
+    `SELECT p.id, p.full_name, p.nip, p.phone, p.division_id, d.name as division_name,
+            COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate
+     FROM hrm_profiles p
+     LEFT JOIN hrm_divisions d ON p.division_id = d.id
+     LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+     WHERE p.id = $1`,
+    [reliefUserId]
+  );
+  if (reliefRes.rows.length === 0) throw new Error('Karyawan pengganti tidak ditemukan');
+  const reliefUser = reliefRes.rows[0];
+
+  const originalPostsRes = await pool.query(
+    `SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true`,
+    [originalUserId]
+  );
+  const originalPosts = originalPostsRes.rows;
+
+  const targetStart = startDate || (new Date().toISOString().split('T')[0]);
+  const targetEnd = endDate || targetStart;
+
+  // 1. Auto-inject bank multi-titik pos originalUser ke reliefUser (is_relief = true, relief_until = targetEnd)
+  const injectedPosts = [];
+  for (const post of originalPosts) {
+    const existingRes = await pool.query(
+      `SELECT id FROM hrm_field_assigned_posts 
+       WHERE user_id = $1 AND post_code = $2 AND is_relief = true AND relief_until = $3::date`,
+      [reliefUserId, post.post_code, targetEnd]
+    );
+
+    if (existingRes.rows.length === 0) {
+      const insRes = await pool.query(
+        `INSERT INTO hrm_field_assigned_posts (
+          user_id, post_code, post_name, latitude, longitude, radius_meters, description,
+          is_active, is_relief, relief_until, relief_original_user_id, relief_leave_request_id
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7,
+          true, true, $8::date, $9, $10
+        ) RETURNING *;`,
+        [
+          reliefUserId,
+          post.post_code,
+          `${post.post_name} [Ganti: ${originalUser.full_name}]`,
+          post.latitude,
+          post.longitude,
+          post.radius_meters || 150,
+          `Penugasan Pengganti Pos Resmi untuk ${originalUser.full_name} (${targetStart} s/d ${targetEnd})`,
+          targetEnd,
+          originalUserId,
+          leaveId || null
+        ]
+      );
+      injectedPosts.push(insRes.rows[0]);
+    }
+  }
+
+  // 2. Update hrm_leave_requests if leaveId provided
+  if (leaveId) {
+    await pool.query(
+      `UPDATE hrm_leave_requests SET
+         substitute_id = $1,
+         substitute_name = $2,
+         substitute_nip = $3,
+         relief_duty_assigned = true,
+         updated_at = NOW()
+       WHERE id = $4`,
+      [reliefUserId, reliefUser.full_name, reliefUser.nip, leaveId]
+    );
+  }
+
+  // 3. Catat di hrm_shift_substitutions (Zero Unmanned Post Table)
+  const hourlyRate = parseFloat(reliefUser.hourly_overtime_rate || 23381.79);
+  const overtimeAmount = Math.round(hourlyRate * 8.0);
+
+  const subRes = await pool.query(
+    `INSERT INTO hrm_shift_substitutions (
+      original_user_id, relief_user_id, shift_id, duty_date, reason_type,
+      reference_id, compensation_type, overtime_hours, overtime_rate, overtime_amount,
+      status, notes, approved_by
+    ) VALUES (
+      $1, $2, $3, $4::date, 'leave_relief',
+      $5, 'overtime', 8.0, $6, $7,
+      'approved', $8, $9
+    ) RETURNING *;`,
+    [
+      originalUserId,
+      reliefUserId,
+      originalUser.shift_id || '00000000-0000-0000-0000-000000000000',
+      targetStart,
+      leaveId || null,
+      hourlyRate,
+      overtimeAmount,
+      notes || `Tugas Pengganti Pos Resmi (${originalUser.full_name})`,
+      adminId || null
+    ]
+  );
+
+  // 4. Catat di hrm_overtime_records (SPKL Pengganti Pos Resmi)
+  const postNamesStr = originalPosts.map(p => p.post_name).join(', ') || 'Pos Dinas';
+  const otRes = await pool.query(
+    `INSERT INTO hrm_overtime_records (
+      user_id, date, start_time, end_time, duration_hours, requested_hours, approved_hours,
+      task_description, status, source, leave_request_id, approved_by, approved_by_name,
+      approval_notes, overtime_phase
+    ) VALUES (
+      $1, $2::date, '07:30', '15:30', 8.0, 8.0, 8.0,
+      $3, 'approved', 'shift_relief', $4, $5, $6,
+      'Disetujui otomatis sebagai Kompensasi Lembur Pengganti Pos (SPKL 8 Jam)', 'completed'
+    ) RETURNING *;`,
+    [
+      reliefUserId,
+      targetStart,
+      `Tugas Pengganti Pos Resmi untuk ${originalUser.full_name} di ${postNamesStr}`,
+      leaveId || null,
+      adminId || null,
+      adminName || 'Admin / Korlap'
+    ]
+  );
+
+  // 5. Kirim Notifikasi WhatsApp ke Karyawan Pengganti
+  const reliefWaMsg = `🛡️ *SURAT TUGAS PENGGANTI POS (ZERO VACANCY) TERBIT*\n\n` +
+    `Halo Rekan *${reliefUser.full_name}* (NIP: ${reliefUser.nip}),\n` +
+    `Anda telah resmi ditugaskan menggantikan rekan kerja Anda:\n` +
+    `👤 *Karyawan:* ${originalUser.full_name} (${originalUser.nip})\n` +
+    `🏢 *Divisi Asal:* ${originalUser.division_name}\n` +
+    `📍 *Pos Tugas:* ${postNamesStr}\n` +
+    `📅 *Periode Tugas:* ${targetStart} s/d ${targetEnd}\n` +
+    `💰 *Kompensasi:* Lembur Resmi Pengganti Pos (SPKL 1 Shift Penuh)\n\n` +
+    `✅ *Koordinat titik pos dinas telah diaktifkan otomatis di aplikasi PWA Anda.* Anda dapat langsung melakukan presensi masuk & pulang di pos tersebut tanpa alarm breach.\n\n` +
+    `_Sistem Sentinel HRM PT Fawwaz Reski Perwira_`;
+
+  if (reliefUser.phone) {
+    await sendWhatsAppAlert({ phone: reliefUser.phone, message: reliefWaMsg }).catch(() => {});
+  }
+
+  // Broadcast ke Pimpinan & Superadmin
+  const leaderWaMsg = `🛡️ *PENUGASAN PENGGANTI POS LAPANGAN RESMI*\n\n` +
+    `Pengganti: *${reliefUser.full_name}* (${reliefUser.nip})\n` +
+    `Menggantikan: *${originalUser.full_name}* (${originalUser.nip})\n` +
+    `Pos Tugas: ${postNamesStr}\n` +
+    `Periode: ${targetStart} s/d ${targetEnd}\n` +
+    `Status Area: Terisi & Aman (Zero Vacancy Terpenuhi)`;
+
+  alertLeadershipViaWhatsAppAndSystem({
+    title: 'Penugasan Pengganti Pos Resmi Terbit',
+    message: `${reliefUser.full_name} resmi menggantikan ${originalUser.full_name} di ${postNamesStr}`,
+    waMessage: leaderWaMsg
+  }).catch(() => {});
+
+  return {
+    success: true,
+    injectedPosts,
+    substitution: subRes.rows[0],
+    overtimeRecord: otRes.rows[0]
+  };
+}
+
+// Rekomendasi Cerdas Karyawan Pengganti (Dual Endpoint Support)
+app.get(['/api/leaves/substitute-candidates', '/api/hrm/relief/recommendations'], async (req, res) => {
+  const { applicantId, userId, originalUserId, startDate, endDate, divisionId, shiftId } = req.query;
+  try {
+    const targetApplicantId = applicantId || userId || originalUserId;
+    const recommendations = await getSmartReliefRecommendations({
+      applicantId: targetApplicantId,
+      startDate,
+      endDate,
+      divisionId,
+      shiftId
+    });
     res.json({
       success: true,
-      data: {
-        sameDivOff,
-        sameDivShift,
-        globalAll,
-        total: result.rows.length,
-      }
+      data: recommendations
     });
   } catch (err) {
-    console.error('Fetch substitute candidates error:', err);
+    console.error('Fetch smart relief recommendations error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// Endpoint Penetapan Pengganti Pos Resmi & Pewarisan Geofence Otomatis
+app.post('/api/hrm/relief/assign', async (req, res) => {
+  const { leaveId, originalUserId, reliefUserId, startDate, endDate, notes, adminId, adminName } = req.body;
+  if (!originalUserId || !reliefUserId) {
+    return res.status(400).json({ success: false, error: 'originalUserId dan reliefUserId wajib diisi' });
+  }
+  try {
+    const result = await assignReliefSubstituteHelper({
+      leaveId,
+      originalUserId,
+      reliefUserId,
+      startDate,
+      endDate,
+      notes,
+      adminId,
+      adminName
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('Assign relief substitute error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint Verifikasi Lembur Darurat Pasca-Shift (1-Klik Korlap / Admin)
+app.post('/api/hrm/overtime/emergency-verify/:id', async (req, res) => {
+  const { id } = req.params;
+  const { action = 'approve', approverId, approverName, notes } = req.body;
+  try {
+    const otRes = await pool.query('SELECT * FROM hrm_overtime_records WHERE id = $1', [id]);
+    if (otRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Record lembur tidak ditemukan' });
+    }
+    const ot = otRes.rows[0];
+    const newStatus = action === 'reject' ? 'rejected' : 'approved';
+    const attStatus = action === 'reject' ? 'rejected' : 'verified';
+
+    await pool.query(`
+      UPDATE hrm_overtime_records SET
+        status = $1,
+        approved_by = $2,
+        approved_by_name = $3,
+        approval_notes = $4,
+        updated_at = NOW()
+      WHERE id = $5
+    `, [newStatus, approverId || null, approverName || 'Korlap / Admin', notes || null, id]);
+
+    await pool.query(`
+      UPDATE hrm_attendances SET
+        emergency_overtime_status = $1,
+        updated_at = NOW()
+      WHERE user_id = $2 AND attendance_date = $3
+    `, [attStatus, ot.user_id, ot.date]);
+
+    res.json({
+      success: true,
+      message: `Lembur darurat berhasil di-${newStatus === 'approved' ? 'verifikasi & disetujui' : 'tolak'}`
+    });
+  } catch (err) {
+    console.error('Verify emergency overtime error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 
 app.post('/api/leaves', async (req, res) => {
   const { userId, leaveType, startDate, endDate, totalDays, reason, attachmentUrl, substituteId, substituteName, substituteNip, assignedByAdmin, isManualAdmin, status: requestedStatus, approvalNotes, adminId, adminName } = req.body;
@@ -5861,21 +6325,21 @@ app.put('/api/leaves/:id/status', async (req, res) => {
     const subNotice = finalSubName ? `\n🛡️ *Petugas Pengganti Pos:* *${finalSubName}* (${finalSubNip || '-'})` : '';
 
     if (status === 'approved') {
-      // 3. SURAT TUGAS PENGGANTI OTOMATIS: Kirim WhatsApp langsung ke Karyawan Pengganti
+      // 3. AUTO-ASSIGN RELIEF SUBSTITUTE: Pewarisan Titik Pos Otomatis + SPKL Pengganti + Notifikasi WhatsApp
       if (validSubId) {
-        const subProfileRes = await pool.query('SELECT full_name, phone FROM hrm_profiles WHERE id = $1', [validSubId]);
-        if (subProfileRes.rows.length > 0 && subProfileRes.rows[0].phone) {
-          const subEmp = subProfileRes.rows[0];
-          const subWaMsg = `🛡️ *SURAT TUGAS PENGGANTI POS DINAS (ZERO VACANCY)*\n\n` +
-            `Halo *${subEmp.full_name}*,\n` +
-            `Anda telah resmi ditetapkan oleh *${approverName || 'Atasan'}* sebagai *Petugas Pengganti Pos* untuk mengisi kekosongan tugas rekan kerja Anda:\n\n` +
-            `👤 Menggantikan: *${leave.user_name}* (${leave.user_nip || '-'})\n` +
-            `🏢 Divisi: *${leave.division_name || 'Operasional'}*\n` +
-            `📅 Periode: *${leave.start_date} s/d ${leave.end_date}* (${leave.total_days} Hari)\n` +
-            `💬 Kategori: Pengganti ${typeLabel}\n\n` +
-            `⚡ Tugas ini telah tercatat resmi di sistem operasional HRM PT FRP dan dihitung lembur resmi. Mohon hadir tepat waktu dan bertugas dengan penuh tanggung jawab.`;
-
-          await sendWhatsAppAlert({ phone: subEmp.phone, message: subWaMsg });
+        try {
+          await assignReliefSubstituteHelper({
+            leaveId: leave.id,
+            originalUserId: leave.user_id,
+            reliefUserId: validSubId,
+            startDate: leave.start_date,
+            endDate: leave.end_date,
+            notes: notes || `Pengganti resmi cuti/izin ${typeLabel}`,
+            adminId: validApproverId,
+            adminName: approverName || 'Atasan / Korlap'
+          });
+        } catch (subErr) {
+          console.error('[assignReliefSubstituteHelper Error]:', subErr.message);
         }
       }
 

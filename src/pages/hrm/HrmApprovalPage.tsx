@@ -1049,6 +1049,16 @@ export const HrmApprovalPage: React.FC = () => {
                             ⚡ First-Responder: Korlap / Admin / K3
                           </Badge>
                         )}
+                        {(o as any).isEmergency && (
+                          <Badge variant="outline" className="mt-1 bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[9px] rounded-md font-bold flex items-center gap-1 w-fit">
+                            🚨 Lembur Pasca-Shift (Auto-Capture)
+                          </Badge>
+                        )}
+                        {(o as any).leaveRequestId && (
+                          <Badge variant="outline" className="mt-1 bg-amber-500/15 text-amber-800 dark:text-amber-200 border-amber-500/30 text-[9px] rounded-md font-bold flex items-center gap-1 w-fit">
+                            ⭐ Pengganti Pos (Relief Duty 1 Shift)
+                          </Badge>
+                        )}
                       </td>
                       <td className="py-3 px-4 font-mono text-[11px]">
                         <p className="text-foreground font-medium">{o.date}</p>
@@ -2306,12 +2316,22 @@ export const HrmApprovalPage: React.FC = () => {
                               className="accent-primary w-4 h-4 cursor-pointer"
                             />
                             <div className="truncate">
-                              <p className="font-bold text-xs flex items-center gap-1.5">
-                                <span>{cand.fullName || cand.name}</span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-bold text-xs">{cand.fullName || cand.name}</span>
                                 <span className="font-mono text-[10px] text-muted-foreground">({cand.nip})</span>
-                              </p>
-                              <p className="text-[10px] text-muted-foreground">
+                                {cand.matchScore && (
+                                  <span className="text-[9.5px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                                    {cand.matchScore}% Cocok
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">
                                 {cand.division || cand.divisionName || 'Operasional'} • {cand.reason || 'Karyawan Aktif'}
+                              </p>
+                              <p className="text-[9.5px] text-blue-600 dark:text-blue-400 font-medium mt-0.5 flex items-center gap-1">
+                                <span>🛡️ Mewarisi bank pos koordinat</span>
+                                <span>•</span>
+                                <span>⭐ Kompensasi SPKL 1 shift</span>
                               </p>
                             </div>
                           </div>

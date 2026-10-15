@@ -495,9 +495,38 @@ export interface FieldAssignedPost {
   radiusMeters: number;
   description?: string;
   isActive: boolean;
+  isRelief?: boolean;
+  reliefUntil?: string;
+  reliefOriginalUserId?: string;
+  reliefOriginalUserName?: string;
+  reliefOriginalUserNip?: string;
   createdAt?: string;
   updatedAt?: string;
 }
+
+export type ReliefRecommendationType = 'off_duty' | 'different_shift' | 'extended_shift' | 'shift_transition';
+
+export interface SmartReliefCandidate {
+  id: string;
+  name: string;
+  nip: string;
+  phone: string;
+  avatarUrl?: string;
+  divisionId?: string;
+  divisionName: string;
+  shiftName: string;
+  isOff: boolean;
+  recommendationType: ReliefRecommendationType;
+  categoryTitle: string;
+  compensationLabel: string;
+  score: number;
+  reasons: string[];
+  hourlyOvertimeRate: number;
+  otHoursMonth: number;
+  waConfirmUrl?: string | null;
+  applicantPosts?: FieldAssignedPost[];
+}
+
 
 export interface FieldPatrolCheck {
   id: string;
@@ -574,6 +603,11 @@ export interface AttendanceRecord {
   breakLateMinutes?: number;
   earlyLeaveApproved?: boolean;
   autoClosedType?: string;
+  // Emergency Post-Shift Overtime
+  isEmergencyOvertime?: boolean;
+  emergencyOvertimeHours?: number;
+  emergencyOvertimeReason?: string;
+  emergencyOvertimeStatus?: 'pending_verification' | 'verified' | 'rejected' | string;
 }
 
 export type ViolationStatus = 'active' | 'resolved' | 'penalized';
@@ -623,6 +657,8 @@ export interface LeaveRequest {
   substituteId?: string;
   substituteName?: string;
   substituteNip?: string;
+  reliefDutyAssigned?: boolean;
+  substituteRoleType?: ReliefRecommendationType | string;
   createdAt: string;
 }
 
@@ -800,6 +836,8 @@ export interface OvertimeRecord {
   completionNotes?: string;
   completionPhotos?: string[];
   isEmergency?: boolean;      // True jika lembur pekerjaan darurat / on-call
+  source?: 'planned' | 'emergency_post_shift' | 'shift_relief' | string;
+  emergencyReportedAt?: string;
   isSubstituteOvertime?: boolean; // True jika lembur karena menggantikan karyawan libur/cuti
   substituteForUserId?: string;   // ID karyawan yang digantikan
   substituteForUserName?: string; // Nama karyawan yang digantikan

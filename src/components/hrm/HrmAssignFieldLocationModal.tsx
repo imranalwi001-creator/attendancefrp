@@ -445,13 +445,19 @@ export const HrmAssignFieldLocationModal: React.FC<HrmAssignFieldLocationModalPr
                   >
                     <div className="space-y-1 text-xs flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <Badge className="bg-indigo-600 text-white font-mono text-[9px] px-1.5 py-0">
-                          {post.postCode}
+                        <Badge className={`${post.isRelief ? 'bg-amber-600 text-white' : 'bg-indigo-600 text-white'} font-mono text-[9px] px-1.5 py-0`}>
+                          {post.isRelief ? 'RELIEF' : post.postCode}
                         </Badge>
                         <span className="font-bold text-foreground truncate" title={post.postName}>
                           {post.postName}
                         </span>
                       </div>
+                      {post.isRelief && (
+                        <div className="text-[10px] text-amber-800 dark:text-amber-300 font-semibold bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-md flex items-center gap-1">
+                          <span>⭐ Pos Pengganti s/d {post.reliefUntil || 'Selesai'}</span>
+                          {post.reliefOriginalUserName && <span>({post.reliefOriginalUserName})</span>}
+                        </div>
+                      )}
                       <p className="text-[11px] font-mono text-muted-foreground truncate">
                         {post.latitude.toFixed(6)}, {post.longitude.toFixed(6)}
                       </p>

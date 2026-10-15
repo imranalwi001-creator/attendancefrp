@@ -121,9 +121,99 @@ export const fieldSentinelService = {
       radiusMeters: parseFloat(p.radiusMeters || p.radius_meters || 100),
       description: p.description || p.notes || '',
       isActive: p.isActive !== false && p.is_active !== false,
+      isRelief: p.isRelief === true || p.is_relief === true,
+      reliefUntil: p.reliefUntil || p.relief_until,
+      reliefOriginalUserId: p.reliefOriginalUserId || p.relief_original_user_id,
+      reliefOriginalUserName: p.reliefOriginalUserName || p.relief_original_user_name,
+      reliefOriginalUserNip: p.reliefOriginalUserNip || p.relief_original_user_nip,
       createdAt: p.createdAt || p.created_at,
       updatedAt: p.updatedAt || p.updated_at,
     }));
+  },
+
+  // 7b. Smart Relief Vacancy Recommendations (4 Tiers)
+  getSmartReliefRecommendations: async (params: {
+    applicantId?: string;
+    userId?: string;
+    originalUserId?: string;
+    startDate?: string;
+    endDate?: string;
+    divisionId?: string;
+    shiftId?: string;
+  }): Promise<{
+    allRanked: import('@/types/hrm').SmartReliefCandidate[];
+    offDutyList: import('@/types/hrm').SmartReliefCandidate[];
+    differentShiftList: import('@/types/hrm').SmartReliefCandidate[];
+    extendedShiftList: import('@/types/hrm').SmartReliefCandidate[];
+    shiftTransitionList: import('@/types/hrm').SmartReliefCandidate[];
+    total: number;
+    applicantPosts?: any[];
+  }> => {
+    const q = new URLSearchParams();
+    if (params.applicantId) q.set('applicantId', params.applicantId);
+    if (params.userId) q.set('userId', params.userId);
+    if (params.originalUserId) q.set('originalUserId', params.originalUserId);
+    if (params.startDate) q.set('startDate', params.startDate);
+    if (params.endDate) q.set('endDate', params.endDate);
+    if (params.divisionId) q.set('divisionId', params.divisionId);
+    if (params.shiftId) q.set('shiftId', params.shiftId);
+
+    const res = await api.get<{
+      success: boolean;
+      data: {
+        allRanked: import('@/types/hrm').SmartReliefCandidate[];
+        offDutyList: import('@/types/hrm').SmartReliefCandidate[];
+        differentShiftList: import('@/types/hrm').SmartReliefCandidate[];
+        extendedShiftList: import('@/types/hrm').SmartReliefCandidate[];
+        shiftTransitionList: import('@/types/hrm').SmartReliefCandidate[];
+        total: number;
+        applicantPosts?: any[];
+      };
+    }>(`/hrm/relief/recommendations?${q.toString()}`);
+    return res?.data || {
+      allRanked: [],
+      offDutyList: [],
+      differentShiftList: [],
+      extendedShiftList: [],
+      shiftTransitionList: [],
+      total: 0
+    };
+  },
+
+  // 7c. Penetapan Pengganti Pos Resmi & Pewarisan Geofence Otomatis
+  assignReliefSubstitute: async (payload: {
+    leaveId?: string;
+    originalUserId: string;
+    reliefUserId: string;
+    startDate?: string;
+    endDate?: string;
+    notes?: string;
+    adminId?: string;
+    adminName?: string;
+  }): Promise<{ success: boolean; injectedPosts?: any[]; substitution?: any; overtimeRecord?: any }> => {
+    const res = await api.post<{ success: boolean; injectedPosts?: any[]; substitution?: any; overtimeRecord?: any }>(
+      '/hrm/relief/assign',
+      payload
+    );
+    if (!res || !res.success) {
+      throw new Error('Gagal menetapkan pengganti pos resmi.');
+    }
+    return res;
+  },
+
+  // 7d. Verifikasi Lembur Darurat Pasca-Shift (1-Klik Korlap/Admin)
+  verifyEmergencyOvertime: async (
+    id: string,
+    action: 'approve' | 'reject',
+    approverId?: string,
+    approverName?: string,
+    notes?: string
+  ): Promise<{ success: boolean; message?: string }> => {
+    const res = await api.post<{ success: boolean; message?: string }>(
+      `/hrm/overtime/emergency-verify/${id}`,
+      { action, approverId, approverName, notes }
+    );
+    return res || { success: false };
   },
 
   // 8. Multi-Titik / Bank Pos Lapangan: Create or update a post in the bank
