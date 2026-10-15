@@ -1510,7 +1510,12 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       const hasApprovedException = (otRes.rows.length > 0) || (subRes.rows.length > 0) || (swapRes.rows.length > 0);
 
       if (!hasApprovedException) {
-        if (!userProfile.shift_id) {
+        let activeShiftId = userProfile.shift_id;
+        if (!activeShiftId || !UUID_REGEX.test(activeShiftId)) {
+          activeShiftId = await resolveShiftId(userProfile.shift_id);
+        }
+
+        if (!activeShiftId) {
           return res.status(400).json({
             success: false,
             error: 'Presensi Masuk Ditolak: Akun Anda belum memiliki penugasan shift kerja. Silakan hubungi HRD atau Administrator.',
@@ -1523,7 +1528,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
         const shiftRes = await pool.query(
           `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
-          [userProfile.shift_id]
+          [activeShiftId]
         );
         if (shiftRes.rows.length === 0) {
           return res.status(400).json({
@@ -1849,11 +1854,23 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     }
 
     const { shiftId, shiftName } = req.body;
-    let resolvedShiftId = shiftId;
-    let resolvedShiftName = shiftName;
-    if (!resolvedShiftId && userProfile.shift_id) {
+    let resolvedShiftId = null;
+    let resolvedShiftName = shiftName || null;
+
+    if (shiftId && UUID_REGEX.test(shiftId)) {
+      resolvedShiftId = shiftId;
+    } else if (userProfile && userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) {
       resolvedShiftId = userProfile.shift_id;
-      resolvedShiftName = userProfile.shift_name;
+      if (!resolvedShiftName) resolvedShiftName = userProfile.shift_name;
+    } else {
+      resolvedShiftId = await resolveShiftId(shiftId);
+    }
+
+    if (resolvedShiftId && !resolvedShiftName) {
+      const shRes = await pool.query('SELECT name FROM hrm_shifts WHERE id = $1 LIMIT 1', [resolvedShiftId]);
+      if (shRes.rows.length > 0) {
+        resolvedShiftName = shRes.rows[0].name;
+      }
     }
 
     // Cek apakah karyawan masih memiliki presensi aktif yang belum clock-out
@@ -4204,10 +4221,11 @@ app.post('/api/attendances/clock-out', async (req, res) => {
         let shiftEndTime = '16:30';
         let isCrossDay = false;
 
-        if (userProfile.shift_id) {
+        const validProfileShiftId = (userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) ? userProfile.shift_id : null;
+        if (validProfileShiftId) {
           const shiftRes = await pool.query(
             `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
-            [userProfile.shift_id]
+            [validProfileShiftId]
           );
           if (shiftRes.rows.length > 0) {
             const sh = shiftRes.rows[0];
@@ -10017,7 +10035,7 @@ app.post('/api/employee-schedules/batch', async (req, res) => {
       `, [
         item.userId,
         item.scheduleDate,
-        item.shiftId || null,
+        (item.shiftId && UUID_REGEX.test(item.shiftId)) ? item.shiftId : null,
         item.shiftCode || 'OFF',
         item.shiftName || (item.shiftCode === 'OFF' ? 'Libur / Off' : item.shiftCode === 'DAY' ? 'Day Shift (07:30 - 16:30 WITA)' : `Shift ${item.shiftCode}`),
         item.startTime || (item.shiftCode === 'M' ? '22:30' : item.shiftCode === 'S' ? '15:30' : '07:30'),

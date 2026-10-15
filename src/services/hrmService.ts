@@ -3054,6 +3054,8 @@ export const hrmService = {
     geofenceDistance?: number;
     geofenceValid?: boolean;
     isMockLocation?: boolean;
+    shiftId?: string;
+    shiftName?: string;
   }): Promise<AttendanceRecord> => {
     const today = getTodayDateStr();
     const existing = hrmService.getUserTodayAttendance(data.userId);
@@ -3248,8 +3250,14 @@ export const hrmService = {
       securityFlags: flags,
       deviceId: currentDeviceId,
       deviceModel: currentModel,
-      shiftId: (data as any).shiftId || userShift.id,
-      shiftName: (data as any).shiftName || activeShiftName,
+      shiftId: (() => {
+        const isUuid = (id?: string) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+        if (isUuid(data.shiftId)) return data.shiftId;
+        if (isUuid(userShift?.id)) return userShift.id;
+        if (isUuid(user?.shiftId)) return user.shiftId;
+        return undefined;
+      })(),
+      shiftName: data.shiftName || (data as any).shiftName || activeShiftName,
     };
 
     try {
@@ -3469,6 +3477,8 @@ export const hrmService = {
     isEmergencyOvertime?: boolean;
     emergencyOvertimeHours?: number;
     emergencyOvertimeReason?: string;
+    shiftId?: string;
+    shiftName?: string;
   }): Promise<AttendanceRecord> => {
     const today = data.date || getTodayDateStr();
     const existing = hrmService.getUserTodayAttendance(data.userId);
@@ -3524,6 +3534,8 @@ export const hrmService = {
       biometricScore: data.biometricConfidence,
       biometricMatch: data.isVerifiedBiometric,
       geofenceValid: true,
+      shiftId: data.shiftId,
+      shiftName: data.shiftName,
     });
   },
 
