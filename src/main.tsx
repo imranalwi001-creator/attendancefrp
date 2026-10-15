@@ -7,6 +7,33 @@ import { initAppUpdater } from "./services/updaterService.ts";
 import { initLiveDeployWatcher } from "./services/liveDeployWatcher.ts";
 import { isCapacitorApp } from "./services/apiClient.ts";
 
+// DOM RECONCILIATION GUARD:
+// Melindungi React 18 dari crash fatal Google Translate / ekstensi browser / DOM race conditions
+// yang menyebabkan error: "NotFoundError: Failed to execute 'removeChild' on 'Node'"
+if (typeof Node === "function" && Node.prototype) {
+  const originalRemoveChild = Node.prototype.removeChild;
+  Node.prototype.removeChild = function <T extends Node>(child: T): T {
+    if (child.parentNode !== this) {
+      if (typeof console !== "undefined") {
+        console.warn("[DOM Guard] Bypassed invalid removeChild call on detached/translated node:", this, child);
+      }
+      return child;
+    }
+    return originalRemoveChild.apply(this, [child]) as T;
+  };
+
+  const originalInsertBefore = Node.prototype.insertBefore;
+  Node.prototype.insertBefore = function <T extends Node>(newNode: T, referenceNode: Node | null): T {
+    if (referenceNode && referenceNode.parentNode !== this) {
+      if (typeof console !== "undefined") {
+        console.warn("[DOM Guard] Bypassed invalid insertBefore call on detached/translated node:", this, referenceNode);
+      }
+      return newNode;
+    }
+    return originalInsertBefore.apply(this, [newNode, referenceNode]) as T;
+  };
+}
+
 // Inisialisasi Live Auto-Sync Watcher: Menjamin APK otomatis memuat deploy terbaru dari server
 void initLiveDeployWatcher();
 

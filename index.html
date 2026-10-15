@@ -1,7 +1,8 @@
 <!doctype html>
-<html lang="en">
+<html lang="id" class="notranslate" translate="no">
   <head>
     <meta charset="UTF-8" />
+    <meta name="google" content="notranslate" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>HRM Attendance System</title>
     <meta name="description" content="Sistem Informasi Presensi & Manajemen SDM Mandiri">
@@ -24,6 +25,24 @@
     <link rel="apple-touch-icon" href="/logo.png" />
     <link rel="manifest" href="/manifest.webmanifest">
     <script>
+      // DOM RECONCILIATION GUARD: Mencegah Google Translate / Ekstensi Chrome merusak pohon DOM React
+      if (typeof Node === 'function' && Node.prototype) {
+        var origRemoveChild = Node.prototype.removeChild;
+        Node.prototype.removeChild = function(child) {
+          if (child.parentNode !== this) {
+            return child;
+          }
+          return origRemoveChild.apply(this, arguments);
+        };
+        var origInsertBefore = Node.prototype.insertBefore;
+        Node.prototype.insertBefore = function(newNode, refNode) {
+          if (refNode && refNode.parentNode !== this) {
+            return newNode;
+          }
+          return origInsertBefore.apply(this, arguments);
+        };
+      }
+
       // EMERGENCY STORAGE SANITIZER: Langsung bersihkan hrm_attendance yang kembung dari browser/PWA
       (function() {
         try {

@@ -23,6 +23,23 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('[ErrorBoundary caught error]:', error, errorInfo);
+    // Auto-recovery jika terjadi tabrakan DOM akibat Google Translate atau ekstensi browser
+    const msg = (error?.message || '').toLowerCase();
+    if (
+      msg.includes('removechild') ||
+      msg.includes('bukanlah anak dari node ini') ||
+      msg.includes('not a child of this node')
+    ) {
+      const lastRetry = sessionStorage.getItem('dom_error_retry');
+      const now = Date.now();
+      if (!lastRetry || now - parseInt(lastRetry, 10) > 10000) {
+        sessionStorage.setItem('dom_error_retry', now.toString());
+        console.warn('[ErrorBoundary] Auto-recovering from DOM manipulation collision...');
+        setTimeout(() => {
+          this.setState({ hasError: false, error: null });
+        }, 100);
+      }
+    }
   }
 
   private handleReload = () => {
