@@ -1826,6 +1826,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     );
 
     let result;
+    const flagsJson = JSON.stringify(Array.isArray(detectedFlags) ? detectedFlags : []);
     if (openAttRes.rows.length > 0) {
       // Jika karyawan sudah dalam status clock-in dan belum clock-out, pertahankan rekaman aktif
       result = openAttRes;
@@ -2570,8 +2571,8 @@ Mohon segera pantau posisi petugas melalui menu Live Monitoring HRM.`;
     if (isOutOfBounds && !isExcusedFromBreach) {
       // 1. Ambil jam shift karyawan hari ini
       const schedRes = await pool.query(`
-        SELECT COALESCE(es.end_time, p.custom_end_time, s.end_time, '16:30') as shift_end_time,
-               COALESCE(es.start_time, p.custom_start_time, s.start_time, '07:30') as shift_start_time,
+        SELECT COALESCE(es.end_time::text, p.custom_end_time::text, s.end_time::text, '16:30') as shift_end_time,
+               COALESCE(es.start_time::text, p.custom_start_time::text, s.start_time::text, '07:30') as shift_start_time,
                COALESCE(s.is_cross_day, false) as is_cross_day
         FROM hrm_profiles p
         LEFT JOIN hrm_shifts s ON p.shift_id = s.id
@@ -10170,8 +10171,8 @@ async function runAutoCloseCompliantAttendance() {
   try {
     const candidates = await pool.query(`
       SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.notes,
-             COALESCE(es.end_time, p.custom_end_time, s.end_time, '16:30') as shift_end_time,
-             COALESCE(es.start_time, p.custom_start_time, s.start_time, '07:30') as shift_start_time,
+             COALESCE(es.end_time::text, p.custom_end_time::text, s.end_time::text, '16:30') as shift_end_time,
+             COALESCE(es.start_time::text, p.custom_start_time::text, s.start_time::text, '07:30') as shift_start_time,
              COALESCE(s.is_cross_day, false) as is_cross_day,
              p.full_name, p.nip, p.phone, p.is_out_of_bounds,
              (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date as today_wita
