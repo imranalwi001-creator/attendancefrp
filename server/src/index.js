@@ -2507,14 +2507,86 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
     const userLon = parseFloat(longitude);
     const userAccuracy = accuracy ? parseFloat(accuracy) : 5;
 
-    // Check today's break time & early leave status
+    // 1. Ambil rekaman presensi hari ini
     const todayAttRes = await pool.query(
-      `SELECT is_on_break, is_early_leave, clock_out FROM hrm_attendances WHERE user_id = $1 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date LIMIT 1`,
+      `SELECT clock_in, clock_out, is_on_break, is_early_leave, status 
+       FROM hrm_attendances 
+       WHERE user_id = $1 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date 
+       ORDER BY created_at DESC LIMIT 1`,
       [validUserId]
     );
+    const hasClockedInToday = Boolean(todayAttRes.rows[0]?.clock_in);
+    const hasClockedOutToday = Boolean(todayAttRes.rows[0]?.clock_out);
     const isOnBreakToday = todayAttRes.rows[0]?.is_on_break === true;
     const isEarlyLeaveToday = todayAttRes.rows[0]?.is_early_leave === true;
-    const hasClockedOutToday = Boolean(todayAttRes.rows[0]?.clock_out);
+
+    // 2. Cek apakah ada pengajuan Cuti/Izin/Sakit yang aktif & disetujui hari ini
+    const activeLeaveRes = await pool.query(
+      `SELECT id FROM hrm_leaves 
+       WHERE user_id = $1 
+         AND status = 'approved' 
+         AND (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date BETWEEN start_date AND end_date 
+       LIMIT 1;`,
+      [validUserId]
+    ).catch(() => ({ rows: [] }));
+    const hasActiveLeaveToday = activeLeaveRes.rows.length > 0;
+
+    // 3. Cek jam shift karyawan hari ini
+    const schedRes = await pool.query(`
+      SELECT COALESCE(es.end_time::text, p.custom_end_time::text, s.end_time::text, '16:30') as shift_end_time,
+             COALESCE(es.start_time::text, p.custom_start_time::text, s.start_time::text, '07:30') as shift_start_time,
+             COALESCE(s.is_cross_day, false) as is_cross_day
+      FROM hrm_profiles p
+      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+      LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
+      WHERE p.id = $1 LIMIT 1;
+    `, [validUserId]);
+
+    const shiftInfo = schedRes.rows[0];
+    const shiftEndStr = (shiftInfo?.shift_end_time || '16:30').substring(0, 5);
+    const shiftStartStr = (shiftInfo?.shift_start_time || '07:30').substring(0, 5);
+    const [endH, endM] = shiftEndStr.split(':').map(Number);
+    const [startH, startM] = shiftStartStr.split(':').map(Number);
+    const endTotalMins = (endH || 16) * 60 + (endM || 30);
+    const startTotalMins = (startH || 7) * 60 + (startM || 30);
+
+    const nowWitaDate = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    const nowH = nowWitaDate.getUTCHours();
+    const nowM = nowWitaDate.getUTCMinutes();
+    let nowTotalMins = nowH * 60 + nowM;
+
+    const isCrossDay = Boolean(shiftInfo?.is_cross_day);
+    if (isCrossDay && nowTotalMins < 720 && endTotalMins >= 720) {
+      nowTotalMins += 1440;
+    }
+
+    // 4. Cek apakah ada penugasan Lembur resmi (SPKL) yang disetujui hari ini
+    const activeOvertimeRes = await pool.query(
+      `SELECT id FROM hrm_overtimes 
+       WHERE user_id = $1 
+         AND overtime_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date 
+         AND status = 'approved' 
+       LIMIT 1;`,
+      [validUserId]
+    ).catch(() => ({ rows: [] }));
+    const hasActiveOvertime = activeOvertimeRes.rows.length > 0;
+
+    // Evaluasi apakah saat ini berada di luar jam kerja (shift)
+    let isOutsideShiftHours = false;
+    if (isCrossDay) {
+      if (nowTotalMins < startTotalMins - 60 && nowTotalMins > endTotalMins + 30) {
+        isOutsideShiftHours = true;
+      }
+    } else {
+      if (nowTotalMins < startTotalMins - 60 || nowTotalMins >= endTotalMins + 30) {
+        isOutsideShiftHours = true;
+      }
+    }
+
+    // Jendela presensi masuk terbuka (120 menit sebelum jam shift dimulai hingga jam shift usai)
+    const isShiftOpenWindow = isCrossDay
+      ? (nowTotalMins >= (startTotalMins - 120 + 1440) % 1440 || nowTotalMins < endTotalMins)
+      : (nowTotalMins >= Math.max(0, startTotalMins - 120) && nowTotalMins <= endTotalMins);
 
     // Pengecualian 3 Petugas Distribusi Online Mobile (Rusdi, Reza, Ichtiar)
     const isMobileOnlineSpecialist = [
@@ -2524,7 +2596,16 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
     ].includes(validUserId) || 
     ['FR07046', 'FR07042', 'FR07044', 'FR.07.046', 'FR.07.042', 'FR.07.044', 'FRP07046', 'FRP07042', 'FRP07044'].includes((prof.nip || '').trim());
 
-    const isExcusedFromBreach = isOnBreakToday || isEarlyLeaveToday || hasClockedOutToday || isMobileOnlineSpecialist;
+    // 🛡️ PRINSIP PERLINDUNGAN PRIVASI DI LUAR JAM KERJA:
+    // Karyawan HANYA bisa aktif dimonitor perimeternya jika:
+    // 1. Sudah Clock-In hari ini
+    // 2. Belum Clock-Out
+    // 3. Tidak sedang cuti/izin/sakit sah
+    // 4. Berada dalam jam shift atau sedang lembur resmi
+    const isCurrentlyOnDuty = hasClockedInToday && !hasClockedOutToday && !hasActiveLeaveToday && (!isOutsideShiftHours || hasActiveOvertime);
+
+    // Karyawan dikecualikan dari alarm pelanggaran perimeter jika tidak aktif bertugas, sedang istirahat, izin pulang cepat, atau petugas mobile
+    const isExcusedFromBreach = !isCurrentlyOnDuty || isOnBreakToday || isEarlyLeaveToday || isMobileOnlineSpecialist;
 
     // ─── QUERY ALL REGISTERED ACTIVE POSTS IN THE BANK (Titik A, Titik B, Titik C, ...) ───
     const postsRes = await pool.query(
@@ -2581,7 +2662,7 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
           || ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes((prof.email || '').toLowerCase())
           || ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FRP07065', 'FR07066', 'FRP07046'].includes((prof.nip || '').trim());
 
-          shouldPromptSelfie = isSpecialDutyOfficer;
+          shouldPromptSelfie = isSpecialDutyOfficer && (isCurrentlyOnDuty || isShiftOpenWindow);
 
           await pool.query(
             `UPDATE hrm_profiles SET
@@ -2594,9 +2675,10 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
             [insidePost.id, insidePost.post_name, validUserId]
           );
 
-          // 📲 NOTIFIKASI WHATSAPP KE PETUGAS LAPANGAN KHUSUS (ASLAM, SAMSI, TAKDIR)
-          if (isSpecialDutyOfficer && prof.phone) {
-            const officerArrivalWa =
+          // 📲 NOTIFIKASI HANYA DIKIRIM JIKA DALAM JAM DINAS / JENDELA SHIFT DIBUKA
+          if (isCurrentlyOnDuty || isShiftOpenWindow) {
+            if (isSpecialDutyOfficer && prof.phone) {
+              const officerArrivalWa =
 `📍 *NOTIFIKASI TUGAS LAPANGAN PT FRP*
 
 Halo *${prof.full_name}*, sistem mendeteksi Anda telah tiba di *${insidePost.post_name}* [${insidePost.post_code}].
@@ -2604,17 +2686,17 @@ Waktu: ${witaTimeStr}
 
 📸 *INSTRUKSI PIMPINAN:*
 Silakan segera buka aplikasi presensi dan lakukan *FOTO SELFIE VERIFIKASI WAJAH DI LOKASI POS* untuk mengonfirmasi kehadiran Anda di pos tugas ini. Terima kasih!`;
-            await sendWhatsAppAlert({
-              phone: prof.phone,
-              message: officerArrivalWa
-            }).catch(e => console.error('[WhatsApp Officer Arrival Error]:', e.message));
-          }
+              await sendWhatsAppAlert({
+                phone: prof.phone,
+                message: officerArrivalWa
+              }).catch(e => console.error('[WhatsApp Officer Arrival Error]:', e.message));
+            }
 
-          // 📲 TRIGGER AUTOMATIC SYSTEM & WHATSAPP ALERT TO PIMPINAN & SUPERADMIN
-          const arrivalTitle = `📍 ${prof.full_name} Tiba di ${insidePost.post_name}`;
-          const arrivalSystemMsg = `Petugas ${prof.full_name} (${prof.nip || 'FRP'}) terdeteksi aktif berada di ${insidePost.post_name} (${insidePost.post_code}). Jarak: ${distance}m (Radius aman: ${insidePost.radius}m).`;
+            // 📲 TRIGGER AUTOMATIC SYSTEM & WHATSAPP ALERT TO PIMPINAN & SUPERADMIN
+            const arrivalTitle = `📍 ${prof.full_name} Tiba di ${insidePost.post_name}`;
+            const arrivalSystemMsg = `Petugas ${prof.full_name} (${prof.nip || 'FRP'}) terdeteksi aktif berada di ${insidePost.post_name} (${insidePost.post_code}). Jarak: ${distance}m (Radius aman: ${insidePost.radius}m).`;
 
-          const arrivalWaMsg =
+            const arrivalWaMsg =
 `📢 *NOTIFIKASI RADAR LAPANGAN PT. FAWWAZ RESKI PERWIRA*
 
 👤 Petugas: *${prof.full_name}* (${prof.nip || 'FRP-FIELD'})
@@ -2626,22 +2708,23 @@ Silakan segera buka aplikasi presensi dan lakukan *FOTO SELFIE VERIFIKASI WAJAH 
 
 ✅ Petugas sah dan aktif terpantau di dalam area kerja yang ditentukan pimpinan.`;
 
-          await alertLeadershipViaWhatsAppAndSystem({
-            title: arrivalTitle,
-            message: arrivalSystemMsg,
-            waMessage: arrivalWaMsg,
-            link: '/admin/monitoring',
-            metadata: {
-              type: 'post_arrival',
-              userId: validUserId,
-              postId: insidePost.id,
-              postCode: insidePost.post_code,
-              postName: insidePost.post_name,
-              latitude: userLat,
-              longitude: userLon,
-              distance: distance
-            }
-          });
+            await alertLeadershipViaWhatsAppAndSystem({
+              title: arrivalTitle,
+              message: arrivalSystemMsg,
+              waMessage: arrivalWaMsg,
+              link: '/admin/monitoring',
+              metadata: {
+                type: 'post_arrival',
+                userId: validUserId,
+                postId: insidePost.id,
+                postCode: insidePost.post_code,
+                postName: insidePost.post_name,
+                latitude: userLat,
+                longitude: userLon,
+                distance: distance
+              }
+            });
+          }
         }
       } else {
         // 🔴 EMPLOYEE IS OUTSIDE ALL REGISTERED POSTS
@@ -2653,8 +2736,24 @@ Silakan segera buka aplikasi presensi dan lakukan *FOTO SELFIE VERIFIKASI WAJAH 
         distance = Math.round(nearest.distance);
         excessDist = isExcusedFromBreach ? 0 : Math.max(0, Math.round(nearest.distance - nearest.radius));
 
-        // If previously inside a post and NOT on break/early-leave, trigger breach alert
-        if (prof.current_active_post_id) {
+        // JIKA KARYAWAN TIDAK AKTIF BERTUGAS (Belum Masuk, Sudah Pulang, Di Luar Jam Kerja, atau Cuti):
+        // Jangan pernah memicu peringatan perimeter breach atau mengubah status jadi out_of_bounds!
+        if (!isCurrentlyOnDuty) {
+          isOutOfBounds = false;
+          excessDist = 0;
+          if (prof.current_active_post_id || prof.is_out_of_bounds) {
+            await pool.query(
+              `UPDATE hrm_profiles SET
+                 current_active_post_id = NULL,
+                 current_active_post_name = NULL,
+                 is_out_of_bounds = false,
+                 out_of_bounds_distance = 0
+               WHERE id = $1;`,
+              [validUserId]
+            );
+          }
+        } else if (prof.current_active_post_id) {
+          // Karyawan memang sedang AKTIF BERTUGAS dan sebelumnya berada di pos tugas
           if (isExcusedFromBreach) {
             // Employee stepped out during authorized break or early leave
             await pool.query(
@@ -2667,20 +2766,49 @@ Silakan segera buka aplikasi presensi dan lakukan *FOTO SELFIE VERIFIKASI WAJAH 
               [validUserId]
             );
           } else {
-            await pool.query(
-              `UPDATE hrm_profiles SET
-                 current_active_post_id = NULL,
-                 current_active_post_name = NULL,
-                 is_out_of_bounds = true,
-                 out_of_bounds_distance = $1
-               WHERE id = $2;`,
-              [excessDist, validUserId]
-            );
+            // Cek apakah jam kerja shift sebenarnya sudah usai (Auto-Clock Out saat meninggalkan pos setelah shift usai)
+            if (nowTotalMins >= endTotalMins && !hasActiveOvertime) {
+              const clockOutTime = `${shiftEndStr}:00`;
+              const autoNote = ` [Auto-Clock Out: Karyawan meninggalkan pos kerja setelah shift usai (${shiftEndStr} WITA)]`;
+              await pool.query(
+                `UPDATE hrm_attendances SET
+                   clock_out = $1,
+                   status = 'hadir',
+                   is_locked = false,
+                   is_perimeter_breached = false,
+                   auto_closed_type = 'AUTO_CLOCKOUT_OUT_OF_BOUNDS',
+                   notes = TRIM(COALESCE(notes, '') || $2),
+                   updated_at = NOW()
+                 WHERE user_id = $3 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date AND clock_out IS NULL;`,
+                [clockOutTime, autoNote, validUserId]
+              );
+              await pool.query(
+                `UPDATE hrm_profiles SET
+                   current_active_post_id = NULL,
+                   current_active_post_name = NULL,
+                   is_out_of_bounds = false,
+                   out_of_bounds_distance = 0
+                 WHERE id = $1;`,
+                [validUserId]
+              );
+              isOutOfBounds = false;
+              excessDist = 0;
+            } else {
+              // Benar-benar pelanggaran perimeter pada saat jam aktif kerja!
+              await pool.query(
+                `UPDATE hrm_profiles SET
+                   current_active_post_id = NULL,
+                   current_active_post_name = NULL,
+                   is_out_of_bounds = true,
+                   out_of_bounds_distance = $1
+                 WHERE id = $2;`,
+                [excessDist, validUserId]
+              );
 
-          const breachTitle = `🚨 ${prof.full_name} Bergerak Keluar Perimeter`;
-          const breachSystemMsg = `Petugas ${prof.full_name} (${prof.nip || 'FRP'}) terdeteksi bergerak keluar dari area ${prof.current_active_post_name || targetLocationName} sejauh ${excessDist} meter!`;
+              const breachTitle = `🚨 ${prof.full_name} Bergerak Keluar Perimeter`;
+              const breachSystemMsg = `Petugas ${prof.full_name} (${prof.nip || 'FRP'}) terdeteksi bergerak keluar dari area ${prof.current_active_post_name || targetLocationName} sejauh ${excessDist} meter!`;
 
-          const breachWaMsg =
+              const breachWaMsg =
 `🚨 *PERINGATAN RADAR LAPANGAN PT. FAWWAZ RESKI PERWIRA*
 
 👤 Petugas: *${prof.full_name}* (${prof.nip || 'FRP-FIELD'})
@@ -2692,19 +2820,20 @@ Silakan segera buka aplikasi presensi dan lakukan *FOTO SELFIE VERIFIKASI WAJAH 
 
 Mohon segera pantau posisi petugas melalui menu Live Monitoring HRM.`;
 
-            await alertLeadershipViaWhatsAppAndSystem({
-              title: breachTitle,
-              message: breachSystemMsg,
-              waMessage: breachWaMsg,
-              link: '/admin/monitoring',
-              metadata: {
-                type: 'perimeter_breach',
-                userId: validUserId,
-                excessDistance: excessDist,
-                latitude: userLat,
-                longitude: userLon
-              }
-            });
+              await alertLeadershipViaWhatsAppAndSystem({
+                title: breachTitle,
+                message: breachSystemMsg,
+                waMessage: breachWaMsg,
+                link: '/admin/monitoring',
+                metadata: {
+                  type: 'perimeter_breach',
+                  userId: validUserId,
+                  excessDistance: excessDist,
+                  latitude: userLat,
+                  longitude: userLon
+                }
+              });
+            }
           }
         }
       }
@@ -4444,6 +4573,17 @@ app.post('/api/attendances/clock-out', async (req, res) => {
       ).catch((err) => console.warn('[Photo Retention] Error clearing older clock-out photos:', err));
     }
 
+    // 🛡️ Reset radar perimeter & pos penugasan aktif saat karyawan clock-out
+    await pool.query(
+      `UPDATE hrm_profiles SET
+         current_active_post_id = NULL,
+         current_active_post_name = NULL,
+         is_out_of_bounds = false,
+         out_of_bounds_distance = 0
+       WHERE id = $1;`,
+      [validUserId]
+    ).catch(e => console.warn('[Clock-Out Profile Reset Error]:', e.message));
+
     res.json({ success: true, data: updatedAttendance, emergencyOvertime: emergencyOtRecord });
   } catch (err) {
     console.error('Clock-out error:', err);
@@ -4534,7 +4674,7 @@ app.post('/api/attendances/early-leave', async (req, res) => {
 
     // Update profile status agar tidak dianggap out of bounds
     await pool.query(
-      `UPDATE hrm_profiles SET is_out_of_bounds = false, current_active_post_id = NULL, current_active_post_name = NULL WHERE id = $1`,
+      `UPDATE hrm_profiles SET is_out_of_bounds = false, out_of_bounds_distance = 0, current_active_post_id = NULL, current_active_post_name = NULL WHERE id = $1`,
       [validUserId]
     );
 

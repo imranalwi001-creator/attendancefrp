@@ -1401,8 +1401,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       evaluateLocationCoords(coords, pos.coords.accuracy || 10);
 
       const now = Date.now();
+      const hasClockedIn = Boolean(todayAttendance?.clockIn || todayAttendance?.clock_in);
+      const hasClockedOut = Boolean(todayAttendance?.clockOut || todayAttendance?.clock_out);
+
+      // 🛡️ PERLINDUNGAN PRIVASI: Karyawan di luar jam kerja / sudah absen pulang TIDAK dipantau
+      const isActivelyOnDuty = hasClockedIn && !hasClockedOut;
+      const isApproachingPostForCheckIn = !hasClockedIn && !hasClockedOut && locationStatus === 'inside';
+      const shouldSendPing = isFieldOfficer && (isActivelyOnDuty || isApproachingPostForCheckIn);
+
       // Send location ping every 45-60s or on position change
-      if (isFieldOfficer && now - lastPingTimeRef.current >= 45000) {
+      if (shouldSendPing && now - lastPingTimeRef.current >= 45000) {
         lastPingTimeRef.current = now;
         fieldSentinelService.sendLocationPing({
           userId: user.id,
@@ -1456,7 +1464,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       navigator.geolocation.clearWatch(watchId);
       clearInterval(heartbeat);
     };
-  }, [user?.id, bankPosts, assignedOffice]);
+  }, [user?.id, bankPosts, assignedOffice, todayAttendance?.clockIn, todayAttendance?.clock_in, todayAttendance?.clockOut, todayAttendance?.clock_out, locationStatus]);
 
   // Break Countdown Timer
   useEffect(() => {
