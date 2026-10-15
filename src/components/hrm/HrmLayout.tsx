@@ -31,6 +31,7 @@ import {
   Briefcase,
   CalendarClock,
   Award,
+  Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -289,10 +290,16 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       roles: ['superadmin', 'admin', 'hrd', 'korlap'],
     },
     {
+      label: 'Simulasi Sosialisasi',
+      path: '/admin/simulasi',
+      icon: Sparkles,
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan', 'korlap'],
+    },
+    {
       label: 'Kelola Divisi',
       path: '/admin/divisi',
       icon: Building2,
-      roles: ['superadmin'],
+      roles: ['superadmin', 'admin', 'hrd', 'pimpinan'],
     },
     {
       label: 'Kelola Role & Akses',
@@ -304,7 +311,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       label: 'Pengaturan Kantor',
       path: '/admin/pengaturan',
       icon: Settings,
-      roles: ['superadmin'],
+      roles: ['superadmin', 'admin', 'pimpinan'],
     },
   ];
 

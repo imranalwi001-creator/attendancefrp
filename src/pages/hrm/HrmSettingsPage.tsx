@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { hrmService } from '@/services/hrmService';
 import { OfficeLocation, Shift, AppSettings, OvertimeSettings, CompanyProfile, CompanyDocument, CompanyDocumentType } from '@/types/hrm';
 import defaultLogo from '@/assets/logo.png';
@@ -41,6 +42,7 @@ import {
   X,
   Download,
   Wifi,
+  Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
@@ -958,6 +960,31 @@ export const HrmSettingsPage: React.FC = () => {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {/* Banner Link to Mode Simulasi Sesi Sosialisasi */}
+            <div className="mb-5 p-4 rounded-xl bg-gradient-to-r from-emerald-950/20 via-background to-teal-950/20 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    Mode Simulasi Sesi Sosialisasi & Presentasi (DIV-SIM)
+                    <span className="text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded-full">
+                      Bebas Jadwal 24 Jam
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Titik koordinat venue presentasi untuk uji coba presensi serentak seluruh karyawan tanpa batasan shift kerja.
+                  </p>
+                </div>
+              </div>
+              <Link to="/admin/simulasi" className="shrink-0">
+                <Button size="sm" type="button" className="h-8 text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg gap-1.5 shadow-sm">
+                  <Sparkles className="w-3.5 h-3.5" /> Buka Panel Simulasi DIV-SIM
+                </Button>
+              </Link>
+            </div>
+
             {officeMessage && (
               <Alert className="mb-4 py-2 text-xs border-border"><AlertDescription>{officeMessage.text}</AlertDescription></Alert>
             )}

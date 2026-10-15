@@ -155,7 +155,16 @@ export const App: React.FC = () => {
                 <Route
                   path="/admin/divisi"
                   element={
-                    <HrmProtectedRoute allowedRoles={['superadmin']}>
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'korlap']}>
+                      <HrmDivisionsPage />
+                    </HrmProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="/admin/simulasi"
+                  element={
+                    <HrmProtectedRoute allowedRoles={['superadmin', 'admin', 'hrd', 'pimpinan', 'korlap']}>
                       <HrmDivisionsPage />
                     </HrmProtectedRoute>
                   }
