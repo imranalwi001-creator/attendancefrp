@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "node server/src/index.js",
+    "server:dev": "node --watch server/src/index.js",
     "build": "vite build",
     "build:shared": "node scripts/validate-production-env.mjs && vite build --mode production",
     "build:dev": "vite build --mode development",
