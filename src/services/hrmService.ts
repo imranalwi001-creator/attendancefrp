@@ -4271,7 +4271,10 @@ export const hrmService = {
       try {
         const subUser = hrmService.getUsers().find((u) => u.id === actualSubId);
         if (subUser) {
-          const otHourlyRate = (subUser as any)?.hourlyOvertimeRate || 25000;
+          // Ambil tarif lembur resmi perorangan karyawan dari profil database PostgreSQL (hrm_payroll_salary_profiles)
+          const rawOtRate = Number((subUser as any)?.hourly_overtime_rate || (subUser as any)?.hourlyOvertimeRate);
+          const baseSal = Number((subUser as any)?.base_salary || (subUser as any)?.baseSalary || 4045050);
+          const otHourlyRate = rawOtRate > 0 ? rawOtRate : Math.round(baseSal / 173);
           const otHours = 8; // Standar 1 shift penggantian pos
           const totalPay = Math.round(otHours * otHourlyRate * 1.5);
 
