@@ -134,6 +134,9 @@ export async function initDb() {
       ALTER TABLE hrm_attendances 
       ADD COLUMN IF NOT EXISTS time_outside_minutes INTEGER DEFAULT 0;
 
+      ALTER TABLE hrm_attendances 
+      ADD COLUMN IF NOT EXISTS is_simulation BOOLEAN DEFAULT false;
+
       -- Early Leave & Remote Unlock Columns
       ALTER TABLE hrm_attendances 
       ADD COLUMN IF NOT EXISTS is_early_leave BOOLEAN DEFAULT false;
@@ -475,6 +478,26 @@ export async function initDb() {
       SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
           break_start_time = EXCLUDED.break_start_time, break_end_time = EXCLUDED.break_end_time,
           break_duration_minutes = EXCLUDED.break_duration_minutes;
+
+      -- Shift Khusus: Shift Simulasi & Bebas Jadwal (24 Jam Penuh Tanpa Batasan)
+      INSERT INTO hrm_shifts (name, start_time, end_time, break_start_time, break_end_time, break_duration_minutes, late_tolerance_minutes, is_default)
+      VALUES ('Shift Simulasi & Bebas Jadwal (24 Jam)', '00:00:00', '23:59:59', '12:00:00', '13:00:00', 60, 1440, false)
+      ON CONFLICT (name) DO UPDATE 
+      SET start_time = '00:00:00', end_time = '23:59:59', late_tolerance_minutes = 1440;
+
+      -- Divisi Khusus: DIV-SIM (Divisi Uji Coba & Simulasi Sosialisasi)
+      INSERT INTO hrm_divisions (code, name, description, location_name, address, latitude, longitude, radius_meters)
+      VALUES (
+        'DIV-SIM',
+        'Divisi Uji Coba & Simulasi Sosialisasi',
+        'Divisi khusus sesi presentasi dan simulasi presensi wajah & lokasi karyawan tanpa batasan jadwal',
+        'Venue Acara / Ruang Sosialisasi',
+        'Lokasi Acara Presentasi PT FRP',
+        -4.78236486,
+        119.57192181,
+        300
+      )
+      ON CONFLICT (code) DO NOTHING;
 
       -- ─── 15. BANK POS TUGAS LAPANGAN & GEOFENCE MULTI-TITIK ───
       CREATE TABLE IF NOT EXISTS hrm_field_assigned_posts (

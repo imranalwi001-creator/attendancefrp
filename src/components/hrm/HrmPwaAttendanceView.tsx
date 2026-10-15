@@ -1267,6 +1267,24 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       }
     }
 
+    // Masukkan Divisi Simulasi Sosialisasi (DIV-SIM) agar seluruh karyawan dapat mencoba absen di venue presentasi
+    try {
+      const allDivs = hrmService.getDivisions();
+      const simDiv = allDivs.find((d) => d.code === 'DIV-SIM' || d.id === 'div-sim');
+      if (simDiv && typeof simDiv.latitude === 'number' && typeof simDiv.longitude === 'number' && !isNaN(simDiv.latitude)) {
+        if (!candidateOffices.some((c) => Math.abs(c.lat - simDiv.latitude) < 0.0001 && Math.abs(c.lng - simDiv.longitude) < 0.0001)) {
+          candidateOffices.push({
+            name: `${simDiv.locationName || 'Venue Sosialisasi'} [DIV-SIM]`,
+            lat: simDiv.latitude,
+            lng: simDiv.longitude,
+            radius: simDiv.radiusMeters || 300,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Gagal memuat kandidat DIV-SIM:', e);
+    }
+
     if (candidateOffices.length > 0) {
       const officeChecks = candidateOffices.map((cand) => {
         const d = geofenceService.calculateDistance(coords, { latitude: cand.lat, longitude: cand.lng });
@@ -2917,25 +2935,36 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const hasApprovedOvertimeOrSubstituteToday = Boolean(approvedOvertimeToday || approvedSubstituteToday);
   const isInsideCoordinates = locationStatus === 'inside' || isFieldSpecial;
 
+  // Deteksi Mode Simulasi Sosialisasi: Jika karyawan terdaftar di DIV-SIM atau berada di radius titik presentasi
+  const isSimulationAtVenue = useMemo(() => {
+    return Boolean(
+      (user?.divisionCode === 'DIV-SIM' || user?.divisionId === 'div-sim') ||
+      (assignedPostName && (assignedPostName.includes('DIV-SIM') || assignedPostName.toLowerCase().includes('simulasi')))
+    );
+  }, [user, assignedPostName]);
+
   // Syarat Tombol Absen Masuk Aktif:
-  // - Tidak sedang Cuti / Izin
-  // - Tidak sedang Jadwal Libur (Off Duty)
+  // - Tidak sedang Cuti / Izin (dilewati jika simulasi)
+  // - Tidak sedang Jadwal Libur (dilewati jika simulasi)
   // - Berada di radius pos kerja
   // - Serta memenuhi salah satu dari:
-  //   A. Belum pernah absen masuk untuk shift ini (sesuai jadwal shift/lembur)
-  //   B. Shift sebelumnya sudah selesai (isCurrentSessionClosed) dan shift berikutnya siap dimasuki (Shift 1 -> Shift 2 -> Shift 3)
+  //   A. Mode Simulasi Sosialisasi Aktif (Bebas Jadwal 24 Jam)
+  //   B. Belum pernah absen masuk untuk shift ini (sesuai jadwal shift/lembur)
+  //   C. Shift sebelumnya sudah selesai (isCurrentSessionClosed) dan shift berikutnya siap dimasuki
   const isShiftAssigned = userShift?.id !== 'unassigned' && Boolean(userShift?.startTime);
   const isClockInAllowed =
-    !hasActiveLeaveToday &&
-    !isEmployeeOffToday &&
+    (!hasActiveLeaveToday || isSimulationAtVenue) &&
+    (!isEmployeeOffToday || isSimulationAtVenue) &&
     isInsideCoordinates &&
     (
+      isSimulationAtVenue ||
       (!hasClockedIn && (isShiftAssigned || isFieldSpecial) && (isShiftWindowActive || hasApprovedOvertimeOrSubstituteToday || isFieldSpecial)) ||
       (isCurrentSessionClosed && Boolean(nextShiftInfo?.isNextShiftAvailable) && Boolean(nextShiftInfo?.isNextShiftWindowOpen))
     );
 
   // Keterangan Alasan Non-Aktif Tombol Absen Masuk:
   const clockInDisabledReason = useMemo(() => {
+    if (isSimulationAtVenue) return null;
     if (hasActiveLeaveToday) {
       const typeLabel = activeLeaveToday?.leaveType?.includes('sakit')
         ? 'SAKIT'
@@ -2971,15 +3000,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       return windowCheck.reason || `DI LUAR JADWAL SHIFT (${userShift?.startTime?.substring(0, 5) || '08:00'} - ${userShift?.endTime?.substring(0, 5) || '17:00'})`;
     }
     return null;
-  }, [hasActiveLeaveToday, activeLeaveToday, isEmployeeOffToday, isInsideCoordinates, isCurrentlyOnDuty, isCurrentSessionClosed, nextShiftInfo, todayAttendance, isShiftAssigned, isFieldSpecial, isShiftWindowActive, hasApprovedOvertimeOrSubstituteToday, userShift, currentTime]);
+  }, [isSimulationAtVenue, hasActiveLeaveToday, activeLeaveToday, isEmployeeOffToday, isInsideCoordinates, isCurrentlyOnDuty, isCurrentSessionClosed, nextShiftInfo, todayAttendance, isShiftAssigned, isFieldSpecial, isShiftWindowActive, hasApprovedOvertimeOrSubstituteToday, userShift, currentTime]);
 
   // Tombol Absen Pulang:
   const isClockOutAllowed =
     isCurrentlyOnDuty &&
-    (clockOutWindow.isAllowed || hasApprovedEmergencyLeave);
+    (clockOutWindow.isAllowed || hasApprovedEmergencyLeave || isSimulationAtVenue);
 
   const clockOutDisabledReason = useMemo(() => {
     if (!hasClockedIn) return 'BELUM ABSEN MASUK';
+    if (isSimulationAtVenue) return null;
     if (isCurrentSessionClosed) {
       if (nextShiftInfo?.isNextShiftAvailable) {
         return `SHIFT LALU SELESAI (${todayAttendance?.clockOut?.substring(0, 5)}) • SIAP MASUK ${nextShiftInfo.nextShiftCode.replace('SHF-', 'SHIFT ')}`;
@@ -2989,7 +3019,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     if (hasApprovedEmergencyLeave) return null;
     if (!clockOutWindow.isAllowed) return clockOutWindow.reason || 'BELUM JAM PULANG';
     return null;
-  }, [hasClockedIn, isCurrentSessionClosed, nextShiftInfo, hasApprovedEmergencyLeave, clockOutWindow, todayAttendance]);
+  }, [hasClockedIn, isSimulationAtVenue, isCurrentSessionClosed, nextShiftInfo, hasApprovedEmergencyLeave, clockOutWindow, todayAttendance]);
 
   // ─── TAHAP 2: DETEKSI & ALUR LEMBUR PASCA-SHIFT OTOMATIS (MAX 3 JAM) ───
   const checkPostShiftOvertime = () => {

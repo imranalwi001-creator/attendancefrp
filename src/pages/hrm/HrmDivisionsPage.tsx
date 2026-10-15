@@ -143,6 +143,18 @@ export const HrmDivisionsPage: React.FC = () => {
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [importDirectSave, setImportDirectSave] = useState(true);
 
+  // Simulation Venue (DIV-SIM) State
+  const [simDivision, setSimDivision] = useState<Division | null>(null);
+  const [simCountToday, setSimCountToday] = useState<number>(0);
+  const [simVenueName, setSimVenueName] = useState<string>('Venue Acara / Ruang Sosialisasi');
+  const [simAddress, setSimAddress] = useState<string>('Lokasi Presentasi & Sosialisasi PT FRP');
+  const [simLat, setSimLat] = useState<number>(-4.78236486);
+  const [simLng, setSimLng] = useState<number>(119.57192181);
+  const [simRadius, setSimRadius] = useState<number>(300);
+  const [isGettingSimGps, setIsGettingSimGps] = useState<boolean>(false);
+  const [isSavingSimVenue, setIsSavingSimVenue] = useState<boolean>(false);
+  const [isCleaningSimLogs, setIsCleaningSimLogs] = useState<boolean>(false);
+
   const getTargetEmployees = (divId: string = rosterSelectedDivId): EmployeeScheduleTarget[] => {
     const rawUsers = users.length > 0 ? users : hrmService.getUsers();
     const sortFn = (a: any, b: any) => {
@@ -692,9 +704,27 @@ export const HrmDivisionsPage: React.FC = () => {
     }
   };
 
+  const loadSimulationStatus = async () => {
+    try {
+      const data = await hrmService.getSimulationStatus();
+      setSimCountToday(data.countToday);
+      if (data.division) {
+        setSimDivision(data.division);
+        if (data.division.locationName) setSimVenueName(data.division.locationName);
+        if (data.division.address) setSimAddress(data.division.address);
+        if (typeof data.division.latitude === 'number') setSimLat(data.division.latitude);
+        if (typeof data.division.longitude === 'number') setSimLng(data.division.longitude);
+        if (data.division.radiusMeters) setSimRadius(data.division.radiusMeters);
+      }
+    } catch (e) {
+      console.warn('Gagal memuat status simulasi:', e);
+    }
+  };
+
   useEffect(() => {
     loadData();
     loadPosts();
+    loadSimulationStatus();
   }, []);
 
   // Update dynamic terminal barcode every second when terminal modal is open
@@ -957,9 +987,69 @@ export const HrmDivisionsPage: React.FC = () => {
     } catch (err: any) {
       console.error('[AddEmployeeToDivision Error]', err);
       toast.error(err?.message || 'Gagal menambahkan karyawan ke divisi.');
-    } finally {
       setIsAddingEmp(false);
     }
+  };
+
+  const handleGetSimGps = () => {
+    if (!navigator.geolocation) {
+      toast.error('Perangkat Anda tidak mendukung geolokasi GPS.');
+      return;
+    }
+    setIsGettingSimGps(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setSimLat(pos.coords.latitude);
+        setSimLng(pos.coords.longitude);
+        setIsGettingSimGps(false);
+        toast.success(`Koordinat GPS terkunci: ${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)} (Akurasi: ±${Math.round(pos.coords.accuracy)}m)`);
+      },
+      (err) => {
+        setIsGettingSimGps(false);
+        toast.error(`Gagal mengunci GPS: ${err.message}. Pastikan izin lokasi browser telah diizinkan.`);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  };
+
+  const handleSaveSimVenue = async () => {
+    setIsSavingSimVenue(true);
+    try {
+      await hrmService.updateSimulationVenue({
+        latitude: simLat,
+        longitude: simLng,
+        radiusMeters: simRadius,
+        locationName: simVenueName,
+        address: simAddress,
+      });
+      loadData();
+      loadSimulationStatus();
+      toast.success('Titik venue presentasi berhasil disimpan! Seluruh karyawan sekarang dapat langsung mencoba absensi di lokasi ini.');
+    } catch (err: any) {
+      toast.error('Gagal menyimpan titik venue: ' + err.message);
+    } finally {
+      setIsSavingSimVenue(false);
+    }
+  };
+
+  const handleCleanSimLogs = async () => {
+    toast.warning('Bersihkan seluruh rekaman presensi simulasi dari database? Rekap kehadiran kerja asli tidak akan terhapus.', {
+      action: {
+        label: 'Bersihkan',
+        onClick: async () => {
+          setIsCleaningSimLogs(true);
+          try {
+            const res = await hrmService.cleanSimulationLogs();
+            loadSimulationStatus();
+            toast.success(res.message || 'Log presensi simulasi berhasil dibersihkan.');
+          } catch (err: any) {
+            toast.error('Gagal membersihkan log: ' + err.message);
+          } finally {
+            setIsCleaningSimLogs(false);
+          }
+        },
+      },
+    });
   };
 
   return (
@@ -999,6 +1089,147 @@ export const HrmDivisionsPage: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/* 🎯 Sesi Simulasi Sosialisasi (DIV-SIM) Card */}
+      <Card className="border-emerald-500/30 bg-gradient-to-r from-emerald-950/20 via-background to-teal-950/20 rounded-2xl shadow-sm overflow-hidden">
+        <div className="p-5 sm:p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-base font-bold text-foreground">
+                    🎯 Mode Simulasi Sesi Sosialisasi & Presentasi (DIV-SIM)
+                  </h3>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Bebas Jadwal 24 Jam Penuh
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Titik koordinat khusus ruang presentasi agar seluruh karyawan dapat langsung mencoba absensi wajah & lokasi secara serentak tanpa batasan jadwal shift.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCleanSimLogs}
+                disabled={isCleaningSimLogs}
+                className="h-8 text-xs border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 rounded-lg gap-1.5"
+                title="Hapus data presensi coba-coba karyawan saat presentasi"
+              >
+                {isCleaningSimLogs ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5" />
+                )}
+                <span>Bersihkan Log Simulasi ({simCountToday})</span>
+              </Button>
+            </div>
+          </div>
+
+          {/* Quick Input Bar */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-2 border-t border-border/40">
+            <div className="space-y-1 lg:col-span-2">
+              <label className="text-[11px] font-medium text-muted-foreground flex items-center gap-1">
+                <MapPin className="w-3 h-3 text-emerald-400" />
+                Nama Venue / Ruang Acara
+              </label>
+              <input
+                type="text"
+                value={simVenueName}
+                onChange={(e) => setSimVenueName(e.target.value)}
+                placeholder="Contoh: Aula Pertemuan Lt. 2 PT FRP"
+                className="w-full h-8 px-2.5 text-xs bg-muted/40 border border-border rounded-lg text-foreground focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-muted-foreground">
+                Latitude
+              </label>
+              <input
+                type="number"
+                step="any"
+                value={simLat}
+                onChange={(e) => setSimLat(parseFloat(e.target.value) || 0)}
+                placeholder="-4.782365"
+                className="w-full h-8 px-2.5 text-xs bg-muted/40 border border-border rounded-lg text-foreground font-mono focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-muted-foreground">
+                Longitude
+              </label>
+              <input
+                type="number"
+                step="any"
+                value={simLng}
+                onChange={(e) => setSimLng(parseFloat(e.target.value) || 0)}
+                placeholder="119.571922"
+                className="w-full h-8 px-2.5 text-xs bg-muted/40 border border-border rounded-lg text-foreground font-mono focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-muted-foreground">
+                Radius (Meter)
+              </label>
+              <input
+                type="number"
+                value={simRadius}
+                onChange={(e) => setSimRadius(parseInt(e.target.value, 10) || 100)}
+                placeholder="300"
+                className="w-full h-8 px-2.5 text-xs bg-muted/40 border border-border rounded-lg text-foreground font-mono focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+            <span className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              Radius <strong>{simRadius}m</strong> mencakup seluruh ruangan & lobi gedung acara.
+            </span>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleGetSimGps}
+                disabled={isGettingSimGps}
+                className="h-8 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 rounded-lg gap-1.5 font-medium"
+              >
+                {isGettingSimGps ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Crosshair className="w-3.5 h-3.5" />
+                )}
+                <span>Gunakan Koordinat GPS Saya Saat Ini</span>
+              </Button>
+
+              <Button
+                size="sm"
+                onClick={handleSaveSimVenue}
+                disabled={isSavingSimVenue}
+                className="h-8 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg shadow-sm gap-1.5"
+              >
+                {isSavingSimVenue ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>Simpan Titik Venue Acara</span>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Card>
 
       {/* Division Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">

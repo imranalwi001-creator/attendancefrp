@@ -226,6 +226,18 @@ const DEFAULT_DIVISIONS: Division[] = [
     longitude: 106.8250,
     radiusMeters: 200,
   },
+  {
+    id: 'div-sim',
+    code: 'DIV-SIM',
+    name: 'Divisi Uji Coba & Simulasi Sosialisasi',
+    description: 'Divisi khusus sesi presentasi dan simulasi presensi wajah & lokasi karyawan tanpa batasan jadwal',
+    leaderName: 'Tim Fasilitator HRD',
+    locationName: 'Venue Acara / Ruang Sosialisasi',
+    address: 'Lokasi Presentasi & Sosialisasi PT FRP',
+    latitude: -4.78236486,
+    longitude: 119.57192181,
+    radiusMeters: 300,
+  },
 ];
 
 const DEFAULT_SHIFTS: Shift[] = [
@@ -244,6 +256,22 @@ const DEFAULT_SHIFTS: Shift[] = [
     colorTag: '#0d9488',
     description: 'Hari Senin s/d Jumat : Pukul 07.30 - 16.30 WITA',
     isDefault: true,
+  },
+  {
+    id: 'shift-simulation',
+    code: 'SIM',
+    name: 'Shift Simulasi & Bebas Jadwal (24 Jam)',
+    startTime: '00:00',
+    endTime: '23:59',
+    breakStartTime: '12:00',
+    breakEndTime: '13:00',
+    lateToleranceMinutes: 1440,
+    earliestClockInMinutes: 1440,
+    isCrossDay: false,
+    workingDays: [0, 1, 2, 3, 4, 5, 6],
+    colorTag: '#10b981',
+    description: 'Shift khusus simulasi terbuka 24 jam penuh tanpa batasan jendela waktu',
+    isDefault: false,
   },
   {
     id: 'shift-morning',
@@ -1459,6 +1487,72 @@ export const hrmService = {
       console.warn('[HRM] Error fetching live divisions from backend:', e);
     }
     return hrmService.getDivisions();
+  },
+
+  getSimulationStatus: async (): Promise<{ division: Division | null; countToday: number }> => {
+    try {
+      const res = await api.get<{ success: boolean; data: any }>('/simulation/status');
+      if (res && res.success && res.data) {
+        return {
+          division: res.data.division,
+          countToday: res.data.simulationAttendanceCountToday || 0,
+        };
+      }
+    } catch (e) {
+      console.warn('[HRM] Error fetching simulation status:', e);
+    }
+    const all = hrmService.getDivisions();
+    const sim = all.find((d) => d.code === 'DIV-SIM' || d.id === 'div-sim') || null;
+    return { division: sim, countToday: 0 };
+  },
+
+  updateSimulationVenue: async (params: {
+    latitude: number;
+    longitude: number;
+    radiusMeters?: number;
+    locationName?: string;
+    address?: string;
+  }): Promise<Division | null> => {
+    try {
+      const res = await api.post<{ success: boolean; data: any; message?: string }>('/simulation/venue', params);
+      if (res && res.success && res.data) {
+        await hrmService.fetchDivisions();
+        return res.data;
+      }
+    } catch (e) {
+      console.warn('[HRM] Error updating simulation venue:', e);
+    }
+    // Local fallback
+    const divs = hrmService.getDivisions();
+    const simIdx = divs.findIndex((d) => d.code === 'DIV-SIM' || d.id === 'div-sim');
+    const updated: Division = {
+      id: simIdx !== -1 ? divs[simIdx].id : 'div-sim',
+      code: 'DIV-SIM',
+      name: 'Divisi Uji Coba & Simulasi Sosialisasi',
+      description: 'Divisi khusus sesi presentasi dan simulasi presensi wajah & lokasi karyawan tanpa batasan jadwal',
+      locationName: params.locationName || 'Venue Acara / Ruang Sosialisasi',
+      address: params.address || 'Lokasi Presentasi & Sosialisasi PT FRP',
+      latitude: params.latitude,
+      longitude: params.longitude,
+      radiusMeters: params.radiusMeters || 300,
+    };
+    if (simIdx !== -1) divs[simIdx] = updated;
+    else divs.push(updated);
+    localStorage.setItem(STORAGE_KEYS.DIVISIONS, JSON.stringify(divs));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+    return updated;
+  },
+
+  cleanSimulationLogs: async (): Promise<{ success: boolean; deletedCount: number; message?: string }> => {
+    try {
+      const res = await api.post<{ success: boolean; deletedCount: number; message?: string }>('/simulation/clean-logs');
+      if (res && res.success) {
+        return res;
+      }
+    } catch (e) {
+      console.warn('[HRM] Error cleaning simulation logs:', e);
+    }
+    return { success: true, deletedCount: 0, message: 'Log presensi simulasi dibersihkan' };
   },
 
   getDivisionLocation: (divisionId?: string): {

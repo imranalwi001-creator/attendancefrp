@@ -1462,8 +1462,38 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
     const isExempt = isExemptFieldOfficer(userProfile);
 
+    // Cek apakah presensi dilakukan dalam konteks Simulasi Sosialisasi (DIV-SIM)
+    let isSimulationSession = false;
+    let simDivision = null;
+    try {
+      const simDivRes = await pool.query(`SELECT * FROM hrm_divisions WHERE code = 'DIV-SIM' LIMIT 1`);
+      if (simDivRes.rows.length > 0) {
+        simDivision = simDivRes.rows[0];
+        const isUserInSimDiv = userProfile && (userProfile.division_id === simDivision.id || userProfile.division_code === 'DIV-SIM');
+        let isWithinSimRadius = false;
+        if (latitude && longitude && simDivision.latitude && simDivision.longitude) {
+          const distToSim = calculateHaversineMeters(
+            parseFloat(latitude),
+            parseFloat(longitude),
+            parseFloat(simDivision.latitude),
+            parseFloat(simDivision.longitude)
+          );
+          const allowedRad = (parseFloat(simDivision.radius_meters) || 300) + 50; // buffer 50m ekstra
+          if (distToSim <= allowedRad) {
+            isWithinSimRadius = true;
+          }
+        }
+        if (isUserInSimDiv || isWithinSimRadius) {
+          isSimulationSession = true;
+        }
+      }
+    } catch (simErr) {
+      console.warn('[SimulationCheck] Warning:', simErr.message);
+    }
+
     // Validasi Jam Kerja Shift Karyawan (Server-side Shift Window Guard)
-    if (!isExempt && userProfile) {
+    // Sesi simulasi / sosialisasi otomatis diizinkan bebas jadwal 24 jam penuh!
+    if (!isExempt && !isSimulationSession && userProfile) {
       const otRes = await pool.query(
         `SELECT id FROM hrm_overtime_records WHERE user_id = $1 AND date = $2 AND status = 'approved' LIMIT 1`,
         [userId, date]
@@ -1597,7 +1627,14 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     let isServerGeofenceValid = geofenceValid !== false;
     let locationName = 'Kantor Pusat';
 
-    if (latitude && longitude && userId) {
+    if (isSimulationSession && simDivision) {
+      const distToSim = (latitude && longitude && simDivision.latitude && simDivision.longitude)
+        ? Math.round(calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(simDivision.latitude), parseFloat(simDivision.longitude)))
+        : 0;
+      serverDistance = distToSim;
+      isServerGeofenceValid = true;
+      locationName = `${simDivision.location_name || 'Venue Simulasi Presentasi'} [DIV-SIM]`;
+    } else if (latitude && longitude && userId) {
       const fieldPosts = await pool.query(
         `SELECT * FROM hrm_field_assigned_posts 
          WHERE user_id = $1 AND is_active = true 
@@ -1820,10 +1857,16 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     }
 
     // Cek apakah karyawan masih memiliki presensi aktif yang belum clock-out
-    const openAttRes = await pool.query(
-      `SELECT * FROM hrm_attendances WHERE user_id = $1 AND clock_out IS NULL ORDER BY created_at DESC LIMIT 1`,
-      [validUserId]
-    );
+    // Pada sesi simulasi, prioritaskan pencarian rekaman simulasi yang belum clock-out
+    const openAttRes = isSimulationSession
+      ? await pool.query(
+          `SELECT * FROM hrm_attendances WHERE user_id = $1 AND clock_out IS NULL AND (is_simulation = true OR notes LIKE '%[SIMULASI%') ORDER BY created_at DESC LIMIT 1`,
+          [validUserId]
+        )
+      : await pool.query(
+          `SELECT * FROM hrm_attendances WHERE user_id = $1 AND clock_out IS NULL ORDER BY created_at DESC LIMIT 1`,
+          [validUserId]
+        );
 
     let result;
     const flagsJson = JSON.stringify(Array.isArray(detectedFlags) ? detectedFlags : []);
@@ -1832,12 +1875,16 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       result = openAttRes;
     } else {
       // Buat rekaman presensi baru (mendukung multi-shift berurutan: Shift 1 -> Shift 2 -> Shift 3)
+      const finalNotes = isSimulationSession
+        ? `[SIMULASI SOSIALISASI] ${notes || ''}`.trim()
+        : (notes || '');
+
       const query = `
         INSERT INTO hrm_attendances (
           user_id, attendance_date, clock_in, photo_in, lat_in, long_in, status, late_minutes, notes,
           biometric_score, biometric_match, geofence_distance_meters, geofence_valid, is_mock_location, security_flags,
-          shift_id, shift_name
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          shift_id, shift_name, is_simulation
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         RETURNING *;
       `;
       result = await pool.query(query, [
@@ -1848,8 +1895,8 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         latitude,
         longitude,
         status || 'hadir',
-        lateMinutes || 0,
-        notes || '',
+        isSimulationSession ? 0 : (lateMinutes || 0),
+        finalNotes,
         computedBiometricScore != null ? computedBiometricScore : null,
         computedBiometricMatch != null ? computedBiometricMatch : null,
         serverDistance != null ? serverDistance : geofenceDistance,
@@ -1857,7 +1904,8 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         isMockLocation === true,
         flagsJson,
         resolvedShiftId || null,
-        resolvedShiftName || null
+        resolvedShiftName || null,
+        Boolean(isSimulationSession)
       ]);
     }
     const insertedAttendance = result.rows[0];
@@ -3825,8 +3873,36 @@ app.post('/api/attendances/clock-out', async (req, res) => {
 
     const isExempt = isExemptFieldOfficer(userProfile);
 
-    // Validasi Jam Pulang Shift Karyawan (Server-side Clock-Out Enforcement - Berlaku untuk Seluruh Karyawan Termasuk 3 Petugas Lapangan)
-    if (userProfile) {
+    // Cek apakah clock-out berada dalam konteks Simulasi Sosialisasi (DIV-SIM)
+    let isSimulationSession = false;
+    let simDivision = null;
+    try {
+      const simDivRes = await pool.query(`SELECT * FROM hrm_divisions WHERE code = 'DIV-SIM' LIMIT 1`);
+      if (simDivRes.rows.length > 0) {
+        simDivision = simDivRes.rows[0];
+        const isUserInSimDiv = userProfile && (userProfile.division_id === simDivision.id || userProfile.division_code === 'DIV-SIM');
+        let isWithinSimRadius = false;
+        if (latitude && longitude && simDivision.latitude && simDivision.longitude) {
+          const distToSim = calculateHaversineMeters(
+            parseFloat(latitude),
+            parseFloat(longitude),
+            parseFloat(simDivision.latitude),
+            parseFloat(simDivision.longitude)
+          );
+          if (distToSim <= ((parseFloat(simDivision.radius_meters) || 300) + 50)) {
+            isWithinSimRadius = true;
+          }
+        }
+        if (isUserInSimDiv || isWithinSimRadius) {
+          isSimulationSession = true;
+        }
+      }
+    } catch (simErr) {
+      console.warn('[SimulationClockOut] Warning:', simErr.message);
+    }
+
+    // Validasi Jam Pulang Shift Karyawan: Lewati jika dalam sesi simulasi
+    if (userProfile && !isSimulationSession) {
       const leaveRes = await pool.query(
         `SELECT id FROM hrm_leave_requests WHERE user_id = $1 AND leave_type IN ('emergency_leave', 'izin_darurat') AND status = 'approved' AND $2 BETWEEN start_date AND end_date LIMIT 1`,
         [userId, date]
@@ -3907,7 +3983,12 @@ app.post('/api/attendances/clock-out', async (req, res) => {
       }
     }
 
-    if (latitude && longitude && userId) {
+    if (isSimulationSession && simDivision) {
+      serverDistance = (latitude && longitude && simDivision.latitude && simDivision.longitude)
+        ? Math.round(calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(simDivision.latitude), parseFloat(simDivision.longitude)))
+        : 0;
+      isServerGeofenceValid = true;
+    } else if (latitude && longitude && userId) {
       const fieldPosts = await pool.query(
         `SELECT * FROM hrm_field_assigned_posts 
          WHERE user_id = $1 AND is_active = true 
@@ -5263,6 +5344,85 @@ app.delete('/api/divisions/:id', async (req, res) => {
     res.json({ success: true, message: 'Divisi berhasil dihapus dari database' });
   } catch (err) {
     console.error('Delete division error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── 5B. SIMULATION & SOSIALISASI VENUE ENDPOINTS ──────────────────────────────────
+app.get('/api/simulation/status', async (req, res) => {
+  try {
+    const divRes = await pool.query(`SELECT * FROM hrm_divisions WHERE code = 'DIV-SIM' LIMIT 1`);
+    const div = divRes.rows[0] || null;
+    
+    // Hitung log presensi simulasi yang tercatat hari ini
+    const countRes = await pool.query(
+      `SELECT COUNT(*) FROM hrm_attendances 
+       WHERE (is_simulation = true OR notes LIKE '%[SIMULASI%') 
+         AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date`
+    );
+    const count = parseInt(countRes.rows[0]?.count || 0, 10);
+
+    res.json({
+      success: true,
+      data: {
+        division: div ? formatDivisionRow(div) : null,
+        simulationAttendanceCountToday: count,
+        isActive: Boolean(div)
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/simulation/venue', async (req, res) => {
+  const { latitude, longitude, radiusMeters, locationName, address } = req.body;
+  try {
+    const lat = latitude !== undefined ? parseFloat(latitude) : -4.78236486;
+    const lng = longitude !== undefined ? parseFloat(longitude) : 119.57192181;
+    const rad = radiusMeters !== undefined ? parseInt(radiusMeters, 10) : 300;
+    const locName = locationName || 'Venue Acara / Ruang Sosialisasi';
+    const addr = address || 'Lokasi Presentasi & Sosialisasi PT FRP';
+
+    const query = `
+      INSERT INTO hrm_divisions (
+        code, name, description, location_name, address, latitude, longitude, radius_meters
+      ) VALUES ('DIV-SIM', 'Divisi Uji Coba & Simulasi Sosialisasi', 'Divisi khusus sesi presentasi dan simulasi presensi wajah & lokasi karyawan tanpa batasan jadwal', $1, $2, $3, $4, $5)
+      ON CONFLICT (code) DO UPDATE SET
+        location_name = EXCLUDED.location_name,
+        address = EXCLUDED.address,
+        latitude = EXCLUDED.latitude,
+        longitude = EXCLUDED.longitude,
+        radius_meters = EXCLUDED.radius_meters,
+        updated_at = NOW()
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [locName, addr, lat, lng, rad]);
+    res.json({
+      success: true,
+      message: 'Titik koordinat venue simulasi berhasil diperbarui!',
+      data: formatDivisionRow(result.rows[0])
+    });
+  } catch (err) {
+    console.error('Update simulation venue error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/simulation/clean-logs', async (req, res) => {
+  try {
+    const delRes = await pool.query(
+      `DELETE FROM hrm_attendances 
+       WHERE is_simulation = true OR notes LIKE '%[SIMULASI%'
+       RETURNING id;`
+    );
+    res.json({
+      success: true,
+      deletedCount: delRes.rowCount,
+      message: `${delRes.rowCount} rekaman presensi simulasi berhasil dibersihkan dari database!`
+    });
+  } catch (err) {
+    console.error('Clean simulation logs error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
