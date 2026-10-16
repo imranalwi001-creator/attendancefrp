@@ -1493,6 +1493,9 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
     // Validasi Jam Kerja Shift Karyawan (Server-side Shift Window Guard)
     // Sesi simulasi / sosialisasi otomatis diizinkan bebas jadwal 24 jam penuh!
+    let activeShiftId = null;
+    let activeShiftName = null;
+
     if (!isExempt && !isSimulationSession && userProfile) {
       const otRes = await pool.query(
         `SELECT id FROM hrm_overtime_records WHERE user_id = $1 AND date = $2 AND status = 'approved' LIMIT 1`,
@@ -1509,38 +1512,77 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
       const hasApprovedException = (otRes.rows.length > 0) || (subRes.rows.length > 0) || (swapRes.rows.length > 0);
 
+      // Guard Dobel Shift / Shift Lanjutan: Jika karyawan sudah menyelesaikan shift hari ini,
+      // mereka WAJIB memiliki pengajuan Lembur (SPKL) atau Tugas Pengganti (Relief Duty) yang sudah disetujui (Approved),
+      // KECUALI jika karyawan menggunakan fitur Mode Absen Tugas Darurat Mandiri (isEmergencyOverride = true)
+      const isEmergencyOverride = req.body.isEmergencyOverride === true || req.body.isEmergencyOverride === 'true';
+      const cleanEmergencyReason = (req.body.emergencyReason || req.body.emergencyOvertimeReason || notes || '').trim();
+
+      const completedAttCheck = await pool.query(
+        `SELECT id, shift_name, clock_in, clock_out FROM hrm_attendances 
+         WHERE user_id = $1 AND attendance_date = $2 AND clock_out IS NOT NULL 
+         ORDER BY created_at DESC LIMIT 1`,
+        [validUserId, date]
+      ).catch(() => ({ rows: [] }));
+
+      if (completedAttCheck.rows.length > 0 && !hasApprovedException && !isEmergencyOverride && !isExempt && !isSimulationSession) {
+        const prevShift = completedAttCheck.rows[0].shift_name || 'Shift sebelumnya';
+        const outTime = (completedAttCheck.rows[0].clock_out || '').substring(0, 5);
+        return res.status(403).json({
+          success: false,
+          error: `Presensi Shift Tambahan Ditolak: Anda telah menyelesaikan tugas (${prevShift}, pulang pk ${outTime} WITA) hari ini. Untuk melanjutkan ke shift berikutnya, wajib memiliki persetujuan SPKL Lembur / Relief Duty, atau gunakan opsi '🚨 Absen Tugas Darurat Mandiri'.`,
+          code: 'REQUIRES_APPROVED_OVERTIME_OR_SUBSTITUTE',
+          canEmergencyOverride: true
+        });
+      }
+
       if (!hasApprovedException) {
-        let activeShiftId = userProfile.shift_id;
-        if (!activeShiftId || !UUID_REGEX.test(activeShiftId)) {
-          activeShiftId = await resolveShiftId(userProfile.shift_id);
-        }
-
-        if (!activeShiftId) {
-          return res.status(400).json({
-            success: false,
-            error: 'Presensi Masuk Ditolak: Akun Anda belum memiliki penugasan shift kerja. Silakan hubungi HRD atau Administrator.',
-          });
-        }
-
+        // Prioritas 1: Periksa Roster Jadwal Kerja harian (hrm_employee_schedules) hari ini
         let shiftStartTime = '07:30';
         let shiftEndTime = '16:30';
         let isCrossDay = false;
 
-        const shiftRes = await pool.query(
-          `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
-          [activeShiftId]
-        );
-        if (shiftRes.rows.length === 0) {
-          return res.status(400).json({
-            success: false,
-            error: 'Presensi Masuk Ditolak: Data shift kerja Anda tidak ditemukan di sistem database.',
-          });
-        }
+        const schedRes = await pool.query(
+          `SELECT es.*, s.is_cross_day as shift_is_cross_day, s.id as master_shift_id, s.name as master_shift_name
+           FROM hrm_employee_schedules es
+           LEFT JOIN hrm_shifts s ON es.shift_id = s.id OR s.code = es.shift_code
+           WHERE es.user_id = $1 AND es.schedule_date = $2::date
+           LIMIT 1`,
+          [validUserId, date]
+        ).catch(() => ({ rows: [] }));
 
-        const sh = shiftRes.rows[0];
-        shiftStartTime = sh.start_time ? sh.start_time.substring(0, 5) : '07:30';
-        shiftEndTime = sh.end_time ? sh.end_time.substring(0, 5) : '16:30';
-        isCrossDay = Boolean(sh.is_cross_day);
+        if (schedRes.rows.length > 0 && !schedRes.rows[0].is_off) {
+          const es = schedRes.rows[0];
+          shiftStartTime = es.start_time ? es.start_time.substring(0, 5) : '07:30';
+          shiftEndTime = es.end_time ? es.end_time.substring(0, 5) : '16:30';
+          isCrossDay = Boolean(es.is_night_shift || es.shift_is_cross_day);
+          activeShiftName = es.shift_name || es.master_shift_name || `Shift ${es.shift_code}`;
+          activeShiftId = (es.shift_id && UUID_REGEX.test(es.shift_id)) ? es.shift_id : (es.master_shift_id || null);
+        } else {
+          // Prioritas 2: Periksa target shiftId dari request body (misal transisi antar-shift / lembur shift selanjutnya)
+          let targetShiftId = (req.body.shiftId && UUID_REGEX.test(req.body.shiftId)) ? req.body.shiftId : null;
+          if (!targetShiftId && userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) {
+            targetShiftId = userProfile.shift_id;
+          }
+          if (!targetShiftId) {
+            targetShiftId = await resolveShiftId(userProfile.shift_id);
+          }
+
+          if (targetShiftId) {
+            const shiftRes = await pool.query(
+              `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
+              [targetShiftId]
+            ).catch(() => ({ rows: [] }));
+            if (shiftRes.rows.length > 0) {
+              const sh = shiftRes.rows[0];
+              shiftStartTime = sh.start_time ? sh.start_time.substring(0, 5) : '07:30';
+              shiftEndTime = sh.end_time ? sh.end_time.substring(0, 5) : '16:30';
+              isCrossDay = Boolean(sh.is_cross_day);
+              activeShiftName = sh.name;
+              activeShiftId = targetShiftId;
+            }
+          }
+        }
 
         const [sH, sM] = shiftStartTime.split(':').map(Number);
         const [eH, eM] = shiftEndTime.split(':').map(Number);
@@ -1557,7 +1599,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
           nowMins = witaDate.getUTCHours() * 60 + witaDate.getUTCMinutes();
         }
 
-        // Window dibuka 120 menit (2 jam) sebelum jam masuk
+        // Window dibuka 120 menit (2 jam) sebelum jam masuk resmi shift
         const openMins = (startMins - 120 + 1440) % 1440;
         let isShiftOpen = false;
 
@@ -1573,12 +1615,17 @@ app.post('/api/attendances/clock-in', async (req, res) => {
           }
         }
 
-        if (!isShiftOpen) {
+        // Toleransi khusus jika karyawan melakukan presensi tugas darurat / on-call di hari libur atau di luar jam shift
+        const isEmergencyOnCall = (notes && (notes.includes('On-Call') || notes.includes('Darurat'))) ||
+                                  (req.body.isEmergencyOvertime === true || req.body.isEmergencyOvertime === 'true') ||
+                                  isEmergencyOverride;
+
+        if (!isShiftOpen && !isEmergencyOnCall) {
           const openH = Math.floor(openMins / 60).toString().padStart(2, '0');
           const openM = (openMins % 60).toString().padStart(2, '0');
           return res.status(403).json({
             success: false,
-            error: `Presensi Masuk Ditolak: Jam saat ini (${time || 'sekarang'} WITA) berada di luar jendela shift kerja resmi (${shiftStartTime} - ${shiftEndTime} WITA). Presensi dibuka mulai pk ${openH}:${openM} WITA.`,
+            error: `Presensi Masuk Ditolak: Jam saat ini (${time || 'sekarang'} WITA) berada di luar jendela shift kerja resmi (${activeShiftName || 'Shift'}: ${shiftStartTime} - ${shiftEndTime} WITA). Presensi dibuka mulai pk ${openH}:${openM} WITA.`,
             code: 'OUTSIDE_SHIFT_WINDOW'
           });
         }
@@ -1859,6 +1906,9 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
     if (shiftId && UUID_REGEX.test(shiftId)) {
       resolvedShiftId = shiftId;
+    } else if (activeShiftId && UUID_REGEX.test(activeShiftId)) {
+      resolvedShiftId = activeShiftId;
+      if (!resolvedShiftName) resolvedShiftName = activeShiftName;
     } else if (userProfile && userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) {
       resolvedShiftId = userProfile.shift_id;
       if (!resolvedShiftName) resolvedShiftName = userProfile.shift_name;
@@ -1926,6 +1976,63 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       ]);
     }
     const insertedAttendance = result.rows[0];
+
+    // ─── PENANGANAN KHUSUS ABSEN TUGAS DARURAT MANDIRI (REKOMENDASI 3) ───
+    if (isEmergencyOverride && insertedAttendance?.id) {
+      await pool.query(
+        `UPDATE hrm_attendances SET
+           is_emergency_overtime = true,
+           emergency_overtime_reason = $1,
+           emergency_overtime_status = 'pending_verification'
+         WHERE id = $2`,
+        [cleanEmergencyReason || 'Tugas operasional darurat mandiri (Kompensasi menunggu verifikasi atasan)', insertedAttendance.id]
+      ).catch(() => {});
+
+      // Buat tiket lembur berstatus pending di hrm_overtime_records
+      await pool.query(
+        `INSERT INTO hrm_overtime_records (
+           user_id, date, start_time, end_time, duration_hours, requested_hours, approved_hours,
+           task_description, is_emergency, source, status, overtime_phase, emergency_reported_at, approval_notes
+         ) VALUES (
+           $1, $2::date, $3, '23:59', 0, 0, 0,
+           $4, true, 'emergency_override_clockin', 'pending', 'requested', NOW(),
+           'Absen Masuk Tugas Darurat Mandiri (Kompensasi terkunci, wajib diverifikasi atasan di Dashboard)'
+         )`,
+        [
+          validUserId,
+          date,
+          time || '15:30',
+          cleanEmergencyReason || 'Tugas operasional darurat mandiri'
+        ]
+      ).catch(e => console.warn('[Emergency OT Record Insert]:', e.message));
+
+      // Kirim WhatsApp alert seketika ke Pimpinan & Korlap
+      const empName = userProfile?.full_name || 'Karyawan';
+      const empNip = userProfile?.nip || '-';
+      const posName = locationName || 'Pos Lapangan';
+      const targetShift = resolvedShiftName || 'Shift Tambahan';
+
+      const waMsg = `🚨 *NOTIFIKASI ABSEN MASUK TUGAS DARURAT MANDIRI*\n\n` +
+        `👤 *Karyawan:* ${empName} (NIP: ${empNip})\n` +
+        `🏢 *Divisi:* ${userProfile?.division_name || 'Operasional'}\n` +
+        `📍 *Pos Presensi:* ${posName}\n` +
+        `⏱️ *Jam Masuk:* ${time || '-'} WITA\n` +
+        `⚡ *Shift:* ${targetShift}\n` +
+        `📝 *Alasan Lapangan:* _"${cleanEmergencyReason || 'Tugas darurat mendadak lapangan'}"_\n` +
+        `📸 *Bukti Forensik:* Selfie Presensi Ber-Watermark GPS Tersimpan\n` +
+        `⏳ *Status Kompensasi:* TERKUNCI (Menunggu verifikasi Korlap / Admin di Dashboard).`;
+
+      alertLeadershipViaWhatsAppAndSystem({
+        title: 'Notifikasi Absen Masuk Tugas Darurat',
+        message: `${empName} absen tugas darurat mandiri di ${posName} (${targetShift})`,
+        waMessage: waMsg,
+        metadata: {
+          type: 'emergency_override_clockin',
+          attendanceId: insertedAttendance.id,
+          userId: validUserId
+        }
+      }).catch(err => console.error('[Emergency Override Alert Error]:', err.message));
+    }
 
     // Ephemeral Rolling Photo Replacement: Foto check-in yang lalu otomatis dihapus dan digantikan hanya dengan foto check-in terbaru
     if (photo && validUserId && insertedAttendance?.id) {
@@ -4221,17 +4328,53 @@ app.post('/api/attendances/clock-out', async (req, res) => {
         let shiftEndTime = '16:30';
         let isCrossDay = false;
 
-        const validProfileShiftId = (userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) ? userProfile.shift_id : null;
-        if (validProfileShiftId) {
-          const shiftRes = await pool.query(
-            `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
-            [validProfileShiftId]
-          );
-          if (shiftRes.rows.length > 0) {
-            const sh = shiftRes.rows[0];
-            shiftStartTime = sh.start_time ? sh.start_time.substring(0, 5) : '07:30';
-            shiftEndTime = sh.end_time ? sh.end_time.substring(0, 5) : '16:30';
-            isCrossDay = Boolean(sh.is_cross_day);
+        // Prioritas 1: Ambil jam shift resmi dari rekaman presensi masuk aktif yang sedang ditutup (Shift 1, 2, 3, atau Day)
+        const openAttForShift = await pool.query(
+          `SELECT a.shift_id, a.shift_name, a.clock_in, s.start_time, s.end_time, s.is_cross_day
+           FROM hrm_attendances a
+           LEFT JOIN hrm_shifts s ON a.shift_id = s.id
+           WHERE a.user_id = $1 AND (a.attendance_date = $2 OR a.attendance_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '1 day')
+             AND a.clock_out IS NULL
+           ORDER BY a.created_at DESC
+           LIMIT 1`,
+          [validUserId, date]
+        ).catch(() => ({ rows: [] }));
+
+        if (openAttForShift.rows.length > 0 && openAttForShift.rows[0].start_time) {
+          const row = openAttForShift.rows[0];
+          shiftStartTime = row.start_time.substring(0, 5);
+          shiftEndTime = row.end_time.substring(0, 5);
+          isCrossDay = Boolean(row.is_cross_day);
+        } else {
+          // Prioritas 2: Periksa Roster Jadwal Harian (hrm_employee_schedules)
+          const schedRes = await pool.query(
+            `SELECT es.*, s.is_cross_day as shift_is_cross_day FROM hrm_employee_schedules es
+             LEFT JOIN hrm_shifts s ON es.shift_id = s.id OR s.code = es.shift_code
+             WHERE es.user_id = $1 AND (es.schedule_date = $2::date OR es.schedule_date = ($2::date - INTERVAL '1 day'))
+             ORDER BY es.schedule_date DESC LIMIT 1`,
+            [validUserId, date]
+          ).catch(() => ({ rows: [] }));
+
+          if (schedRes.rows.length > 0 && schedRes.rows[0].start_time) {
+            const es = schedRes.rows[0];
+            shiftStartTime = es.start_time.substring(0, 5);
+            shiftEndTime = es.end_time.substring(0, 5);
+            isCrossDay = Boolean(es.is_night_shift || es.shift_is_cross_day);
+          } else {
+            // Prioritas 3: Fallback ke profil shift resmi
+            const validProfileShiftId = (userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) ? userProfile.shift_id : null;
+            if (validProfileShiftId) {
+              const shiftRes = await pool.query(
+                `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
+                [validProfileShiftId]
+              ).catch(() => ({ rows: [] }));
+              if (shiftRes.rows.length > 0) {
+                const sh = shiftRes.rows[0];
+                shiftStartTime = sh.start_time ? sh.start_time.substring(0, 5) : '07:30';
+                shiftEndTime = sh.end_time ? sh.end_time.substring(0, 5) : '16:30';
+                isCrossDay = Boolean(sh.is_cross_day);
+              }
+            }
           }
         }
 

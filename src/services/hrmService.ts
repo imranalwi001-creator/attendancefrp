@@ -3056,6 +3056,8 @@ export const hrmService = {
     isMockLocation?: boolean;
     shiftId?: string;
     shiftName?: string;
+    isEmergencyOverride?: boolean;
+    emergencyReason?: string;
   }): Promise<AttendanceRecord> => {
     const today = getTodayDateStr();
     const existing = hrmService.getUserTodayAttendance(data.userId);
@@ -3258,6 +3260,8 @@ export const hrmService = {
         return undefined;
       })(),
       shiftName: data.shiftName || (data as any).shiftName || activeShiftName,
+      isEmergencyOverride: Boolean(data.isEmergencyOverride),
+      emergencyReason: data.emergencyReason,
     };
 
     try {
@@ -3479,6 +3483,8 @@ export const hrmService = {
     emergencyOvertimeReason?: string;
     shiftId?: string;
     shiftName?: string;
+    isEmergencyOverride?: boolean;
+    emergencyReason?: string;
   }): Promise<AttendanceRecord> => {
     const today = data.date || getTodayDateStr();
     const existing = hrmService.getUserTodayAttendance(data.userId);
@@ -3536,6 +3542,8 @@ export const hrmService = {
       geofenceValid: true,
       shiftId: data.shiftId,
       shiftName: data.shiftName,
+      isEmergencyOverride: data.isEmergencyOverride,
+      emergencyReason: data.emergencyReason,
     });
   },
 

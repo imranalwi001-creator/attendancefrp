@@ -252,6 +252,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     emergencyOvertimeReason: string;
   } | null>(null);
 
+  // ─── EMERGENCY OVERRIDE CLOCK-IN STATES (REKOMENDASI 3: ABSEN TUGAS DARURAT MANDIRI) ───
+  const [emergencyOverrideModalOpen, setEmergencyOverrideModalOpen] = useState<boolean>(false);
+  const [emergencyOverrideCategory, setEmergencyOverrideCategory] = useState<string>('Panggilan Tugas Darurat Mendadak');
+  const [emergencyOverrideDetails, setEmergencyOverrideDetails] = useState<string>('');
+  const [emergencyOverridePayload, setEmergencyOverridePayload] = useState<{
+    isEmergencyOverride: boolean;
+    emergencyReason: string;
+  } | null>(null);
+
   // Active relief post for logged-in user
   const activeReliefPost = useMemo(() => {
     return bankPosts.find((p) => p.isRelief === true);
@@ -1852,22 +1861,26 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   }, [attendancesHistory, user, todayAttendance, userLeaves, userOvertimeList, currentMonthStr]);
 
   // Start Camera Stream (Fullscreen View)
-  const openLiveCamera = async (type: 'clock_in' | 'clock_out' | 'emergency_on_call' | 'emergency_on_call_out') => {
+  const openLiveCamera = async (
+    type: 'clock_in' | 'clock_out' | 'emergency_on_call' | 'emergency_on_call_out',
+    options?: { isEmergencyOverride?: boolean }
+  ) => {
     // Pastikan getaran darurat dihentikan seketika saat kamera dibuka
     isAlarmSilencedRef.current = true;
     emergencyAlertService.stopEmergencyAlert();
 
     const isSpecialMobile = isMobileOnlineOfficer(user);
     const isOnCallAction = type === 'emergency_on_call' || type === 'emergency_on_call_out';
+    const isOverrideActive = Boolean(options?.isEmergencyOverride || emergencyOverridePayload?.isEmergencyOverride);
 
     // Validasi Ketat Jadwal Shift & Geofence sebelum buka kamera
     if (!isSpotCheckAction && !isSpecialMobile && !isOnCallAction) {
       if (type === 'clock_in') {
-        if (!isClockInAllowed) {
+        if (!isClockInAllowed && !isOverrideActive) {
           toast.error(clockInDisabledReason || 'Presensi Masuk belum dibuka untuk jadwal shift Anda.');
           return;
         }
-        if (locationStatus === 'outside') {
+        if (locationStatus === 'outside' && !isOverrideActive) {
           toast.error('Presensi Masuk diblokir! Anda berada di luar radius kantor/pos tugas.');
           return;
         }
@@ -2192,6 +2205,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       ? `PT FAWWAZ RESKI PERWIRA • MOBILE INVENTORY WFA • SKOR: ${matchScore || 98}%`
       : emergencyOvertimePayload?.isEmergencyOvertime
       ? `PT FAWWAZ RESKI PERWIRA • LEMBUR DARURAT (+${emergencyOvertimePayload.emergencyOvertimeHours}J) • SKOR: ${matchScore || 98}%`
+      : emergencyOverridePayload?.isEmergencyOverride
+      ? `PT FAWWAZ RESKI PERWIRA • MASUK TUGAS DARURAT • SKOR: ${matchScore || 98}%`
       : `PT FAWWAZ RESKI PERWIRA • ${actionType === 'clock_in' ? 'PRESENSI MASUK' : 'PRESENSI PULANG'} • SKOR: ${matchScore || 98}%`;
     ctx.fillText(headerTitle, badgeX + badgePadX, badgeY + Math.round(24 * scale));
     ctx.restore();
@@ -2239,6 +2254,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       ctx.font = `bold ${Math.round(14.5 * scale)}px system-ui, -apple-system, sans-serif`;
       ctx.fillStyle = '#f87171'; // Red / Rose bright
       ctx.fillText(`🚨 LEMBUR DARURAT: +${emergencyOvertimePayload.emergencyOvertimeHours} JAM (CAP 3 JAM)`, paddingX, startY);
+    } else if (emergencyOverridePayload?.isEmergencyOverride) {
+      ctx.font = `bold ${Math.round(14.5 * scale)}px system-ui, -apple-system, sans-serif`;
+      ctx.fillStyle = '#f59e0b'; // Amber bright
+      ctx.fillText(`⚡ ABSEN MASUK TUGAS DARURAT MANDIRI (UNSCHEDULED)`, paddingX, startY);
     } else {
       const cleanShiftName = userShift?.name || 'Day Shift';
       const shiftHoursStr = `${userShift?.startTime || '07:30'} - ${userShift?.endTime || '16:30'} WITA`;
@@ -2641,12 +2660,17 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           emergencyOvertimeHours: emergencyOvertimePayload.emergencyOvertimeHours,
           emergencyOvertimeReason: emergencyOvertimePayload.emergencyOvertimeReason,
         } : {}),
+        ...(emergencyOverridePayload?.isEmergencyOverride ? {
+          isEmergencyOverride: true,
+          emergencyReason: emergencyOverridePayload.emergencyReason,
+        } : {}),
         ...(targetShiftId ? { shiftId: targetShiftId } : {}),
         ...(targetShiftName ? { shiftName: targetShiftName } : {}),
       } as any);
 
-      // Reset emergency overtime payload setelah terkirim
+      // Reset emergency overtime and override payload setelah terkirim
       setEmergencyOvertimePayload(null);
+      setEmergencyOverridePayload(null);
 
       // Dismiss loading toast immediately so it doesn't linger
       toast.dismiss(toastLoadingId);
@@ -2967,7 +2991,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     (
       isSimulationAtVenue ||
       (!hasClockedIn && (isShiftAssigned || isFieldSpecial) && (isShiftWindowActive || hasApprovedOvertimeOrSubstituteToday || isFieldSpecial)) ||
-      (isCurrentSessionClosed && Boolean(nextShiftInfo?.isNextShiftAvailable) && Boolean(nextShiftInfo?.isNextShiftWindowOpen))
+      (isCurrentSessionClosed && Boolean(nextShiftInfo?.isNextShiftAvailable) && Boolean(nextShiftInfo?.isNextShiftWindowOpen) && Boolean(hasApprovedOvertimeOrSubstituteToday || isFieldSpecial))
     );
 
   // Keterangan Alasan Non-Aktif Tombol Absen Masuk:
@@ -2991,6 +3015,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
 
     if (isCurrentSessionClosed) {
+      if (!hasApprovedOvertimeOrSubstituteToday && !isFieldSpecial) {
+        return 'TUGAS HARI INI SELESAI • BUTUH SPKL / RELIEF DUTY UNTUK LANJUT SHIFT 2';
+      }
       if (nextShiftInfo && !nextShiftInfo.isNextShiftAvailable) {
         return nextShiftInfo.nextShiftDisabledReason || 'Presensi shift hari ini telah selesai. Berlanjut esok hari.';
       }
@@ -4210,6 +4237,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 onClick={() => {
                   if (isCurrentlyOnDuty) return;
                   if (!isClockInAllowed) {
+                    if (isCurrentSessionClosed && !hasApprovedOvertimeOrSubstituteToday) {
+                      setEmergencyOverrideModalOpen(true);
+                      return;
+                    }
                     toast.error(clockInDisabledReason || 'Presensi masuk belum memenuhi syarat lokasi/shift.');
                     return;
                   }
@@ -4220,6 +4251,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 opacity-90 cursor-default'
                     : isClockInAllowed
                     ? 'bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white ring-2 ring-emerald-400 ring-offset-1 shadow-emerald-600/30'
+                    : isCurrentSessionClosed && !hasApprovedOvertimeOrSubstituteToday
+                    ? 'bg-amber-600 hover:bg-amber-700 active:scale-95 text-white ring-2 ring-amber-400 shadow-amber-600/30'
                     : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-80'
                 }`}
               >
@@ -4230,7 +4263,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     : isCurrentSessionClosed
                     ? nextShiftInfo?.isNextShiftAvailable
                       ? `ABSEN MASUK ${nextShiftInfo.nextShiftCode.replace('SHF-', 'SHIFT ')} (${nextShiftInfo.nextShiftStart})`
-                      : `SELESAI HARI INI`
+                      : `TUGAS DARURAT MANDIRI`
                     : !userShift
                     ? `MEMUAT SHIFT...`
                     : userShift?.id === 'unassigned' || !userShift?.startTime
@@ -4298,6 +4331,36 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </span>
               </button>
             </div>
+
+            {/* Banner Tugas Darurat Mandiri (Rekomendasi 3 - Self-Emergency Override) */}
+            {isCurrentSessionClosed && !hasApprovedOvertimeOrSubstituteToday && (
+              <div className="bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/15 border border-amber-400/50 dark:border-amber-600/50 rounded-2xl p-3 flex items-center justify-between gap-2.5 shadow-sm">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                    <Zap className="w-4 h-4 fill-white" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-amber-950 dark:text-amber-100 flex items-center gap-1.5">
+                      <span>Panggilan Tugas Darurat Mendadak?</span>
+                      <span className="text-[9px] font-mono bg-amber-200 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 px-1.5 py-0.2 rounded-md font-bold">
+                        DARURAT
+                      </span>
+                    </p>
+                    <p className="text-[10.5px] text-amber-800 dark:text-amber-300 truncate">
+                      Shift selesai tapi ada tugas mendesak tanpa SPKL? Klik untuk lapor.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEmergencyOverrideModalOpen(true)}
+                  className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white font-bold text-xs shrink-0 active:scale-95 shadow-xs flex items-center gap-1"
+                >
+                  <Zap className="w-3.5 h-3.5 fill-white" />
+                  <span>Absen Darurat</span>
+                </button>
+              </div>
+            )}
 
             {/* Banner Peringatan Keluar Area Tugas Tanpa Laporan */}
             {hasClockedIn && !hasClockedOut && (!isInsideCoordinates || todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached) && (
@@ -6433,6 +6496,108 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             >
               <Camera className="w-4 h-4" />
               <span>Foto & Klaim Lembur (+{selectedEmergencyOtHours}J)</span>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL ABSEN TUGAS DARURAT MANDIRI (REKOMENDASI 3: SELF-EMERGENCY OVERRIDE) ─── */}
+      <Dialog open={emergencyOverrideModalOpen} onOpenChange={setEmergencyOverrideModalOpen}>
+        <DialogContent className="max-w-md p-4 sm:p-6 rounded-3xl bg-card border-border">
+          <DialogHeader className="space-y-1">
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
+                <Zap className="w-4 h-4 fill-amber-500" />
+              </div>
+              <span>Presensi Tugas Darurat Mandiri</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Fitur khusus untuk penugasan mendesak di luar jam shift ketika SPKL belum sempat diterbitkan oleh atasan.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3.5 py-2 text-xs">
+            {/* Opsi Kategori Tugas Darurat */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">Kategori Keadaan Darurat:</label>
+              <div className="grid grid-cols-1 gap-1.5">
+                {[
+                  '🚨 Insiden / Kejadian Darurat Pos Lapangan',
+                  '🔄 Pengganti Rekan Mendadak (Sakit / Berhalangan)',
+                  '📦 Distribusi Logistik / Pengawalan Kritis Mendesak',
+                  '⚡ Perbaikan Kerusakan Fasilitas / Masalah Lapangan',
+                  '📞 Panggilan Langsung Pimpinan / Korlap Lapangan',
+                ].map((item, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setEmergencyOverrideCategory(item)}
+                    className={`p-2 rounded-xl border text-left text-[11px] transition-all flex items-center justify-between ${
+                      emergencyOverrideCategory === item
+                        ? 'border-amber-500 bg-amber-500/10 text-amber-900 dark:text-amber-200 font-bold'
+                        : 'border-border hover:bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    <span>{item}</span>
+                    {emergencyOverrideCategory === item && (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Input Keterangan Alasan */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">Keterangan / Kronologi Singkat Tugas Darurat:</label>
+              <Textarea
+                rows={3}
+                placeholder="Contoh: Diminta Korlap Bpk Aslam mengawal pengiriman logistik malam karena staf sebelumnya sakit..."
+                value={emergencyOverrideDetails}
+                onChange={(e) => setEmergencyOverrideDetails(e.target.value)}
+                className="text-xs resize-none rounded-xl"
+              />
+            </div>
+
+            {/* Banner Gembok Finansial & WhatsApp Realtime */}
+            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
+              <div className="flex items-center gap-1.5 font-bold">
+                <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>Gembok Finansial & Notifikasi Direksi Realtime</span>
+              </div>
+              <p className="opacity-90 leading-snug">
+                Presensi akan diverifikasi oleh Pimpinan. Jam lembur tidak otomatis cair sebelum disetujui di portal Approval. Notifikasi darurat instan otomatis terkirim ke WhatsApp Direktur Utama, Pimpinan, dan Korlap saat Anda mengambil foto wajah.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setEmergencyOverrideModalOpen(false);
+                setEmergencyOverridePayload(null);
+              }}
+              className="rounded-xl text-xs"
+            >
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                const combinedReason = `${emergencyOverrideCategory}${emergencyOverrideDetails.trim() ? ` - ${emergencyOverrideDetails.trim()}` : ''}`;
+                setEmergencyOverridePayload({
+                  isEmergencyOverride: true,
+                  emergencyReason: combinedReason,
+                });
+                setEmergencyOverrideModalOpen(false);
+                openLiveCamera('clock_in', { isEmergencyOverride: true });
+              }}
+              className="rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white font-bold text-xs flex items-center gap-1.5"
+            >
+              <Camera className="w-4 h-4" />
+              <span>Buka Kamera & Foto Presensi Darurat</span>
             </Button>
           </DialogFooter>
         </DialogContent>
