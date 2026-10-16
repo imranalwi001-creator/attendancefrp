@@ -1470,20 +1470,9 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       if (simDivRes.rows.length > 0) {
         simDivision = simDivRes.rows[0];
         const isUserInSimDiv = userProfile && (userProfile.division_id === simDivision.id || userProfile.division_code === 'DIV-SIM');
-        let isWithinSimRadius = false;
-        if (latitude && longitude && simDivision.latitude && simDivision.longitude) {
-          const distToSim = calculateHaversineMeters(
-            parseFloat(latitude),
-            parseFloat(longitude),
-            parseFloat(simDivision.latitude),
-            parseFloat(simDivision.longitude)
-          );
-          const allowedRad = (parseFloat(simDivision.radius_meters) || 300) + 50; // buffer 50m ekstra
-          if (distToSim <= allowedRad) {
-            isWithinSimRadius = true;
-          }
-        }
-        if (isUserInSimDiv || isWithinSimRadius) {
+        const isExplicitSim = req.body.isSimulation === true || req.body.isSimulation === 'true';
+        // HANYA aktif jika karyawan memang berasal dari divisi DIV-SIM atau eksplisit sesi simulasi
+        if (isUserInSimDiv || isExplicitSim) {
           isSimulationSession = true;
         }
       }
@@ -1495,6 +1484,9 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     // Sesi simulasi / sosialisasi otomatis diizinkan bebas jadwal 24 jam penuh!
     let activeShiftId = null;
     let activeShiftName = null;
+    let shiftStartTime = '07:30';
+    let shiftEndTime = '16:30';
+    let isCrossDay = false;
 
     if (!isExempt && !isSimulationSession && userProfile) {
       const otRes = await pool.query(
@@ -1538,9 +1530,9 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
       if (!hasApprovedException) {
         // Prioritas 1: Periksa Roster Jadwal Kerja harian (hrm_employee_schedules) hari ini
-        let shiftStartTime = '07:30';
-        let shiftEndTime = '16:30';
-        let isCrossDay = false;
+        shiftStartTime = '07:30';
+        shiftEndTime = '16:30';
+        isCrossDay = false;
 
         const schedRes = await pool.query(
           `SELECT es.*, s.is_cross_day as shift_is_cross_day, s.id as master_shift_id, s.name as master_shift_name
@@ -1941,6 +1933,40 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       // Jika karyawan sudah dalam status clock-in dan belum clock-out, pertahankan rekaman aktif
       result = openAttRes;
     } else {
+      // Server-side authoritative late minutes computation
+      let finalStatus = status || 'hadir';
+      let finalLateMinutes = parseInt(lateMinutes, 10) || 0;
+
+      if (isSimulationSession) {
+        finalStatus = 'hadir';
+        finalLateMinutes = 0;
+      } else if (shiftStartTime) {
+        const [sH, sM] = shiftStartTime.split(':').map(Number);
+        const startMins = (sH || 7) * 60 + (sM || 30);
+        let curMins = 0;
+        if (time && typeof time === 'string') {
+          const [cH, cM] = time.split(':').map(Number);
+          curMins = (cH || 0) * 60 + (cM || 0);
+        } else {
+          const witaDate = new Date(Date.now() + 8 * 3600000);
+          curMins = witaDate.getUTCHours() * 60 + witaDate.getUTCMinutes();
+        }
+
+        let diff = curMins - startMins;
+        if (isCrossDay && curMins < 720 && startMins >= 720) {
+          diff = (curMins + 1440) - startMins;
+        }
+
+        const tolerance = userProfile?.late_tolerance_minutes ?? 15;
+        if (diff > tolerance) {
+          finalStatus = 'terlambat';
+          finalLateMinutes = diff;
+        } else {
+          finalStatus = 'hadir';
+          finalLateMinutes = 0;
+        }
+      }
+
       // Buat rekaman presensi baru (mendukung multi-shift berurutan: Shift 1 -> Shift 2 -> Shift 3)
       const finalNotes = isSimulationSession
         ? `[SIMULASI SOSIALISASI] ${notes || ''}`.trim()
@@ -1961,8 +1987,8 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         photo,
         latitude,
         longitude,
-        status || 'hadir',
-        isSimulationSession ? 0 : (lateMinutes || 0),
+        finalStatus,
+        finalLateMinutes,
         finalNotes,
         computedBiometricScore != null ? computedBiometricScore : null,
         computedBiometricMatch != null ? computedBiometricMatch : null,
@@ -4285,23 +4311,12 @@ app.post('/api/attendances/clock-out', async (req, res) => {
     let isSimulationSession = false;
     let simDivision = null;
     try {
-      const simDivRes = await pool.query(`SELECT * FROM hrm_divisions WHERE code = 'DIV-SIM' LIMIT 1`);
+      const simDivRes = await pool.query(`SELECT * FROM hrm_divisions WHERE code = 'DIV-SIM' AND is_active = true LIMIT 1`);
       if (simDivRes.rows.length > 0) {
         simDivision = simDivRes.rows[0];
         const isUserInSimDiv = userProfile && (userProfile.division_id === simDivision.id || userProfile.division_code === 'DIV-SIM');
-        let isWithinSimRadius = false;
-        if (latitude && longitude && simDivision.latitude && simDivision.longitude) {
-          const distToSim = calculateHaversineMeters(
-            parseFloat(latitude),
-            parseFloat(longitude),
-            parseFloat(simDivision.latitude),
-            parseFloat(simDivision.longitude)
-          );
-          if (distToSim <= ((parseFloat(simDivision.radius_meters) || 300) + 50)) {
-            isWithinSimRadius = true;
-          }
-        }
-        if (isUserInSimDiv || isWithinSimRadius) {
+        const isExplicitSim = req.body.isSimulation === true || req.body.isSimulation === 'true';
+        if (isUserInSimDiv || isExplicitSim) {
           isSimulationSession = true;
         }
       }
@@ -5666,6 +5681,7 @@ function formatDivisionRow(d) {
     allowedPosts,
     bssidWhitelist: d.bssid_whitelist || '',
     wifiSsid: d.wifi_ssid || '',
+    isActive: d.is_active !== false,
   };
 }
 
@@ -5823,10 +5839,33 @@ app.get('/api/simulation/status', async (req, res) => {
       data: {
         division: div ? formatDivisionRow(div) : null,
         simulationAttendanceCountToday: count,
-        isActive: Boolean(div)
+        isActive: Boolean(div && div.is_active === true)
       }
     });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/simulation/toggle', async (req, res) => {
+  const { isActive } = req.body;
+  try {
+    const nextState = Boolean(isActive);
+    const result = await pool.query(
+      `UPDATE hrm_divisions SET is_active = $1, updated_at = NOW() WHERE code = 'DIV-SIM' RETURNING *`,
+      [nextState]
+    );
+    const div = result.rows[0];
+    res.json({
+      success: true,
+      message: nextState ? '🎯 Sesi Simulasi Sosialisasi DIAKTIFKAN!' : '🔒 Sesi Simulasi Sosialisasi DINONAKTIFKAN!',
+      data: {
+        division: div ? formatDivisionRow(div) : null,
+        isActive: nextState
+      }
+    });
+  } catch (err) {
+    console.error('Toggle simulation error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });

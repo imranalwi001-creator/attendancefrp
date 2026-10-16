@@ -154,6 +154,8 @@ export const HrmDivisionsPage: React.FC = () => {
   const [isGettingSimGps, setIsGettingSimGps] = useState<boolean>(false);
   const [isSavingSimVenue, setIsSavingSimVenue] = useState<boolean>(false);
   const [isCleaningSimLogs, setIsCleaningSimLogs] = useState<boolean>(false);
+  const [isSimActive, setIsSimActive] = useState<boolean>(false);
+  const [isTogglingSim, setIsTogglingSim] = useState<boolean>(false);
 
   const getTargetEmployees = (divId: string = rosterSelectedDivId): EmployeeScheduleTarget[] => {
     const rawUsers = users.length > 0 ? users : hrmService.getUsers();
@@ -708,6 +710,7 @@ export const HrmDivisionsPage: React.FC = () => {
     try {
       const data = await hrmService.getSimulationStatus();
       setSimCountToday(data.countToday);
+      setIsSimActive(Boolean(data.isActive));
       if (data.division) {
         setSimDivision(data.division);
         if (data.division.locationName) setSimVenueName(data.division.locationName);
@@ -718,6 +721,21 @@ export const HrmDivisionsPage: React.FC = () => {
       }
     } catch (e) {
       console.warn('Gagal memuat status simulasi:', e);
+    }
+  };
+
+  const handleToggleSimulation = async () => {
+    try {
+      setIsTogglingSim(true);
+      const nextState = !isSimActive;
+      const res = await hrmService.toggleSimulationSession(nextState);
+      setIsSimActive(res.isActive);
+      toast.success(res.message || (res.isActive ? '🎯 Mode Simulasi DIAKTIFKAN!' : '🔒 Mode Simulasi DINONAKTIFKAN!'));
+      await loadSimulationStatus();
+    } catch (err: any) {
+      toast.error('Gagal mengubah status simulasi: ' + (err.message || 'Error'));
+    } finally {
+      setIsTogglingSim(false);
     }
   };
 
@@ -1103,10 +1121,17 @@ export const HrmDivisionsPage: React.FC = () => {
                   <h3 className="text-base font-bold text-foreground">
                     🎯 Mode Simulasi Sesi Sosialisasi & Presentasi (DIV-SIM)
                   </h3>
-                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Bebas Jadwal 24 Jam Penuh
-                  </span>
+                  {isSimActive ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Sesi Simulasi Aktif (Bebas Jadwal)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-slate-500/15 text-slate-400 border border-slate-500/30 px-2 py-0.5 rounded-full">
+                      <Lock className="w-3 h-3 text-slate-400" />
+                      Non-Aktif (Terkunci)
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Titik koordinat khusus ruang presentasi agar seluruh karyawan dapat langsung mencoba absensi wajah & lokasi secara serentak tanpa batasan jadwal shift.
@@ -1114,13 +1139,38 @@ export const HrmDivisionsPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-2 self-start sm:self-auto">
+            <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+              {/* Master ON/OFF Switch */}
+              <div className="flex items-center gap-2 bg-background/80 border border-border px-3 py-1.5 rounded-xl shadow-xs">
+                <span className="text-xs font-semibold text-foreground">
+                  Saklar:
+                </span>
+                <button
+                  type="button"
+                  disabled={isTogglingSim}
+                  onClick={handleToggleSimulation}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                    isSimActive ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                  }`}
+                  title={isSimActive ? 'Klik untuk mematikan sesi simulasi' : 'Klik untuk mengaktifkan sesi simulasi'}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      isSimActive ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+                <span className={`text-xs font-bold ${isSimActive ? 'text-emerald-500' : 'text-slate-400'}`}>
+                  {isSimActive ? 'AKTIF (ON)' : 'OFF'}
+                </span>
+              </div>
+
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleCleanSimLogs}
                 disabled={isCleaningSimLogs}
-                className="h-8 text-xs border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 rounded-lg gap-1.5"
+                className="h-9 text-xs border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 rounded-xl gap-1.5"
                 title="Hapus data presensi coba-coba karyawan saat presentasi"
               >
                 {isCleaningSimLogs ? (
@@ -1128,7 +1178,7 @@ export const HrmDivisionsPage: React.FC = () => {
                 ) : (
                   <Trash2 className="w-3.5 h-3.5" />
                 )}
-                <span>Bersihkan Log Simulasi ({simCountToday})</span>
+                <span>Bersihkan Log ({simCountToday})</span>
               </Button>
             </div>
           </div>

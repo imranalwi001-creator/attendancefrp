@@ -633,7 +633,19 @@ export const normalizeAttendanceRecord = (a: any): AttendanceRecord => {
     latOut: a.latOut != null ? parseFloat(a.latOut) : (a.lat_out != null ? parseFloat(a.lat_out) : undefined),
     longOut: a.longOut != null ? parseFloat(a.longOut) : (a.long_out != null ? parseFloat(a.long_out) : undefined),
     status: a.status || 'hadir',
-    lateMinutes: a.lateMinutes != null ? Number(a.lateMinutes) : (a.late_minutes != null ? Number(a.late_minutes) : 0),
+    lateMinutes: (() => {
+      const raw = a.lateMinutes != null ? Number(a.lateMinutes) : (a.late_minutes != null ? Number(a.late_minutes) : 0);
+      if (raw > 0) return raw;
+      if (a.status === 'terlambat' && cIn) {
+        const [cH, cM] = cIn.split(':').map(Number);
+        const curMins = (cH || 0) * 60 + (cM || 0);
+        const startMins = 7 * 60 + 30; // standard shift 07:30
+        if (curMins > startMins + 15) {
+          return curMins - startMins;
+        }
+      }
+      return raw;
+    })(),
     earlyLeavingMinutes: a.earlyLeavingMinutes != null ? Number(a.earlyLeavingMinutes) : (a.early_leaving_minutes != null ? Number(a.early_leaving_minutes) : 0),
     workDurationMinutes: a.workDurationMinutes != null ? Number(a.workDurationMinutes) : (a.work_duration_minutes != null ? Number(a.work_duration_minutes) : 0),
     isLocked: a.isLocked === true || a.is_locked === true,
@@ -1489,13 +1501,14 @@ export const hrmService = {
     return hrmService.getDivisions();
   },
 
-  getSimulationStatus: async (): Promise<{ division: Division | null; countToday: number }> => {
+  getSimulationStatus: async (): Promise<{ division: Division | null; countToday: number; isActive: boolean }> => {
     try {
       const res = await api.get<{ success: boolean; data: any }>('/simulation/status');
       if (res && res.success && res.data) {
         return {
           division: res.data.division,
           countToday: res.data.simulationAttendanceCountToday || 0,
+          isActive: Boolean(res.data.isActive),
         };
       }
     } catch (e) {
@@ -1503,7 +1516,25 @@ export const hrmService = {
     }
     const all = hrmService.getDivisions();
     const sim = all.find((d) => d.code === 'DIV-SIM' || d.id === 'div-sim') || null;
-    return { division: sim, countToday: 0 };
+    return { division: sim, countToday: 0, isActive: Boolean(sim?.isActive) };
+  },
+
+  toggleSimulationSession: async (isActive: boolean): Promise<{ success: boolean; isActive: boolean; message?: string }> => {
+    try {
+      const res = await api.post<{ success: boolean; data: any; message?: string }>('/simulation/toggle', { isActive });
+      if (res && res.success) {
+        await hrmService.fetchDivisions();
+        return {
+          success: true,
+          isActive: Boolean(res.data?.isActive),
+          message: res.message,
+        };
+      }
+    } catch (e) {
+      console.warn('[HRM] Error toggling simulation status:', e);
+      throw e;
+    }
+    return { success: false, isActive: false };
   },
 
   updateSimulationVenue: async (params: {
@@ -3156,7 +3187,7 @@ export const hrmService = {
 
     if (!dailySchedule?.isOff && currentTotalMinutes > shiftStartTotalMinutes + tolerance) {
       status = 'terlambat';
-      lateMinutes = currentTotalMinutes - (shiftStartTotalMinutes + tolerance);
+      lateMinutes = currentTotalMinutes - shiftStartTotalMinutes;
     }
 
     const all = hrmService.getAttendances();

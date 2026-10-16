@@ -1279,7 +1279,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     // Masukkan Divisi Simulasi Sosialisasi (DIV-SIM) agar seluruh karyawan dapat mencoba absen di venue presentasi
     try {
       const allDivs = hrmService.getDivisions();
-      const simDiv = allDivs.find((d) => d.code === 'DIV-SIM' || d.id === 'div-sim');
+      // Masukkan Divisi Simulasi Sosialisasi (DIV-SIM) HANYA jika sesi simulasi sedang aktif (isActive === true)
+      const simDiv = allDivs.find((d) => (d.code === 'DIV-SIM' || d.id === 'div-sim') && (d.isActive === true || (d as any).is_active === true));
       if (simDiv && typeof simDiv.latitude === 'number' && typeof simDiv.longitude === 'number' && !isNaN(simDiv.latitude)) {
         if (!candidateOffices.some((c) => Math.abs(c.lat - simDiv.latitude) < 0.0001 && Math.abs(c.lng - simDiv.longitude) < 0.0001)) {
           candidateOffices.push({
@@ -4072,7 +4073,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
                 {hasClockedIn && (
                   <Badge className={todayAttendance?.status === 'terlambat' ? 'bg-amber-500 text-white text-[10px]' : 'bg-emerald-600 text-white text-[10px]'}>
-                    {todayAttendance?.status === 'terlambat' ? `Terlambat ${todayAttendance.lateMinutes}m` : 'Tepat Waktu'}
+                    {todayAttendance?.status === 'terlambat'
+                      ? (todayAttendance.lateMinutes && todayAttendance.lateMinutes > 0
+                          ? `Terlambat ${todayAttendance.lateMinutes}m`
+                          : (todayAttendance.late_minutes && (todayAttendance as any).late_minutes > 0
+                              ? `Terlambat ${(todayAttendance as any).late_minutes}m`
+                              : 'Terlambat'))
+                      : 'Tepat Waktu'}
                   </Badge>
                 )}
               </div>
