@@ -40,6 +40,7 @@ import {
   FileUp,
   Sparkles,
   RefreshCw,
+  Lock,
 } from 'lucide-react';
 import {
   generateSmartRoster,
