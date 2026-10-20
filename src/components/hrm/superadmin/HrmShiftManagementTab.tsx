@@ -57,15 +57,17 @@ export const HrmShiftManagementTab: React.FC = () => {
     setUsers(hrmService.getUsers());
     setDivisions(hrmService.getDivisions());
     setShiftSwaps(hrmService.getShiftSwaps());
-    setIsLoading(false);
 
     try {
-      await hrmService.syncWithBackend();
+      await hrmService.syncWithBackend(true);
       setShifts(hrmService.getShifts());
       setUsers(hrmService.getUsers());
       setDivisions(hrmService.getDivisions());
       setShiftSwaps(hrmService.getShiftSwaps());
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {

@@ -1205,14 +1205,7 @@ export const hrmService = {
     }
 
     const existingShifts = safeGetJson<Shift[]>(STORAGE_KEYS.SHIFTS, []);
-    const needsShiftSync = !existingShifts.length || existingShifts.some((s) => 
-      (s.id === 'shift-morning' && (s.startTime !== '07:30' || s.endTime !== '15:30')) ||
-      (s.id === 'shift-regular' && (s.startTime !== '07:30' || s.endTime !== '16:30')) ||
-      (s.id === 'shift-afternoon' && (s.startTime !== '15:30' || s.endTime !== '22:30')) ||
-      (s.id === 'shift-night' && (s.startTime !== '22:30' || s.endTime !== '07:30')) ||
-      !s.name.includes('WITA')
-    );
-    if (needsShiftSync) {
+    if (!existingShifts || existingShifts.length === 0) {
       localStorage.setItem(STORAGE_KEYS.SHIFTS, JSON.stringify(DEFAULT_SHIFTS));
     }
     if (!localStorage.getItem(STORAGE_KEYS.OFFICE)) {
