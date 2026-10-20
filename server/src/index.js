@@ -892,57 +892,157 @@ app.get('/api/shifts', async (req, res) => {
 
 app.post('/api/shifts', async (req, res) => {
   const { name, startTime, endTime, breakStartTime, breakEndTime, breakDurationMinutes, lateToleranceMinutes, isDefault } = req.body;
-  if (!name) return res.status(400).json({ success: false, error: 'Nama shift wajib diisi' });
+  if (!name || !name.trim()) return res.status(400).json({ success: false, error: 'Nama shift wajib diisi' });
+
+  const sanitizeTimeParam = (val, fallback = '08:00:00') => {
+    if (!val) return fallback;
+    const parts = String(val).trim().split(':');
+    const h = parts[0] || '08';
+    const m = parts[1] || '00';
+    const s = parts[2] || '00';
+    return `${h.padStart(2, '0')}:${m.padStart(2, '0')}:${s.padStart(2, '0')}`;
+  };
+
+  const cleanName = name.trim();
+  const cleanStart = sanitizeTimeParam(startTime, '07:30:00');
+  const cleanEnd = sanitizeTimeParam(endTime, '16:30:00');
+  const isCrossDay = cleanEnd < cleanStart;
+
+  let shiftCode = req.body.code ? String(req.body.code).trim().toUpperCase() : '';
+  if (!shiftCode) {
+    if (cleanName.includes('Day Shift')) shiftCode = 'DAY';
+    else if (cleanName.includes('Shift III')) shiftCode = 'SHF-III';
+    else if (cleanName.includes('Shift II')) shiftCode = 'SHF-II';
+    else if (cleanName.includes('Shift I')) shiftCode = 'SHF-I';
+    else shiftCode = cleanName.replace(/[^a-zA-Z0-9]/g, '').substring(0, 8).toUpperCase() || 'SHF';
+  }
+
   try {
     if (isDefault) {
       await pool.query('UPDATE hrm_shifts SET is_default = false');
     }
     const result = await pool.query(
-      `INSERT INTO hrm_shifts (name, start_time, end_time, break_start_time, break_end_time, break_duration_minutes, late_tolerance_minutes, is_default)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO hrm_shifts (name, code, start_time, end_time, break_start_time, break_end_time, break_duration_minutes, late_tolerance_minutes, is_default, is_cross_day)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (name) DO UPDATE SET
+         code = COALESCE(EXCLUDED.code, hrm_shifts.code),
          start_time = EXCLUDED.start_time,
          end_time = EXCLUDED.end_time,
          break_start_time = EXCLUDED.break_start_time,
          break_end_time = EXCLUDED.break_end_time,
          break_duration_minutes = EXCLUDED.break_duration_minutes,
          late_tolerance_minutes = EXCLUDED.late_tolerance_minutes,
-         is_default = EXCLUDED.is_default
+         is_default = EXCLUDED.is_default,
+         is_cross_day = EXCLUDED.is_cross_day
        RETURNING *;`,
-      [name.trim(), startTime || '08:00:00', endTime || '17:00:00', breakStartTime || '12:00:00', breakEndTime || '13:00:00', breakDurationMinutes || 60, lateToleranceMinutes || 15, isDefault === true]
+      [
+        cleanName,
+        shiftCode,
+        cleanStart,
+        cleanEnd,
+        sanitizeTimeParam(breakStartTime, '12:00:00'),
+        sanitizeTimeParam(breakEndTime, '13:00:00'),
+        Number(breakDurationMinutes) || 60,
+        Number(lateToleranceMinutes) || 15,
+        isDefault === true,
+        isCrossDay
+      ]
     );
-    res.json({ success: true, data: result.rows[0] });
+
+    const s = result.rows[0];
+    res.json({
+      success: true,
+      data: {
+        id: s.id,
+        code: s.code || shiftCode,
+        name: s.name,
+        startTime: s.start_time ? s.start_time.substring(0, 5) : '08:00',
+        endTime: s.end_time ? s.end_time.substring(0, 5) : '17:00',
+        breakStartTime: s.break_start_time ? s.break_start_time.substring(0, 5) : '12:00',
+        breakEndTime: s.break_end_time ? s.break_end_time.substring(0, 5) : '13:00',
+        breakDurationMinutes: s.break_duration_minutes || 60,
+        lateToleranceMinutes: s.late_tolerance_minutes || 15,
+        isDefault: s.is_default,
+        isCrossDay: s.is_cross_day,
+      }
+    });
   } catch (err) {
+    console.error('[Add Shift Error]:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 app.put('/api/shifts/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, startTime, endTime, breakStartTime, breakEndTime, breakDurationMinutes, lateToleranceMinutes, isDefault } = req.body;
+  const { name, startTime, endTime, breakStartTime, breakEndTime, breakDurationMinutes, lateToleranceMinutes, isDefault, code } = req.body;
+
+  const sanitizeTimeParam = (val, fallback = '08:00:00') => {
+    if (!val) return fallback;
+    const parts = String(val).trim().split(':');
+    const h = parts[0] || '08';
+    const m = parts[1] || '00';
+    const s = parts[2] || '00';
+    return `${h.padStart(2, '0')}:${m.padStart(2, '0')}:${s.padStart(2, '0')}`;
+  };
+
   try {
     if (isDefault) {
       await pool.query('UPDATE hrm_shifts SET is_default = false WHERE id != $1', [id]);
     }
+    const cleanStart = startTime ? sanitizeTimeParam(startTime) : null;
+    const cleanEnd = endTime ? sanitizeTimeParam(endTime) : null;
+    const isCrossDay = (cleanStart && cleanEnd) ? (cleanEnd < cleanStart) : null;
+
     const result = await pool.query(
       `UPDATE hrm_shifts SET
          name = COALESCE($1, name),
-         start_time = COALESCE($2, start_time),
-         end_time = COALESCE($3, end_time),
-         break_start_time = COALESCE($4, break_start_time),
-         break_end_time = COALESCE($5, break_end_time),
-         break_duration_minutes = COALESCE($6, break_duration_minutes),
-         late_tolerance_minutes = COALESCE($7, late_tolerance_minutes),
-         is_default = COALESCE($8, is_default)
-       WHERE id = $9
+         code = COALESCE($2, code),
+         start_time = COALESCE($3, start_time),
+         end_time = COALESCE($4, end_time),
+         break_start_time = COALESCE($5, break_start_time),
+         break_end_time = COALESCE($6, break_end_time),
+         break_duration_minutes = COALESCE($7, break_duration_minutes),
+         late_tolerance_minutes = COALESCE($8, late_tolerance_minutes),
+         is_default = COALESCE($9, is_default),
+         is_cross_day = COALESCE($10, is_cross_day)
+       WHERE id = $11
        RETURNING *;`,
-      [name ? name.trim() : null, startTime || null, endTime || null, breakStartTime || null, breakEndTime || null, breakDurationMinutes != null ? breakDurationMinutes : null, lateToleranceMinutes != null ? lateToleranceMinutes : null, isDefault != null ? isDefault : null, id]
+      [
+        name ? name.trim() : null,
+        code ? code.trim().toUpperCase() : null,
+        cleanStart,
+        cleanEnd,
+        breakStartTime ? sanitizeTimeParam(breakStartTime) : null,
+        breakEndTime ? sanitizeTimeParam(breakEndTime) : null,
+        breakDurationMinutes != null ? Number(breakDurationMinutes) : null,
+        lateToleranceMinutes != null ? Number(lateToleranceMinutes) : null,
+        isDefault != null ? isDefault : null,
+        isCrossDay,
+        id
+      ]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Shift tidak ditemukan' });
     }
-    res.json({ success: true, data: result.rows[0] });
+    const s = result.rows[0];
+    res.json({
+      success: true,
+      data: {
+        id: s.id,
+        code: s.code || (s.name.substring(0, 4).toUpperCase()),
+        name: s.name,
+        startTime: s.start_time ? s.start_time.substring(0, 5) : '08:00',
+        endTime: s.end_time ? s.end_time.substring(0, 5) : '17:00',
+        breakStartTime: s.break_start_time ? s.break_start_time.substring(0, 5) : '12:00',
+        breakEndTime: s.break_end_time ? s.break_end_time.substring(0, 5) : '13:00',
+        breakDurationMinutes: s.break_duration_minutes || 60,
+        lateToleranceMinutes: s.late_tolerance_minutes || 15,
+        isDefault: s.is_default,
+        isCrossDay: s.is_cross_day,
+      }
+    });
   } catch (err) {
+    console.error('[Update Shift Error]:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1487,6 +1587,8 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     let shiftStartTime = '07:30';
     let shiftEndTime = '16:30';
     let isCrossDay = false;
+    const isEmergencyOverride = req.body.isEmergencyOverride === true || req.body.isEmergencyOverride === 'true';
+    const cleanEmergencyReason = (req.body.emergencyReason || req.body.emergencyOvertimeReason || notes || '').trim();
 
     if (!isExempt && !isSimulationSession && userProfile) {
       const otRes = await pool.query(
@@ -1507,8 +1609,6 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       // Guard Dobel Shift / Shift Lanjutan: Jika karyawan sudah menyelesaikan shift hari ini,
       // mereka WAJIB memiliki pengajuan Lembur (SPKL) atau Tugas Pengganti (Relief Duty) yang sudah disetujui (Approved),
       // KECUALI jika karyawan menggunakan fitur Mode Absen Tugas Darurat Mandiri (isEmergencyOverride = true)
-      const isEmergencyOverride = req.body.isEmergencyOverride === true || req.body.isEmergencyOverride === 'true';
-      const cleanEmergencyReason = (req.body.emergencyReason || req.body.emergencyOvertimeReason || notes || '').trim();
 
       const completedAttCheck = await pool.query(
         `SELECT id, shift_name, clock_in, clock_out FROM hrm_attendances 

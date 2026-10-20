@@ -22,6 +22,8 @@ import {
   RefreshCw,
   Search,
   Building2,
+  Trash2,
+  Sparkles,
 } from 'lucide-react';
 import { TimePicker } from '@/components/ui/time-picker';
 
@@ -99,36 +101,73 @@ export const HrmShiftManagementTab: React.FC = () => {
     setShiftModalOpen(true);
   };
 
+  const ensureSeconds = (timeStr: string, fallback = '07:30:00') => {
+    if (!timeStr) return fallback;
+    const clean = timeStr.trim();
+    const parts = clean.split(':');
+    const h = parts[0] || '07';
+    const m = parts[1] || '30';
+    const s = parts[2] || '00';
+    return `${h.padStart(2, '0')}:${m.padStart(2, '0')}:${s.padStart(2, '0')}`;
+  };
+
   const handleSaveShift = async () => {
     if (!shiftName.trim()) {
       toast.error('Nama shift wajib diisi');
       return;
     }
+    if (!startTime || !endTime) {
+      toast.error('Jam mulai dan jam selesai wajib diisi');
+      return;
+    }
     setIsSubmitting(true);
     try {
+      const cleanStart = ensureSeconds(startTime, '07:30:00');
+      const cleanEnd = ensureSeconds(endTime, '16:30:00');
+
       if (editingShift) {
         await hrmService.updateShift(editingShift.id, {
-          name: shiftName,
-          startTime: `${startTime}:00`,
-          endTime: `${endTime}:00`,
-          lateToleranceMinutes: Number(lateTolerance),
+          name: shiftName.trim(),
+          startTime: cleanStart,
+          endTime: cleanEnd,
+          lateToleranceMinutes: Number(lateTolerance) || 15,
           isDefault,
         });
         toast.success('Pola shift berhasil diperbarui.');
       } else {
         await hrmService.addShift({
-          name: shiftName,
-          startTime: `${startTime}:00`,
-          endTime: `${endTime}:00`,
-          lateToleranceMinutes: Number(lateTolerance),
+          name: shiftName.trim(),
+          startTime: cleanStart,
+          endTime: cleanEnd,
+          lateToleranceMinutes: Number(lateTolerance) || 15,
           isDefault,
         });
         toast.success('Shift baru berhasil ditambahkan.');
       }
       setShiftModalOpen(false);
-      loadData();
+      await loadData();
     } catch (err: any) {
-      toast.error('Gagal menyimpan master shift');
+      toast.error(err?.message || 'Gagal menyimpan master shift');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteShift = async (s: Shift) => {
+    const assignedEmps = users.filter((u) => u.shiftId === s.id);
+    if (assignedEmps.length > 0) {
+      toast.error(`Tidak dapat menghapus shift "${s.name}" karena masih ditugaskan ke ${assignedEmps.length} karyawan.`);
+      return;
+    }
+    if (!window.confirm(`Apakah Anda yakin ingin menghapus master shift "${s.name}"?`)) return;
+
+    setIsSubmitting(true);
+    try {
+      await hrmService.deleteShift(s.id);
+      toast.success(`Shift "${s.name}" berhasil dihapus.`);
+      await loadData();
+    } catch (err: any) {
+      toast.error(err?.message || 'Gagal menghapus shift');
     } finally {
       setIsSubmitting(false);
     }
@@ -252,7 +291,21 @@ export const HrmShiftManagementTab: React.FC = () => {
                   </p>
                 </div>
 
-                <div className="pt-2 border-t border-border flex justify-end">
+                <div className="pt-2 border-t border-border flex items-center justify-between gap-1.5">
+                  <div>
+                    {!s.isDefault && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeleteShift(s)}
+                        className="h-7 text-[11px] text-destructive hover:bg-destructive/10 rounded-lg px-2 gap-1"
+                        title="Hapus Shift"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        Hapus
+                      </Button>
+                    )}
+                  </div>
                   <Button
                     variant="outline"
                     size="sm"
@@ -495,10 +548,41 @@ export const HrmShiftManagementTab: React.FC = () => {
           </DialogHeader>
 
           <div className="space-y-4 py-2 text-xs">
+            {/* Quick Shift Templates */}
+            <div className="space-y-1.5 p-2.5 rounded-xl bg-muted/40 border border-border/60">
+              <Label className="text-[11px] text-muted-foreground flex items-center gap-1.5 font-medium">
+                <Sparkles className="w-3.5 h-3.5 text-primary" />
+                Template Pola Jam Operasional:
+              </Label>
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {[
+                  { name: 'Shift I (Pagi)', start: '07:30', end: '15:30' },
+                  { name: 'Shift II (Siang)', start: '15:30', end: '22:30' },
+                  { name: 'Shift III (Malam)', start: '22:30', end: '07:30' },
+                  { name: 'Day Shift (Reguler)', start: '07:30', end: '16:30' },
+                ].map((preset) => (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    onClick={() => {
+                      if (!shiftName.trim() || shiftName.startsWith('Shift') || shiftName.startsWith('Day')) {
+                        setShiftName(`${preset.name} (${preset.start} - ${preset.end} WITA)`);
+                      }
+                      setStartTime(preset.start);
+                      setEndTime(preset.end);
+                    }}
+                    className="px-2 py-1 text-[11px] font-mono rounded-lg border border-border bg-card hover:bg-primary/10 hover:border-primary/40 text-foreground transition-all cursor-pointer"
+                  >
+                    {preset.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">Nama Shift</Label>
+              <Label className="text-xs font-semibold">Nama Shift <span className="text-destructive">*</span></Label>
               <Input
-                placeholder="Contoh: Shift III (22:30 - 07:30 WITA)"
+                placeholder="Contoh: Shift IV (Pola Khusus Lapangan)"
                 value={shiftName}
                 onChange={(e) => setShiftName(e.target.value)}
                 className="h-9 text-xs rounded-xl"
@@ -507,29 +591,57 @@ export const HrmShiftManagementTab: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold">Jam Mulai</Label>
-                <TimePicker
+                <Label className="text-xs font-semibold flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-primary" />
+                  Jam Masuk (WITA)
+                </Label>
+                <Input
+                  type="time"
                   value={startTime}
-                  onChange={(val) => setStartTime(val)}
+                  onChange={(e) => setStartTime(e.target.value)}
+                  className="h-9 text-xs rounded-xl font-mono px-3"
+                  required
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold">Jam Selesai</Label>
-                <TimePicker
+                <Label className="text-xs font-semibold flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-primary" />
+                  Jam Pulang (WITA)
+                </Label>
+                <Input
+                  type="time"
                   value={endTime}
-                  onChange={(val) => setEndTime(val)}
+                  onChange={(e) => setEndTime(e.target.value)}
+                  className="h-9 text-xs rounded-xl font-mono px-3"
+                  required
                 />
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">Toleransi Keterlambatan (Menit)</Label>
+              <Label className="text-xs font-semibold">Batas Toleransi Terlambat (Menit)</Label>
               <Input
                 type="number"
+                min="0"
+                max="1440"
                 value={lateTolerance}
                 onChange={(e) => setLateTolerance(Number(e.target.value))}
                 className="h-9 text-xs rounded-xl font-mono"
               />
+              <p className="text-[10px] text-muted-foreground">Karyawan absen lewat dari menit ini akan tercatat Terlambat.</p>
+            </div>
+
+            <div className="flex items-center space-x-2 pt-2 border-t border-border/60">
+              <input
+                type="checkbox"
+                id="isDefaultShiftCheckbox"
+                checked={isDefault}
+                onChange={(e) => setIsDefault(e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+              />
+              <Label htmlFor="isDefaultShiftCheckbox" className="text-xs font-medium cursor-pointer">
+                Jadikan Shift Utama / Default untuk Karyawan Baru
+              </Label>
             </div>
           </div>
 

@@ -1661,37 +1661,66 @@ export const hrmService = {
     window.dispatchEvent(new Event('hrm_shifts_updated'));
   },
 
-  addShift: (shiftData: Omit<Shift, 'id'>): Shift => {
+  addShift: async (shiftData: Omit<Shift, 'id'>): Promise<Shift> => {
+    // 1. Sync to PostgreSQL backend first
+    let serverShift: any = null;
+    try {
+      const res: any = await api.post('/shifts', {
+        name: shiftData.name?.trim(),
+        startTime: shiftData.startTime,
+        endTime: shiftData.endTime,
+        lateToleranceMinutes: shiftData.lateToleranceMinutes,
+        isDefault: shiftData.isDefault || false,
+      });
+      if (res?.data) serverShift = res.data;
+    } catch (err: any) {
+      console.warn('[Shift API] Error persisting new shift to backend:', err?.message || err);
+      throw new Error(err?.data?.error || err?.message || 'Gagal menyimpan shift ke database backend.');
+    }
+
     const shifts = hrmService.getShifts();
     const newShift: Shift = {
       ...shiftData,
-      id: `shift-${Date.now()}`,
-      isDefault: shiftData.isDefault || false,
+      id: serverShift?.id || `shift-${Date.now()}`,
+      name: serverShift?.name || shiftData.name?.trim(),
+      code: serverShift?.code || (shiftData as any).code || 'SHF',
+      startTime: serverShift?.startTime || shiftData.startTime,
+      endTime: serverShift?.endTime || shiftData.endTime,
+      lateToleranceMinutes: serverShift?.lateToleranceMinutes != null ? Number(serverShift.lateToleranceMinutes) : (shiftData.lateToleranceMinutes || 15),
+      isDefault: serverShift?.isDefault != null ? serverShift.isDefault : (shiftData.isDefault || false),
     };
+
     if (newShift.isDefault) {
       shifts.forEach((s) => (s.isDefault = false));
     }
-    shifts.push(newShift);
+
+    const existingIdx = shifts.findIndex((s) => s.id === newShift.id || s.name.trim().toLowerCase() === newShift.name.trim().toLowerCase());
+    if (existingIdx !== -1) {
+      shifts[existingIdx] = newShift;
+    } else {
+      shifts.push(newShift);
+    }
+
     hrmService.saveShifts(shifts);
-
-    // Sync to PostgreSQL backend asynchronously
-    api.post('/shifts', {
-      name: newShift.name,
-      startTime: newShift.startTime,
-      endTime: newShift.endTime,
-      lateToleranceMinutes: newShift.lateToleranceMinutes,
-      isDefault: newShift.isDefault,
-    }).then((res: any) => {
-      if (res?.data?.id) {
-        newShift.id = res.data.id;
-        hrmService.saveShifts(shifts);
-      }
-    }).catch((err) => console.warn('[Shift API] Error persisting new shift:', err.message));
-
+    window.dispatchEvent(new Event('hrm_shifts_updated'));
     return newShift;
   },
 
-  updateShift: (id: string, shiftData: Partial<Shift>): Shift => {
+  updateShift: async (id: string, shiftData: Partial<Shift>): Promise<Shift> => {
+    try {
+      await api.put(`/shifts/${id}`, {
+        name: shiftData.name?.trim(),
+        startTime: shiftData.startTime,
+        endTime: shiftData.endTime,
+        lateToleranceMinutes: shiftData.lateToleranceMinutes,
+        isDefault: shiftData.isDefault,
+        code: (shiftData as any).code,
+      });
+    } catch (err: any) {
+      console.warn('[Shift API] Error updating shift on backend:', err?.message || err);
+      throw new Error(err?.data?.error || err?.message || 'Gagal memperbarui shift di database backend.');
+    }
+
     const shifts = hrmService.getShifts();
     const idx = shifts.findIndex((s) => s.id === id);
     if (idx === -1) throw new Error('Shift tidak ditemukan');
@@ -1700,20 +1729,12 @@ export const hrmService = {
     }
     shifts[idx] = { ...shifts[idx], ...shiftData };
     hrmService.saveShifts(shifts);
-
-    // Sync to PostgreSQL backend asynchronously
-    api.put(`/shifts/${id}`, {
-      name: shiftData.name,
-      startTime: shiftData.startTime,
-      endTime: shiftData.endTime,
-      lateToleranceMinutes: shiftData.lateToleranceMinutes,
-      isDefault: shiftData.isDefault,
-    }).catch((err) => console.warn('[Shift API] Error updating shift:', err.message));
+    window.dispatchEvent(new Event('hrm_shifts_updated'));
 
     return shifts[idx];
   },
 
-  deleteShift: (id: string): boolean => {
+  deleteShift: async (id: string): Promise<boolean> => {
     const shifts = hrmService.getShifts();
     const users = hrmService.getUsers();
     if (users.some((u) => u.shiftId === id)) {
@@ -1723,11 +1744,16 @@ export const hrmService = {
     if (filtered.length === 0) {
       throw new Error('Minimal harus ada 1 shift yang aktif di sistem.');
     }
+
+    try {
+      await api.delete(`/shifts/${id}`);
+    } catch (err: any) {
+      console.warn('[Shift API] Error deleting shift on backend:', err?.message || err);
+      throw new Error(err?.data?.error || err?.message || 'Gagal menghapus shift di database backend.');
+    }
+
     hrmService.saveShifts(filtered);
-
-    // Sync to PostgreSQL backend asynchronously
-    api.delete(`/shifts/${id}`).catch((err) => console.warn('[Shift API] Error deleting shift:', err.message));
-
+    window.dispatchEvent(new Event('hrm_shifts_updated'));
     return true;
   },
 

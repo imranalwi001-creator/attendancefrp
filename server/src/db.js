@@ -440,7 +440,9 @@ export async function initDb() {
       -- 3. Terapkan indeks unik pada nama shift agar duplikasi tidak pernah terjadi lagi
       CREATE UNIQUE INDEX IF NOT EXISTS idx_hrm_shifts_unique_name ON hrm_shifts(name);
 
-      -- 3b. Pastikan kolom waktu istirahat (break time) tersedia di hrm_shifts
+      -- 3b. Pastikan kolom waktu istirahat (break time) dan code tersedia di hrm_shifts
+      ALTER TABLE hrm_shifts ALTER COLUMN name TYPE VARCHAR(150);
+      ALTER TABLE hrm_shifts ADD COLUMN IF NOT EXISTS code VARCHAR(30);
       ALTER TABLE hrm_shifts
       ADD COLUMN IF NOT EXISTS break_start_time TIME DEFAULT '12:00:00',
       ADD COLUMN IF NOT EXISTS break_end_time TIME DEFAULT '13:00:00',
