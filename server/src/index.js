@@ -1050,17 +1050,49 @@ app.put('/api/shifts/:id', async (req, res) => {
 app.delete('/api/shifts/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const userCheck = await pool.query('SELECT count(*) FROM hrm_profiles WHERE shift_id = $1', [id]);
-    if (parseInt(userCheck.rows[0].count) > 0) {
-      return res.status(400).json({ success: false, error: 'Shift tidak dapat dihapus karena masih digunakan oleh karyawan.' });
+    const isUuid = UUID_REGEX.test(id);
+    let targetShift = null;
+
+    if (isUuid) {
+      const sRes = await pool.query('SELECT * FROM hrm_shifts WHERE id = $1', [id]);
+      if (sRes.rows.length > 0) targetShift = sRes.rows[0];
+    } else {
+      const sRes = await pool.query('SELECT * FROM hrm_shifts WHERE code = $1 OR name ILIKE $1 LIMIT 1', [id]);
+      if (sRes.rows.length > 0) targetShift = sRes.rows[0];
     }
+
+    if (!targetShift) {
+      return res.json({ success: true, message: 'Shift tidak ada di database atau sudah terhapus.' });
+    }
+
+    const shiftUuid = targetShift.id;
+
+    if (targetShift.is_default) {
+      return res.status(400).json({ success: false, error: 'Shift utama (default) tidak dapat dihapus.' });
+    }
+
     const countCheck = await pool.query('SELECT count(*) FROM hrm_shifts');
     if (parseInt(countCheck.rows[0].count) <= 1) {
       return res.status(400).json({ success: false, error: 'Minimal harus ada 1 shift yang aktif di sistem.' });
     }
-    await pool.query('DELETE FROM hrm_shifts WHERE id = $1', [id]);
-    res.json({ success: true, message: 'Shift berhasil dihapus' });
+
+    const userCheck = await pool.query('SELECT count(*) FROM hrm_profiles WHERE shift_id = $1', [shiftUuid]);
+    if (parseInt(userCheck.rows[0].count) > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Shift "${targetShift.name}" tidak dapat dihapus karena masih digunakan oleh ${userCheck.rows[0].count} karyawan.`
+      });
+    }
+
+    // Unlink any foreign key references gracefully
+    await pool.query('UPDATE hrm_shift_substitutions SET shift_id = NULL WHERE shift_id = $1', [shiftUuid]).catch(() => {});
+    await pool.query('UPDATE hrm_employee_schedules SET shift_id = NULL WHERE shift_id = $1', [shiftUuid]).catch(() => {});
+    await pool.query('UPDATE hrm_attendances SET shift_id = NULL WHERE shift_id = $1', [shiftUuid]).catch(() => {});
+
+    await pool.query('DELETE FROM hrm_shifts WHERE id = $1', [shiftUuid]);
+    res.json({ success: true, message: `Shift "${targetShift.name}" berhasil dihapus.` });
   } catch (err) {
+    console.error('[Delete Shift Error]', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1416,8 +1448,8 @@ app.put('/api/users/:id', async (req, res) => {
         postal_code = COALESCE($15, postal_code),
         gender = COALESCE($16, gender),
         birth_place = COALESCE($17, birth_place),
-        birth_date = COALESCE($18, birth_date),
         emergency_contact = COALESCE($19, emergency_contact),
+        emergency_phone = COALESCE($20, emergency_phone),
         annual_leave_quota = COALESCE($21, annual_leave_quota),
         used_leave_days = COALESCE($22, used_leave_days),
         permission_quota = COALESCE($23, permission_quota),

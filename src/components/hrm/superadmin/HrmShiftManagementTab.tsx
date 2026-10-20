@@ -177,12 +177,18 @@ export const HrmShiftManagementTab: React.FC = () => {
 
   const handleOpenAssign = (u: UserProfile) => {
     setSelectedUser(u);
-    setTargetShiftId(u.shiftId || (shifts[0] ? shifts[0].id : ''));
+    const validShift = shifts.find((s) => s.id === u.shiftId);
+    const defaultShift = shifts.find((s) => s.isDefault);
+    const fallbackId = validShift ? validShift.id : (defaultShift ? defaultShift.id : (shifts[0] ? shifts[0].id : ''));
+    setTargetShiftId(fallbackId);
     setAssignModalOpen(true);
   };
 
   const handleSaveUserShift = async () => {
-    if (!selectedUser || !targetShiftId) return;
+    if (!selectedUser || !targetShiftId) {
+      toast.error('Silakan pilih shift yang valid');
+      return;
+    }
     setIsSubmitting(true);
     try {
       const targetShift = shifts.find((s) => s.id === targetShiftId);
@@ -194,16 +200,16 @@ export const HrmShiftManagementTab: React.FC = () => {
         shiftName: shiftName,
       });
 
-      // 2. Perbarui state lokal & sinkronisasi
+      // 2. Perbarui state lokal & sinkronisasi paksa
       hrmService.updateUser(selectedUser.id, {
         shiftId: targetShiftId,
         shiftName: shiftName,
       });
-      await hrmService.syncWithBackend().catch(() => null);
+      await hrmService.syncWithBackend(true).catch(() => null);
 
       toast.success(`Jadwal shift untuk ${selectedUser.fullName || selectedUser.name} berhasil diperbarui di database & PWA.`);
       setAssignModalOpen(false);
-      loadData();
+      await loadData();
     } catch (err: any) {
       console.error('[AssignShift Error]', err);
       toast.error('Gagal memperbarui shift: ' + (err.message || 'Koneksi database terganggu'));
