@@ -1448,6 +1448,7 @@ app.put('/api/users/:id', async (req, res) => {
         postal_code = COALESCE($15, postal_code),
         gender = COALESCE($16, gender),
         birth_place = COALESCE($17, birth_place),
+        birth_date = COALESCE($18, birth_date),
         emergency_contact = COALESCE($19, emergency_contact),
         emergency_phone = COALESCE($20, emergency_phone),
         annual_leave_quota = COALESCE($21, annual_leave_quota),
