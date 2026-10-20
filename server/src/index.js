@@ -1709,6 +1709,15 @@ app.post('/api/attendances/clock-in', async (req, res) => {
           }
         }
 
+        // Prioritas Khusus: Jika karyawan memiliki jam kerja khusus (custom_start_time), prioritaskan jam kerja tersebut
+        if (userProfile && userProfile.custom_start_time) {
+          shiftStartTime = userProfile.custom_start_time.substring(0, 5);
+          if (userProfile.custom_end_time) {
+            shiftEndTime = userProfile.custom_end_time.substring(0, 5);
+          }
+          activeShiftName = `Shift Khusus (${shiftStartTime} - ${shiftEndTime} WITA)`;
+        }
+
         const [sH, sM] = shiftStartTime.split(':').map(Number);
         const [eH, eM] = shiftEndTime.split(':').map(Number);
         const startMins = (sH || 7) * 60 + (sM || 30);
@@ -2073,7 +2082,10 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       if (isSimulationSession) {
         finalStatus = 'hadir';
         finalLateMinutes = 0;
-      } else if (shiftStartTime) {
+      } else if (shiftStartTime || (userProfile && userProfile.custom_start_time)) {
+        if (userProfile && userProfile.custom_start_time) {
+          shiftStartTime = userProfile.custom_start_time.substring(0, 5);
+        }
         const [sH, sM] = shiftStartTime.split(':').map(Number);
         const startMins = (sH || 7) * 60 + (sM || 30);
         let curMins = 0;

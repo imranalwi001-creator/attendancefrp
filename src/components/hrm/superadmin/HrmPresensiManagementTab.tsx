@@ -411,7 +411,7 @@ export const HrmPresensiManagementTab: React.FC = () => {
                           </td>
                           <td className="py-3 px-4 text-center whitespace-nowrap">
                             {getStatusBadge(att.status)}
-                            {att.lateMinutes && att.lateMinutes > 0 ? (
+                            {(att.status === 'terlambat' || att.status === 'late') && att.lateMinutes && att.lateMinutes > 0 ? (
                               <p className="text-[10px] text-amber-600 font-mono mt-0.5">+{att.lateMinutes}m</p>
                             ) : null}
                           </td>
