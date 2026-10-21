@@ -289,7 +289,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       return {
         user: u,
         attendance: att,
-        status: !att ? 'absent' : att.status === 'terlambat' ? 'late' : 'present',
+        status: !att ? 'absent' : (att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0)) ? 'late' : 'present',
         totalLateMinutes: att?.lateMinutes || 0,
         lateCount: att && (att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0)) ? 1 : 0,
         totalAttCount: att ? 1 : 0,

@@ -2629,7 +2629,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
         const tolerance = userShift.lateToleranceMinutes ?? 15;
         if (diff > tolerance) {
-          lateMinutes = diff;
+          lateMinutes = diff - tolerance;
           status = 'terlambat';
         } else {
           lateMinutes = 0;

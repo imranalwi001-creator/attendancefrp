@@ -3207,7 +3207,7 @@ export const hrmService = {
 
     if (!dailySchedule?.isOff && currentTotalMinutes > shiftStartTotalMinutes + tolerance) {
       status = 'terlambat';
-      lateMinutes = currentTotalMinutes - shiftStartTotalMinutes;
+      lateMinutes = currentTotalMinutes - (shiftStartTotalMinutes + tolerance);
     }
 
     const all = hrmService.getAttendances();

@@ -2107,7 +2107,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         const tolerance = userProfile?.late_tolerance_minutes ?? 15;
         if (diff > tolerance) {
           finalStatus = 'terlambat';
-          finalLateMinutes = diff;
+          finalLateMinutes = diff - tolerance;
         } else {
           finalStatus = 'hadir';
           finalLateMinutes = 0;
