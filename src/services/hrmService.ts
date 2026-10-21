@@ -31,6 +31,7 @@ import {
   DisciplinaryRecord,
   DisciplinaryStatus,
   EmployeeKpiRecord,
+  isLeadershipSpecialFieldOfficer,
 } from '@/types/hrm';
 import { api } from './apiClient';
 import { payrollTaxEngine } from './payrollTaxEngine';
@@ -5462,8 +5463,12 @@ export const hrmService = {
     const grossIncome = baseSalary + fixedAllowances + otherTotal + overtimePay;
 
     // ── Deductions ──
-    const lateDeduction = settings.isLateDeductionEnabled === true
-      ? totalLateMinutes * settings.lateDeductionPerMinute
+    const isSpecialOfficer = isLeadershipSpecialFieldOfficer(employee) || isLeadershipSpecialFieldOfficer(userId);
+    const isLateEnabled = isSpecialOfficer || employee.isLateDeductionEnabled === true || profile?.isLateDeductionEnabled === true || settings.isLateDeductionEnabled === true;
+    const ratePerMinute = employee.lateDeductionPerMinute || profile?.lateDeductionPerMinute || (isSpecialOfficer ? 1000 : (settings.lateDeductionPerMinute || 1000));
+
+    const lateDeduction = isLateEnabled
+      ? totalLateMinutes * ratePerMinute
       : 0;
     const absenceDeduction = absentCount * settings.absenceDeductionPerDay;
     const bpjsKesehatan = Math.round((settings.bpjsKesehatanEmployee / 100) * baseSalary);

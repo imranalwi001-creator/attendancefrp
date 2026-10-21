@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
-import { UserProfile, AttendanceRecord, OvertimeRecord, Shift } from '@/types/hrm';
+import { UserProfile, AttendanceRecord, OvertimeRecord, Shift, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
 import { hrmService } from '@/services/hrmService';
 import {
   Printer,
@@ -276,6 +276,13 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
     };
   }, [monthDaysData]);
 
+  // Per-employee Lateness Penalty: Rp 1.000/menit for Special Officers (Aslam, Samsi, Takdir)
+  const isSpecialTarget = selectedEmployee
+    ? isLeadershipSpecialFieldOfficer(selectedEmployee) || selectedEmployee.isLateDeductionEnabled === true
+    : false;
+  const lateRatePerMin = selectedEmployee?.lateDeductionPerMinute || 1000;
+  const totalLatePenalty = summary.totalLateMinutes * lateRatePerMin;
+
   // Handle Print Action
   const handlePrint = () => {
     window.print();
@@ -361,6 +368,22 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
       '',
       '',
     ]);
+
+    if (isSpecialTarget) {
+      wsData.push([
+        'POTONGAN KETERLAMBATAN:',
+        `Tarif: Rp ${lateRatePerMin.toLocaleString('id-ID')} / Menit`,
+        `Total Durasi: ${summary.totalLateMinutes} Menit`,
+        `TOTAL POTONGAN: Rp ${totalLatePenalty.toLocaleString('id-ID')}`,
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+      ]);
+    }
 
     // 7. Signatures
     wsData.push([]);
@@ -611,6 +634,13 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
                     {polaShift}
                   </span>
                 </div>
+                {isSpecialTarget && (
+                  <div className="flex text-rose-800 font-bold bg-rose-50/80 px-1 py-0.5 rounded border border-rose-200 mt-1">
+                    <span className="w-28 font-bold">DENDA TELAT</span>
+                    <span className="w-3">:</span>
+                    <span className="font-mono">Rp {lateRatePerMin.toLocaleString('id-ID')} / Menit (Aktif)</span>
+                  </div>
+                )}
               </div>
 
               {/* Right Column */}
@@ -775,8 +805,16 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
                     <td className="border border-slate-900 py-2 text-sky-900 font-black">
                       {summary.totalOtHours} Jam
                     </td>
-                    <td colSpan={3} className="border border-slate-900 py-2 text-left px-2 font-normal text-[9px] text-slate-600">
-                      * Data presensi dan durasi lembur diverifikasi sistem secara sah & mutlak.
+                    <td colSpan={3} className="border border-slate-900 py-2 text-left px-2 font-normal text-[9px]">
+                      {isSpecialTarget ? (
+                        <div className="font-semibold text-rose-900 bg-rose-50 p-1 rounded border border-rose-200 leading-tight">
+                          <span className="font-bold underline text-rose-950">POTONGAN KETERLAMBATAN:</span> Rp {lateRatePerMin.toLocaleString('id-ID')}/mnt
+                          <br />
+                          Total Denda: <span className="font-black text-[10px] text-rose-950">Rp {totalLatePenalty.toLocaleString('id-ID')}</span> ({summary.totalLateMinutes} Menit)
+                        </div>
+                      ) : (
+                        <span className="text-slate-600">* Data presensi dan durasi lembur diverifikasi sistem secara sah & mutlak.</span>
+                      )}
                     </td>
                   </tr>
                 </tfoot>

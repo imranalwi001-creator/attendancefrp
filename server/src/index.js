@@ -475,6 +475,8 @@ function formatUserRow(r) {
     currentActivePostEnteredAt: r.current_active_post_entered_at || null,
     allowedPosts: r.allowed_posts ? (typeof r.allowed_posts === 'string' ? JSON.parse(r.allowed_posts) : r.allowed_posts) : [],
     allowOgsClockOut: r.allow_ogs_clock_out !== false,
+    isLateDeductionEnabled: r.is_late_deduction_enabled === true || isSpecial,
+    lateDeductionPerMinute: r.late_deduction_per_minute ? parseFloat(r.late_deduction_per_minute) : (isSpecial ? 1000.00 : 1000.00),
     createdAt: r.created_at,
   };
 }
