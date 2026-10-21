@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord } from '@/types/hrm';
+import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile } from '@/types/hrm';
+import { HrmAbsenSplModal } from '@/components/hrm/HrmAbsenSplModal';
 import defaultLogo from '@/assets/logo.png';
 import {
   FileSpreadsheet,
@@ -69,6 +70,8 @@ export const HrmReportsPage: React.FC = () => {
   // Professional Print Modal State
   const [printModalOpen, setPrintModalOpen] = useState(false);
   const [otPrintModalOpen, setOtPrintModalOpen] = useState(false);
+  const [absenSplModalOpen, setAbsenSplModalOpen] = useState(false);
+  const [employees, setEmployees] = useState<UserProfile[]>([]);
   const [leaderSignName, setLeaderSignName] = useState('Drs. Hendra Setiawan, M.M.');
   const [hrdSignName, setHrdSignName] = useState(user?.fullName || 'Budi Santoso, S.Psi.');
   const [financeSignName, setFinanceSignName] = useState('Siti Aminah, S.E.');
@@ -82,6 +85,7 @@ export const HrmReportsPage: React.FC = () => {
     setDivisions(hrmService.getDivisions());
     setAppSettings(hrmService.getAppSettings());
     setOffice(hrmService.getOfficeLocation());
+    setEmployees(hrmService.getUsers().filter((u) => u.isActive));
   };
 
   useEffect(() => {
@@ -395,6 +399,12 @@ export const HrmReportsPage: React.FC = () => {
 
           {activeTab === 'attendance' ? (
             <>
+              <Button
+                onClick={() => setAbsenSplModalOpen(true)}
+                className="bg-teal-700 hover:bg-teal-600 text-white text-xs gap-2 font-semibold shadow-sm rounded-xl h-9 border border-teal-500/40"
+              >
+                <FileText className="w-4 h-4 text-teal-200" /> Form ABSEN/SPL Resmi
+              </Button>
               <Button
                 onClick={() => setPrintModalOpen(true)}
                 className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs gap-2 font-medium shadow-sm rounded-xl h-9"
@@ -1602,6 +1612,15 @@ export const HrmReportsPage: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Official Form ABSEN/SPL Modal */}
+      <HrmAbsenSplModal
+        isOpen={absenSplModalOpen}
+        onClose={() => setAbsenSplModalOpen(false)}
+        employees={employees}
+        attendances={attendances}
+        overtimes={overtimes}
+      />
     </div>
   );
 };

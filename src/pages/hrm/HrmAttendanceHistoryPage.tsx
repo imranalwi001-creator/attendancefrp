@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService } from '@/services/hrmService';
-import { AttendanceRecord, UserProfile } from '@/types/hrm';
-import { CalendarDays, Camera, Eye, ShieldCheck, MapPin, Search, RefreshCw, ShieldAlert, AlertTriangle } from 'lucide-react';
+import { AttendanceRecord, UserProfile, OvertimeRecord } from '@/types/hrm';
+import { CalendarDays, Camera, Eye, ShieldCheck, MapPin, Search, RefreshCw, ShieldAlert, AlertTriangle, FileText } from 'lucide-react';
+import { HrmAbsenSplModal } from '@/components/hrm/HrmAbsenSplModal';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -26,6 +27,8 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
   const { user } = useHrmAuth();
   const [history, setHistory] = useState<AttendanceRecord[]>([]);
   const [employees, setEmployees] = useState<UserProfile[]>([]);
+  const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
+  const [absenSplModalOpen, setAbsenSplModalOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterMonth, setFilterMonth] = useState<string>('all');
@@ -95,6 +98,7 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
     if (!user) return;
     const allUsers = hrmService.getUsers().filter((u) => u.isActive);
     setEmployees(allUsers);
+    setOvertimes(hrmService.getOvertimeRecords());
 
     const allAttendances = hrmService.getAttendances();
     if (isPrivileged) {
@@ -190,6 +194,15 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
           >
             <RefreshCw className="w-3.5 h-3.5 text-primary" />
             Sinkronkan Realtime
+          </Button>
+
+          <Button
+            size="sm"
+            onClick={() => setAbsenSplModalOpen(true)}
+            className="bg-teal-700 hover:bg-teal-600 text-white rounded-xl text-xs gap-1.5 h-9 font-semibold shadow-xs"
+          >
+            <FileText className="w-3.5 h-3.5 text-teal-200" />
+            Form ABSEN/SPL Resmi
           </Button>
 
           <Select value={filterMonth} onValueChange={setFilterMonth}>
@@ -602,6 +615,17 @@ export const HrmAttendanceHistoryPage: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Official Form ABSEN/SPL Modal */}
+      <HrmAbsenSplModal
+        isOpen={absenSplModalOpen}
+        onClose={() => setAbsenSplModalOpen(false)}
+        employees={employees}
+        initialUserId={selectedUserId !== 'all' ? selectedUserId : (user?.id || undefined)}
+        initialMonth={filterMonth !== 'all' ? filterMonth : undefined}
+        attendances={history}
+        overtimes={overtimes}
+      />
     </div>
   );
 };

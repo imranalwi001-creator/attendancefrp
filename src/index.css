@@ -367,7 +367,9 @@ All colors MUST be HSL.
       visibility: hidden;
     }
     #printable-report-sheet,
-    #printable-report-sheet * {
+    #printable-report-sheet *,
+    #printable-absen-spl,
+    #printable-absen-spl * {
       visibility: visible;
     }
     #printable-report-sheet {
@@ -379,6 +381,18 @@ All colors MUST be HSL.
       padding: 15mm 20mm !important;
       background: #ffffff !important;
       color: #0f172a !important;
+      box-shadow: none !important;
+      border: none !important;
+    }
+    #printable-absen-spl {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100% !important;
+      margin: 0 !important;
+      padding: 8mm 12mm !important;
+      background: #ffffff !important;
+      color: #000000 !important;
       box-shadow: none !important;
       border: none !important;
     }
