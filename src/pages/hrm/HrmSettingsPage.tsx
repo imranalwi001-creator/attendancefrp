@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { hrmService } from '@/services/hrmService';
-import { OfficeLocation, Shift, AppSettings, OvertimeSettings, CompanyProfile, CompanyDocument, CompanyDocumentType } from '@/types/hrm';
+import { OfficeLocation, Shift, AppSettings, OvertimeSettings, CompanyProfile, CompanyDocument, CompanyDocumentType, PayrollSettings } from '@/types/hrm';
+import { Switch } from '@/components/ui/switch';
 import defaultLogo from '@/assets/logo.png';
 import {
   Settings,
@@ -160,6 +161,11 @@ export const HrmSettingsPage: React.FC = () => {
   const [overtimeSettings, setOvertimeSettings] = useState<OvertimeSettings>(hrmService.getOvertimeSettings());
   const [overtimeMessage, setOvertimeMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Lateness & Discipline Policy State (Superadmin)
+  const [payrollSettings, setPayrollSettings] = useState<PayrollSettings>(hrmService.getPayrollSettings());
+  const [disciplineMessage, setDisciplineMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [savingDiscipline, setSavingDiscipline] = useState(false);
+
   const [simHours, setSimHours] = useState<number>(3);
   const [simIsWeekend, setSimIsWeekend] = useState<boolean>(false);
 
@@ -181,6 +187,37 @@ export const HrmSettingsPage: React.FC = () => {
     }
   };
 
+  const handleSaveDiscipline = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingDiscipline(true);
+    try {
+      hrmService.updatePayrollSettings(payrollSettings);
+
+      await fetch('/api/payroll/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payrollSettings),
+      }).catch(() => null);
+
+      window.dispatchEvent(new Event('hrm_data_updated'));
+      window.dispatchEvent(new Event('hrm_payroll_settings_updated'));
+
+      setDisciplineMessage({
+        type: 'success',
+        text: `Pengaturan potongan keterlambatan berhasil diperbarui! Status saat ini: ${
+          payrollSettings.isLateDeductionEnabled ? 'AKTIF (Potong Gaji)' : 'NONAKTIF (Standar FRP - Evaluasi Kinerja)'
+        }.`,
+      });
+      toast.success('Kebijakan kedisiplinan & potongan keterlambatan berhasil disimpan ke database!');
+      setTimeout(() => setDisciplineMessage(null), 5000);
+    } catch (err: any) {
+      setDisciplineMessage({ type: 'error', text: err.message || 'Gagal menyimpan pengaturan kedisiplinan' });
+      toast.error('Gagal menyimpan kebijakan kedisiplinan.');
+    } finally {
+      setSavingDiscipline(false);
+    }
+  };
+
   useEffect(() => {
     const s = hrmService.getAppSettings();
     setAppSettings(s);
@@ -190,6 +227,18 @@ export const HrmSettingsPage: React.FC = () => {
     setOvertimeSettings(hrmService.getOvertimeSettings());
     setCompanyProfile(hrmService.getCompanyProfile());
     setCompanyDocs(hrmService.getCompanyDocuments());
+    setPayrollSettings(hrmService.getPayrollSettings());
+
+    // Fetch live settings from database backend
+    fetch('/api/payroll/settings')
+      .then((res) => res.json())
+      .then((res) => {
+        if (res && res.success && res.data) {
+          setPayrollSettings((prev) => ({ ...prev, ...res.data }));
+          hrmService.updatePayrollSettings(res.data);
+        }
+      })
+      .catch(() => null);
 
     const handleShiftsUpdate = () => {
       setShifts(hrmService.getShifts());
@@ -487,6 +536,7 @@ export const HrmSettingsPage: React.FC = () => {
     { id: 'shift', label: 'Shift Kerja', icon: Clock },
     { id: 'istirahat', label: 'Jam Istirahat', icon: Coffee },
     { id: 'lembur', label: 'Lembur', icon: Zap },
+    { id: 'kedisiplinan', label: 'Kedisiplinan & Potongan', icon: AlertTriangle },
   ];
 
   return (
@@ -1526,6 +1576,196 @@ export const HrmSettingsPage: React.FC = () => {
             <div className="flex justify-end">
               <Button type="submit" className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold gap-2 text-sm rounded-xl px-6">
                 <Save className="w-4 h-4" /> Simpan Pengaturan Lembur
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ═══ TAB: KEDISIPLINAN & POTONGAN KETERLAMBATAN ════════════════════════════ */}
+      {activeTab === 'kedisiplinan' && (
+        <div className="space-y-5">
+          {disciplineMessage && (
+            <Alert
+              className={`py-2 text-xs ${
+                disciplineMessage.type === 'success'
+                  ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400'
+                  : 'border-destructive/20 bg-destructive/5 text-destructive'
+              }`}
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <AlertDescription>{disciplineMessage.text}</AlertDescription>
+            </Alert>
+          )}
+
+          <form onSubmit={handleSaveDiscipline} className="space-y-5">
+            {/* Master Toggle Card */}
+            <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
+              <CardHeader className="pb-3 border-b border-border/60">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-500" />
+                      Kebijakan Pemotongan Gaji atas Keterlambatan
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      Kendali penuh Superadmin untuk mengaktifkan atau menonaktifkan pemotongan gaji akibat keterlambatan kerja.
+                    </CardDescription>
+                  </div>
+                  <Badge
+                    variant="outline"
+                    className={`text-xs px-3 py-1 font-bold ${
+                      payrollSettings.isLateDeductionEnabled
+                        ? 'bg-rose-500/10 text-rose-600 border-rose-300'
+                        : 'bg-emerald-500/10 text-emerald-600 border-emerald-300'
+                    }`}
+                  >
+                    {payrollSettings.isLateDeductionEnabled ? '🔴 STATUS: AKTIF (POTONG GAJI)' : '🟢 STATUS: NONAKTIF (STANDAR FRP)'}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="p-5 space-y-4">
+                {/* Large Switch Toggle */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl border border-border/80 bg-muted/30">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="master-late-deduction-toggle" className="text-sm font-bold text-foreground cursor-pointer">
+                        Aktifkan Pemotongan Gaji Keterlambatan
+                      </Label>
+                    </div>
+                    <p className="text-xs text-muted-foreground leading-relaxed max-w-2xl">
+                      {payrollSettings.isLateDeductionEnabled
+                        ? 'Sistem secara otomatis mengalikan total menit keterlambatan dengan tarif per menit dan memotong nominal gaji pokok karyawan pada slip gaji bulanan.'
+                        : 'Standar PT FRP saat ini: Keterlambatan tetap dicatat secara presisi & realtime pada Form ABSEN/SPL dan radar pengawasan Direktur/Pimpinan, namun TIDAK memotong nominal uang gaji karyawan.'}
+                    </p>
+                  </div>
+                  <Switch
+                    id="master-late-deduction-toggle"
+                    checked={payrollSettings.isLateDeductionEnabled === true}
+                    onCheckedChange={(val) =>
+                      setPayrollSettings((prev) => ({ ...prev, isLateDeductionEnabled: val }))
+                    }
+                  />
+                </div>
+
+                {/* Status Notice Callout */}
+                <div
+                  className={`p-3.5 rounded-xl border text-xs leading-relaxed ${
+                    payrollSettings.isLateDeductionEnabled
+                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200'
+                      : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-900 dark:text-emerald-200'
+                  }`}
+                >
+                  <p className="font-bold flex items-center gap-1.5">
+                    {payrollSettings.isLateDeductionEnabled ? '⚠️ Perhatian Mode Pemotongan Aktif:' : 'ℹ️ Informasi Mode Standar FRP:'}
+                  </p>
+                  <p className="mt-1">
+                    {payrollSettings.isLateDeductionEnabled
+                      ? 'Setiap menit keterlambatan yang tercatat pada absensi akan dikurangi dari penghasilan bulanan karyawan. Pastikan seluruh izin dinas/lapangan telah disetujui atasan sebelum tutup periode payroll.'
+                      : 'Karyawan menerima gaji penuh tanpa denda potongan keterlambatan. Rekapitulasi menit keterlambatan tetap tersedia lengkap di menu Laporan, Form ABSEN/SPL, dan radar kinerja pimpinan untuk pembinaan disiplin.'}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Parameter Tarif Potongan */}
+            <Card className="border-border bg-card rounded-xl shadow-sm">
+              <CardHeader className="pb-3 border-b border-border/60">
+                <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                  <Coins className="w-4 h-4 text-primary" />
+                  Parameter Tarif Potongan & Ketidakhadiran
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Konfigurasi besaran nominal potongan jika pemotongan diaktifkan.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-5 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Tarif Potongan per Menit Terlambat</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">
+                        Rp
+                      </span>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={500}
+                        value={payrollSettings.lateDeductionPerMinute || 1000}
+                        onChange={(e) =>
+                          setPayrollSettings((prev) => ({
+                            ...prev,
+                            lateDeductionPerMinute: Number(e.target.value) || 0,
+                          }))
+                        }
+                        className="pl-9 text-xs rounded-xl font-mono font-bold"
+                        placeholder="1000"
+                      />
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Contoh: Karyawan telat 20 menit = Rp {(20 * (payrollSettings.lateDeductionPerMinute || 1000)).toLocaleString('id-ID')}
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Potongan Ketidakhadiran / Alfa per Hari</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">
+                        Rp
+                      </span>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={5000}
+                        value={payrollSettings.absenceDeductionPerDay || 155000}
+                        onChange={(e) =>
+                          setPayrollSettings((prev) => ({
+                            ...prev,
+                            absenceDeductionPerDay: Number(e.target.value) || 0,
+                          }))
+                        }
+                        className="pl-9 text-xs rounded-xl font-mono font-bold"
+                        placeholder="155000"
+                      />
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Diterapkan jika karyawan tidak hadir tanpa keterangan izin/sakit/cuti yang sah.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Live Preview Box */}
+                <div className="p-4 rounded-xl bg-muted/40 border border-border">
+                  <p className="text-xs font-bold text-foreground flex items-center gap-1.5 mb-2">
+                    <Sparkles className="w-3.5 h-3.5 text-primary" />
+                    Simulasi Dampak terhadap Karyawan (Contoh: 1 Karyawan Telat 30 Menit Sebulan)
+                  </p>
+                  <div className="grid grid-cols-2 gap-3 text-center">
+                    <div className="p-3 bg-card rounded-lg border border-border">
+                      <p className="text-[11px] text-muted-foreground">Jika Mode NONAKTIF (Standar)</p>
+                      <p className="text-lg font-bold text-emerald-600 mt-0.5">Rp 0</p>
+                      <p className="text-[10px] text-muted-foreground">Gaji Utuh, tercatat di Form ABSEN/SPL</p>
+                    </div>
+                    <div className="p-3 bg-card rounded-lg border border-border">
+                      <p className="text-[11px] text-muted-foreground">Jika Mode AKTIF</p>
+                      <p className="text-lg font-bold text-rose-600 mt-0.5">
+                        - Rp {(30 * (payrollSettings.lateDeductionPerMinute || 1000)).toLocaleString('id-ID')}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">Dipangkas langsung dari slip gaji</p>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="flex justify-end">
+              <Button
+                type="submit"
+                disabled={savingDiscipline}
+                className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold gap-2 text-sm rounded-xl px-6 shadow-sm"
+              >
+                <Save className="w-4 h-4" />
+                {savingDiscipline ? 'Menyimpan...' : 'Simpan Kebijakan Kedisiplinan'}
               </Button>
             </div>
           </form>
