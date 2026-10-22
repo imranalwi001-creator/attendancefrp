@@ -5394,7 +5394,7 @@ app.get('/api/attendances/today', async (req, res) => {
 });
 
 app.get('/api/attendances', async (req, res) => {
-  const { date, userId, includePhoto } = req.query;
+  const { date, month, startDate, endDate, userId, includePhoto, limit } = req.query;
   try {
     const isFullPhoto = includePhoto === 'true';
     let query = isFullPhoto
@@ -5425,6 +5425,15 @@ app.get('/api/attendances', async (req, res) => {
     if (date) {
       params.push(date);
       conditions.push(`a.attendance_date = $${params.length}`);
+    } else if (month) {
+      params.push(month);
+      conditions.push(`TO_CHAR(a.attendance_date, 'YYYY-MM') = $${params.length}`);
+    } else if (startDate && endDate) {
+      params.push(startDate);
+      const pStart = params.length;
+      params.push(endDate);
+      const pEnd = params.length;
+      conditions.push(`a.attendance_date BETWEEN $${pStart} AND $${pEnd}`);
     }
     if (userId) {
       let resolvedUserId = userId;
@@ -5444,7 +5453,8 @@ app.get('/api/attendances', async (req, res) => {
     if (conditions.length > 0) {
       query += ' WHERE ' + conditions.join(' AND ');
     }
-    query += ' ORDER BY a.attendance_date DESC, a.clock_in DESC LIMIT 500';
+    const maxLimit = limit ? Math.min(parseInt(limit, 10), 10000) : (month || userId ? 5000 : 500);
+    query += ` ORDER BY a.attendance_date DESC, a.clock_in DESC LIMIT ${maxLimit}`;
     const result = await pool.query(query, params);
     const data = result.rows.map((a) => {
       const attDate = a.attendance_date ? (typeof a.attendance_date === 'string' ? a.attendance_date.substring(0, 10) : new Date(a.attendance_date).toISOString().split('T')[0]) : '';

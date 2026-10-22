@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile } from '@/types/hrm';
+import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile, Shift } from '@/types/hrm';
 import { HrmAbsenSplModal } from '@/components/hrm/HrmAbsenSplModal';
+import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMonthlyCalendarModal';
 import defaultLogo from '@/assets/logo.png';
 import {
   FileSpreadsheet,
@@ -23,6 +24,11 @@ import {
   CreditCard,
   CheckCheck,
   ShieldAlert,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  RotateCw,
+  Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -54,11 +60,18 @@ export const HrmReportsPage: React.FC = () => {
   const [appSettings, setAppSettings] = useState<AppSettings>(hrmService.getAppSettings());
   const [office, setOffice] = useState<OfficeLocation>(hrmService.getOfficeLocation());
 
-  // Attendance Filters
-  const [selectedDate, setSelectedDate] = useState<string>(getTodayDateStr());
+  // Attendance Filters & Monthly Navigation
+  const currentMonthStr = getTodayDateStr().slice(0, 7);
+  const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
+  const [attendanceViewMode, setAttendanceViewMode] = useState<'recap' | 'logs'>('recap');
+  const [selectedDate, setSelectedDate] = useState<string>(''); // Default kosong agar menampilkan data bulan terpilih
   const [filterDivision, setFilterDivision] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isFetchingMonth, setIsFetchingMonth] = useState<boolean>(false);
+  const [calendarModalOpen, setCalendarModalOpen] = useState<boolean>(false);
+  const [selectedCalendarUser, setSelectedCalendarUser] = useState<UserProfile | null>(null);
+  const [allShifts, setAllShifts] = useState<Shift[]>([]);
 
   // Overtime Filters
   const [selectedOtDate, setSelectedOtDate] = useState<string>('');
@@ -79,6 +92,40 @@ export const HrmReportsPage: React.FC = () => {
   const printAreaRef = useRef<HTMLDivElement>(null);
   const otPrintAreaRef = useRef<HTMLDivElement>(null);
 
+  // Parsing Tahun & Bulan Terpilih
+  const [selectedYearNum, selectedMonthNum] = React.useMemo(() => {
+    const parts = (selectedMonth || currentMonthStr).split('-').map(Number);
+    return [parts[0] || new Date().getFullYear(), parts[1] || new Date().getMonth() + 1];
+  }, [selectedMonth, currentMonthStr]);
+
+  const selectedMonthLabel = React.useMemo(() => {
+    const d = new Date(selectedYearNum, selectedMonthNum - 1, 1);
+    return d.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+  }, [selectedYearNum, selectedMonthNum]);
+
+  // Fetch data presensi dari PostgreSQL API saat bulan berganti
+  const fetchMonthAttendances = React.useCallback(async (monthStr: string) => {
+    try {
+      setIsFetchingMonth(true);
+      const res = await fetch(`/api/attendances?month=${monthStr}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          const monthAtts: AttendanceRecord[] = json.data;
+          setAttendances((prev) => {
+            const map = new Map(prev.map((a) => [a.id, a]));
+            monthAtts.forEach((a) => map.set(a.id, a));
+            return Array.from(map.values());
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[ReportsPage] Fetch month attendances warning:', e);
+    } finally {
+      setIsFetchingMonth(false);
+    }
+  }, []);
+
   const loadData = () => {
     setAttendances(hrmService.getAttendances());
     setOvertimes(hrmService.getOvertimeRecords());
@@ -86,20 +133,140 @@ export const HrmReportsPage: React.FC = () => {
     setAppSettings(hrmService.getAppSettings());
     setOffice(hrmService.getOfficeLocation());
     setEmployees(hrmService.getUsers().filter((u) => u.isActive));
+    setAllShifts(hrmService.getShifts());
+    fetchMonthAttendances(selectedMonth);
   };
 
   useEffect(() => {
     loadData();
   }, []);
 
+  useEffect(() => {
+    fetchMonthAttendances(selectedMonth);
+  }, [selectedMonth, fetchMonthAttendances]);
+
+  // Navigasi Bulan
+  const handlePrevMonth = () => {
+    let nextY = selectedYearNum;
+    let nextM = selectedMonthNum - 1;
+    if (nextM < 1) {
+      nextM = 12;
+      nextY -= 1;
+    }
+    const newMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
+    setSelectedMonth(newMonthStr);
+    setSelectedDate('');
+  };
+
+  const handleNextMonth = () => {
+    let nextY = selectedYearNum;
+    let nextM = selectedMonthNum + 1;
+    if (nextM > 12) {
+      nextM = 1;
+      nextY += 1;
+    }
+    const newMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
+    setSelectedMonth(newMonthStr);
+    setSelectedDate('');
+  };
+
+  const handleResetToCurrentMonth = () => {
+    setSelectedMonth(currentMonthStr);
+    setSelectedDate('');
+  };
+
+  // Matriks Rekapitulasi Presensi Bulanan Per Karyawan
+  const monthlyEmployeeRecap = React.useMemo(() => {
+    return employees.map((emp) => {
+      const empAtts = attendances.filter((a) => {
+        const isEmp = a.userId === emp.id || a.userId === emp.nip || (a.userNip && a.userNip === emp.nip);
+        const aDate = a.attendanceDate || (a as any).date;
+        const inMonth = aDate && aDate.startsWith(selectedMonth);
+        return isEmp && inMonth;
+      });
+
+      const onTimeCount = empAtts.filter((a) => a.status === 'hadir').length;
+      const lateAtts = empAtts.filter((a) => a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0));
+      const lateCount = lateAtts.length;
+      const totalLateMinutes = empAtts.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
+      const lateDeduction = totalLateMinutes * 1000;
+      const totalWorkMinutes = empAtts.reduce((sum, a) => sum + (a.workDurationMinutes || 0), 0);
+      const totalWorkHours = Number((totalWorkMinutes / 60).toFixed(1));
+      const perimeterBreachCount = empAtts.reduce((sum, a) => sum + (a.perimeterBreachCount || (a.isPerimeterBreached ? 1 : 0)), 0);
+
+      return {
+        user: emp,
+        totalAttendances: empAtts.length,
+        onTimeCount,
+        lateCount,
+        totalLateMinutes,
+        lateDeduction,
+        totalWorkHours,
+        perimeterBreachCount,
+        attendances: empAtts,
+      };
+    });
+  }, [employees, attendances, selectedMonth]);
+
+  const filteredMonthlyRecap = React.useMemo(() => {
+    return monthlyEmployeeRecap.filter((item) => {
+      const matchDiv = filterDivision === 'all' || (item.user.divisionName || '').toLowerCase() === filterDivision.toLowerCase() || item.user.divisionId === filterDivision;
+      const matchSearch =
+        item.user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.user.nip.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchDiv && matchSearch;
+    });
+  }, [monthlyEmployeeRecap, filterDivision, searchQuery]);
+
+  // Export Rekapitulasi Bulanan Seluruh Karyawan ke Excel (.xlsx)
+  const exportMonthlyRecapToExcel = () => {
+    const dataToExport = filteredMonthlyRecap.map((r, idx) => ({
+      No: idx + 1,
+      'Periode Bulan': selectedMonthLabel,
+      NIP: r.user.nip,
+      'Nama Karyawan': r.user.fullName,
+      Divisi: r.user.divisionName || '-',
+      'Total Kehadiran': r.totalAttendances,
+      'Hadir Tepat Waktu': r.onTimeCount,
+      'Hadir Terlambat': r.lateCount,
+      'Total Menit Terlambat': r.totalLateMinutes,
+      'Estimasi Denda Terlambat (Rp)': r.lateDeduction,
+      'Akumulasi Jam Kerja (Jam)': r.totalWorkHours,
+      'Pelanggaran Perimeter': r.perimeterBreachCount > 0 ? `${r.perimeterBreachCount}x Terdeteksi` : 'PATUH / NIHIL',
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, `Rekap ${selectedMonth}`);
+
+    worksheet['!cols'] = [
+      { wch: 6 },
+      { wch: 18 },
+      { wch: 14 },
+      { wch: 26 },
+      { wch: 22 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 20 },
+      { wch: 26 },
+      { wch: 24 },
+      { wch: 22 },
+    ];
+
+    XLSX.writeFile(workbook, `Rekapitulasi_Presensi_Bulanan_${selectedMonth}.xlsx`);
+  };
+
   const filteredList = attendances.filter((a) => {
-    const matchDate = !selectedDate || a.attendanceDate === selectedDate;
+    const aDate = a.attendanceDate || (a as any).date;
+    const matchMonth = aDate && aDate.startsWith(selectedMonth);
+    const matchDate = !selectedDate || aDate === selectedDate;
     const matchDiv = filterDivision === 'all' || (a.divisionName || '').toLowerCase() === filterDivision.toLowerCase();
     const matchStatus = filterStatus === 'all' || a.status === filterStatus;
     const matchSearch =
       (a.userName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (a.userNip || '').toLowerCase().includes(searchQuery.toLowerCase());
-    return matchDate && matchDiv && matchStatus && matchSearch;
+    return matchMonth && matchDate && matchDiv && matchStatus && matchSearch;
   });
 
   const totalRecords = filteredList.length;
@@ -236,9 +403,8 @@ export const HrmReportsPage: React.FC = () => {
     };
   });
 
-  // Current Month Lateness Summary (Realtime)
-  const currentMonthStr = getTodayDateStr().slice(0, 7);
-  const currentMonthAttendances = attendances.filter((a) => a.attendanceDate?.startsWith(currentMonthStr));
+  // Selected Month Lateness Summary (Realtime & Historical Synchronized)
+  const currentMonthAttendances = attendances.filter((a) => (a.attendanceDate || (a as any).date)?.startsWith(selectedMonth));
   const lateRecordsMonth = currentMonthAttendances.filter((a) => a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0));
 
   const employeeLatenessMap = new Map<string, {
@@ -413,15 +579,24 @@ export const HrmReportsPage: React.FC = () => {
               </Button>
               <Button
                 variant="outline"
-                onClick={exportToExcel}
-                className="text-xs gap-2 rounded-xl h-9 font-medium"
+                onClick={exportMonthlyRecapToExcel}
+                className="text-xs gap-1.5 rounded-xl h-9 font-semibold border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 shadow-xs"
+                title={`Ekspor Rekapitulasi Presensi Bulanan Seluruh Karyawan (${selectedMonthLabel})`}
               >
-                <FileDown className="w-4 h-4 text-primary" /> Excel (.xlsx)
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> Rekap Bulanan (.xlsx)
+              </Button>
+              <Button
+                variant="outline"
+                onClick={exportToExcel}
+                className="text-xs gap-1.5 rounded-xl h-9 font-medium"
+                title="Ekspor Log Presensi Harian"
+              >
+                <FileDown className="w-4 h-4 text-primary" /> Log Excel
               </Button>
               <Button
                 variant="outline"
                 onClick={exportToCsv}
-                className="text-xs gap-2 rounded-xl h-9 font-medium"
+                className="text-xs gap-1.5 rounded-xl h-9 font-medium"
               >
                 <Download className="w-4 h-4 text-primary" /> CSV
               </Button>
@@ -577,156 +752,393 @@ export const HrmReportsPage: React.FC = () => {
             </Card>
           </div>
 
-          {/* Filter Toolbar */}
-          <Card className="border-border bg-card rounded-xl shadow-sm">
-            <CardContent className="p-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="relative">
-                  <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-                  <Input
-                    type="text"
-                    placeholder="Cari karyawan, NIP..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9 text-xs rounded-xl h-9"
-                  />
+          {/* ── INTERACTIVE MONTH NAVIGATOR & VIEW MODE SWITCHER ── */}
+          <Card className="border-primary/30 bg-gradient-to-r from-card via-card to-primary/5 rounded-2xl shadow-xs overflow-hidden">
+            <CardContent className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              {/* Month Navigator Controls */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1 bg-muted/80 p-1 rounded-xl border border-border">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handlePrevMonth}
+                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
+                    title="Bulan Sebelumnya"
+                  >
+                    <ChevronLeft size={16} />
+                  </Button>
+                  <div className="flex items-center gap-1.5 px-3 font-semibold text-xs text-foreground min-w-[140px] justify-center">
+                    <Calendar className="w-3.5 h-3.5 text-primary" />
+                    <span>{selectedMonthLabel}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleNextMonth}
+                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
+                    title="Bulan Berikutnya"
+                  >
+                    <ChevronRight size={16} />
+                  </Button>
                 </div>
 
-                <div>
-                  <DatePicker
-                    value={selectedDate}
-                    onChange={(v) => setSelectedDate(v)}
-                    placeholder="Filter tanggal..."
-                  />
-                </div>
+                {selectedMonth !== currentMonthStr && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleResetToCurrentMonth}
+                    className="h-7 px-2.5 text-xs rounded-xl border-primary/30 text-primary hover:bg-primary/10 font-medium gap-1"
+                  >
+                    <RotateCw size={11} />
+                    Bulan Berjalan
+                  </Button>
+                )}
 
-                <div>
-                  <Select value={filterDivision} onValueChange={setFilterDivision}>
-                    <SelectTrigger className="text-xs rounded-xl h-9">
-                      <SelectValue placeholder="Semua Divisi" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Semua Divisi</SelectItem>
-                      {divisions.map((d) => (
-                        <SelectItem key={d.id} value={d.name}>
-                          {d.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <Badge variant="outline" className="text-xs bg-muted/40 font-mono border-border">
+                  {isFetchingMonth ? 'Sinkronisasi PostgreSQL...' : `${filteredMonthlyRecap.length} Karyawan`}
+                </Badge>
+              </div>
 
-                <div>
-                  <Select value={filterStatus} onValueChange={setFilterStatus}>
-                    <SelectTrigger className="text-xs rounded-xl h-9">
-                      <SelectValue placeholder="Status Kehadiran" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Semua Status</SelectItem>
-                      <SelectItem value="hadir">Hadir Tepat Waktu</SelectItem>
-                      <SelectItem value="terlambat">Terlambat</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+              {/* View Mode Toggle: Rekap Bulanan Karyawan vs Rincian Log Harian */}
+              <div className="flex items-center gap-1 bg-muted/80 p-1 rounded-xl border border-border self-end sm:self-auto">
+                <Button
+                  size="sm"
+                  variant={attendanceViewMode === 'recap' ? 'default' : 'ghost'}
+                  onClick={() => setAttendanceViewMode('recap')}
+                  className="h-7 px-2.5 text-xs rounded-lg font-medium gap-1.5"
+                >
+                  <Users size={12} />
+                  <span>Rekapan Bulanan Karyawan</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant={attendanceViewMode === 'logs' ? 'default' : 'ghost'}
+                  onClick={() => setAttendanceViewMode('logs')}
+                  className="h-7 px-2.5 text-xs rounded-lg font-medium gap-1.5"
+                >
+                  <FileText size={12} />
+                  <span>Log Detail Harian</span>
+                </Button>
               </div>
             </CardContent>
           </Card>
 
-          {/* Data Table */}
-          <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-border flex items-center justify-between">
-              <div>
-                <h2 className="text-sm font-semibold text-foreground">Rincian Data Log Presensi</h2>
-                <p className="text-xs text-muted-foreground">
-                  Menampilkan {filteredList.length} data presensi sesuai kriteria filter
-                </p>
-              </div>
-              {selectedDate && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setSelectedDate('')}
-                  className="text-xs text-muted-foreground hover:text-foreground h-8"
-                >
-                  <X className="w-3.5 h-3.5 mr-1" /> Tampilkan Semua Tanggal
-                </Button>
-              )}
-            </div>
+          {/* ── SUB-VIEW 1: REKAPAN BULANAN PER KARYAWAN ── */}
+          {attendanceViewMode === 'recap' ? (
+            <div className="space-y-4">
+              {/* Filter Bar Rekapan */}
+              <Card className="border-border bg-card rounded-xl shadow-xs">
+                <CardContent className="p-3">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="relative">
+                        <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                        <Input
+                          type="text"
+                          placeholder="Cari nama karyawan, NIP..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="pl-9 text-xs rounded-xl h-9"
+                        />
+                      </div>
+                      <Select value={filterDivision} onValueChange={setFilterDivision}>
+                        <SelectTrigger className="text-xs rounded-xl h-9">
+                          <SelectValue placeholder="Semua Divisi" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Semua Divisi</SelectItem>
+                          {divisions.map((d) => (
+                            <SelectItem key={d.id} value={d.name}>
+                              {d.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left">
-                <thead className="bg-muted/50 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
-                  <tr>
-                    <th className="py-3 px-4 font-semibold">Tanggal</th>
-                    <th className="py-3 px-4 font-semibold">Karyawan</th>
-                    <th className="py-3 px-4 font-semibold">Divisi</th>
-                    <th className="py-3 px-4 font-semibold">Jam Masuk</th>
-                    <th className="py-3 px-4 font-semibold">Jam Pulang</th>
-                    <th className="py-3 px-4 font-semibold">Keterlambatan</th>
-                    <th className="py-3 px-4 font-semibold">Disiplin Perimeter</th>
-                    <th className="py-3 px-4 font-semibold">Status</th>
-                    <th className="py-3 px-4 font-semibold">Catatan</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {filteredList.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} className="py-8 text-center text-muted-foreground">
-                        Tidak ada data log presensi yang cocok dengan kriteria pencarian.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredList.map((a) => (
-                      <tr key={a.id} className="hover:bg-muted/30 transition-colors">
-                        <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">
-                          {a.attendanceDate}
-                        </td>
-                        <td className="py-3 px-4">
-                          <p className="font-semibold text-foreground">{a.userName}</p>
-                          <p className="text-[10px] text-muted-foreground font-mono">{a.userNip}</p>
-                        </td>
-                        <td className="py-3 px-4 text-muted-foreground">{a.divisionName || '-'}</td>
-                        <td className="py-3 px-4 font-mono text-foreground font-medium">
-                          {a.clockIn || '-'}
-                        </td>
-                        <td className="py-3 px-4 font-mono text-foreground">
-                          {a.clockOut || '-'}
-                        </td>
-                        <td className="py-3 px-4">
-                          {a.lateMinutes > 0 ? (
-                            <span className="text-amber-600 font-medium">{a.lateMinutes} Menit</span>
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          {a.isPerimeterBreached || a.isLocked ? (
-                            <Badge variant="outline" className="bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[10px] gap-1 font-semibold">
-                              <ShieldAlert size={10} /> {a.perimeterBreachCount || 1}x Keluar
-                            </Badge>
-                          ) : (
-                            <span className="text-[11px] text-emerald-600 font-medium">✓ Patuh</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          {a.status === 'hadir' ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary/10 text-primary">Hadir</span>
-                          ) : a.status === 'terlambat' ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-600">Terlambat</span>
-                          ) : (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-muted text-muted-foreground">{a.status}</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 text-muted-foreground max-w-xs truncate text-[11px]">
-                          {a.notes || '-'}
-                        </td>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={exportMonthlyRecapToExcel}
+                      className="h-9 px-3 text-xs rounded-xl border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 font-semibold gap-1.5 shrink-0"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                      Ekspor Rekap ({selectedMonthLabel})
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Tabel Matriks Rekapitulasi Presensi Bulanan Seluruh Karyawan */}
+              <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-border flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                      <Users className="w-4 h-4 text-primary" />
+                      Rekapitulasi Presensi Bulanan Karyawan ({selectedMonthLabel})
+                    </h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Ringkasan kehadiran, frekuensi keterlambatan, akumulasi denda, dan audit disiplin seluruh personel aktif.
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="text-xs font-mono bg-muted/40 border-border">
+                    {filteredMonthlyRecap.length} Personel
+                  </Badge>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-muted/50 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+                      <tr>
+                        <th className="py-3 px-3 text-center font-semibold w-10">#</th>
+                        <th className="py-3 px-4 font-semibold min-w-[200px]">Karyawan</th>
+                        <th className="py-3 px-4 font-semibold min-w-[130px]">Divisi</th>
+                        <th className="py-3 px-3 text-center font-semibold">Total Hadir</th>
+                        <th className="py-3 px-3 text-center font-semibold">Tepat Waktu</th>
+                        <th className="py-3 px-3 text-center font-semibold">Terlambat</th>
+                        <th className="py-3 px-3 text-center font-semibold">Akumulasi Telat</th>
+                        <th className="py-3 px-4 text-right font-semibold">Estimasi Denda</th>
+                        <th className="py-3 px-3 text-center font-semibold">Jam Kerja</th>
+                        <th className="py-3 px-4 text-center font-semibold w-28">Aksi</th>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {filteredMonthlyRecap.length === 0 ? (
+                        <tr>
+                          <td colSpan={10} className="py-8 text-center text-muted-foreground">
+                            Tidak ada data karyawan yang cocok dengan kriteria pencarian.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredMonthlyRecap.map((r, idx) => (
+                          <tr key={r.user.id} className="hover:bg-muted/30 transition-colors">
+                            <td className="py-3 px-3 text-center font-mono text-muted-foreground">{idx + 1}</td>
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-7 h-7 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
+                                  {r.user.fullName.charAt(0)}
+                                </div>
+                                <div>
+                                  <p className="font-semibold text-foreground">{r.user.fullName}</p>
+                                  <p className="text-[10px] text-muted-foreground font-mono">{r.user.nip}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 text-muted-foreground">
+                              {r.user.divisionName || '-'}
+                            </td>
+                            <td className="py-3 px-3 text-center font-mono font-semibold text-foreground">
+                              {r.totalAttendances} Hari
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] rounded-full">
+                                {r.onTimeCount}x
+                              </Badge>
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              {r.lateCount > 0 ? (
+                                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] rounded-full">
+                                  {r.lateCount}x
+                                </Badge>
+                              ) : (
+                                <span className="text-muted-foreground/40 text-[11px]">-</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-center font-mono">
+                              {r.totalLateMinutes > 0 ? (
+                                <span className="font-bold text-amber-600">{r.totalLateMinutes} mnt</span>
+                              ) : (
+                                <span className="text-muted-foreground/40">-</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-right font-mono">
+                              {r.lateDeduction > 0 ? (
+                                <span className="font-bold text-rose-600">Rp {r.lateDeduction.toLocaleString('id-ID')}</span>
+                              ) : (
+                                <span className="text-muted-foreground/40">-</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-center font-mono text-foreground">
+                              {r.totalWorkHours} Jam
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2.5 text-[11px] rounded-lg gap-1 border-primary/30 text-primary hover:bg-primary/10 font-medium"
+                                onClick={() => {
+                                  setSelectedCalendarUser(r.user);
+                                  setCalendarModalOpen(true);
+                                }}
+                                title={`Buka Kalender Presensi Bulanan ${r.user.fullName}`}
+                              >
+                                <CalendarDays size={12} />
+                                <span>Kalender</span>
+                              </Button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
             </div>
-          </Card>
+          ) : (
+            /* ── SUB-VIEW 2: RINCIAN LOG DETAIL HARIAN ── */
+            <div className="space-y-4">
+              {/* Filter Toolbar */}
+              <Card className="border-border bg-card rounded-xl shadow-sm">
+                <CardContent className="p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                      <Input
+                        type="text"
+                        placeholder="Cari karyawan, NIP..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="pl-9 text-xs rounded-xl h-9"
+                      />
+                    </div>
+
+                    <div>
+                      <DatePicker
+                        value={selectedDate}
+                        onChange={(v) => setSelectedDate(v)}
+                        placeholder="Filter tanggal spesifik..."
+                      />
+                    </div>
+
+                    <div>
+                      <Select value={filterDivision} onValueChange={setFilterDivision}>
+                        <SelectTrigger className="text-xs rounded-xl h-9">
+                          <SelectValue placeholder="Semua Divisi" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Semua Divisi</SelectItem>
+                          {divisions.map((d) => (
+                            <SelectItem key={d.id} value={d.name}>
+                              {d.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Select value={filterStatus} onValueChange={setFilterStatus}>
+                        <SelectTrigger className="text-xs rounded-xl h-9">
+                          <SelectValue placeholder="Status Kehadiran" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Semua Status</SelectItem>
+                          <SelectItem value="hadir">Hadir Tepat Waktu</SelectItem>
+                          <SelectItem value="terlambat">Terlambat</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Data Table */}
+              <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-border flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-semibold text-foreground">Rincian Data Log Presensi ({selectedMonthLabel})</h2>
+                    <p className="text-xs text-muted-foreground">
+                      Menampilkan {filteredList.length} data presensi sesuai kriteria filter
+                    </p>
+                  </div>
+                  {selectedDate && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSelectedDate('')}
+                      className="text-xs text-muted-foreground hover:text-foreground h-8"
+                    >
+                      <X className="w-3.5 h-3.5 mr-1" /> Tampilkan Semua Tanggal Bulan Ini
+                    </Button>
+                  )}
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-muted/50 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+                      <tr>
+                        <th className="py-3 px-4 font-semibold">Tanggal</th>
+                        <th className="py-3 px-4 font-semibold">Karyawan</th>
+                        <th className="py-3 px-4 font-semibold">Divisi</th>
+                        <th className="py-3 px-4 font-semibold">Jam Masuk</th>
+                        <th className="py-3 px-4 font-semibold">Jam Pulang</th>
+                        <th className="py-3 px-4 font-semibold">Keterlambatan</th>
+                        <th className="py-3 px-4 font-semibold">Disiplin Perimeter</th>
+                        <th className="py-3 px-4 font-semibold">Status</th>
+                        <th className="py-3 px-4 font-semibold">Catatan</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {filteredList.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="py-8 text-center text-muted-foreground">
+                            Tidak ada data log presensi yang cocok dengan kriteria pencarian.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredList.map((a) => (
+                          <tr key={a.id} className="hover:bg-muted/30 transition-colors">
+                            <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">
+                              {a.attendanceDate}
+                            </td>
+                            <td className="py-3 px-4">
+                              <p className="font-semibold text-foreground">{a.userName}</p>
+                              <p className="text-[10px] text-muted-foreground font-mono">{a.userNip}</p>
+                            </td>
+                            <td className="py-3 px-4 text-muted-foreground">{a.divisionName || '-'}</td>
+                            <td className="py-3 px-4 font-mono text-foreground font-medium">
+                              {a.clockIn || '-'}
+                            </td>
+                            <td className="py-3 px-4 font-mono text-foreground">
+                              {a.clockOut || '-'}
+                            </td>
+                            <td className="py-3 px-4">
+                              {a.lateMinutes > 0 ? (
+                                <span className="text-amber-600 font-medium">{a.lateMinutes} Menit</span>
+                              ) : (
+                                <span className="text-muted-foreground">-</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {a.isPerimeterBreached || a.isLocked ? (
+                                <Badge variant="outline" className="bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[10px] gap-1 font-semibold">
+                                  <ShieldAlert size={10} /> {a.perimeterBreachCount || 1}x Keluar
+                                </Badge>
+                              ) : (
+                                <span className="text-[11px] text-emerald-600 font-medium">✓ Patuh</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {a.status === 'hadir' ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary/10 text-primary">Hadir</span>
+                              ) : a.status === 'terlambat' ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-600">Terlambat</span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-muted text-muted-foreground">{a.status}</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-muted-foreground max-w-xs truncate text-[11px]">
+                              {a.notes || '-'}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
         </>
       ) : (
         /* OVERTIME REPORT VIEW */
@@ -965,7 +1377,7 @@ export const HrmReportsPage: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <Clock className="w-4 h-4 text-amber-600" />
                   <h2 className="text-sm font-semibold text-foreground">
-                    Rekapitulasi Keterlambatan Bulan Berjalan ({new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })})
+                    Rekapitulasi Keterlambatan Bulan {selectedMonthLabel}
                   </h2>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
@@ -973,7 +1385,7 @@ export const HrmReportsPage: React.FC = () => {
                 </p>
               </div>
               <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-500/30 text-[10px] font-mono">
-                Real-Time
+                {selectedMonth === currentMonthStr ? 'Real-Time' : 'Arsip Bulanan'}
               </Badge>
             </div>
 
@@ -983,7 +1395,7 @@ export const HrmReportsPage: React.FC = () => {
                 <div className="p-3 bg-muted/40 rounded-xl border border-border">
                   <span className="text-muted-foreground text-xs block">Karyawan Terlambat</span>
                   <span className="text-lg font-bold text-foreground font-mono">{employeeLatenessList.length} Orang</span>
-                  <span className="text-[10px] text-muted-foreground block">({lateRecordsMonth.length} kali kejadian bulan ini)</span>
+                  <span className="text-[10px] text-muted-foreground block">({lateRecordsMonth.length} kali kejadian di {selectedMonthLabel})</span>
                 </div>
                 <div className="p-3 bg-muted/40 rounded-xl border border-border">
                   <span className="text-muted-foreground text-xs block">Akumulasi Keterlambatan</span>
@@ -1013,7 +1425,7 @@ export const HrmReportsPage: React.FC = () => {
                     {employeeLatenessList.length === 0 ? (
                       <tr>
                         <td colSpan={5} className="py-6 text-center text-muted-foreground">
-                          Luar biasa! Tidak ada catatan keterlambatan di bulan berjalan.
+                          Luar biasa! Tidak ada catatan keterlambatan di {selectedMonthLabel}.
                         </td>
                       </tr>
                     ) : (
@@ -1620,6 +2032,16 @@ export const HrmReportsPage: React.FC = () => {
         employees={employees}
         attendances={attendances}
         overtimes={overtimes}
+      />
+
+      {/* Modal Kalender Presensi Bulanan Karyawan */}
+      <HrmEmployeeMonthlyCalendarModal
+        isOpen={calendarModalOpen}
+        onClose={() => setCalendarModalOpen(false)}
+        user={selectedCalendarUser}
+        initialMonth={selectedMonth}
+        attendances={attendances}
+        allShifts={allShifts}
       />
     </div>
   );

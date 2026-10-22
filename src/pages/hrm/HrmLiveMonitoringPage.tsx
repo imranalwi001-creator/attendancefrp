@@ -33,6 +33,10 @@ import {
   Radio,
   FileImage,
   ExternalLink,
+  Calendar as CalendarIcon,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
@@ -59,6 +63,7 @@ import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { FieldPatrolCheck } from '@/types/hrm';
 import { HrmAssignFieldLocationModal } from '@/components/hrm/HrmAssignFieldLocationModal';
 import { HrmPatrolWatermarkPreviewModal } from '@/components/hrm/HrmPatrolWatermarkPreviewModal';
+import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMonthlyCalendarModal';
 
 export const HrmLiveMonitoringPage: React.FC = () => {
   const { user } = useHrmAuth();
@@ -110,6 +115,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
   const [allAttendances, setAllAttendances] = useState<AttendanceRecord[]>([]);
   const [periodScope, setPeriodScope] = useState<'today' | 'month' | 'year'>('today');
+
+  // Navigasi Bulan & Kalender Presensi Per Karyawan
+  const currentMonthStr = getTodayDateStr().slice(0, 7);
+  const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
+  const [selectedDayDate, setSelectedDayDate] = useState<string>(''); // YYYY-MM-DD atau '' (semua tanggal di bulan)
+  const [calendarModalOpen, setCalendarModalOpen] = useState<boolean>(false);
+  const [selectedCalendarUser, setSelectedCalendarUser] = useState<UserProfile | null>(null);
+  const [isFetchingMonth, setIsFetchingMonth] = useState<boolean>(false);
 
   const loadFieldAgents = async () => {
     try {
@@ -240,21 +253,107 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       .catch((err) => console.error('Failed generating QR code:', err));
   }, [qrData?.code, qrModalOpen]);
 
-  const currentMonthStr = getTodayDateStr().slice(0, 7);
   const currentYearStr = getTodayDateStr().slice(0, 4);
-  const currentMonthName = new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
   const currentYear = new Date().getFullYear();
+
+  // Parsing Tahun & Bulan Terpilih
+  const [selectedYearNum, selectedMonthNum] = React.useMemo(() => {
+    const parts = (selectedMonth || currentMonthStr).split('-').map(Number);
+    return [parts[0] || new Date().getFullYear(), parts[1] || new Date().getMonth() + 1];
+  }, [selectedMonth, currentMonthStr]);
+
+  const selectedMonthLabel = React.useMemo(() => {
+    const d = new Date(selectedYearNum, selectedMonthNum - 1, 1);
+    return d.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+  }, [selectedYearNum, selectedMonthNum]);
+
+  // Fungsi Fetch Presensi Bulan Terpilih dari PostgreSQL API
+  const fetchMonthAttendances = React.useCallback(async (monthStr: string) => {
+    try {
+      setIsFetchingMonth(true);
+      const res = await fetch(`/api/attendances?month=${monthStr}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          const monthAtts: AttendanceRecord[] = json.data;
+          setAllAttendances((prev) => {
+            const map = new Map(prev.map((a) => [a.id, a]));
+            monthAtts.forEach((a) => map.set(a.id, a));
+            return Array.from(map.values());
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[LiveMonitoring] Fetch month note:', e);
+    } finally {
+      setIsFetchingMonth(false);
+    }
+  }, []);
+
+  // Fetch data bulan saat selectedMonth berubah atau saat periodScope beralih ke 'month'
+  useEffect(() => {
+    if (periodScope === 'month') {
+      fetchMonthAttendances(selectedMonth);
+    }
+  }, [selectedMonth, periodScope, fetchMonthAttendances]);
+
+  // Navigasi Bulan (Sebelumnya, Berikutnya, Berjalan)
+  const handlePrevMonth = () => {
+    let nextY = selectedYearNum;
+    let nextM = selectedMonthNum - 1;
+    if (nextM < 1) {
+      nextM = 12;
+      nextY -= 1;
+    }
+    const newMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
+    setSelectedMonth(newMonthStr);
+    setSelectedDayDate(''); // reset filter hari agar melihat full bulan baru
+  };
+
+  const handleNextMonth = () => {
+    let nextY = selectedYearNum;
+    let nextM = selectedMonthNum + 1;
+    if (nextM > 12) {
+      nextM = 1;
+      nextY += 1;
+    }
+    const newMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
+    setSelectedMonth(newMonthStr);
+    setSelectedDayDate(''); // reset filter hari
+  };
+
+  const handleResetToCurrentMonth = () => {
+    setSelectedMonth(currentMonthStr);
+    setSelectedDayDate('');
+  };
+
+  // Jumlah Hari dalam Bulan Terpilih (1 s/d 28/29/30/31)
+  const daysInSelectedMonth = React.useMemo(() => {
+    const totalDays = new Date(selectedYearNum, selectedMonthNum, 0).getDate();
+    return Array.from({ length: totalDays }, (_, i) => {
+      const dayNum = i + 1;
+      const dateStr = `${selectedYearNum}-${String(selectedMonthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+      const d = new Date(selectedYearNum, selectedMonthNum - 1, dayNum);
+      const dayName = d.toLocaleDateString('id-ID', { weekday: 'short' });
+      return { dayNum, dateStr, dayName };
+    });
+  }, [selectedYearNum, selectedMonthNum]);
 
   const activePeriodAttendances = React.useMemo(() => {
     if (periodScope === 'today') {
       const today = getTodayDateStr();
       return allAttendances.filter((a) => (a.attendanceDate || (a as any).date) === today);
     } else if (periodScope === 'month') {
-      return allAttendances.filter((a) => (a.attendanceDate || (a as any).date)?.startsWith(currentMonthStr));
+      return allAttendances.filter((a) => {
+        const d = a.attendanceDate || (a as any).date;
+        if (!d || !d.startsWith(selectedMonth)) return false;
+        if (selectedDayDate) return d === selectedDayDate;
+        return true;
+      });
     } else {
       return allAttendances.filter((a) => (a.attendanceDate || (a as any).date)?.startsWith(currentYearStr));
     }
-  }, [allAttendances, periodScope, currentMonthStr, currentYearStr]);
+  }, [allAttendances, periodScope, selectedMonth, selectedDayDate, currentYearStr]);
 
   // Aggregate Division Summaries
   const divisionSummaries = React.useMemo(() => {
@@ -430,9 +529,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               variant={periodScope === 'month' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setPeriodScope('month')}
-              className="text-xs h-7 px-2.5 rounded-lg font-medium"
+              className="text-xs h-7 px-2.5 rounded-lg font-medium gap-1.5"
             >
-              Bulan Berjalan
+              <CalendarDays size={12} />
+              Kalender Bulanan
             </Button>
             <Button
               type="button"
@@ -593,6 +693,123 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           </p>
         </div>
       </div>
+
+      {/* ── INTERACTIVE MONTH & DATE CALENDAR NAVIGATOR ── */}
+      {periodScope === 'month' && (
+        <Card className="border-primary/30 bg-gradient-to-r from-card via-card to-primary/5 rounded-2xl shadow-xs overflow-hidden">
+          <CardContent className="p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1 bg-muted/80 p-1 rounded-xl border border-border">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handlePrevMonth}
+                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
+                    title="Bulan Sebelumnya"
+                  >
+                    <ChevronLeft size={16} />
+                  </Button>
+                  <div className="flex items-center gap-1.5 px-3 font-semibold text-xs text-foreground min-w-[140px] justify-center">
+                    <CalendarIcon size={13} className="text-primary" />
+                    <span>{selectedMonthLabel}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleNextMonth}
+                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
+                    title="Bulan Berikutnya"
+                  >
+                    <ChevronRight size={16} />
+                  </Button>
+                </div>
+
+                {selectedMonth !== currentMonthStr && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleResetToCurrentMonth}
+                    className="h-7 px-2.5 text-xs rounded-xl border-primary/30 text-primary hover:bg-primary/10 font-medium gap-1"
+                  >
+                    <RotateCw size={11} />
+                    Bulan Berjalan
+                  </Button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {selectedDayDate && (
+                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30 text-xs px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                    <span>Filter: <strong>{new Date(selectedDayDate).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}</strong></span>
+                    <button
+                      onClick={() => setSelectedDayDate('')}
+                      className="ml-1 hover:text-rose-600 focus:outline-none"
+                      title="Reset ke semua hari"
+                    >
+                      <X size={12} />
+                    </button>
+                  </Badge>
+                )}
+                <Badge variant="outline" className="text-xs bg-muted/50 border-border font-mono">
+                  {isFetchingMonth ? 'Sinkronisasi PostgreSQL...' : `${activePeriodAttendances.length} Log Presensi`}
+                </Badge>
+              </div>
+            </div>
+
+            {/* Quick Date Selector Horizontal Scroll */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>Pilih Tanggal Spesifik untuk Menyaring Presensi:</span>
+                {selectedDayDate && (
+                  <button
+                    onClick={() => setSelectedDayDate('')}
+                    className="text-primary hover:underline font-medium text-[11px]"
+                  >
+                    Tampilkan Seluruh Hari di {selectedMonthLabel}
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-0.5 scrollbar-thin">
+                <Button
+                  size="sm"
+                  variant={!selectedDayDate ? 'default' : 'outline'}
+                  onClick={() => setSelectedDayDate('')}
+                  className={`h-8 px-3 text-xs rounded-xl shrink-0 font-medium ${
+                    !selectedDayDate ? 'shadow-xs' : 'border-border text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Semua Hari ({daysInSelectedMonth.length} Hari)
+                </Button>
+                {daysInSelectedMonth.map((d) => {
+                  const isSelected = selectedDayDate === d.dateStr;
+                  const isToday = d.dateStr === getTodayDateStr();
+                  const dayAttCount = allAttendances.filter((a) => (a.attendanceDate || (a as any).date) === d.dateStr).length;
+
+                  return (
+                    <button
+                      key={d.dateStr}
+                      type="button"
+                      onClick={() => setSelectedDayDate(isSelected ? '' : d.dateStr)}
+                      className={`h-8 min-w-[42px] px-2 rounded-xl flex flex-col items-center justify-center text-[10px] shrink-0 border transition-all ${
+                        isSelected
+                          ? 'bg-primary text-primary-foreground border-primary font-bold shadow-xs'
+                          : isToday
+                          ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-semibold'
+                          : 'border-border bg-card hover:bg-muted/60 text-muted-foreground hover:text-foreground'
+                      }`}
+                      title={`${d.dayName}, ${d.dateStr} (${dayAttCount} presensi)`}
+                    >
+                      <span className="leading-tight font-mono text-[11px] font-bold">{String(d.dayNum).padStart(2, '0')}</span>
+                      <span className="text-[9px] uppercase leading-none opacity-80">{d.dayName}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Filter Bar */}
       <Card className="border-border/80 bg-card rounded-2xl shadow-xs">
@@ -1555,6 +1772,20 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                 </Button>
                               ) : null
                             )}
+                            {/* Tombol Kalender Presensi Bulanan Per Karyawan */}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px] rounded-lg gap-1 border-primary/30 text-primary hover:bg-primary/10 font-medium"
+                              onClick={() => {
+                                setSelectedCalendarUser(u);
+                                setCalendarModalOpen(true);
+                              }}
+                              title={`Buka Kalender Presensi ${u.fullName}`}
+                            >
+                              <CalendarDays size={12} /> Kalender
+                            </Button>
+
                             {att?.photoIn || (att as any)?.clockInPhoto || att?.photoOut || (att as any)?.clockOutPhoto ? (
                               <Button
                                 size="sm"
@@ -1578,9 +1809,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                               >
                                 <Eye size={12} /> Forensik
                               </Button>
-                            ) : (
-                              <span className="text-muted-foreground/30 text-xs mr-2">-</span>
-                            )}
+                            ) : null}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -1770,6 +1999,23 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     )}
                   </div>
                 )}
+
+                {/* Tombol Kalender Presensi Karyawan */}
+                <div className="pt-2 border-t border-border/60">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 w-full text-[11px] rounded-xl gap-1.5 border-primary/30 text-primary hover:bg-primary/10 font-medium"
+                    onClick={() => {
+                      setSelectedCalendarUser(u);
+                      setCalendarModalOpen(true);
+                    }}
+                    title={`Buka Kalender Presensi ${u.fullName}`}
+                  >
+                    <CalendarDays size={12} />
+                    <span>Kalender Presensi</span>
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           );
@@ -2112,6 +2358,26 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         open={previewWatermarkModalOpen}
         onClose={() => setPreviewWatermarkModalOpen(false)}
         check={previewWatermarkData}
+      />
+
+      {/* Modal Kalender Presensi Bulanan Karyawan */}
+      <HrmEmployeeMonthlyCalendarModal
+        isOpen={calendarModalOpen}
+        onClose={() => setCalendarModalOpen(false)}
+        user={selectedCalendarUser}
+        initialMonth={selectedMonth}
+        attendances={allAttendances}
+        allShifts={allShifts}
+        onOpenPhotoPreview={(photoData) => {
+          setPreviewForensic({
+            url: photoData.url,
+            name: photoData.userName,
+            nip: photoData.userNip,
+            time: photoData.time,
+            biometricScore: photoData.biometricScore,
+            geofenceDistance: photoData.geofenceDistance,
+          });
+        }}
       />
     </div>
   );
