@@ -388,6 +388,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         (a) => a.userId === u.id || a.userId === u.email || a.userId === u.nip || (a.userNip && a.userNip === u.nip)
       );
 
+      let isLate = att && (att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0));
+      let effectiveLateMinutes = att?.lateMinutes || 0;
+
       // Evaluasi jadwal kerja dan jam shift untuk mendeteksi mangkir definitif
       const uShift = resolveEffectiveShift(u, allShifts, hrmService.getEmployeeTodaySchedule(u.id, getTodayDateStr()));
       const nowWita = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Makassar', hour12: false, hour: '2-digit', minute: '2-digit' });
@@ -1609,7 +1612,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filtered.map(({ user: u, attendance: att, status, totalLateMinutes, lateCount, totalAttCount }, idx) => {
+                  filtered.map(({ user: u, attendance: att, status, absentSubtype, shift, totalLateMinutes, lateCount, totalAttCount }, idx) => {
                     const userAnomaly = radarSummary.items.find((i) => i.userId === u.id);
                     return (
                       <TableRow key={u.id} className="hover:bg-muted/30 transition-colors">
@@ -1679,13 +1682,13 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                               <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
                                 Telat {att?.lateMinutes || 0}m
                               </Badge>
-                            ) : item.absentSubtype === 'mangkir' ? (
+                            ) : absentSubtype === 'mangkir' ? (
                               <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 text-[11px] rounded-full px-2.5 py-0.5 font-bold shadow-xs">
                                 Mangkir / Alpa
                               </Badge>
-                            ) : item.absentSubtype === 'pending_shift' ? (
+                            ) : absentSubtype === 'pending_shift' ? (
                               <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-400 text-[11px] rounded-full px-2.5 py-0.5">
-                                Shift Pk {item.shift?.startTime ? item.shift.startTime.slice(0, 5) : '-'}
+                                Shift Pk {shift?.startTime ? shift.startTime.slice(0, 5) : '-'}
                               </Badge>
                             ) : (
                               <Badge variant="outline" className="bg-muted text-muted-foreground border-border text-[11px] rounded-full px-2.5 py-0.5">
@@ -1907,7 +1910,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               Tidak ada data staf yang sesuai dengan filter.
             </div>
           ) : (
-            filtered.map(({ user: u, attendance: att, status }) => {
+            filtered.map(({ user: u, attendance: att, status, absentSubtype, shift }) => {
               const userAnomaly = radarSummary.items.find((i) => i.userId === u.id);
               return (
               <Card key={u.id} className="border-border/80 bg-card rounded-2xl shadow-xs hover:shadow-md transition-all flex flex-col justify-between">
@@ -1965,13 +1968,13 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] rounded-full">
                       Telat {att?.lateMinutes}m
                     </Badge>
-                  ) : (item as any).absentSubtype === 'mangkir' ? (
+                  ) : absentSubtype === 'mangkir' ? (
                     <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 text-[10px] rounded-full font-bold shadow-xs">
                       Mangkir / Alpa
                     </Badge>
-                  ) : (item as any).absentSubtype === 'pending_shift' ? (
+                  ) : absentSubtype === 'pending_shift' ? (
                     <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200 text-[10px] rounded-full">
-                      Shift Pk {(item as any).shift?.startTime ? (item as any).shift.startTime.slice(0, 5) : '-'}
+                      Shift Pk {shift?.startTime ? shift.startTime.slice(0, 5) : '-'}
                     </Badge>
                   ) : (
                     <Badge variant="outline" className="bg-muted text-muted-foreground border-border text-[10px] rounded-full">
