@@ -38,6 +38,7 @@ import { payrollTaxEngine } from './payrollTaxEngine';
 import { GenerationResult, DEFAULT_SHIFTS as ROSTER_DEFAULT_SHIFTS } from './rosterSchedulerService';
 import { notifyUserWithAudioAndVibe } from './soundVibrationService';
 import { geofenceService } from './geofenceService';
+import { calculateAttendanceLateness, resolveEffectiveShift } from '@/lib/hrmShiftResolver';
 
 const STORAGE_KEYS = {
   ROLES: 'hrm_roles',
@@ -3179,36 +3180,37 @@ export const hrmService = {
     if (!data.photoUrl) securityScore -= 20;
 
     const shifts = hrmService.getShifts();
-    const userShift = shifts.find((s) => s.id === user.shiftId) || shifts[0];
-
-    // Priority 1: Check dynamic employee schedule from database roster for today, overridden by custom work hours if assigned
     const dailySchedule = hrmService.getEmployeeTodaySchedule(user.id, today);
-    const activeStartTime = user.customStartTime || (dailySchedule ? dailySchedule.startTime : userShift.startTime);
-    const activeShiftCode = dailySchedule ? dailySchedule.shiftCode : (userShift.code || 'REG');
-    const activeShiftName = user.customStartTime
-      ? `Shift Khusus (${user.customStartTime} - ${user.customEndTime || '16:30'} WITA)`
-      : (dailySchedule ? dailySchedule.shiftName : userShift.name);
+    const resolvedShift = resolveEffectiveShift(user, shifts, dailySchedule);
+
+    const activeStartTime = resolvedShift.startTime;
+    const activeEndTime = resolvedShift.endTime;
+    const activeShiftCode = dailySchedule ? dailySchedule.shiftCode : (resolvedShift.code || 'REG');
+    const activeShiftName = resolvedShift.name;
 
     const now = new Date();
     const clockInStr = now.toTimeString().split(' ')[0];
 
-    const [shiftHour, shiftMinute] = activeStartTime.split(':').map(Number);
-    const shiftStartTotalMinutes = shiftHour * 60 + shiftMinute;
-    const tolerance = user.lateToleranceMinutes !== undefined ? user.lateToleranceMinutes : (userShift.lateToleranceMinutes || 15);
-    const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
-
-    let status: AttendanceStatus = 'hadir';
-    let lateMinutes = 0;
+    const effectiveTolerance = user.lateToleranceMinutes !== undefined
+      ? user.lateToleranceMinutes
+      : (resolvedShift.lateToleranceMinutes || 15);
 
     let notesText = data.notes || 'Presensi masuk terverifikasi sistem';
     if (dailySchedule && dailySchedule.isOff) {
       notesText = `[Jadwal Libur/OFF] ${notesText}`;
     }
 
-    if (!dailySchedule?.isOff && currentTotalMinutes > shiftStartTotalMinutes + tolerance) {
-      status = 'terlambat';
-      lateMinutes = currentTotalMinutes - (shiftStartTotalMinutes + tolerance);
-    }
+    const latenessEval = calculateAttendanceLateness({
+      clockInTime: clockInStr,
+      shiftStartTime: activeStartTime,
+      shiftEndTime: activeEndTime,
+      lateToleranceMinutes: effectiveTolerance,
+      isCrossDay: resolvedShift.isCrossDay,
+      isOffDay: Boolean(dailySchedule?.isOff),
+    });
+
+    const status: AttendanceStatus = latenessEval.status;
+    const lateMinutes = latenessEval.lateMinutes;
 
     const all = hrmService.getAttendances();
     const newRecord: AttendanceRecord = {

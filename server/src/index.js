@@ -1617,14 +1617,109 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
     // Validasi Jam Kerja Shift Karyawan (Server-side Shift Window Guard)
     // Sesi simulasi / sosialisasi otomatis diizinkan bebas jadwal 24 jam penuh!
+    // ─── UNIFIED REALTIME SHIFT & ROSTER RESOLUTION (UNTUK SEMUA POLA SHIFT) ───
     let activeShiftId = null;
     let activeShiftName = null;
     let shiftStartTime = '07:30';
     let shiftEndTime = '16:30';
     let isCrossDay = false;
+    let isEmployeeOffToday = false;
+    let effectiveLateTolerance = (userProfile && Number.isFinite(userProfile.late_tolerance_minutes))
+      ? Number(userProfile.late_tolerance_minutes)
+      : 15;
+
     const isEmergencyOverride = req.body.isEmergencyOverride === true || req.body.isEmergencyOverride === 'true';
     const cleanEmergencyReason = (req.body.emergencyReason || req.body.emergencyOvertimeReason || notes || '').trim();
 
+    // Prioritas 1: Periksa Roster Jadwal Kerja harian (hrm_employee_schedules) hari ini
+    if (userProfile) {
+      try {
+        const schedRes = await pool.query(
+          `SELECT es.*, s.is_cross_day as shift_is_cross_day, s.id as master_shift_id, s.name as master_shift_name, s.late_tolerance_minutes as master_shift_tolerance
+           FROM hrm_employee_schedules es
+           LEFT JOIN hrm_shifts s ON es.shift_id = s.id OR s.code = es.shift_code
+           WHERE es.user_id = $1 AND es.schedule_date = $2::date
+           LIMIT 1`,
+          [validUserId, date]
+        );
+        if (schedRes.rows.length > 0) {
+          const es = schedRes.rows[0];
+          if (es.is_off) {
+            isEmployeeOffToday = true;
+          }
+          if (es.start_time) {
+            shiftStartTime = es.start_time.substring(0, 5);
+          }
+          if (es.end_time) {
+            shiftEndTime = es.end_time.substring(0, 5);
+          }
+          isCrossDay = Boolean(es.is_night_shift || es.shift_is_cross_day);
+          activeShiftName = es.shift_name || es.master_shift_name || `Shift ${es.shift_code}`;
+          activeShiftId = (es.shift_id && UUID_REGEX.test(es.shift_id)) ? es.shift_id : (es.master_shift_id || null);
+          if (es.master_shift_tolerance != null && userProfile.late_tolerance_minutes == null) {
+            effectiveLateTolerance = Number(es.master_shift_tolerance);
+          }
+        }
+      } catch (schedErr) {
+        console.warn('[ShiftSchedLookup Warning]:', schedErr.message);
+      }
+    }
+
+    // Prioritas 2: Jika tidak ada jadwal roster harian spesifik, periksa shift ID target atau shift resmi profil
+    if (!activeShiftId && userProfile) {
+      let targetShiftId = (req.body.shiftId && UUID_REGEX.test(req.body.shiftId)) ? req.body.shiftId : null;
+      if (!targetShiftId && userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) {
+        targetShiftId = userProfile.shift_id;
+      }
+      if (!targetShiftId && userProfile.shift_id) {
+        targetShiftId = await resolveShiftId(userProfile.shift_id);
+      }
+
+      if (targetShiftId) {
+        try {
+          const shiftRes = await pool.query(
+            `SELECT id, name, start_time, end_time, is_cross_day, late_tolerance_minutes FROM hrm_shifts WHERE id = $1 LIMIT 1`,
+            [targetShiftId]
+          );
+          if (shiftRes.rows.length > 0) {
+            const sh = shiftRes.rows[0];
+            shiftStartTime = sh.start_time ? sh.start_time.substring(0, 5) : '07:30';
+            shiftEndTime = sh.end_time ? sh.end_time.substring(0, 5) : '16:30';
+            isCrossDay = Boolean(sh.is_cross_day);
+            activeShiftName = sh.name;
+            activeShiftId = targetShiftId;
+            if (sh.late_tolerance_minutes != null && userProfile.late_tolerance_minutes == null) {
+              effectiveLateTolerance = Number(sh.late_tolerance_minutes);
+            }
+          }
+        } catch (shErr) {
+          console.warn('[ShiftLookup Warning]:', shErr.message);
+        }
+      }
+    }
+
+    // Prioritas Khusus Pimpinan: Jika karyawan memiliki jam kerja khusus (custom_start_time), prioritaskan jam kerja tersebut
+    if (userProfile && userProfile.custom_start_time) {
+      shiftStartTime = userProfile.custom_start_time.substring(0, 5);
+      if (userProfile.custom_end_time) {
+        shiftEndTime = userProfile.custom_end_time.substring(0, 5);
+      }
+      activeShiftName = `Shift Khusus (${shiftStartTime} - ${shiftEndTime} WITA)`;
+      if (userProfile.late_tolerance_minutes != null) {
+        effectiveLateTolerance = Number(userProfile.late_tolerance_minutes);
+      }
+    }
+
+    // Auto-crossday detection jika jam pulang lebih kecil dari jam masuk
+    const [sH_chk, sM_chk] = shiftStartTime.split(':').map(Number);
+    const [eH_chk, eM_chk] = shiftEndTime.split(':').map(Number);
+    const sMins_chk = (Number.isFinite(sH_chk) ? sH_chk : 7) * 60 + (Number.isFinite(sM_chk) ? sM_chk : 0);
+    const eMins_chk = (Number.isFinite(eH_chk) ? eH_chk : 16) * 60 + (Number.isFinite(eM_chk) ? eM_chk : 0);
+    if (eMins_chk < sMins_chk) {
+      isCrossDay = true;
+    }
+
+    // ─── SHIFT WINDOW GUARD (HANYA UNTUK KARYAWAN REGULER) ───
     if (!isExempt && !isSimulationSession && userProfile) {
       const otRes = await pool.query(
         `SELECT id FROM hrm_overtime_records WHERE user_id = $1 AND date = $2 AND status = 'approved' LIMIT 1`,
@@ -1641,10 +1736,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
       const hasApprovedException = (otRes.rows.length > 0) || (subRes.rows.length > 0) || (swapRes.rows.length > 0);
 
-      // Guard Dobel Shift / Shift Lanjutan: Jika karyawan sudah menyelesaikan shift hari ini,
-      // mereka WAJIB memiliki pengajuan Lembur (SPKL) atau Tugas Pengganti (Relief Duty) yang sudah disetujui (Approved),
-      // KECUALI jika karyawan menggunakan fitur Mode Absen Tugas Darurat Mandiri (isEmergencyOverride = true)
-
+      // Guard Dobel Shift / Shift Lanjutan: Jika karyawan sudah menyelesaikan shift hari ini
       const completedAttCheck = await pool.query(
         `SELECT id, shift_name, clock_in, clock_out FROM hrm_attendances 
          WHERE user_id = $1 AND attendance_date = $2 AND clock_out IS NOT NULL 
@@ -1663,69 +1755,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         });
       }
 
-      if (!hasApprovedException) {
-        // Prioritas 1: Periksa Roster Jadwal Kerja harian (hrm_employee_schedules) hari ini
-        shiftStartTime = '07:30';
-        shiftEndTime = '16:30';
-        isCrossDay = false;
-
-        const schedRes = await pool.query(
-          `SELECT es.*, s.is_cross_day as shift_is_cross_day, s.id as master_shift_id, s.name as master_shift_name
-           FROM hrm_employee_schedules es
-           LEFT JOIN hrm_shifts s ON es.shift_id = s.id OR s.code = es.shift_code
-           WHERE es.user_id = $1 AND es.schedule_date = $2::date
-           LIMIT 1`,
-          [validUserId, date]
-        ).catch(() => ({ rows: [] }));
-
-        if (schedRes.rows.length > 0 && !schedRes.rows[0].is_off) {
-          const es = schedRes.rows[0];
-          shiftStartTime = es.start_time ? es.start_time.substring(0, 5) : '07:30';
-          shiftEndTime = es.end_time ? es.end_time.substring(0, 5) : '16:30';
-          isCrossDay = Boolean(es.is_night_shift || es.shift_is_cross_day);
-          activeShiftName = es.shift_name || es.master_shift_name || `Shift ${es.shift_code}`;
-          activeShiftId = (es.shift_id && UUID_REGEX.test(es.shift_id)) ? es.shift_id : (es.master_shift_id || null);
-        } else {
-          // Prioritas 2: Periksa target shiftId dari request body (misal transisi antar-shift / lembur shift selanjutnya)
-          let targetShiftId = (req.body.shiftId && UUID_REGEX.test(req.body.shiftId)) ? req.body.shiftId : null;
-          if (!targetShiftId && userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) {
-            targetShiftId = userProfile.shift_id;
-          }
-          if (!targetShiftId) {
-            targetShiftId = await resolveShiftId(userProfile.shift_id);
-          }
-
-          if (targetShiftId) {
-            const shiftRes = await pool.query(
-              `SELECT start_time, end_time, is_cross_day, name FROM hrm_shifts WHERE id = $1 LIMIT 1`,
-              [targetShiftId]
-            ).catch(() => ({ rows: [] }));
-            if (shiftRes.rows.length > 0) {
-              const sh = shiftRes.rows[0];
-              shiftStartTime = sh.start_time ? sh.start_time.substring(0, 5) : '07:30';
-              shiftEndTime = sh.end_time ? sh.end_time.substring(0, 5) : '16:30';
-              isCrossDay = Boolean(sh.is_cross_day);
-              activeShiftName = sh.name;
-              activeShiftId = targetShiftId;
-            }
-          }
-        }
-
-        // Prioritas Khusus: Jika karyawan memiliki jam kerja khusus (custom_start_time), prioritaskan jam kerja tersebut
-        if (userProfile && userProfile.custom_start_time) {
-          shiftStartTime = userProfile.custom_start_time.substring(0, 5);
-          if (userProfile.custom_end_time) {
-            shiftEndTime = userProfile.custom_end_time.substring(0, 5);
-          }
-          activeShiftName = `Shift Khusus (${shiftStartTime} - ${shiftEndTime} WITA)`;
-        }
-
-        const [sH, sM] = shiftStartTime.split(':').map(Number);
-        const [eH, eM] = shiftEndTime.split(':').map(Number);
-        const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 0);
-        const endMins = (Number.isFinite(eH) ? eH : 16) * 60 + (Number.isFinite(eM) ? eM : 0);
-        if (endMins < startMins) isCrossDay = true;
-
+      if (!hasApprovedException && !isEmployeeOffToday) {
         let nowMins = 0;
         if (time && typeof time === 'string') {
           const [cH, cM] = time.split(':').map(Number);
@@ -1736,18 +1766,18 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         }
 
         // Window dibuka 120 menit (2 jam) sebelum jam masuk resmi shift
-        const openMins = (startMins - 120 + 1440) % 1440;
+        const openMins = (sMins_chk - 120 + 1440) % 1440;
         let isShiftOpen = false;
 
         if (isCrossDay) {
-          if (nowMins >= openMins || nowMins < endMins) {
+          if (nowMins >= openMins || nowMins < eMins_chk) {
             isShiftOpen = true;
           }
         } else {
-          if (openMins > startMins) {
-            if (nowMins >= openMins || nowMins <= endMins) isShiftOpen = true;
+          if (openMins > sMins_chk) {
+            if (nowMins >= openMins || nowMins <= eMins_chk) isShiftOpen = true;
           } else {
-            if (nowMins >= openMins && nowMins <= endMins) isShiftOpen = true;
+            if (nowMins >= openMins && nowMins <= eMins_chk) isShiftOpen = true;
           }
         }
 
@@ -2078,16 +2108,13 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       result = openAttRes;
     } else {
       // Server-side authoritative late minutes computation
-      let finalStatus = status || 'hadir';
-      let finalLateMinutes = parseInt(lateMinutes, 10) || 0;
+      let finalStatus = 'hadir';
+      let finalLateMinutes = 0;
 
-      if (isSimulationSession) {
+      if (isSimulationSession || isEmployeeOffToday) {
         finalStatus = 'hadir';
         finalLateMinutes = 0;
-      } else if (shiftStartTime || (userProfile && userProfile.custom_start_time)) {
-        if (userProfile && userProfile.custom_start_time) {
-          shiftStartTime = userProfile.custom_start_time.substring(0, 5);
-        }
+      } else {
         const [sH, sM] = shiftStartTime.split(':').map(Number);
         const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 0);
         let curMins = 0;
@@ -2104,10 +2131,9 @@ app.post('/api/attendances/clock-in', async (req, res) => {
           diff = (curMins + 1440) - startMins;
         }
 
-        const tolerance = userProfile?.late_tolerance_minutes ?? 15;
-        if (diff > tolerance) {
+        if (diff > effectiveLateTolerance) {
           finalStatus = 'terlambat';
-          finalLateMinutes = diff - tolerance;
+          finalLateMinutes = diff - effectiveLateTolerance;
         } else {
           finalStatus = 'hadir';
           finalLateMinutes = 0;

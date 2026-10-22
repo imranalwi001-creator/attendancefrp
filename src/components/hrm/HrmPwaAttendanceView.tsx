@@ -75,7 +75,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import defaultAvatar from '@/assets/logo.png';
-import { resolveEffectiveShift, checkShiftClockInWindow, checkShiftClockOutWindow, determineNextContinuousShift, NextContinuousShiftInfo } from '@/lib/hrmShiftResolver';
+import { resolveEffectiveShift, checkShiftClockInWindow, checkShiftClockOutWindow, determineNextContinuousShift, NextContinuousShiftInfo, calculateAttendanceLateness } from '@/lib/hrmShiftResolver';
 import { compressImageFile } from '@/lib/imageCompressor';
 import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
@@ -2612,29 +2612,26 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       }
 
       // ─── CABANG 3: PRESENSI MASUK / PULANG REGULER ───
-      // Determine late minutes
+      // Determine late minutes using authoritative realtime shift evaluation
       let lateMinutes = 0;
       let status: 'hadir' | 'terlambat' = 'hadir';
       if (actionType === 'clock_in' && userShift?.startTime) {
-        const [sH, sM] = userShift.startTime.split(':').map(Number);
-        const [cH, cM] = [now.getHours(), now.getMinutes()];
-        const startMins = sH * 60 + sM;
-        let curMins = cH * 60 + cM;
-        const isCrossDay = Boolean(userShift.isCrossDay || (userShift.endTime && userShift.endTime < userShift.startTime));
+        const isNext = Boolean(todayAttendance?.clockIn && todayAttendance?.clockOut) && Boolean(nextShiftInfo?.isNextShiftAvailable);
+        const effectiveShiftStart = isNext && nextShiftInfo?.nextShiftStart ? nextShiftInfo.nextShiftStart : userShift.startTime;
+        const effectiveShiftEnd = isNext && nextShiftInfo?.nextShiftEnd ? nextShiftInfo.nextShiftEnd : userShift.endTime;
+        const effectiveIsCross = isNext ? Boolean(nextShiftInfo?.isNextShiftCrossDay) : userShift.isCrossDay;
 
-        let diff = curMins - startMins;
-        if (isCrossDay && curMins < 720 && startMins >= 720) {
-          diff = (curMins + 1440) - startMins;
-        }
+        const latenessEval = calculateAttendanceLateness({
+          clockInTime: timeStr,
+          shiftStartTime: effectiveShiftStart,
+          shiftEndTime: effectiveShiftEnd,
+          lateToleranceMinutes: user.lateToleranceMinutes ?? userShift.lateToleranceMinutes ?? 15,
+          isCrossDay: effectiveIsCross,
+          isOffDay: isEmployeeOffToday,
+        });
 
-        const tolerance = userShift.lateToleranceMinutes ?? 15;
-        if (diff > tolerance) {
-          lateMinutes = diff - tolerance;
-          status = 'terlambat';
-        } else {
-          lateMinutes = 0;
-          status = 'hadir';
-        }
+        status = latenessEval.status;
+        lateMinutes = latenessEval.lateMinutes;
       }
 
       const isStartingNextShift = actionType === 'clock_in' && Boolean(todayAttendance?.clockIn && todayAttendance?.clockOut);
@@ -6094,25 +6091,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             let lateMinutes = 0;
             let status: 'hadir' | 'terlambat' = 'hadir';
             if (actionType === 'clock_in' && userShift?.startTime) {
-              const [sH, sM] = userShift.startTime.split(':').map(Number);
-              const [cH, cM] = [now.getHours(), now.getMinutes()];
-              const startMins = sH * 60 + sM;
-              let curMins = cH * 60 + cM;
-              const isCrossDay = Boolean(userShift.isCrossDay || (userShift.endTime && userShift.endTime < userShift.startTime));
-
-              let diff = curMins - startMins;
-              if (isCrossDay && curMins < 720 && startMins >= 720) {
-                diff = (curMins + 1440) - startMins;
-              }
-
-              const tolerance = userShift.lateToleranceMinutes ?? 15;
-              if (diff > tolerance) {
-                lateMinutes = diff;
-                status = 'terlambat';
-              } else {
-                lateMinutes = 0;
-                status = 'hadir';
-              }
+              const latenessEval = calculateAttendanceLateness({
+                clockInTime: timeStr,
+                shiftStartTime: userShift.startTime,
+                shiftEndTime: userShift.endTime,
+                lateToleranceMinutes: user.lateToleranceMinutes ?? userShift.lateToleranceMinutes ?? 15,
+                isCrossDay: userShift.isCrossDay,
+                isOffDay: isEmployeeOffToday,
+              });
+              status = latenessEval.status;
+              lateMinutes = latenessEval.lateMinutes;
             }
 
             const savedAttendance = await hrmService.recordAttendance({

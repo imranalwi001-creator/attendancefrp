@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
 import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer } from '@/types/hrm';
+import { resolveEffectiveShift, calculateAttendanceLateness } from '@/lib/hrmShiftResolver';
 import {
   UserCheck,
   Clock,
@@ -281,25 +282,82 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     });
   }, [divisions, users, activePeriodAttendances]);
 
+  const allShifts = React.useMemo(() => hrmService.getShifts(), []);
   const monitoredList = users.map((u) => {
     if (periodScope === 'today') {
       const att = activePeriodAttendances.find(
         (a) => a.userId === u.id || a.userId === u.email || a.userId === u.nip || (a.userNip && a.userNip === u.nip)
       );
+
+      let isLate = att && (att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0));
+      let effectiveLateMinutes = att?.lateMinutes || 0;
+
+      // Realtime authoritative fallback evaluation jika status di database belum sinkron
+      if (att && att.clockIn && !isLate) {
+        const uShift = resolveEffectiveShift(u, allShifts, hrmService.getEmployeeTodaySchedule(u.id, getTodayDateStr()));
+        if (uShift && uShift.startTime) {
+          const latenessEval = calculateAttendanceLateness({
+            clockInTime: att.clockIn,
+            shiftStartTime: uShift.startTime,
+            shiftEndTime: uShift.endTime,
+            lateToleranceMinutes: u.lateToleranceMinutes ?? uShift.lateToleranceMinutes ?? 15,
+            isCrossDay: uShift.isCrossDay,
+          });
+          if (latenessEval.status === 'terlambat' && latenessEval.lateMinutes > 0) {
+            isLate = true;
+            effectiveLateMinutes = latenessEval.lateMinutes;
+          }
+        }
+      }
+
       return {
         user: u,
         attendance: att,
-        status: !att ? 'absent' : (att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0)) ? 'late' : 'present',
-        totalLateMinutes: att?.lateMinutes || 0,
-        lateCount: att && (att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0)) ? 1 : 0,
+        status: !att ? 'absent' : isLate ? 'late' : 'present',
+        totalLateMinutes: effectiveLateMinutes,
+        lateCount: isLate ? 1 : 0,
         totalAttCount: att ? 1 : 0,
       };
     } else {
       const userAtts = activePeriodAttendances.filter(
         (a) => a.userId === u.id || a.userId === u.email || a.userId === u.nip || (a.userNip && a.userNip === u.nip)
       );
-      const lateAtts = userAtts.filter((a) => a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0));
-      const totLateMin = lateAtts.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
+      const lateAtts = userAtts.filter((a) => {
+        if (a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0)) return true;
+        if (a.clockIn) {
+          const aDate = a.attendanceDate || (a as any).date;
+          const uShift = resolveEffectiveShift(u, allShifts, hrmService.getEmployeeTodaySchedule(u.id, aDate));
+          if (uShift && uShift.startTime) {
+            const evalRes = calculateAttendanceLateness({
+              clockInTime: a.clockIn,
+              shiftStartTime: uShift.startTime,
+              shiftEndTime: uShift.endTime,
+              lateToleranceMinutes: u.lateToleranceMinutes ?? uShift.lateToleranceMinutes ?? 15,
+              isCrossDay: uShift.isCrossDay,
+            });
+            return evalRes.status === 'terlambat';
+          }
+        }
+        return false;
+      });
+      const totLateMin = lateAtts.reduce((sum, a) => {
+        if (a.lateMinutes && a.lateMinutes > 0) return sum + a.lateMinutes;
+        if (a.clockIn) {
+          const aDate = a.attendanceDate || (a as any).date;
+          const uShift = resolveEffectiveShift(u, allShifts, hrmService.getEmployeeTodaySchedule(u.id, aDate));
+          if (uShift && uShift.startTime) {
+            const evalRes = calculateAttendanceLateness({
+              clockInTime: a.clockIn,
+              shiftStartTime: uShift.startTime,
+              shiftEndTime: uShift.endTime,
+              lateToleranceMinutes: u.lateToleranceMinutes ?? uShift.lateToleranceMinutes ?? 15,
+              isCrossDay: uShift.isCrossDay,
+            });
+            return sum + evalRes.lateMinutes;
+          }
+        }
+        return sum;
+      }, 0);
       const latestAtt = userAtts[userAtts.length - 1];
 
       return {

@@ -469,3 +469,81 @@ export function determineNextContinuousShift(
   };
 }
 
+export interface LatenessCalculationResult {
+  status: 'hadir' | 'terlambat';
+  lateMinutes: number;
+  totalLateFromStart: number;
+  toleranceMinutes: number;
+  shiftStartMinutes: number;
+  clockInMinutes: number;
+}
+
+/**
+ * Standar Authoritative Evaluasi Keterlambatan Realtime untuk Seluruh Shift FRP:
+ * - Menangani seluruh pola shift: Day Shift, Shift I, Shift II, Shift III (lintas hari / cross-day), Shift Khusus Lapangan, Roster Harian.
+ * - Kebijakan PP 35 / Perusahaan: Keterlambatan murni dihitung setelah batas toleransi (diff - tolerance).
+ * - Menangani format menit :00, :15, :30, :45 tanpa bug falsy.
+ */
+export function calculateAttendanceLateness(params: {
+  clockInTime?: string | null;
+  shiftStartTime?: string | null;
+  shiftEndTime?: string | null;
+  lateToleranceMinutes?: number | null;
+  isCrossDay?: boolean | null;
+  isOffDay?: boolean | null;
+}): LatenessCalculationResult {
+  if (params.isOffDay) {
+    return {
+      status: 'hadir',
+      lateMinutes: 0,
+      totalLateFromStart: 0,
+      toleranceMinutes: 0,
+      shiftStartMinutes: 0,
+      clockInMinutes: 0,
+    };
+  }
+
+  const [sH, sM] = (params.shiftStartTime || '07:30').split(':').map(Number);
+  const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 0);
+
+  const [cH, cM] = (params.clockInTime || '00:00').split(':').map(Number);
+  const clockInMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);
+
+  let isCross = Boolean(params.isCrossDay);
+  if (params.shiftEndTime) {
+    const [eH, eM] = params.shiftEndTime.split(':').map(Number);
+    const endMins = (Number.isFinite(eH) ? eH : 16) * 60 + (Number.isFinite(eM) ? eM : 0);
+    if (endMins < startMins) isCross = true;
+  }
+
+  let diff = clockInMins - startMins;
+  if (isCross && clockInMins < 720 && startMins >= 720) {
+    diff = (clockInMins + 1440) - startMins;
+  }
+
+  const tolerance = (params.lateToleranceMinutes != null && Number.isFinite(Number(params.lateToleranceMinutes)))
+    ? Number(params.lateToleranceMinutes)
+    : 15;
+
+  if (diff > tolerance) {
+    return {
+      status: 'terlambat',
+      lateMinutes: Math.max(0, diff - tolerance),
+      totalLateFromStart: Math.max(0, diff),
+      toleranceMinutes: tolerance,
+      shiftStartMinutes: startMins,
+      clockInMinutes: clockInMins,
+    };
+  }
+
+  return {
+    status: 'hadir',
+    lateMinutes: 0,
+    totalLateFromStart: Math.max(0, diff),
+    toleranceMinutes: tolerance,
+    shiftStartMinutes: startMins,
+    clockInMinutes: clockInMins,
+  };
+}
+
+
