@@ -388,12 +388,30 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         (a) => a.userId === u.id || a.userId === u.email || a.userId === u.nip || (a.userNip && a.userNip === u.nip)
       );
 
-      let isLate = att && (att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0));
-      let effectiveLateMinutes = att?.lateMinutes || 0;
+      // Evaluasi jadwal kerja dan jam shift untuk mendeteksi mangkir definitif
+      const uShift = resolveEffectiveShift(u, allShifts, hrmService.getEmployeeTodaySchedule(u.id, getTodayDateStr()));
+      const nowWita = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Makassar', hour12: false, hour: '2-digit', minute: '2-digit' });
+      
+      let absentSubtype: 'pending_shift' | 'in_progress' | 'mangkir' = 'in_progress';
+      if (!att) {
+        if (uShift && uShift.startTime && uShift.endTime) {
+          const shiftEnd = uShift.endTime.slice(0, 5);
+          const shiftStart = uShift.startTime.slice(0, 5);
+          if (nowWita < shiftStart) {
+            absentSubtype = 'pending_shift';
+          } else if (nowWita >= shiftEnd) {
+            absentSubtype = 'mangkir';
+          } else {
+            absentSubtype = 'in_progress';
+          }
+        } else {
+          // Default: jika sudah lewat pukul 17:00 WITA, dianggap Mangkir
+          absentSubtype = nowWita >= '17:00' ? 'mangkir' : 'in_progress';
+        }
+      }
 
       // Realtime authoritative fallback evaluation jika status di database belum sinkron
       if (att && att.clockIn && !isLate) {
-        const uShift = resolveEffectiveShift(u, allShifts, hrmService.getEmployeeTodaySchedule(u.id, getTodayDateStr()));
         if (uShift && uShift.startTime) {
           const latenessEval = calculateAttendanceLateness({
             clockInTime: att.clockIn,
@@ -413,6 +431,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         user: u,
         attendance: att,
         status: !att ? 'absent' : isLate ? 'late' : 'present',
+        absentSubtype,
+        shift: uShift,
         totalLateMinutes: effectiveLateMinutes,
         lateCount: isLate ? 1 : 0,
         totalAttCount: att ? 1 : 0,
@@ -482,6 +502,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const presentCount = monitoredList.filter((i) => i.status === 'present').length;
   const lateCount = monitoredList.filter((i) => i.status === 'late').length;
   const absentCount = monitoredList.filter((i) => i.status === 'absent').length;
+  const mangkirCount = monitoredList.filter((i) => i.status === 'absent' && (i as any).absentSubtype === 'mangkir').length;
   const activeBreaches = perimeterViolations.filter((v) => v.status === 'active');
 
   const radarSummary: AnomalyRadarSummary = React.useMemo(() => {
@@ -635,7 +656,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
-          <p className="text-xs font-medium text-muted-foreground">Belum Presensi</p>
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-muted-foreground">Belum Presensi</p>
+            {mangkirCount > 0 && periodScope === 'today' && (
+              <span className="text-[10px] font-bold text-rose-700 bg-rose-100 dark:bg-rose-950/60 px-1.5 py-0.5 rounded-full border border-rose-300">
+                {mangkirCount} Mangkir
+              </span>
+            )}
+          </div>
           <p className="text-2xl font-bold text-destructive mt-1 font-mono">{absentCount} Orang</p>
         </div>
 
@@ -1626,6 +1654,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                               <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
                                 Telat {att?.lateMinutes || 0}m
                               </Badge>
+                            ) : item.absentSubtype === 'mangkir' ? (
+                              <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 text-[11px] rounded-full px-2.5 py-0.5 font-bold shadow-xs">
+                                Mangkir / Alpa
+                              </Badge>
+                            ) : item.absentSubtype === 'pending_shift' ? (
+                              <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-400 text-[11px] rounded-full px-2.5 py-0.5">
+                                Shift Pk {item.shift?.startTime ? item.shift.startTime.slice(0, 5) : '-'}
+                              </Badge>
                             ) : (
                               <Badge variant="outline" className="bg-muted text-muted-foreground border-border text-[11px] rounded-full px-2.5 py-0.5">
                                 Belum Hadir
@@ -1903,6 +1939,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   ) : status === 'late' ? (
                     <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] rounded-full">
                       Telat {att?.lateMinutes}m
+                    </Badge>
+                  ) : (item as any).absentSubtype === 'mangkir' ? (
+                    <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 text-[10px] rounded-full font-bold shadow-xs">
+                      Mangkir / Alpa
+                    </Badge>
+                  ) : (item as any).absentSubtype === 'pending_shift' ? (
+                    <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200 text-[10px] rounded-full">
+                      Shift Pk {(item as any).shift?.startTime ? (item as any).shift.startTime.slice(0, 5) : '-'}
                     </Badge>
                   ) : (
                     <Badge variant="outline" className="bg-muted text-muted-foreground border-border text-[10px] rounded-full">

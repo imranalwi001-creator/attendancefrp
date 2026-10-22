@@ -118,10 +118,19 @@ export const HrmKinerjaManagementTab: React.FC = () => {
     const totalLateMinutes = userAtts.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
     const breaches = userAtts.reduce((sum, a) => sum + (a.perimeterBreachCount || (a.isPerimeterBreached ? 1 : 0)), 0);
 
+    // Deteksi Mangkir (Alfa / Alpa / Tidak hadir tanpa keterangan)
+    const alfaAtts = userAtts.filter((a) => a.status === 'alfa' || a.status === 'alpa' || a.status === 'alpha');
+    const alfaDays = alfaAtts.length;
+
     // Formula presensi berbasis hari kerja efektif bulan berjalan (patokan 22 hari kerja standar)
     const effectiveDays = onTimeDays * 1.0 + lateDays * 0.75;
     let score = Math.round((effectiveDays / 22) * 100);
     if (score > 100) score = 100;
+
+    // Penalti MANGKIR (Alfa): -20 Poin per hari mangkir (Strict Kebijakan PT FRP)
+    if (alfaDays > 0) {
+      score = Math.max(0, score - (alfaDays * 20));
+    }
 
     // Penalti akumulasi keterlambatan
     if (totalLateMinutes > 120) score = Math.max(0, score - 10);
@@ -136,10 +145,13 @@ export const HrmKinerjaManagementTab: React.FC = () => {
       totalDays: userAtts.length,
       onTimeDays,
       lateDays,
+      alfaDays,
       totalLateMinutes,
       breaches,
       attendanceScore: score,
-      statusText: `${score}% (${userAtts.length} Hari Hadir)`,
+      statusText: alfaDays > 0 
+        ? `${score}% (${userAtts.length} Hari, ${alfaDays} Mangkir)` 
+        : `${score}% (${userAtts.length} Hari Hadir)`,
     };
   };
 
@@ -565,17 +577,26 @@ export const HrmKinerjaManagementTab: React.FC = () => {
                                 0% (0 Hari)
                               </Badge>
                             ) : (
-                              <Badge
-                                variant="outline"
-                                className={`text-[10px] font-mono ${
-                                  attStats.attendanceScore! >= 80
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                    : 'bg-amber-50 text-amber-700 border-amber-200'
-                                }`}
-                                title={`${attStats.totalDays} hari hadir (${attStats.onTimeDays} tepat waktu, ${attStats.lateDays} telat, ${attStats.totalLateMinutes}m telat)`}
-                              >
-                                {attStats.attendanceScore}% ({attStats.totalDays}h)
-                              </Badge>
+                              <div className="flex flex-col items-center gap-1">
+                                <Badge
+                                  variant="outline"
+                                  className={`text-[10px] font-mono ${
+                                    attStats.alfaDays && attStats.alfaDays > 0
+                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                      : attStats.attendanceScore! >= 80
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                                  }`}
+                                  title={`${attStats.totalDays} hari total (${attStats.onTimeDays} tepat waktu, ${attStats.lateDays} telat, ${attStats.alfaDays || 0} mangkir)`}
+                                >
+                                  {attStats.attendanceScore}% ({attStats.totalDays}h)
+                                </Badge>
+                                {attStats.alfaDays && attStats.alfaDays > 0 ? (
+                                  <span className="text-[9px] font-bold text-rose-600 font-mono bg-rose-50 px-1.5 py-0.2 rounded border border-rose-200">
+                                    {attStats.alfaDays}x Mangkir (-{attStats.alfaDays * 20}p)
+                                  </span>
+                                ) : null}
+                              </div>
                             )}
                           </td>
 

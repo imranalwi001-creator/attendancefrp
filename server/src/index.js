@@ -11109,6 +11109,103 @@ async function runAutoCloseCompliantAttendance() {
   }
 }
 
+// ─── 11. AUTO-MARKING MANGKIR (ALFA / TANPA KETERANGAN) ────────────────────
+async function runAutoMarkMangkirAttendance(targetDateStr = null) {
+  try {
+    // Gunakan tanggal WITA (Asia/Makassar)
+    const nowWitaDate = targetDateStr || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' });
+    const nowWitaTime = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Makassar', hour12: false, hour: '2-digit', minute: '2-digit' });
+
+    console.log(`[Auto-Mangkir Engine] Memeriksa status ketidakhadiran untuk tanggal ${nowWitaDate} (pk ${nowWitaTime} WITA)...`);
+
+    // 1. Ambil seluruh karyawan aktif non-superadmin yang sudah mendaftar (termasuk jadwal & shift mereka)
+    const usersRes = await pool.query(`
+      SELECT p.id, p.full_name, p.nip, p.phone, p.shift_id,
+             s.name as shift_name, s.start_time as shift_start, s.end_time as shift_end, s.is_cross_day
+      FROM hrm_profiles p
+      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+      WHERE p.is_active = true 
+        AND p.role_id != (SELECT id FROM hrm_roles WHERE name = 'superadmin' LIMIT 1)
+    `);
+
+    let markedCount = 0;
+
+    for (const emp of usersRes.rows) {
+      // 2. Periksa apakah sudah ada presensi pada tanggal tersebut
+      const attCheck = await pool.query(`
+        SELECT id, status, clock_in FROM hrm_attendances 
+        WHERE user_id = $1 AND attendance_date = $2 LIMIT 1
+      `, [emp.id, nowWitaDate]);
+
+      if (attCheck.rows.length > 0) {
+        // Karyawan sudah memiliki record presensi (hadir, terlambat, atau sudah ditandai)
+        continue;
+      }
+
+      // 3. Periksa apakah karyawan memiliki pengajuan Cuti / Izin / Sakit yang disetujui (Approved)
+      const leaveCheck = await pool.query(`
+        SELECT id, leave_type FROM hrm_leave_requests
+        WHERE user_id = $1 
+          AND $2 >= start_date AND $2 <= end_date
+          AND status = 'approved'
+        LIMIT 1
+      `, [emp.id, nowWitaDate]);
+
+      if (leaveCheck.rows.length > 0) {
+        // Tidak mangkir karena ada izin/cuti resmi
+        continue;
+      }
+
+      // 4. Periksa apakah jam shift kerja sudah usai
+      const shiftEndStr = (emp.shift_end || '17:00:00').slice(0, 5);
+      const isPastShift = targetDateStr && targetDateStr < new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' })
+        ? true 
+        : nowWitaTime >= shiftEndStr;
+
+      if (!isPastShift) {
+        // Shift kerja belum selesai, beri kesempatan presensi
+        continue;
+      }
+
+      // 5. Buat record resmi Mangkir (status = 'alfa') di hrm_attendances
+      const notesMsg = `[MANGKIR OTOMATIS: Tidak hadir tanpa keterangan hingga jam shift (${shiftEndStr} WITA) berakhir]`;
+      await pool.query(`
+        INSERT INTO hrm_attendances (
+          user_id, attendance_date, status, late_minutes, early_leaving_minutes,
+          work_duration_minutes, is_locked, notes, shift_id, shift_name, created_at, updated_at
+        ) VALUES (
+          $1, $2, 'alfa', 0, 0,
+          0, false, $3, $4, $5, NOW(), NOW()
+        )
+      `, [emp.id, nowWitaDate, notesMsg, emp.shift_id, emp.shift_name || 'Shift Reguler']);
+
+      markedCount++;
+      console.log(`[Auto-Mangkir Engine] Berhasil mencatat Mangkir untuk ${emp.full_name} (${emp.nip})`);
+    }
+
+    console.log(`[Auto-Mangkir Engine] Selesai. Total karyawan dicatat Mangkir/Alfa: ${markedCount} orang.`);
+    return markedCount;
+  } catch (err) {
+    console.error('[runAutoMarkMangkirAttendance Error]:', err.message);
+    return 0;
+  }
+}
+
+// Endpoint manual trigger sinkronisasi mangkir oleh Superadmin
+app.post('/api/attendances/sync-mangkir', async (req, res) => {
+  try {
+    const { targetDate } = req.body;
+    const count = await runAutoMarkMangkirAttendance(targetDate || null);
+    res.json({
+      success: true,
+      markedCount: count,
+      message: `Audit mangkir selesai. Sebanyak ${count} karyawan tanpa keterangan telah dicatat berstatus Alfa.`
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // Endpoint manual reconcile auto clock-out
 app.post('/api/attendances/auto-close-reconcile', async (req, res) => {
   try {
@@ -11134,6 +11231,11 @@ async function start() {
     setInterval(runAutoCloseCompliantAttendance, 15 * 60 * 1000);
     // Jalankan satu kali saat startup
     runAutoCloseCompliantAttendance().catch(() => {});
+
+    // Jalankan auto-marking mangkir setiap 30 menit
+    setInterval(() => runAutoMarkMangkirAttendance().catch(() => {}), 30 * 60 * 1000);
+    // Jalankan satu kali saat startup
+    runAutoMarkMangkirAttendance().catch(() => {});
 
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`[HRM-Backend] Server running on port ${PORT}`);
