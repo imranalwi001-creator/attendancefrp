@@ -3096,7 +3096,7 @@ Silakan segera buka aplikasi presensi dan lakukan *FOTO SELFIE VERIFIKASI WAJAH 
               await pool.query(
                 `UPDATE hrm_attendances SET
                    clock_out = $1,
-                   status = 'hadir',
+                   status = CASE WHEN status = 'terlambat' OR late_minutes > 0 THEN 'terlambat' ELSE 'hadir' END,
                    is_locked = false,
                    is_perimeter_breached = false,
                    auto_closed_type = 'AUTO_CLOCKOUT_OUT_OF_BOUNDS',
@@ -3259,7 +3259,7 @@ Mohon segera pantau posisi petugas melalui menu Live Monitoring HRM.`;
         const autoCloseRes = await pool.query(
           `UPDATE hrm_attendances SET
              clock_out = $1,
-             status = 'hadir',
+             status = CASE WHEN status = 'terlambat' OR late_minutes > 0 THEN 'terlambat' ELSE 'hadir' END,
              is_locked = false,
              is_perimeter_breached = false,
              auto_closed_type = 'AUTO_CLOCKOUT_OUT_OF_BOUNDS',
@@ -11075,7 +11075,7 @@ async function runAutoCloseCompliantAttendance() {
           UPDATE hrm_attendances SET
             clock_out = $1,
             work_duration_minutes = $2,
-            status = 'hadir',
+            status = CASE WHEN status = 'terlambat' OR late_minutes > 0 THEN 'terlambat' ELSE 'hadir' END,
             is_locked = false,
             is_perimeter_breached = false,
             auto_closed_type = 'AUTO_CLOCKOUT_OPTION_2',
