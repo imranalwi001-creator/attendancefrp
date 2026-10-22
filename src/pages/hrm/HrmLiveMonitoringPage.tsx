@@ -73,7 +73,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
   const [perimeterViolations, setPerimeterViolations] = useState<PerimeterViolation[]>([]);
 
-  const [activeTab, setActiveTab] = useState<'all' | 'present' | 'late' | 'absent' | 'anomalies' | 'breaches' | 'field_radar'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'present' | 'late' | 'absent' | 'mangkir' | 'anomalies' | 'breaches' | 'field_radar'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterDivision, setFilterDivision] = useState('all');
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
@@ -427,15 +427,28 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         }
       }
 
+      const isAlfaRecord = att && (att.status === 'alfa' || att.status === 'alpa' || att.status === 'alpha');
+      if (isAlfaRecord) {
+        absentSubtype = 'mangkir';
+      }
+
+      const calculatedStatus: 'present' | 'late' | 'absent' | 'mangkir' = isAlfaRecord
+        ? 'mangkir'
+        : !att
+        ? (absentSubtype === 'mangkir' ? 'mangkir' : 'absent')
+        : isLate
+        ? 'late'
+        : 'present';
+
       return {
         user: u,
         attendance: att,
-        status: !att ? 'absent' : isLate ? 'late' : 'present',
+        status: calculatedStatus,
         absentSubtype,
         shift: uShift,
         totalLateMinutes: effectiveLateMinutes,
         lateCount: isLate ? 1 : 0,
-        totalAttCount: att ? 1 : 0,
+        totalAttCount: (att && !isAlfaRecord) ? 1 : 0,
       };
     } else {
       const userAtts = activePeriodAttendances.filter(
@@ -501,8 +514,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
   const presentCount = monitoredList.filter((i) => i.status === 'present').length;
   const lateCount = monitoredList.filter((i) => i.status === 'late').length;
-  const absentCount = monitoredList.filter((i) => i.status === 'absent').length;
-  const mangkirCount = monitoredList.filter((i) => i.status === 'absent' && (i as any).absentSubtype === 'mangkir').length;
+  const mangkirCount = monitoredList.filter((i) => i.status === 'mangkir' || (i as any).absentSubtype === 'mangkir').length;
+  const absentCount = monitoredList.filter((i) => i.status === 'absent' && (i as any).absentSubtype !== 'mangkir').length;
   const activeBreaches = perimeterViolations.filter((v) => v.status === 'active');
 
   const radarSummary: AnomalyRadarSummary = React.useMemo(() => {
@@ -649,22 +662,34 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         </div>
 
         <div
-          onClick={() => setActiveTab('absent')}
+          onClick={() => setActiveTab('mangkir')}
           className={`p-4 rounded-2xl border cursor-pointer transition-all ${
-            activeTab === 'absent'
-              ? 'border-destructive bg-destructive/10 ring-1 ring-destructive/20 shadow-xs'
+            activeTab === 'mangkir'
+              ? 'border-rose-600 bg-rose-50 ring-1 ring-rose-500/40 shadow-xs dark:bg-rose-950/40'
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-muted-foreground">Belum Presensi</p>
-            {mangkirCount > 0 && periodScope === 'today' && (
-              <span className="text-[10px] font-bold text-rose-700 bg-rose-100 dark:bg-rose-950/60 px-1.5 py-0.5 rounded-full border border-rose-300">
-                {mangkirCount} Mangkir
-              </span>
+            <p className="text-xs font-medium text-rose-700 dark:text-rose-400 font-semibold">Mangkir / Alpa</p>
+            {mangkirCount > 0 && (
+              <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
             )}
           </div>
-          <p className="text-2xl font-bold text-destructive mt-1 font-mono">{absentCount} Orang</p>
+          <p className="text-2xl font-bold text-rose-700 dark:text-rose-400 mt-1 font-mono">{mangkirCount} Orang</p>
+        </div>
+
+        <div
+          onClick={() => setActiveTab('absent')}
+          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+            activeTab === 'absent'
+              ? 'border-muted-foreground bg-muted ring-1 ring-border shadow-xs'
+              : 'border-border bg-card hover:bg-muted/40'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-muted-foreground">Belum Hadir</p>
+          </div>
+          <p className="text-2xl font-bold text-muted-foreground mt-1 font-mono">{absentCount} Orang</p>
         </div>
 
         <div
