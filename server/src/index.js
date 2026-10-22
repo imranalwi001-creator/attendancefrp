@@ -1722,14 +1722,14 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
         const [sH, sM] = shiftStartTime.split(':').map(Number);
         const [eH, eM] = shiftEndTime.split(':').map(Number);
-        const startMins = (sH || 7) * 60 + (sM || 30);
-        const endMins = (eH || 16) * 60 + (eM || 30);
+        const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 0);
+        const endMins = (Number.isFinite(eH) ? eH : 16) * 60 + (Number.isFinite(eM) ? eM : 0);
         if (endMins < startMins) isCrossDay = true;
 
         let nowMins = 0;
         if (time && typeof time === 'string') {
           const [cH, cM] = time.split(':').map(Number);
-          nowMins = (cH || 0) * 60 + (cM || 0);
+          nowMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);
         } else {
           const witaDate = new Date(Date.now() + 8 * 3600000);
           nowMins = witaDate.getUTCHours() * 60 + witaDate.getUTCMinutes();
@@ -2089,11 +2089,11 @@ app.post('/api/attendances/clock-in', async (req, res) => {
           shiftStartTime = userProfile.custom_start_time.substring(0, 5);
         }
         const [sH, sM] = shiftStartTime.split(':').map(Number);
-        const startMins = (sH || 7) * 60 + (sM || 30);
+        const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 0);
         let curMins = 0;
         if (time && typeof time === 'string') {
           const [cH, cM] = time.split(':').map(Number);
-          curMins = (cH || 0) * 60 + (cM || 0);
+          curMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);
         } else {
           const witaDate = new Date(Date.now() + 8 * 3600000);
           curMins = witaDate.getUTCHours() * 60 + witaDate.getUTCMinutes();
@@ -2844,8 +2844,8 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
     const shiftStartStr = (shiftInfo?.shift_start_time || '07:30').substring(0, 5);
     const [endH, endM] = shiftEndStr.split(':').map(Number);
     const [startH, startM] = shiftStartStr.split(':').map(Number);
-    const endTotalMins = (endH || 16) * 60 + (endM || 30);
-    const startTotalMins = (startH || 7) * 60 + (startM || 30);
+    const endTotalMins = (Number.isFinite(endH) ? endH : 16) * 60 + (Number.isFinite(endM) ? endM : 0);
+    const startTotalMins = (Number.isFinite(startH) ? startH : 7) * 60 + (Number.isFinite(startM) ? startM : 0);
 
     const nowWitaDate = new Date(Date.now() + 8 * 60 * 60 * 1000);
     const nowH = nowWitaDate.getUTCHours();
@@ -4542,14 +4542,14 @@ app.post('/api/attendances/clock-out', async (req, res) => {
 
         const [sH, sM] = shiftStartTime.split(':').map(Number);
         const [eH, eM] = shiftEndTime.split(':').map(Number);
-        const startMins = (sH || 7) * 60 + (sM || 30);
-        const endMins = (eH || 16) * 60 + (eM || 30);
+        const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 0);
+        const endMins = (Number.isFinite(eH) ? eH : 16) * 60 + (Number.isFinite(eM) ? eM : 0);
         if (endMins < startMins) isCrossDay = true;
 
         let nowMins = 0;
         if (time && typeof time === 'string') {
           const [cH, cM] = time.split(':').map(Number);
-          nowMins = (cH || 0) * 60 + (cM || 0);
+          nowMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);
         } else {
           const witaDate = new Date(Date.now() + 8 * 3600000);
           nowMins = witaDate.getUTCHours() * 60 + witaDate.getUTCMinutes();
