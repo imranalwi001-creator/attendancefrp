@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { UserProfile, AttendanceRecord, Shift } from '@/types/hrm';
 import { hrmService } from '@/services/hrmService';
+import { hrmHolidayService, NationalHoliday } from '@/services/hrmHolidayService';
 import { resolveEffectiveShift } from '@/lib/hrmShiftResolver';
 import * as XLSX from 'xlsx';
 import {
@@ -120,6 +121,9 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
   // Auto-fetch data presensi dari PostgreSQL API saat bulan atau user berubah
   const [serverMonthAttendances, setServerMonthAttendances] = useState<AttendanceRecord[]>([]);
   const [isLoadingMonth, setIsLoadingMonth] = useState<boolean>(false);
+  const [monthSchedules, setMonthSchedules] = useState<Map<string, any>>(new Map());
+  const [monthLeaves, setMonthLeaves] = useState<Map<string, any>>(new Map());
+  const [nationalHolidays, setNationalHolidays] = useState<Map<string, NationalHoliday>>(new Map());
 
   React.useEffect(() => {
     if (!isOpen || !user || !selectedMonth) return;
@@ -127,6 +131,8 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
     setIsLoadingMonth(true);
 
     const targetUserId = user.id || user.nip;
+
+    // 1. Ambil Presensi
     fetch(`/api/attendances?month=${selectedMonth}&userId=${encodeURIComponent(targetUserId)}`)
       .then((res) => res.json())
       .then((json) => {
@@ -141,10 +147,57 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
         if (isMounted) setIsLoadingMonth(false);
       });
 
+    // 2. Ambil Jadwal Kerja Roster Karyawan (untuk deteksi shift & hari OFF)
+    fetch(`/api/employee-schedules?month=${selectedMonth}&userId=${encodeURIComponent(user.id)}`)
+      .then((res) => res.json())
+      .then((json) => {
+        if (isMounted && json.success && Array.isArray(json.data)) {
+          const sMap = new Map<string, any>();
+          json.data.forEach((row: any) => {
+            if (row.scheduleDate) sMap.set(row.scheduleDate, row);
+          });
+          setMonthSchedules(sMap);
+        }
+      })
+      .catch((err) => console.warn('[CalendarModal] Schedules fetch warning:', err));
+
+    // 3. Ambil Pengajuan Cuti / Izin Resmi yang Disetujui
+    fetch(`/api/leaves?userId=${encodeURIComponent(user.id)}&status=approved`)
+      .then((res) => res.json())
+      .then((json) => {
+        if (isMounted && json.success && Array.isArray(json.data)) {
+          const lMap = new Map<string, any>();
+          json.data.forEach((l: any) => {
+            const start = l.start_date || l.startDate;
+            const end = l.end_date || l.endDate || start;
+            if (start && end) {
+              let curr = new Date(start);
+              const stop = new Date(end);
+              while (curr <= stop) {
+                const cStr = curr.toISOString().split('T')[0];
+                lMap.set(cStr, l);
+                curr.setDate(curr.getDate() + 1);
+              }
+            }
+          });
+          setMonthLeaves(lMap);
+        }
+      })
+      .catch((err) => console.warn('[CalendarModal] Leaves fetch warning:', err));
+
+    // 4. Ambil dan Sinkronkan Hari Libur Nasional (SKB 3 Menteri)
+    hrmHolidayService.fetchHolidays(yearNum).then((hols) => {
+      if (isMounted) {
+        const hMap = new Map<string, NationalHoliday>();
+        hols.forEach((h) => hMap.set(h.date, h));
+        setNationalHolidays(hMap);
+      }
+    });
+
     return () => {
       isMounted = false;
     };
-  }, [isOpen, user?.id, user?.nip, selectedMonth]);
+  }, [isOpen, user?.id, user?.nip, selectedMonth, yearNum]);
 
   // Gabungkan attendances dari props dan dari server PostgreSQL
   const userMonthAttendances = useMemo(() => {
@@ -290,6 +343,18 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
   const selectedRecord = useMemo(() => {
     return attendanceMap.get(selectedDateStr) || null;
   }, [attendanceMap, selectedDateStr]);
+
+  const selectedHoliday = useMemo(() => {
+    return nationalHolidays.get(selectedDateStr) || hrmHolidayService.isNationalHoliday(selectedDateStr).holiday;
+  }, [nationalHolidays, selectedDateStr]);
+
+  const selectedSched = useMemo(() => {
+    return monthSchedules.get(selectedDateStr) || null;
+  }, [monthSchedules, selectedDateStr]);
+
+  const selectedLeave = useMemo(() => {
+    return monthLeaves.get(selectedDateStr) || null;
+  }, [monthLeaves, selectedDateStr]);
 
   const selectedDateFormatted = useMemo(() => {
     if (!selectedDateStr) return '-';
@@ -518,6 +583,16 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                 const att = d.attendance;
                 const isSelected = d.dateStr === selectedDateStr;
                 const isSunday = idx % 7 === 6;
+                const isSaturday = idx % 7 === 5;
+
+                // Deteksi Libur Nasional (SKB 3 Menteri)
+                const holiday = nationalHolidays.get(d.dateStr) || hrmHolidayService.isNationalHoliday(d.dateStr).holiday;
+                const isNationalHoliday = Boolean(holiday);
+
+                // Deteksi Jadwal Roster & Pengajuan Cuti
+                const sched = monthSchedules.get(d.dateStr);
+                const leave = monthLeaves.get(d.dateStr);
+                const isDayShiftEmp = (user?.shiftName || '').toLowerCase().includes('day') || user?.shiftCode === 'DAY' || (user?.divisionName || '').toLowerCase().includes('general') || (user?.divisionName || '').toLowerCase().includes('office');
 
                 // Tentukan status visual
                 let statusBg = 'bg-card hover:bg-muted/30';
@@ -557,11 +632,41 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                       </div>
                     );
                   }
+                } else if (leave) {
+                  statusBg = 'bg-blue-500/5 hover:bg-blue-500/10';
+                  statusBadge = (
+                    <span className="mt-1 text-[9px] font-semibold text-blue-600 dark:text-blue-400">
+                      {leave.leave_type || leave.type || 'Cuti/Izin'}
+                    </span>
+                  );
+                } else if (isNationalHoliday) {
+                  statusBg = 'bg-rose-500/10 hover:bg-rose-500/15 border-rose-500/20';
+                  statusBadge = (
+                    <span className="mt-1 text-[9px] font-bold text-rose-600 dark:text-rose-400 truncate block" title={holiday?.name}>
+                      🇮🇩 {holiday?.name}
+                    </span>
+                  );
+                } else if (sched?.isOff) {
+                  statusBadge = (
+                    <span className="mt-1 text-[9px] text-muted-foreground/60 italic font-medium">Libur (OFF)</span>
+                  );
                 } else if (isSunday) {
                   statusBadge = (
-                    <span className="mt-1 text-[9px] text-muted-foreground/60 italic">Libur</span>
+                    <span className="mt-1 text-[9px] text-rose-500/60 italic font-medium">Libur</span>
                   );
-                } else if (!d.isFuture) {
+                } else if (isSaturday && (isDayShiftEmp || !sched)) {
+                  statusBadge = (
+                    <span className="mt-1 text-[9px] text-muted-foreground/60 italic font-medium">Libur Akhir Pekan</span>
+                  );
+                } else if (d.isToday) {
+                  statusBadge = (
+                    <span className="mt-1 text-[9px] text-amber-600 dark:text-amber-400 font-medium">Belum Absen</span>
+                  );
+                } else if (d.isFuture) {
+                  statusBadge = (
+                    <span className="mt-1 text-[9px] text-muted-foreground/40 font-light">Jadwal Kerja</span>
+                  );
+                } else {
                   statusBadge = (
                     <span className="mt-1 text-[9px] text-rose-500/70 font-medium">Alfa / Nihil</span>
                   );
@@ -582,8 +687,10 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                         className={`text-xs font-semibold ${
                           d.isToday
                             ? 'w-5 h-5 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold'
-                            : isSunday
-                            ? 'text-rose-500'
+                            : isNationalHoliday || isSunday
+                            ? 'text-rose-500 font-bold'
+                            : isSaturday
+                            ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
                             : d.isCurrentMonth
                             ? 'text-foreground'
                             : 'text-muted-foreground/40'
@@ -769,6 +876,39 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                     </div>
                   </div>
                 </div>
+              </div>
+            ) : selectedHoliday ? (
+              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/25 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <Badge className="bg-rose-600 text-white text-[10px] rounded-full">
+                    🇮🇩 Hari Libur Nasional Resmi
+                  </Badge>
+                  <span className="text-xs font-bold text-rose-700 dark:text-rose-300">
+                    SKB 3 Menteri
+                  </span>
+                </div>
+                <p className="text-sm font-extrabold text-foreground">{selectedHoliday.name}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Hari libur nasional resmi Republik Indonesia (Bulan {selectedMonth}). Karyawan bebas tugas atau berhak atas upah lembur khusus jika ditugaskan.
+                </p>
+              </div>
+            ) : selectedSched?.isOff ? (
+              <div className="p-3.5 rounded-xl bg-muted/30 border border-border space-y-1">
+                <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                  Jadwal Roster: Libur Operasional (OFF)
+                </Badge>
+                <p className="text-xs text-muted-foreground">
+                  Karyawan terjadwal libur rotasi / bebas tugas pada tanggal {selectedDateFormatted}.
+                </p>
+              </div>
+            ) : selectedLeave ? (
+              <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 space-y-1">
+                <Badge className="bg-blue-600 text-white text-[10px]">
+                  {selectedLeave.leave_type || selectedLeave.type || 'Pengajuan Cuti / Izin Disetujui'}
+                </Badge>
+                <p className="text-xs text-foreground font-semibold">
+                  {selectedLeave.reason || 'Cuti Resmi Tercatat'}
+                </p>
               </div>
             ) : (
               <p className="text-xs text-muted-foreground italic py-2">

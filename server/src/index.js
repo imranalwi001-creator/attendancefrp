@@ -10367,11 +10367,19 @@ app.get('/api/employee-schedules', async (req, res) => {
       params.push(date);
       query += ` AND s.schedule_date = $${params.length}`;
     }
-    if (month && year) {
-      params.push(Number(month));
-      query += ` AND EXTRACT(MONTH FROM s.schedule_date) = $${params.length}`;
-      params.push(Number(year));
-      query += ` AND EXTRACT(YEAR FROM s.schedule_date) = $${params.length}`;
+    if (month) {
+      if (typeof month === 'string' && month.includes('-')) {
+        const [mYear, mMonth] = month.split('-').map(Number);
+        params.push(mMonth);
+        query += ` AND EXTRACT(MONTH FROM s.schedule_date) = $${params.length}`;
+        params.push(mYear);
+        query += ` AND EXTRACT(YEAR FROM s.schedule_date) = $${params.length}`;
+      } else if (year) {
+        params.push(Number(month));
+        query += ` AND EXTRACT(MONTH FROM s.schedule_date) = $${params.length}`;
+        params.push(Number(year));
+        query += ` AND EXTRACT(YEAR FROM s.schedule_date) = $${params.length}`;
+      }
     }
 
     query += ` ORDER BY s.schedule_date ASC, CASE WHEN p.nip LIKE 'FR%' THEN 0 ELSE 1 END, NULLIF(REGEXP_REPLACE(p.nip, '[^0-9]', '', 'g'), '')::INT ASC NULLS LAST, p.nip ASC, p.full_name ASC`;
