@@ -10616,7 +10616,7 @@ app.post('/api/attendances/manual-entry', async (req, res) => {
       attendanceDate,
       status || 'hadir',
       clockIn || '07:30:00',
-      clockOut || '16:30:00',
+      clockOut ? clockOut : null,
       notes || 'Presensi manual divalidasi oleh Superadmin',
       lateMinutes || 0,
     ]);

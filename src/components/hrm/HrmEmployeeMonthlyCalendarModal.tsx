@@ -4,10 +4,23 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
+  DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { UserProfile, AttendanceRecord, Shift } from '@/types/hrm';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { TimePicker } from '@/components/ui/time-picker';
+import { toast } from 'sonner';
+import { UserProfile, AttendanceRecord, Shift, AttendanceStatus } from '@/types/hrm';
 import { hrmService } from '@/services/hrmService';
 import { hrmHolidayService, NationalHoliday } from '@/services/hrmHolidayService';
 import { resolveEffectiveShift } from '@/lib/hrmShiftResolver';
@@ -28,6 +41,8 @@ import {
   Camera,
   User,
   Coffee,
+  Edit3,
+  Save,
 } from 'lucide-react';
 
 interface Props {
@@ -47,6 +62,7 @@ interface Props {
     biometricScore?: number;
     geofenceDistance?: number;
   }) => void;
+  onCorrectionSaved?: () => void;
 }
 
 export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
@@ -57,6 +73,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
   attendances = [],
   allShifts = [],
   onOpenPhotoPreview,
+  onCorrectionSaved,
 }) => {
   const currentMonthStr = useMemo(() => {
     const now = new Date();
@@ -125,18 +142,25 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
   const [monthLeaves, setMonthLeaves] = useState<Map<string, any>>(new Map());
   const [nationalHolidays, setNationalHolidays] = useState<Map<string, NationalHoliday>>(new Map());
 
-  React.useEffect(() => {
-    if (!isOpen || !user || !selectedMonth) return;
-    let isMounted = true;
-    setIsLoadingMonth(true);
+  // State Dialog Koreksi Presensi Langsung
+  const [correctionModalOpen, setCorrectionModalOpen] = useState<boolean>(false);
+  const [editStatus, setEditStatus] = useState<AttendanceStatus>('hadir');
+  const [editClockIn, setEditClockIn] = useState<string>('07:30');
+  const [editClockOut, setEditClockOut] = useState<string>('');
+  const [editLateMinutes, setEditLateMinutes] = useState<number>(0);
+  const [editNotes, setEditNotes] = useState<string>('');
+  const [isSubmittingCorrect, setIsSubmittingCorrect] = useState<boolean>(false);
 
+  const loadMonthData = React.useCallback(() => {
+    if (!user || !selectedMonth) return;
+    setIsLoadingMonth(true);
     const targetUserId = user.id || user.nip;
 
     // 1. Ambil Presensi
     fetch(`/api/attendances?month=${selectedMonth}&userId=${encodeURIComponent(targetUserId)}`)
       .then((res) => res.json())
       .then((json) => {
-        if (isMounted && json.success && Array.isArray(json.data)) {
+        if (json.success && Array.isArray(json.data)) {
           setServerMonthAttendances(json.data);
         }
       })
@@ -144,14 +168,14 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
         console.warn('[CalendarModal] Server fetch warning:', err);
       })
       .finally(() => {
-        if (isMounted) setIsLoadingMonth(false);
+        setIsLoadingMonth(false);
       });
 
     // 2. Ambil Jadwal Kerja Roster Karyawan (untuk deteksi shift & hari OFF)
     fetch(`/api/employee-schedules?month=${selectedMonth}&userId=${encodeURIComponent(user.id)}`)
       .then((res) => res.json())
       .then((json) => {
-        if (isMounted && json.success && Array.isArray(json.data)) {
+        if (json.success && Array.isArray(json.data)) {
           const sMap = new Map<string, any>();
           json.data.forEach((row: any) => {
             if (row.scheduleDate) sMap.set(row.scheduleDate, row);
@@ -165,7 +189,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
     fetch(`/api/leaves?userId=${encodeURIComponent(user.id)}&status=approved`)
       .then((res) => res.json())
       .then((json) => {
-        if (isMounted && json.success && Array.isArray(json.data)) {
+        if (json.success && Array.isArray(json.data)) {
           const lMap = new Map<string, any>();
           json.data.forEach((l: any) => {
             const start = l.start_date || l.startDate;
@@ -187,17 +211,17 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
 
     // 4. Ambil dan Sinkronkan Hari Libur Nasional (SKB 3 Menteri)
     hrmHolidayService.fetchHolidays(yearNum).then((hols) => {
-      if (isMounted) {
-        const hMap = new Map<string, NationalHoliday>();
-        hols.forEach((h) => hMap.set(h.date, h));
-        setNationalHolidays(hMap);
-      }
+      const hMap = new Map<string, NationalHoliday>();
+      hols.forEach((h) => hMap.set(h.date, h));
+      setNationalHolidays(hMap);
     });
+  }, [user?.id, user?.nip, selectedMonth, yearNum]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [isOpen, user?.id, user?.nip, selectedMonth, yearNum]);
+  React.useEffect(() => {
+    if (isOpen) {
+      loadMonthData();
+    }
+  }, [isOpen, loadMonthData]);
 
   // Gabungkan attendances dari props dan dari server PostgreSQL
   const userMonthAttendances = useMemo(() => {
@@ -720,21 +744,48 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                 </h4>
               </div>
 
-              {selectedRecord ? (
-                selectedRecord.status === 'hadir' ? (
-                  <Badge className="bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 text-[10px] gap-1 rounded-full">
-                    <CheckCircle2 size={11} /> Tepat Waktu
-                  </Badge>
+              <div className="flex items-center gap-2">
+                {selectedRecord ? (
+                  selectedRecord.status === 'hadir' ? (
+                    <Badge className="bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 text-[10px] gap-1 rounded-full">
+                      <CheckCircle2 size={11} /> Tepat Waktu
+                    </Badge>
+                  ) : (
+                    <Badge className="bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300 text-[10px] gap-1 rounded-full">
+                      <AlertTriangle size={11} /> Terlambat ({selectedRecord.lateMinutes || 0} Menit)
+                    </Badge>
+                  )
                 ) : (
-                  <Badge className="bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300 text-[10px] gap-1 rounded-full">
-                    <AlertTriangle size={11} /> Terlambat ({selectedRecord.lateMinutes || 0} Menit)
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                    Tidak Ada Presensi Tercatat
                   </Badge>
-                )
-              ) : (
-                <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                  Tidak Ada Presensi Tercatat
-                </Badge>
-              )}
+                )}
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    if (selectedRecord) {
+                      setEditStatus(selectedRecord.status);
+                      setEditClockIn(selectedRecord.clockIn ? selectedRecord.clockIn.substring(0, 5) : '07:30');
+                      setEditClockOut(selectedRecord.clockOut ? selectedRecord.clockOut.substring(0, 5) : '');
+                      setEditLateMinutes(selectedRecord.lateMinutes || 0);
+                      setEditNotes(selectedRecord.notes || '');
+                    } else {
+                      setEditStatus('hadir');
+                      setEditClockIn(effectiveShift?.startTime?.substring(0, 5) || '07:30');
+                      setEditClockOut(effectiveShift?.endTime?.substring(0, 5) || '');
+                      setEditLateMinutes(0);
+                      setEditNotes('[Koreksi Superadmin: Kehadiran Disahkan]');
+                    }
+                    setCorrectionModalOpen(true);
+                  }}
+                  className="h-7 px-2.5 gap-1.5 rounded-lg border-primary/40 bg-primary/10 hover:bg-primary/20 text-primary text-[11px] font-bold transition-all shadow-xs"
+                >
+                  <Edit3 size={12} />
+                  <span>{selectedRecord ? 'Koreksi Data' : 'Input Presensi'}</span>
+                </Button>
+              </div>
             </div>
 
             {selectedRecord ? (
@@ -919,6 +970,169 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
           </div>
         </div>
       </DialogContent>
+
+      {/* Dialog Modal Koreksi Presensi Langsung ke PostgreSQL */}
+      <Dialog open={correctionModalOpen} onOpenChange={setCorrectionModalOpen}>
+        <DialogContent className="max-w-md rounded-2xl border-border bg-card shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2 text-foreground">
+              <Edit3 className="w-4 h-4 text-primary" />
+              {selectedRecord ? 'Koreksi Data Presensi Karyawan' : 'Input Presensi Manual Karyawan'}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Perubahan langsung disinkronkan ke PostgreSQL VPS dan data kehadiran mobile PWA karyawan.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2 text-xs">
+            {/* Info Karyawan & Tanggal */}
+            <div className="p-3 bg-muted/40 rounded-xl border border-border/80 space-y-1">
+              <p className="font-bold text-sm text-foreground">{user.fullName}</p>
+              <p className="text-[11px] text-muted-foreground">
+                NIP: <span className="font-mono font-semibold">{user.nip}</span> • Tanggal:{' '}
+                <span className="font-mono font-semibold text-primary">{selectedDateStr}</span>
+              </p>
+            </div>
+
+            {/* Status Presensi */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Status Presensi</Label>
+              <Select value={editStatus} onValueChange={(val: any) => setEditStatus(val)}>
+                <SelectTrigger className="h-9 text-xs rounded-xl">
+                  <SelectValue placeholder="Pilih status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hadir">Hadir Tepat Waktu</SelectItem>
+                  <SelectItem value="terlambat">Terlambat</SelectItem>
+                  <SelectItem value="izin">Izin</SelectItem>
+                  <SelectItem value="sakit">Sakit</SelectItem>
+                  <SelectItem value="cuti">Cuti</SelectItem>
+                  <SelectItem value="alpha">Alpha (Mangkir)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Jam Masuk & Jam Pulang */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Jam Masuk</Label>
+                <TimePicker value={editClockIn} onChange={(val) => setEditClockIn(val)} />
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold">Jam Pulang</Label>
+                  {editClockOut ? (
+                    <button
+                      type="button"
+                      onClick={() => setEditClockOut('')}
+                      className="text-[10px] text-red-500 hover:underline font-medium"
+                    >
+                      Kosongkan (Belum Pulang)
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-amber-500 font-semibold">
+                      (Belum Pulang)
+                    </span>
+                  )}
+                </div>
+                <TimePicker
+                  value={editClockOut}
+                  placeholder="-- : -- (Belum Pulang)"
+                  onChange={(val) => setEditClockOut(val)}
+                />
+              </div>
+            </div>
+
+            {/* Menit Terlambat */}
+            {editStatus === 'terlambat' && (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Menit Keterlambatan</Label>
+                <Input
+                  type="number"
+                  value={editLateMinutes}
+                  onChange={(e) => setEditLateMinutes(Number(e.target.value))}
+                  className="h-9 text-xs rounded-xl font-mono"
+                />
+              </div>
+            )}
+
+            {/* Catatan Koreksi */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Catatan Koreksi / Alasan Dispensasi</Label>
+              <Input
+                placeholder="Contoh: Koreksi absensi dinas luar / dispensasi pimpinan..."
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+                className="h-9 text-xs rounded-xl"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCorrectionModalOpen(false)}
+              className="rounded-xl"
+            >
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={async () => {
+                if (!user || !selectedDateStr) return;
+                setIsSubmittingCorrect(true);
+                try {
+                  if (selectedRecord && selectedRecord.id) {
+                    const res = await hrmService.correctAttendance(selectedRecord.id, {
+                      status: editStatus,
+                      clockIn: editClockIn ? `${editClockIn}:00` : undefined,
+                      clockOut: editClockOut ? `${editClockOut}:00` : null,
+                      notes: editNotes.trim(),
+                      lateMinutes: editStatus === 'terlambat' ? Number(editLateMinutes) : 0,
+                    });
+                    if (res.success) {
+                      toast.success(`Presensi ${user.fullName} (${selectedDateFormatted}) berhasil dikoreksi dan disinkronkan ke PostgreSQL!`);
+                      setCorrectionModalOpen(false);
+                      loadMonthData();
+                      if (onCorrectionSaved) onCorrectionSaved();
+                    } else {
+                      toast.error(res.error || 'Gagal menyimpan koreksi presensi');
+                    }
+                  } else {
+                    const res = await hrmService.addManualAttendance({
+                      userId: user.id,
+                      attendanceDate: selectedDateStr,
+                      status: editStatus,
+                      clockIn: editClockIn ? `${editClockIn}:00` : '07:30:00',
+                      clockOut: editClockOut ? `${editClockOut}:00` : undefined,
+                      notes: editNotes.trim() || 'Presensi divalidasi langsung oleh Superadmin via Kalender',
+                      lateMinutes: editStatus === 'terlambat' ? Number(editLateMinutes) : 0,
+                    });
+                    if (res.success) {
+                      toast.success(`Data presensi baru untuk ${user.fullName} (${selectedDateFormatted}) berhasil disimpan ke PostgreSQL!`);
+                      setCorrectionModalOpen(false);
+                      loadMonthData();
+                      if (onCorrectionSaved) onCorrectionSaved();
+                    } else {
+                      toast.error(res.error || 'Gagal menyimpan presensi manual');
+                    }
+                  }
+                } catch (err: any) {
+                  toast.error(err.message || 'Terjadi kesalahan sistem saat menyimpan');
+                } finally {
+                  setIsSubmittingCorrect(false);
+                }
+              }}
+              disabled={isSubmittingCorrect}
+              className="rounded-xl bg-primary text-primary-foreground font-semibold gap-1.5"
+            >
+              <Save size={13} />
+              {isSubmittingCorrect ? 'Menyimpan...' : 'Simpan Koreksi'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 };
