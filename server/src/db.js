@@ -723,6 +723,21 @@ export async function initDb() {
       );
 
       CREATE INDEX IF NOT EXISTS idx_employee_kpi_user_period ON hrm_employee_kpi(user_id, period_month);
+
+      -- ─── 20. INDONESIAN NATIONAL PUBLIC HOLIDAYS (SKB 3 MENTERI) ───
+      CREATE TABLE IF NOT EXISTS hrm_national_holidays (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        holiday_date DATE NOT NULL UNIQUE,
+        holiday_name VARCHAR(150) NOT NULL,
+        holiday_type VARCHAR(50) DEFAULT 'national',
+        description TEXT,
+        year INT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_national_holidays_date ON hrm_national_holidays (holiday_date);
+      CREATE INDEX IF NOT EXISTS idx_national_holidays_year ON hrm_national_holidays (year);
     `);
 
     console.log('[Database] Schema verification, Biometric, Geofence, Field Sentinel Multi-Posts & Notifications extensions completed.');

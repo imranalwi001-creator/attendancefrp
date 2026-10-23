@@ -38,6 +38,7 @@ import { payrollTaxEngine } from './payrollTaxEngine';
 import { GenerationResult, DEFAULT_SHIFTS as ROSTER_DEFAULT_SHIFTS } from './rosterSchedulerService';
 import { notifyUserWithAudioAndVibe } from './soundVibrationService';
 import { geofenceService } from './geofenceService';
+import { hrmHolidayService } from './hrmHolidayService';
 import { calculateAttendanceLateness, resolveEffectiveShift } from '@/lib/hrmShiftResolver';
 
 const STORAGE_KEYS = {
@@ -4736,7 +4737,7 @@ export const hrmService = {
 
     const dateObj = new Date(data.date);
     const day = dateObj.getDay();
-    const isWeekend = day === 0 || day === 6;
+    const isWeekend = (day === 0 || day === 6) || hrmHolidayService.isWeekendOrHoliday(data.date).isWeekendOrHoliday;
 
     const calc = hrmService.calculateOvertime(data.startTime, data.endTime, isWeekend);
     const hourlyRate = calc.hourlyRate;
@@ -4813,7 +4814,7 @@ export const hrmService = {
 
     const dateObj = new Date(req.date);
     const day = dateObj.getDay();
-    const isWeekend = req.isWeekendHoliday !== undefined ? req.isWeekendHoliday : (day === 0 || day === 6);
+    const isWeekend = req.isWeekendHoliday !== undefined ? req.isWeekendHoliday : ((day === 0 || day === 6) || hrmHolidayService.isWeekendOrHoliday(req.date).isWeekendOrHoliday);
 
     const calc = hrmService.calculateOvertime(req.startTime, req.endTime, isWeekend);
     const hourlyRate = user.overtimeRateOverride || calc.hourlyRate || 23381.79;
@@ -4903,7 +4904,7 @@ export const hrmService = {
 
     const dateObj = new Date(data.date);
     const day = dateObj.getDay();
-    const isWeekend = day === 0 || day === 6;
+    const isWeekend = (day === 0 || day === 6) || hrmHolidayService.isWeekendOrHoliday(data.date).isWeekendOrHoliday;
 
     const calc = hrmService.calculateOvertime(data.startTime, data.endTime, isWeekend);
     const hourlyRate = calc.hourlyRate;

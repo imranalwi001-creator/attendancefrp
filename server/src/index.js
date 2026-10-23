@@ -6357,6 +6357,59 @@ async function broadcastNotification({
   }
 }
 
+// ─── 7.5. NATIONAL PUBLIC HOLIDAYS (SKB 3 MENTERI) ─────────────────────────
+app.get('/api/holidays', async (req, res) => {
+  try {
+    const { year, month } = req.query;
+    let query = `SELECT id, holiday_date as "date", holiday_name as "name", holiday_type as "type", description, year FROM hrm_national_holidays`;
+    const params = [];
+    const conditions = [];
+
+    if (year) {
+      params.push(parseInt(year, 10));
+      conditions.push(`year = $${params.length}`);
+    }
+    if (month && year) {
+      const monthStr = String(month).padStart(2, '0');
+      const startStr = `${year}-${monthStr}-01`;
+      const endStr = `${year}-${monthStr}-31`;
+      params.push(startStr, endStr);
+      conditions.push(`holiday_date BETWEEN $${params.length - 1} AND $${params.length}`);
+    }
+
+    if (conditions.length > 0) {
+      query += ` WHERE ` + conditions.join(' AND ');
+    }
+    query += ` ORDER BY holiday_date ASC`;
+
+    const result = await pool.query(query, params);
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    console.error('[Holidays API] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/holidays/check/:date', async (req, res) => {
+  try {
+    const { date } = req.params;
+    const result = await pool.query(
+      `SELECT id, holiday_date as "date", holiday_name as "name", holiday_type as "type" 
+       FROM hrm_national_holidays 
+       WHERE holiday_date = $1 LIMIT 1`,
+      [date]
+    );
+    if (result.rows.length > 0) {
+      res.json({ success: true, isHoliday: true, holiday: result.rows[0] });
+    } else {
+      res.json({ success: true, isHoliday: false, holiday: null });
+    }
+  } catch (err) {
+    console.error('[Holiday Check API] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── 8. LEAVE REQUESTS (PENGAJUAN IZIN / CUTI / SAKIT) ───────────────────────
 app.get('/api/leaves', async (req, res) => {
   const { userId, status, divisionId } = req.query;
@@ -7374,10 +7427,14 @@ app.post('/api/overtime', async (req, res) => {
       hours = 3.0;
     }
 
-    // Cek apakah tanggal lembur adalah hari libur / istirahat mingguan
+    // Cek apakah tanggal lembur adalah hari libur nasional atau istirahat mingguan
     const otDateObj = new Date(date);
     const dayOfWeek = otDateObj.getDay();
-    const isHolidayOrWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    let isHolidayOrWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    if (!isHolidayOrWeekend) {
+      const holCheck = await pool.query(`SELECT id FROM hrm_national_holidays WHERE holiday_date = $1 LIMIT 1`, [date]).catch(() => ({ rows: [] }));
+      if (holCheck.rows.length > 0) isHolidayOrWeekend = true;
+    }
 
     // Formula Lembur Berjenjang Resmi Kepmenakertrans No. 102/2004 & PP 35/2021
     let comp = 0;
@@ -7540,7 +7597,11 @@ app.put('/api/overtime/:id/status', async (req, res) => {
 
     const otDateObj = new Date(ot.date);
     const dayOfWeek = otDateObj.getDay();
-    const isHolidayOrWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    let isHolidayOrWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    if (!isHolidayOrWeekend) {
+      const holCheck = await pool.query(`SELECT id FROM hrm_national_holidays WHERE holiday_date = $1 LIMIT 1`, [ot.date]).catch(() => ({ rows: [] }));
+      if (holCheck.rows.length > 0) isHolidayOrWeekend = true;
+    }
 
     let compensation = 0;
     if (!isHolidayOrWeekend) {

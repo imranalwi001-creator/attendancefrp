@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService } from '@/services/hrmService';
+import { hrmHolidayService } from '@/services/hrmHolidayService';
 import { UserProfile, OvertimeStatus } from '@/types/hrm';
 import {
   Clock,
@@ -52,6 +53,7 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
   const [endTime, setEndTime] = useState<string>('00:30');
   const [durationHours, setDurationHours] = useState<number>(8.0);
   const [isWeekendHoliday, setIsWeekendHoliday] = useState<boolean>(false);
+  const [holidayDetail, setHolidayDetail] = useState<{ isHoliday: boolean; holidayName?: string }>({ isHoliday: false });
   const [taskDescription, setTaskDescription] = useState<string>('');
   const [status, setStatus] = useState<OvertimeStatus>('approved');
   const [approvalNotes, setApprovalNotes] = useState<string>('Ditugaskan dan disahkan langsung oleh Super Administrator');
@@ -70,9 +72,10 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
         setSelectedUserId(allUsers[0].id);
       }
 
-      // Check if current date is weekend
-      const d = new Date(date);
-      setIsWeekendHoliday(d.getDay() === 0 || d.getDay() === 6);
+      // Check if current date is weekend or national holiday
+      const holCheck = hrmHolidayService.isWeekendOrHoliday(date);
+      setIsWeekendHoliday(holCheck.isWeekendOrHoliday);
+      setHolidayDetail({ isHoliday: holCheck.isNationalHoliday, holidayName: holCheck.holidayName });
     }
   }, [open, preselectedUser]);
 
@@ -126,8 +129,9 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
 
   const handleDateChange = (val: string) => {
     setDate(val);
-    const d = new Date(val);
-    setIsWeekendHoliday(d.getDay() === 0 || d.getDay() === 6);
+    const holCheck = hrmHolidayService.isWeekendOrHoliday(val);
+    setIsWeekendHoliday(holCheck.isWeekendOrHoliday);
+    setHolidayDetail({ isHoliday: holCheck.isNationalHoliday, holidayName: holCheck.holidayName });
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -319,7 +323,14 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
             </div>
 
             <div className="space-y-1">
-              <Label className="text-xs font-semibold">Kategori Hari Kerja</Label>
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold">Kategori Hari Kerja</Label>
+                {holidayDetail.isHoliday && (
+                  <Badge variant="outline" className="text-[10px] bg-red-500/10 text-red-600 border-red-300 font-medium">
+                    🇮🇩 {holidayDetail.holidayName}
+                  </Badge>
+                )}
+              </div>
               <div className="flex items-center gap-2 pt-1.5">
                 <button
                   type="button"
