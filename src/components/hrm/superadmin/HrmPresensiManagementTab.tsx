@@ -113,7 +113,8 @@ export const HrmPresensiManagementTab: React.FC = () => {
     setSelectedRecord(rec);
     setEditStatus(rec.status);
     setEditClockIn(rec.clockIn ? rec.clockIn.substring(0, 5) : '07:30');
-    setEditClockOut(rec.clockOut ? rec.clockOut.substring(0, 5) : '16:30');
+    // Jika belum ada jam pulang (karyawan masih bertugas), jangan dipaksa default 16:30!
+    setEditClockOut(rec.clockOut ? rec.clockOut.substring(0, 5) : '');
     setEditNotes(rec.notes || '');
     setEditLateMinutes(rec.lateMinutes || 0);
     setCorrectModalOpen(true);
@@ -126,7 +127,8 @@ export const HrmPresensiManagementTab: React.FC = () => {
       const res = await hrmService.correctAttendance(selectedRecord.id, {
         status: editStatus,
         clockIn: editClockIn ? `${editClockIn}:00` : undefined,
-        clockOut: editClockOut ? `${editClockOut}:00` : undefined,
+        // Jika editClockOut kosong (belum jam pulang), kirim null agar jam pulang tetap kosong
+        clockOut: editClockOut ? `${editClockOut}:00` : null,
         notes: editNotes,
         lateMinutes: editStatus === 'terlambat' ? Number(editLateMinutes) : 0,
       });
@@ -495,9 +497,25 @@ export const HrmPresensiManagementTab: React.FC = () => {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold">Jam Pulang</Label>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-semibold">Jam Pulang</Label>
+                    {editClockOut ? (
+                      <button
+                        type="button"
+                        onClick={() => setEditClockOut('')}
+                        className="text-[10px] text-red-500 hover:underline font-medium"
+                      >
+                        Kosongkan (Belum Pulang)
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-amber-500 font-semibold">
+                        (Belum Absen Pulang)
+                      </span>
+                    )}
+                  </div>
                   <TimePicker
                     value={editClockOut}
+                    placeholder="-- : -- (Belum Pulang)"
                     onChange={(val) => setEditClockOut(val)}
                   />
                 </div>

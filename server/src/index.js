@@ -10544,21 +10544,34 @@ app.put('/api/attendances/:id/manual-correct', async (req, res) => {
   try {
     const { id } = req.params;
     const { status, clockIn, clockOut, notes, lateMinutes } = req.body;
+
+    let clockOutSql = 'clock_out = clock_out';
+    const params = [status, clockIn, notes, lateMinutes, id];
+
+    if (clockOut !== undefined) {
+      if (clockOut === null || clockOut === '') {
+        clockOutSql = 'clock_out = NULL, photo_out = NULL, lat_out = NULL, long_out = NULL';
+      } else {
+        params.push(clockOut);
+        clockOutSql = `clock_out = $${params.length}`;
+      }
+    }
+
     const query = `
       UPDATE hrm_attendances
       SET status = COALESCE($1, status),
           clock_in = COALESCE($2, clock_in),
-          clock_out = COALESCE($3, clock_out),
-          notes = COALESCE($4, notes),
-          late_minutes = COALESCE($5, late_minutes),
+          ${clockOutSql},
+          notes = COALESCE($3, notes),
+          late_minutes = COALESCE($4, late_minutes),
           is_verified = true,
           is_locked = false,
           is_perimeter_breached = false,
           updated_at = NOW()
-      WHERE id = $6
+      WHERE id = $5
       RETURNING *;
     `;
-    const result = await pool.query(query, [status, clockIn, clockOut, notes, lateMinutes, id]);
+    const result = await pool.query(query, params);
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
     }
