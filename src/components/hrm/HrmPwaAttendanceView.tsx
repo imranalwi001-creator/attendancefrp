@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr, normalizeAttendanceRecord, normalizeDateString } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
+import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, EmployeeSchedule, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
 import {
   Clock,
   MapPin,
@@ -877,9 +877,54 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       // ─── TAHAP 2: SEGERA RESOLVE SHIFT SECARA SINKRON DARI DATA TERSEDIA ───
       const currentShifts = hrmService.getShifts();
-      const currentSched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
+      let currentSched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
       const instantShift = resolveEffectiveShift(user, currentShifts, currentSched);
       setUserShift(instantShift);
+
+      // ─── TAHAP 2.5: FAST REALTIME ROSTER SYNC DARI POSTGRESQL (< 50ms) ───
+      try {
+        const schedRes = await api.get<{ success: boolean; data?: any }>(
+          `/employee-schedules/today/${encodeURIComponent(user.id)}?date=${encodeURIComponent(todayStr)}`
+        ).catch(() => null);
+
+        if (schedRes && schedRes.success && schedRes.data) {
+          const s = schedRes.data;
+          const remoteSched: EmployeeSchedule = {
+            id: s.id,
+            userId: s.userId || user.id,
+            userName: s.userName || user.fullName,
+            userNip: s.userNip || user.nip,
+            scheduleDate: (s.scheduleDate || todayStr).split('T')[0],
+            shiftId: s.shiftId,
+            shiftCode: s.shiftCode,
+            shiftName: s.shiftName,
+            startTime: s.startTime,
+            endTime: s.endTime,
+            durationHours: Number(s.durationHours || 8),
+            isNightShift: Boolean(s.isNightShift),
+            isOff: Boolean(s.isOff),
+            notes: s.notes || '',
+          };
+          currentSched = remoteSched;
+          const syncedShift = resolveEffectiveShift(user, currentShifts, remoteSched);
+          setUserShift(syncedShift);
+
+          try {
+            const existingScheds = hrmService.getEmployeeSchedules();
+            const schedIdx = existingScheds.findIndex(
+              (item) => item.userId === user.id && item.scheduleDate === todayStr
+            );
+            if (schedIdx >= 0) {
+              existingScheds[schedIdx] = remoteSched;
+            } else {
+              existingScheds.push(remoteSched);
+            }
+            localStorage.setItem('hrm_employee_schedules', JSON.stringify(existingScheds));
+          } catch (_) {}
+        }
+      } catch (schedSyncErr) {
+        console.warn('[PWA] Realtime schedule sync note:', schedSyncErr);
+      }
 
       // ─── TAHAP 3: FAST REALTIME TODAY ATTENDANCE FETCH DARI POSTGRESQL (< 50ms) ───
       // Dijalankan LANGSUNG ke PostgreSQL sebelum background bootstrap yang berat!
