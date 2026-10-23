@@ -3182,6 +3182,7 @@ export const hrmService = {
     const shifts = hrmService.getShifts();
     const dailySchedule = hrmService.getEmployeeTodaySchedule(user.id, today);
     const resolvedShift = resolveEffectiveShift(user, shifts, dailySchedule);
+    const userShift = resolvedShift;
 
     const activeStartTime = resolvedShift.startTime;
     const activeEndTime = resolvedShift.endTime;
@@ -3232,7 +3233,7 @@ export const hrmService = {
       earlyLeavingMinutes: 0,
       workDurationMinutes: 0,
       notes: notesText,
-      shiftId: dailySchedule?.shiftId || userShift.id,
+      shiftId: dailySchedule?.shiftId || resolvedShift?.id || user.shiftId,
       shiftCode: activeShiftCode,
       shiftName: activeShiftName,
       deviceId: currentDeviceId,
@@ -3308,6 +3309,8 @@ export const hrmService = {
       shiftId: (() => {
         const isUuid = (id?: string) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
         if (isUuid(data.shiftId)) return data.shiftId;
+        if (isUuid(dailySchedule?.shiftId)) return dailySchedule.shiftId;
+        if (isUuid(resolvedShift?.id)) return resolvedShift.id;
         if (isUuid(userShift?.id)) return userShift.id;
         if (isUuid(user?.shiftId)) return user.shiftId;
         return undefined;
