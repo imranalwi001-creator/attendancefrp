@@ -256,6 +256,42 @@ export class PayrollTaxEngine {
   }
 
   /**
+   * PT FRP Statutory Capped Overtime Formula:
+   * - Dibayarkan di bulan mundur (N-1)
+   * - Jumlah real jam lembur dikali 2 (Jam Bayar = Real Hours x 2)
+   * - Dibatasi: Shift Normal max 30 jam real (60 jam bayar), Day Shift max 56 jam real (112 jam bayar)
+   * - Total Uang Lembur = Jam Bayar x Upah per Jam (1/173 x Base Salary atau override)
+   */
+  public calculateFwpOvertimePay(
+    baseSalary: number,
+    realHours: number,
+    isDayShift: boolean = false,
+    rateOverride?: number
+  ): {
+    realHours: number;
+    cappedRealHours: number;
+    paidHours: number;
+    maxRealHours: number;
+    hourlyRate: number;
+    totalOvertimePay: number;
+  } {
+    const maxRealHours = isDayShift ? 56 : 30;
+    const cappedRealHours = Math.min(Math.max(0, realHours), maxRealHours);
+    const paidHours = cappedRealHours * 2;
+    const hourlyRate = rateOverride ? Math.round(rateOverride) : Math.round(baseSalary / 173);
+    const totalOvertimePay = Math.round(paidHours * hourlyRate);
+
+    return {
+      realHours,
+      cappedRealHours,
+      paidHours,
+      maxRealHours,
+      hourlyRate,
+      totalOvertimePay,
+    };
+  }
+
+  /**
    * Calculate detailed BPJS breakdown for employees and company
    */
   public calculateBpjsBreakdown(baseSalary: number) {

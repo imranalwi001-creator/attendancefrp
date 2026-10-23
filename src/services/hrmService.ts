@@ -5458,8 +5458,31 @@ export const hrmService = {
         )
       : [];
 
-    const overtimePay = periodOt.reduce((s, r) => s + (Number(r.totalPay ?? (r as any).compensationAmount) || 0), 0);
-    const overtimeHours = periodOt.reduce((s, r) => s + (Number((r as any).approvedHours ?? r.durationHours) || 0), 0);
+    const rawOvertimeHours = periodOt.reduce((s, r) => s + (Number((r as any).approvedHours ?? r.durationHours) || 0), 0);
+
+    // PT FRP Overtime Rules:
+    // - Dibayarkan di bulan mundur (N-1)
+    // - Real jam lembur dikali 2 lalu dikali upah per jam
+    // - Dibatasi: Shift Normal max 30 jam real (60 jam bayar), Day Shift max 56 jam real (112 jam bayar)
+    const DAY_SHIFT_NIPS = new Set([
+      'FR07001', 'FR07002', 'FR07003', 'FR07004', 'FR07005',
+      'FR07007',
+      'FR07013', 'FR07014', 'FR07015', 'FR07016', 'FR07017', 'FR07018', 'FR07019', 'FR07020', 'FR07021', 'FR07022',
+      'FR07028',
+      'FR07042', 'FR07044', 'FR07046'
+    ]);
+    const empShiftName = (employee.shiftName || profile?.shiftName || '').toUpperCase();
+    const isDayShift = DAY_SHIFT_NIPS.has(employee.nip || '') || empShiftName.includes('DAY');
+
+    const fwpOtCalc = payrollTaxEngine.calculateFwpOvertimePay(
+      baseSalary,
+      rawOvertimeHours,
+      isDayShift,
+      employee.overtimeRateOverride || profile?.overtimeRateOverride
+    );
+
+    const overtimePay = fwpOtCalc.totalOvertimePay;
+    const overtimeHours = fwpOtCalc.cappedRealHours;
     const overtimeRecordIds = periodOt.map((r) => r.id);
 
     // ── Income ──
