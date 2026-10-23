@@ -10552,6 +10552,8 @@ app.put('/api/attendances/:id/manual-correct', async (req, res) => {
           notes = COALESCE($4, notes),
           late_minutes = COALESCE($5, late_minutes),
           is_verified = true,
+          is_locked = false,
+          is_perimeter_breached = false,
           updated_at = NOW()
       WHERE id = $6
       RETURNING *;
@@ -10574,8 +10576,8 @@ app.post('/api/attendances/manual-entry', async (req, res) => {
       return res.status(400).json({ success: false, error: 'userId dan attendanceDate wajib diisi' });
     }
     const query = `
-      INSERT INTO hrm_attendances (user_id, attendance_date, status, clock_in, clock_out, notes, late_minutes, is_verified, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, true, NOW(), NOW())
+      INSERT INTO hrm_attendances (user_id, attendance_date, status, clock_in, clock_out, notes, late_minutes, is_verified, is_locked, is_perimeter_breached, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, true, false, false, NOW(), NOW())
       ON CONFLICT (user_id, attendance_date) DO UPDATE
       SET status = EXCLUDED.status,
           clock_in = EXCLUDED.clock_in,
@@ -10583,6 +10585,8 @@ app.post('/api/attendances/manual-entry', async (req, res) => {
           notes = EXCLUDED.notes,
           late_minutes = EXCLUDED.late_minutes,
           is_verified = true,
+          is_locked = false,
+          is_perimeter_breached = false,
           updated_at = NOW()
       RETURNING *;
     `;

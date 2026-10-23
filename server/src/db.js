@@ -738,6 +738,10 @@ export async function initDb() {
 
       CREATE INDEX IF NOT EXISTS idx_national_holidays_date ON hrm_national_holidays (holiday_date);
       CREATE INDEX IF NOT EXISTS idx_national_holidays_year ON hrm_national_holidays (year);
+
+      -- ─── 21. ATTENDANCE MANUAL CORRECTION & ENTRY EXTENSIONS ───
+      ALTER TABLE hrm_attendances ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT false;
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_hrm_attendances_user_date ON hrm_attendances (user_id, attendance_date);
     `);
 
     console.log('[Database] Schema verification, Biometric, Geofence, Field Sentinel Multi-Posts & Notifications extensions completed.');
