@@ -1,12 +1,12 @@
-# AGENTS.MD - KNOWLEDGE & INSTRUCTIONS UNTUK PROYEK HRM FRP
+# AGENTS.MD - KNOWLEDGE & INSTRUCTIONS UNTUK PROYEK HRM PT. FAWWAZ RESKI PERWIRA (FRP)
 
-Dokumen ini adalah referensi permanen proyek HRM FRP. Seluruh AI agent dan sesi percakapan WAJIB membaca dan mematuhi panduan ini.
+Dokumen ini adalah referensi permanen proyek HRM PT. FAWWAZ RESKI PERWIRA (FRP). Seluruh AI agent dan sesi percakapan WAJIB membaca dan mematuhi panduan ini. Nama resmi perusahaan adalah **PT. FAWWAZ RESKI PERWIRA** (singkatan: FRP / PT FRP, domain: fawwazreskiperwira.com). DILARANG KERAS mengasumsikan kepanjangan FRP yang lain.
 
 ---
 
 ## 1. LATAR BELAKANG & FITUR KHUSUS PIMPINAN
 
-Pimpinan PT FRP memberikan instruksi ketat untuk pengawasan **3 Karyawan Khusus (Petugas Lapangan)**:
+Pimpinan PT. FAWWAZ RESKI PERWIRA memberikan instruksi ketat untuk pengawasan **3 Karyawan Khusus (Petugas Lapangan)**:
 1. **Muh Aslam Faisal** (NIP: `FRP 07065`, Email: `aslamfaisal10okt@gmail.com`, UUID: `ebf10b16-ab2f-4b53-ab22-b3ffc00694db`)
 2. **LA UNGA SAMSI, S.K.M** (NIP: `FR.07.066`, Email: `abangelsamsi@gmail.com`, UUID: `2ce41a19-0c65-45d3-913e-a68a02203fe2`)
 3. **TAKDIR** (NIP: `FRP.07.046`, Email: `mtakdir46@gmail.com`, UUID: `0a49f92e-5733-4b72-947c-7361f9490632`)

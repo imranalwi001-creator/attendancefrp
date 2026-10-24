@@ -1192,7 +1192,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
           {/* Printable Sheet */}
           <div className="p-8 sm:p-12 bg-white text-slate-900 font-sans space-y-6">
             <div className="text-center pb-4 border-b-2 border-slate-900 space-y-1">
-              <h2 className="text-lg font-black tracking-wide uppercase">PT FAJAR RAYA PRIMA (FRP)</h2>
+              <h2 className="text-lg font-black tracking-wide uppercase">PT. FAWWAZ RESKI PERWIRA</h2>
               <h3 className="text-sm font-bold uppercase tracking-wider text-slate-700">
                 LAPORAN KONSOLIDASI SALDO CUTI &amp; KONTROL ANGGARAN LEMBUR
               </h3>
@@ -1278,7 +1278,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                 <p className="font-semibold text-slate-600">Dibuat Oleh,</p>
                 <div>
                   <p className="font-bold underline text-slate-800">SUPERADMIN / HRD</p>
-                  <p className="text-[10px] text-slate-500">PT Fajar Raya Prima</p>
+                  <p className="text-[10px] text-slate-500">PT. FAWWAZ RESKI PERWIRA</p>
                 </div>
               </div>
               <div className="space-y-12">
@@ -1292,7 +1292,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                 <p className="font-semibold text-slate-600">Disetujui Oleh,</p>
                 <div>
                   <p className="font-bold underline text-slate-800">DIREKTUR UTAMA / PIMPINAN</p>
-                  <p className="text-[10px] text-slate-500">Management FRP</p>
+                  <p className="text-[10px] text-slate-500">Management PT. Fawwaz Reski Perwira</p>
                 </div>
               </div>
             </div>
