@@ -249,7 +249,6 @@ const PrintSlipModal: React.FC<{
     { label: `Pot. Tidak Hadir (${slip.absentCount} hari)`, value: slip.absenceDeduction },
     { label: 'BPJS Kesehatan (1%)', value: bpjsKesVal },
     { label: 'BPJS Ketenagakerjaan (3%)', value: bpjsTkVal },
-    { label: 'PPh 21', value: slip.pph21 },
     ...(slip.otherDeductions || []).map((d) => ({ label: d.name, value: d.amount })),
   ].filter((r) => r.value > 0);
 
@@ -721,10 +720,9 @@ const SimulatorPanel: React.FC<{ settings: PayrollSettings }> = ({ settings }) =
   const gross = base + ot;
   const bpjsK = Math.round((settings.bpjsKesehatanEmployee / 100) * base);
   const bpjsT = Math.round((settings.bpjsKetenagakerjaanEmployee / 100) * base);
-  const pph = Math.round((settings.defaultTaxRate / 100) * (gross - bpjsK - bpjsT));
   const lateDed = settings.isLateDeductionEnabled === true ? late * settings.lateDeductionPerMinute : 0;
   const absDed = absent * settings.absenceDeductionPerDay;
-  const net = Math.max(0, gross - bpjsK - bpjsT - pph - lateDed - absDed);
+  const net = Math.max(0, gross - bpjsK - bpjsT - lateDed - absDed);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
@@ -762,7 +760,6 @@ const SimulatorPanel: React.FC<{ settings: PayrollSettings }> = ({ settings }) =
           ['Total Penghasilan Bruto', gross, 'text-foreground font-semibold', false],
           [`BPJS Kesehatan (${settings.bpjsKesehatanEmployee}%)`, bpjsK, 'text-red-600', true],
           [`BPJS Ketenagakerjaan (${settings.bpjsKetenagakerjaanEmployee}%)`, bpjsT, 'text-red-600', true],
-          [`PPh 21 (${settings.defaultTaxRate}%)`, pph, 'text-red-600', true],
           ['Potongan Terlambat', lateDed, 'text-amber-600', true],
           ['Potongan Kehadiran (Alfa)', absDed, 'text-amber-600', true],
         ].map(([label, val, cls, neg]) => (
@@ -1243,7 +1240,7 @@ export const HrmPayrollPage: React.FC = () => {
             Sistem Penggajian (Payroll)
           </h1>
           <p className="text-xs sm:text-sm text-muted-foreground mt-1 max-w-2xl">
-            Kelola periode gaji, sinkronisasi presensi &amp; lembur otomatis, pemotongan BPJS/PPh 21, dan cetak slip gaji resmi.
+            Kelola periode gaji, sinkronisasi presensi &amp; lembur otomatis, pemotongan iuran BPJS 4%, dan cetak slip gaji resmi.
           </p>
         </div>
 
@@ -1432,10 +1429,10 @@ export const HrmPayrollPage: React.FC = () => {
                     </div>
                     <div>
                       <h4 className="text-xs font-bold text-foreground group-hover:text-blue-600 transition-colors">
-                        3. BPJS, Pajak &amp; Slip Resmi
+                        3. Iuran BPJS &amp; Slip Resmi
                       </h4>
                       <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
-                        Hitung potongan BPJS &amp; PPh 21, lalu cetak slip gaji berformat resmi perusahaan.
+                        Hitung potongan BPJS 4% (TK 3% &amp; Kes 1%), lalu cetak slip gaji berformat resmi perusahaan.
                       </p>
                     </div>
                   </div>
@@ -1973,23 +1970,22 @@ export const HrmPayrollPage: React.FC = () => {
               </CardContent>
             </Card>
 
-            {/* Card 3: BPJS & Tax */}
+            {/* Card 3: BPJS (PT FRP) */}
             <Card className="rounded-2xl border-border/80 shadow-xs bg-card">
               <CardHeader className="pb-3 border-b border-border/60">
                 <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <ShieldCheck size={16} className="text-blue-600" /> Iuran BPJS &amp; Tarif PPh 21
+                  <ShieldCheck size={16} className="text-blue-600" /> Iuran BPJS Ketenagakerjaan &amp; Kesehatan (PT FRP)
                 </CardTitle>
                 <CardDescription className="text-xs">
-                  Persentase pemotongan iuran jaminan sosial dan pajak penghasilan.
+                  Persentase pemotongan iuran jaminan sosial resmi PT. Fawwaz Reski Perwira (PPh 21 ditiadakan / 0%).
                 </CardDescription>
               </CardHeader>
-              <CardContent className="p-4 sm:p-5 grid grid-cols-2 sm:grid-cols-3 gap-3.5">
+              <CardContent className="p-4 sm:p-5 grid grid-cols-2 sm:grid-cols-4 gap-3.5">
                 {[
-                  ['BPJS Kes. Karyawan', 'bpjsKesehatanEmployee'],
-                  ['BPJS Kes. Perusahaan', 'bpjsKesehatanEmployer'],
-                  ['BPJS Naker Karyawan', 'bpjsKetenagakerjaanEmployee'],
+                  ['BPJS Naker Karyawan (3%)', 'bpjsKetenagakerjaanEmployee'],
+                  ['BPJS Kes. Karyawan (1%)', 'bpjsKesehatanEmployee'],
                   ['BPJS Naker Perusahaan', 'bpjsKetenagakerjaanEmployer'],
-                  ['PPh 21 Standar', 'defaultTaxRate'],
+                  ['BPJS Kes. Perusahaan', 'bpjsKesehatanEmployer'],
                 ].map(([label, key]) => (
                   <div key={key} className="space-y-1">
                     <Label className="text-xs text-muted-foreground">{label}</Label>

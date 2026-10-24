@@ -5520,7 +5520,31 @@ export const hrmService = {
   getPayrollSlips: (): PayrollSlip[] => {
     hrmService.init();
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEYS.PAYROLL_SLIPS) || '[]');
+      const raw: PayrollSlip[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.PAYROLL_SLIPS) || '[]');
+      // Sesuai aturan resmi PT. FAWWAZ RESKI PERWIRA: PPh 21 DITIADAKAN (Rp 0)
+      let needsResave = false;
+      const normalized = raw.map((s) => {
+        if (s.pph21 && s.pph21 > 0) {
+          needsResave = true;
+          const bpjsK = Number(s.bpjsKesehatan || 0);
+          const bpjsT = Number(s.bpjsKetenagakerjaan || 0);
+          const late = Number(s.lateDeduction || 0);
+          const abs = Number(s.absenceDeduction || 0);
+          const otherDed = (s.otherDeductions || []).reduce((acc, d) => acc + (d.amount || 0), 0);
+          const newTotDed = bpjsK + bpjsT + late + abs + otherDed;
+          return {
+            ...s,
+            pph21: 0,
+            totalDeductions: newTotDed,
+            netSalary: Math.max(0, (s.grossIncome || 0) - newTotDed),
+          };
+        }
+        return s;
+      });
+      if (needsResave) {
+        localStorage.setItem(STORAGE_KEYS.PAYROLL_SLIPS, JSON.stringify(normalized));
+      }
+      return normalized;
     } catch {
       return [];
     }
@@ -5636,11 +5660,9 @@ export const hrmService = {
     const absenceDeduction = absentCount * settings.absenceDeductionPerDay;
     const bpjsKesehatan = Math.round((settings.bpjsKesehatanEmployee / 100) * baseSalary);
     const bpjsKetenagakerjaan = Math.round((settings.bpjsKetenagakerjaanEmployee / 100) * baseSalary);
-    // Official Indonesian PPh 21 TER (PP 58/2023) calculation
-    const taxCat = payrollTaxEngine.getTerCategory(profile?.taxStatus || 'TK/0');
-    const terCalc = payrollTaxEngine.calculatePph21Ter(grossIncome, taxCat);
-    const pph21 = terCalc.taxAmount;
-    const totalDeductions = lateDeduction + absenceDeduction + bpjsKesehatan + bpjsKetenagakerjaan + pph21;
+    // Sesuai aturan resmi PT. FAWWAZ RESKI PERWIRA: PPh 21 DITIADAKAN / Rp 0
+    const pph21 = 0;
+    const totalDeductions = lateDeduction + absenceDeduction + bpjsKesehatan + bpjsKetenagakerjaan;
 
     const netSalary = Math.max(0, grossIncome - totalDeductions);
 

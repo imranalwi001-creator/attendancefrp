@@ -74,4 +74,12 @@ Pimpinan PT. FAWWAZ RESKI PERWIRA memberikan instruksi ketat untuk pengawasan **
    - PT. FAWWAZ RESKI PERWIRA menerapkan sistem **Upah Pokok Tunggal** (Gaji Pokok murni sesuai kesepakatan/UMK).
    - **TIDAK ADA TUNJANGAN** dalam kebijakan perusahaan (tidak ada tunjangan jabatan, transport, makan, perumahan, kesehatan, maupun tunjangan tambahan lainnya). DILARANG memunculkan input/kolom tunjangan-tunjangan tersebut pada UI payroll/profil gaji.
    - Satu-satunya penambahan hak upah tunai di luar gaji pokok adalah **Uang Lembur (SPKL)** khusus bagi 80 personil sah operasional/lapangan.
-
+8. **Aturan Baku Potongan Slip Gaji PT FRP (PPh 21 Ditiadakan / Rp 0)**:
+   - Sesuai template resmi Slip Gaji Karyawan PT. FAWWAZ RESKI PERWIRA, potongan **PPh 21 (5%) DIHILANGKAN / TIDAK DIKENAKAN KEPADA KARYAWAN (Rp 0)**.
+   - Komponen resmi potongan gaji karyawan HANYA terdiri dari:
+     1. **BPJS Ketenagakerjaan 3%** (misal: Rp 121.351 untuk upah standar Rp 4.045.050)
+     2. **BPJS Kesehatan 1%** (misal: Rp 40.450 untuk upah standar Rp 4.045.050)
+     3. **Presensi / Alpa** (Hari @ nilai potongan alpa, Rp 0 jika tidak ada alpa)
+   - Total Potongan Baku: **Rp 161.802** (3% + 1% dari Rp 4.045.050).
+   - Jumlah Gaji Bersih Standar: **Rp 3.883.248** (Rp 4.045.050 - Rp 161.802).
+   - DILARANG menampilkan baris potongan PPh 21 di slip gaji cetak maupun elektronik.
