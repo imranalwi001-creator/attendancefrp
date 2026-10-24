@@ -1,5 +1,6 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { hrmService } from '@/services/hrmService';
+import { api } from '@/services/apiClient';
 import { UserProfile, Division, AppSettings, OvertimeRecord, OvertimeSettings } from '@/types/hrm';
 import {
   FileSpreadsheet,
@@ -23,6 +24,7 @@ import {
   TrendingUp,
   ShieldCheck,
   Percent,
+  RotateCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -102,7 +104,6 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
   // Settings & Data from hrmService
   const appSettings: AppSettings = hrmService.getAppSettings();
   const divisions: Division[] = hrmService.getDivisions();
-  const rawUsers: UserProfile[] = hrmService.getUsers().filter((u) => u.role !== 'superadmin');
   const allOvertimes: OvertimeRecord[] = hrmService.getOvertimeRecords();
   const salaryProfiles = hrmService.getSalaryProfiles();
 
@@ -117,32 +118,136 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
     ...(otSettings.divisionBudgetCaps || {}),
   }));
 
-  // ─── Process Employee Data ──────────────────────────────────────────────────
-  const employeeLiabilityData: EmployeeLiabilityRow[] = useMemo(() => {
-    return rawUsers.map((user) => {
-      const sp = salaryProfiles.find((p) => p.userId === user.id);
-      const baseSalary = sp?.baseSalary || 4100000;
-      const dailyRate = Math.round(baseSalary / 25);
-      const hourlyOtRate = Math.round(baseSalary / 173);
+  // ─── Live State from PostgreSQL Database ─────────────────────────────────────
+  const [liveUsers, setLiveUsers] = useState<UserProfile[]>(() => {
+    return hrmService.getUsers().filter((u) => u.roleName !== 'superadmin' && (u as any).role !== 'superadmin');
+  });
+  const [liveLeaves, setLiveLeaves] = useState<any[]>([]);
+  const [liveOvertimes, setLiveOvertimes] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
-      // Cuti calculations
-      const leaveQuota = user.annual_leave_quota ?? 12;
-      const leaveUsed = user.used_leave_days ?? 0;
+  const loadLiveAuditData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const [usersRes, leavesRes, otRes] = await Promise.allSettled([
+        api.get<{ success: boolean; data: UserProfile[] }>('/users'),
+        api.get<{ success: boolean; data: any[] }>('/leaves'),
+        api.get<{ success: boolean; data: any[] }>('/overtime'),
+      ]);
+
+      if (usersRes.status === 'fulfilled' && usersRes.value?.data) {
+        const cleanUsers = usersRes.value.data.filter(
+          (u) => u.roleName !== 'superadmin' && (u as any).role !== 'superadmin'
+        );
+        if (cleanUsers.length > 0) {
+          setLiveUsers(cleanUsers);
+          hrmService.setInMemoryUsers(usersRes.value.data);
+        }
+      }
+
+      if (leavesRes.status === 'fulfilled' && leavesRes.value?.data) {
+        setLiveLeaves(leavesRes.value.data);
+      }
+
+      if (otRes.status === 'fulfilled' && otRes.value?.data) {
+        setLiveOvertimes(otRes.value.data);
+      }
+    } catch (err) {
+      console.warn('[HrmLeaveOvertimeLiabilityView] Gagal sync live database:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLiveAuditData();
+  }, [loadLiveAuditData]);
+
+  // ─── Process Employee Data with Live PostgreSQL Sync ────────────────────────
+  const employeeLiabilityData: EmployeeLiabilityRow[] = useMemo(() => {
+    return liveUsers.map((user) => {
+      const sp = salaryProfiles.find((p) => p.userId === user.id);
+      const baseSalary = user.baseSalary || sp?.baseSalary || 4045050;
+      const dailyRate = Math.round(baseSalary / 25);
+      const hourlyOtRate = user.hourlyOvertimeRate || Math.round(baseSalary / 173);
+
+      // ─── CUTI PER KARYAWAN ───
+      // 1. Kuota cuti tahunan (default 12)
+      const leaveQuota = Number(user.annualLeaveQuota ?? (user as any).annual_leave_quota ?? 12);
+
+      // 2. Akumulasi dari kolom used_leave_days di profil database
+      const profileUsedDays = Number(user.usedLeaveDays ?? (user as any).used_leave_days ?? 0);
+
+      // 3. Akumulasi dari tabel hrm_leave_requests (yang disetujui)
+      const userApprovedLeaves = liveLeaves.filter((l: any) => {
+        const matchId = l.user_id === user.id || l.userId === user.id;
+        const matchNip =
+          (l.user_nip && user.nip && l.user_nip.trim().toLowerCase() === user.nip.trim().toLowerCase()) ||
+          (l.nip && user.nip && l.nip.trim().toLowerCase() === user.nip.trim().toLowerCase());
+        const isApproved = (l.status || '').toLowerCase() === 'approved';
+        const lType = (l.leave_type || l.leaveType || '').toLowerCase();
+        const isCuti = lType.includes('cuti') || lType === 'annual_leave';
+        return (matchId || matchNip) && isApproved && isCuti;
+      });
+
+      const daysFromApprovedRequests = userApprovedLeaves.reduce(
+        (sum: number, l: any) => sum + Number(l.total_days || l.totalDays || 1),
+        0
+      );
+
+      // Ambil angka realisasi cuti: terbesar antara used_leave_days profil dan jumlah hari pengajuan cuti yang disetujui
+      const leaveUsed = Math.max(profileUsedDays, daysFromApprovedRequests);
       const leaveRemaining = Math.max(0, leaveQuota - leaveUsed);
       const leaveValuationRp = leaveRemaining * dailyRate;
 
-      // Lembur calculations
-      const userOts = allOvertimes.filter((o) => (o.userId === user.id || o.userNip === user.nip) && o.status === 'approved');
-      const totalOtHours = Number(userOts.reduce((acc, o) => acc + (o.durationHours || 0), 0).toFixed(1));
-      const totalOtPayRp = userOts.reduce((acc, o) => acc + (o.totalPay || 0), 0);
+      // ─── LEMBUR PER KARYAWAN ───
+      const dbUserOts = liveOvertimes.filter((o: any) => {
+        const matchId = o.user_id === user.id || o.userId === user.id;
+        const matchNip =
+          (o.user_nip && user.nip && o.user_nip.trim().toLowerCase() === user.nip.trim().toLowerCase()) ||
+          (o.nip && user.nip && o.nip.trim().toLowerCase() === user.nip.trim().toLowerCase());
+        return (matchId || matchNip) && (o.status || '').toLowerCase() === 'approved';
+      });
 
-      const paidOts = userOts.filter((o) => o.paymentStatus === 'paid' || o.paymentStatus === 'included_in_payroll');
-      const paidOtHours = Number(paidOts.reduce((acc, o) => acc + (o.durationHours || 0), 0).toFixed(1));
-      const paidOtPayRp = paidOts.reduce((acc, o) => acc + (o.totalPay || 0), 0);
+      const localUserOts = allOvertimes.filter((o) => {
+        const matchId = o.userId === user.id;
+        const matchNip = o.userNip && user.nip && o.userNip.trim().toLowerCase() === user.nip.trim().toLowerCase();
+        return (matchId || matchNip) && o.status === 'approved';
+      });
 
-      const unpaidOts = userOts.filter((o) => o.paymentStatus === 'unpaid' || !o.paymentStatus);
-      const unpaidOtHours = Number(unpaidOts.reduce((acc, o) => acc + (o.durationHours || 0), 0).toFixed(1));
-      const unpaidOtPayRp = unpaidOts.reduce((acc, o) => acc + (o.totalPay || 0), 0);
+      const targetOts = dbUserOts.length > 0 ? dbUserOts : localUserOts;
+
+      const totalOtHours = Number(
+        targetOts.reduce((acc: number, o: any) => acc + Number(o.duration_hours || o.durationHours || 0), 0).toFixed(1)
+      );
+      const totalOtPayRp = targetOts.reduce(
+        (acc: number, o: any) => acc + Number(o.total_pay || o.totalPay || o.compensation_amount || 0),
+        0
+      );
+
+      const paidOts = targetOts.filter((o: any) => {
+        const pStatus = (o.payment_status || o.paymentStatus || '').toLowerCase();
+        return pStatus === 'paid' || pStatus === 'included_in_payroll';
+      });
+      const paidOtHours = Number(
+        paidOts.reduce((acc: number, o: any) => acc + Number(o.duration_hours || o.durationHours || 0), 0).toFixed(1)
+      );
+      const paidOtPayRp = paidOts.reduce(
+        (acc: number, o: any) => acc + Number(o.total_pay || o.totalPay || o.compensation_amount || 0),
+        0
+      );
+
+      const unpaidOts = targetOts.filter((o: any) => {
+        const pStatus = (o.payment_status || o.paymentStatus || '').toLowerCase();
+        return !pStatus || pStatus === 'unpaid';
+      });
+      const unpaidOtHours = Number(
+        unpaidOts.reduce((acc: number, o: any) => acc + Number(o.duration_hours || o.durationHours || 0), 0).toFixed(1)
+      );
+      const unpaidOtPayRp = unpaidOts.reduce(
+        (acc: number, o: any) => acc + Number(o.total_pay || o.totalPay || o.compensation_amount || 0),
+        0
+      );
 
       const totalLiabilityRp = leaveValuationRp + unpaidOtPayRp;
 
@@ -151,8 +256,8 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         name: user.fullName || 'Tanpa Nama',
         nip: user.nip || '-',
         divisionId: user.divisionId,
-        divisionName: user.divisionName || user.division || 'Umum',
-        jobTitle: user.position || user.jobTitle || 'Staff',
+        divisionName: user.divisionName || (user as any).division || 'Umum',
+        jobTitle: (user as any).jobTitle || (user as any).position || 'Staff',
         baseSalary,
         dailyRate,
         hourlyOtRate,
@@ -169,7 +274,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         totalLiabilityRp,
       };
     });
-  }, [rawUsers, allOvertimes, salaryProfiles]);
+  }, [liveUsers, liveLeaves, liveOvertimes, allOvertimes, salaryProfiles]);
 
   // ─── Process Division Aggregation ───────────────────────────────────────────
   const divisionLiabilityData: DivisionLiabilitySummary[] = useMemo(() => {
@@ -667,6 +772,17 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
 
             {/* Export and Print Buttons */}
             <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadLiveAuditData}
+                disabled={isLoading}
+                className="text-xs gap-1.5 rounded-xl h-9 font-semibold border-border hover:bg-muted"
+                title="Sinkronisasi data cuti dan lembur langsung dari database server PostgreSQL"
+              >
+                <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-primary' : ''}`} />
+                <span>{isLoading ? 'Menyinkronkan...' : 'Sinkron Database'}</span>
+              </Button>
               <Button
                 variant="outline"
                 onClick={() => setPrintModalOpen(true)}
