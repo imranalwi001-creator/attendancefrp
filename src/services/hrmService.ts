@@ -494,12 +494,14 @@ const DEFAULT_OVERTIME_SETTINGS: OvertimeSettings = {
   syncNationalCalendar: true,
   includeCutiBersamaAsHoliday: true,
   autoApplyHolidayMultiplier: true,
-  monthlyOvertimeBudgetCap: 88000000,
+  monthlyOvertimeBudgetCap: 76000000,
   divisionBudgetCaps: {
     'Shiftman Lapangan': 72000000,
     'Shiftman': 72000000,
     'Wisma Biring Ere': 4000000,
-    'Operasional': 12000000,
+    'Wisma': 4000000,
+    'Rumah Tangga': 4000000,
+    'Operasional': 0,
   },
 };
 
@@ -4588,7 +4590,16 @@ export const hrmService = {
       return DEFAULT_OVERTIME_SETTINGS;
     }
     try {
-      return { ...DEFAULT_OVERTIME_SETTINGS, ...JSON.parse(stored) };
+      const parsed = JSON.parse(stored);
+      // Auto-sanitize legacy 88jt cap to official 76jt cap (SK Direksi FRP: 80 Personil Sah)
+      if (parsed.monthlyOvertimeBudgetCap === 88000000 || !parsed.monthlyOvertimeBudgetCap) {
+        parsed.monthlyOvertimeBudgetCap = 76000000;
+        if (parsed.divisionBudgetCaps) {
+          delete parsed.divisionBudgetCaps['Operasional'];
+        }
+        localStorage.setItem(STORAGE_KEYS.OVERTIME_SETTINGS, JSON.stringify(parsed));
+      }
+      return { ...DEFAULT_OVERTIME_SETTINGS, ...parsed };
     } catch {
       return DEFAULT_OVERTIME_SETTINGS;
     }

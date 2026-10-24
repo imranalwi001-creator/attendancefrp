@@ -444,7 +444,7 @@ function formatUserRow(r) {
     usedEmergencyLeaveDays: r.used_emergency_leave_days || 0,
     permissionQuota: r.permission_quota ?? 5,
     usedPermissionDays: r.used_permission_days || 0,
-    overtimeEligible: r.overtime_eligible !== false,
+    overtimeEligible: r.overtime_eligible === true || ['SHIPMENT', 'RUMAH TANGGA'].includes(r.operational_group),
     maxDailyOvertimeHours: r.max_daily_overtime_hours ? parseFloat(r.max_daily_overtime_hours) : 4.0,
     overtimeRateOverride: r.overtime_rate_override ? parseFloat(r.overtime_rate_override) : null,
     isActive: r.is_active !== false,

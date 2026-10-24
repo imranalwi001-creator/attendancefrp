@@ -110,13 +110,23 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
   const salaryProfiles = hrmService.getSalaryProfiles();
 
   // Overtime Settings & Budget Caps (Baku SK Direksi FRP: Total Plafon Rp 76.000.000 untuk 80 personil)
-  const [otSettings, setOtSettings] = useState<OvertimeSettings>(() => hrmService.getOvertimeSettings());
-  const [tempBudgetCap, setTempBudgetCap] = useState<number>(otSettings.monthlyOvertimeBudgetCap || 76000000);
+  const [otSettings, setOtSettings] = useState<OvertimeSettings>(() => {
+    const s = hrmService.getOvertimeSettings();
+    if (s.monthlyOvertimeBudgetCap === 88000000 || !s.monthlyOvertimeBudgetCap) {
+      s.monthlyOvertimeBudgetCap = 76000000;
+    }
+    return s;
+  });
+  const [tempBudgetCap, setTempBudgetCap] = useState<number>(() => {
+    const cap = otSettings.monthlyOvertimeBudgetCap;
+    return (cap === 88000000 || !cap) ? 76000000 : cap;
+  });
   const [tempDivisionCaps, setTempDivisionCaps] = useState<Record<string, number>>(() => ({
     'Shiftman Lapangan': 72000000,
     'Shiftman': 72000000,
     'Wisma Biring Ere': 4000000,
     'Wisma': 4000000,
+    'Rumah Tangga': 4000000,
     'Operasional': 0,
     'Teknologi Informasi': 0,
     'Sumber Daya Manusia': 0,
@@ -359,10 +369,26 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
     });
 
     const divisionCaps = otSettings.divisionBudgetCaps || {};
-    const globalCap = otSettings.monthlyOvertimeBudgetCap || 76000000;
+    const globalCap = (otSettings.monthlyOvertimeBudgetCap === 88000000 || !otSettings.monthlyOvertimeBudgetCap) 
+      ? 76000000 
+      : otSettings.monthlyOvertimeBudgetCap;
+
+    const totalShiftmanStaff = Array.from(map.values())
+      .filter((d) => {
+        const n = d.divisionName.toLowerCase();
+        return n.includes('shiftman') || n.includes('lapangan') || n.includes('timbangan') || n.includes('matching') || n.includes('segel');
+      })
+      .reduce((sum, d) => sum + d.employeeCount, 0) || 47;
+
+    const totalWismaStaff = Array.from(map.values())
+      .filter((d) => {
+        const n = d.divisionName.toLowerCase();
+        return n.includes('wisma') || n.includes('biring');
+      })
+      .reduce((sum, d) => sum + d.employeeCount, 0) || 33;
 
     return Array.from(map.values()).map((d) => {
-      // Tentukan alokasi plafon divisi (HANYA BERLAKU UNTUK 80 ORANG SAH: SHIFTMAN LAPANGAN & WISMA BIRING ERE)
+      // Tentukan alokasi plafon divisi (HANYA BERLAKU UNTUK 80 ORANG SAH: SHIFTMAN LAPANGAN Rp 72jt & WISMA BIRING ERE Rp 4jt)
       let allocatedBudgetRp = divisionCaps[d.divisionName];
       if (allocatedBudgetRp === undefined) {
         const dName = d.divisionName.toLowerCase();
@@ -370,9 +396,9 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         const isWismaGroup = dName.includes('wisma') || dName.includes('biring');
 
         if (isShiftmanGroup) {
-          allocatedBudgetRp = 72000000;
+          allocatedBudgetRp = Math.round((d.employeeCount / totalShiftmanStaff) * 72000000);
         } else if (isWismaGroup) {
-          allocatedBudgetRp = 4000000;
+          allocatedBudgetRp = Math.round((d.employeeCount / totalWismaStaff) * 4000000);
         } else {
           // Divisi staf kantor / IT / non-operasional tidak memiliki plafon lembur (Non-Eligible)
           allocatedBudgetRp = 0;
@@ -402,7 +428,9 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
 
   // ─── Company-wide Grand Totals ──────────────────────────────────────────────
   const grandTotal = useMemo(() => {
-    const totalBudgetCap = otSettings.monthlyOvertimeBudgetCap || 76000000;
+    const totalBudgetCap = (otSettings.monthlyOvertimeBudgetCap === 88000000 || !otSettings.monthlyOvertimeBudgetCap) 
+      ? 76000000 
+      : otSettings.monthlyOvertimeBudgetCap;
     const eligibleEmployeesCount = employeeLiabilityData.filter((e) => e.isOvertimeEligible).length;
 
     const base = divisionLiabilityData.reduce(

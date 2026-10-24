@@ -812,7 +812,7 @@ export interface OvertimeSettings {
   autoApplyHolidayMultiplier: boolean;        // Otomatis terapkan tarif tanggal merah pada tanggal libur
 
   // === PLAFON & PAGU ANGGARAN LEMBUR PERUSAHAAN (BUDGET CAPS) ===
-  monthlyOvertimeBudgetCap?: number;          // Total pagu anggaran lembur perusahaan per bulan (cth: Rp 88.000.000)
+  monthlyOvertimeBudgetCap?: number;          // Total pagu anggaran lembur perusahaan per bulan (cth: Rp 76.000.000)
   divisionBudgetCaps?: Record<string, number>; // Alokasi plafon per divisi (cth: 'Shiftman': 72000000, 'Wisma Biring Ere': 4000000)
 }
 
