@@ -60,9 +60,11 @@ export const HrmReportsPage: React.FC = () => {
   const [appSettings, setAppSettings] = useState<AppSettings>(hrmService.getAppSettings());
   const [office, setOffice] = useState<OfficeLocation>(hrmService.getOfficeLocation());
 
-  // Attendance Filters & Monthly Navigation
+  // Attendance Filters & Monthly Navigation (Synchronized with Active Fiscal Period)
+  const fiscalPeriod = hrmService.getFiscalPeriod();
+  const defaultFiscalMonthStr = `${fiscalPeriod.activeYear}-${String(fiscalPeriod.activeMonth).padStart(2, '0')}`;
   const currentMonthStr = getTodayDateStr().slice(0, 7);
-  const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
+  const [selectedMonth, setSelectedMonth] = useState<string>(defaultFiscalMonthStr || currentMonthStr);
   const [attendanceViewMode, setAttendanceViewMode] = useState<'recap' | 'logs'>('recap');
   const [selectedDate, setSelectedDate] = useState<string>(''); // Default kosong agar menampilkan data bulan terpilih
   const [filterDivision, setFilterDivision] = useState<string>('all');

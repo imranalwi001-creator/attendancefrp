@@ -32,6 +32,10 @@ import {
   DisciplinaryStatus,
   EmployeeKpiRecord,
   isLeadershipSpecialFieldOfficer,
+  FiscalPeriodSettings,
+  YearEndClosingRecord,
+  HolidayOvertimeMode,
+  LeaveCarryOverPolicy,
 } from '@/types/hrm';
 import { api } from './apiClient';
 import { payrollTaxEngine } from './payrollTaxEngine';
@@ -64,6 +68,8 @@ const STORAGE_KEYS = {
   EMPLOYEE_SCHEDULES: 'hrm_employee_schedules',
   DISCIPLINARY: 'hrm_disciplinary_records',
   EMPLOYEE_KPI: 'hrm_employee_kpi',
+  FISCAL_PERIOD: 'hrm_fiscal_period_settings',
+  YEAR_END_CLOSINGS: 'hrm_year_end_closings',
 };
 
 const DEFAULT_COMPANY_PROFILE: CompanyProfile = {
@@ -482,6 +488,21 @@ const DEFAULT_OVERTIME_SETTINGS: OvertimeSettings = {
   requireApproval: true,
   allowEmergencyOvertime: true,
   payoutCutoffRule: 'Bulan berjalan direkap dan dibayarkan pada payroll bulan berikutnya',
+  holidayCalculationMode: 'depnaker_tier',
+  holidayRateMultiplier: 2.0,
+  holidayFixedHourlyRate: 50000,
+  syncNationalCalendar: true,
+  includeCutiBersamaAsHoliday: true,
+  autoApplyHolidayMultiplier: true,
+};
+
+// Initial Fiscal Period (Bulan & Tahun Berjalan)
+const DEFAULT_FISCAL_PERIOD: FiscalPeriodSettings = {
+  activeYear: new Date().getFullYear(),
+  activeMonth: new Date().getMonth() + 1,
+  isPeriodLocked: false,
+  autoCutoffDay: 25,
+  lastUpdated: new Date().toISOString(),
 };
 
 // Initial Seed Overtime Records for instant realistic reports
@@ -4615,13 +4636,17 @@ export const hrmService = {
     startTimeStr: string,
     endTimeStr: string,
     isWeekend: boolean,
-    hourlyRateOverride?: number
+    hourlyRateOverride?: number,
+    dateStr?: string
   ): {
     durationMinutes: number;
     durationHours: number;
     hourlyRate: number;
     rateMultiplier: number;
     totalPay: number;
+    isHoliday: boolean;
+    holidayName?: string;
+    tierBreakdown?: string;
   } => {
     const settings = hrmService.getOvertimeSettings();
     const [startH, startM] = startTimeStr.split(':').map(Number);
@@ -4637,14 +4662,34 @@ export const hrmService = {
 
     let diffMinutes = Math.max(0, endTotal - startTotal);
 
+    // Check holiday status from dateStr if provided
+    let isHoliday = false;
+    let holidayName: string | undefined;
+    let isWeekendOrHoliday = isWeekend;
+
+    if (dateStr && settings.syncNationalCalendar) {
+      const holCheck = hrmHolidayService.isWeekendOrHoliday(dateStr);
+      if (holCheck.isNationalHoliday || (settings.includeCutiBersamaAsHoliday && holCheck.isWeekendOrHoliday)) {
+        isHoliday = holCheck.isNationalHoliday;
+        holidayName = holCheck.holidayName;
+        isWeekendOrHoliday = true;
+      } else if (holCheck.isWeekend) {
+        isWeekendOrHoliday = true;
+      }
+    }
+
+    const hourlyRate = hourlyRateOverride || settings.hourlyRate;
+
     // Check minimum duration threshold
     if (diffMinutes < settings.minDurationMinutes) {
       return {
         durationMinutes: diffMinutes,
         durationHours: 0,
-        hourlyRate: hourlyRateOverride || settings.hourlyRate,
-        rateMultiplier: isWeekend ? settings.weekendRateMultiplier : 1.0,
+        hourlyRate,
+        rateMultiplier: isWeekendOrHoliday ? (isHoliday ? settings.holidayRateMultiplier : settings.weekendRateMultiplier) : 1.0,
         totalPay: 0,
+        isHoliday,
+        holidayName,
       };
     }
 
@@ -4661,9 +4706,45 @@ export const hrmService = {
       hours = settings.maxDailyHours;
     }
 
-    const hourlyRate = hourlyRateOverride || settings.hourlyRate;
-    const rateMultiplier = isWeekend ? settings.weekendRateMultiplier : 1.0;
-    const totalPay = Math.round(hours * hourlyRate * rateMultiplier);
+    let totalPay = 0;
+    let rateMultiplier = 1.0;
+    let tierBreakdown = '';
+
+    if (isHoliday && settings.holidayCalculationMode === 'depnaker_tier') {
+      // Depnaker PP 35/2021 Holiday tiered calculation:
+      // Jam 1-7 = 2.0x, Jam 8 = 3.0x, Jam 9+ = 4.0x
+      if (hours <= 7) {
+        totalPay = Math.round(hours * 2.0 * hourlyRate);
+        tierBreakdown = `${hours}j × 2.0x`;
+        rateMultiplier = 2.0;
+      } else if (hours <= 8) {
+        const pay7 = 7 * 2.0 * hourlyRate;
+        const pay8 = (hours - 7) * 3.0 * hourlyRate;
+        totalPay = Math.round(pay7 + pay8);
+        tierBreakdown = `7j × 2.0x + ${(hours - 7).toFixed(1)}j × 3.0x`;
+        rateMultiplier = Number((totalPay / (hours * hourlyRate)).toFixed(2));
+      } else {
+        const pay7 = 7 * 2.0 * hourlyRate;
+        const pay8 = 1 * 3.0 * hourlyRate;
+        const pay9Plus = (hours - 8) * 4.0 * hourlyRate;
+        totalPay = Math.round(pay7 + pay8 + pay9Plus);
+        tierBreakdown = `7j × 2.0x + 1j × 3.0x + ${(hours - 8).toFixed(1)}j × 4.0x`;
+        rateMultiplier = Number((totalPay / (hours * hourlyRate)).toFixed(2));
+      }
+    } else if (isHoliday && settings.holidayCalculationMode === 'fixed_nominal') {
+      const flatRate = settings.holidayFixedHourlyRate || 50000;
+      totalPay = Math.round(hours * flatRate);
+      rateMultiplier = Number((flatRate / (hourlyRate || 1)).toFixed(2));
+      tierBreakdown = `Tarif Flat Libur: Rp ${flatRate.toLocaleString('id-ID')}/jam`;
+    } else if (isWeekendOrHoliday) {
+      rateMultiplier = isHoliday ? (settings.holidayRateMultiplier || 2.0) : (settings.weekendRateMultiplier || 2.0);
+      totalPay = Math.round(hours * hourlyRate * rateMultiplier);
+      tierBreakdown = `${hours}j × ${rateMultiplier}x`;
+    } else {
+      rateMultiplier = 1.0;
+      totalPay = Math.round(hours * hourlyRate * rateMultiplier);
+      tierBreakdown = `${hours}j × 1.0x (Hari Kerja Normal)`;
+    }
 
     return {
       durationMinutes: diffMinutes,
@@ -4671,6 +4752,9 @@ export const hrmService = {
       hourlyRate,
       rateMultiplier,
       totalPay,
+      isHoliday,
+      holidayName,
+      tierBreakdown,
     };
   },
 
@@ -6157,5 +6241,187 @@ export const hrmService = {
     } catch (err: any) {
       return { success: false, error: err.message };
     }
+  },
+
+  // ─── PERIODE OPERASIONAL & BULAN/TAHUN BERJALAN ─────────────────────────────
+  getFiscalPeriod: (): FiscalPeriodSettings => {
+    hrmService.init();
+    const stored = localStorage.getItem(STORAGE_KEYS.FISCAL_PERIOD);
+    if (!stored) {
+      return DEFAULT_FISCAL_PERIOD;
+    }
+    try {
+      return { ...DEFAULT_FISCAL_PERIOD, ...JSON.parse(stored) };
+    } catch {
+      return DEFAULT_FISCAL_PERIOD;
+    }
+  },
+
+  updateFiscalPeriod: (updates: Partial<FiscalPeriodSettings>): FiscalPeriodSettings => {
+    hrmService.init();
+    const current = hrmService.getFiscalPeriod();
+    const updated: FiscalPeriodSettings = {
+      ...current,
+      ...updates,
+      lastUpdated: new Date().toISOString(),
+    };
+    localStorage.setItem(STORAGE_KEYS.FISCAL_PERIOD, JSON.stringify(updated));
+    window.dispatchEvent(new CustomEvent('hrm_fiscal_period_updated', { detail: updated }));
+    return updated;
+  },
+
+  // ─── SISTEM TUTUP BUKU AKHIR TAHUN (YEAR-END CLOSING) ─────────────────────────
+  getYearEndClosings: (): YearEndClosingRecord[] => {
+    hrmService.init();
+    return safeGetJson<YearEndClosingRecord[]>(STORAGE_KEYS.YEAR_END_CLOSINGS, []);
+  },
+
+  getYearEndAuditSummary: (year: number) => {
+    hrmService.init();
+    const users = hrmService.getUsers().filter((u) => u.role !== 'superadmin');
+    const attendances = hrmService.getAttendanceRecords();
+    const overtimes = hrmService.getOvertimeRecords();
+    const payrollSlips = hrmService.getPayrollSlips();
+
+    const yearPrefix = `${year}-`;
+
+    // Presensi tahunan
+    const yearAttendances = attendances.filter((a) => a.attendanceDate && a.attendanceDate.startsWith(yearPrefix));
+    const totalPresences = yearAttendances.filter((a) => a.status === 'hadir' || a.status === 'terlambat').length;
+
+    // Lembur tahunan
+    const yearOvertimes = overtimes.filter((o) => o.date && o.date.startsWith(yearPrefix) && o.status === 'approved');
+    const totalAnnualOvertimeHours = yearOvertimes.reduce((acc, o) => acc + (o.durationHours || 0), 0);
+    const totalAnnualOvertimePay = yearOvertimes.reduce((acc, o) => acc + (o.totalPay || 0), 0);
+
+    // Gaji & Pajak tahunan
+    const yearSlips = payrollSlips.filter((s) => s.periodMonth && s.periodMonth.startsWith(yearPrefix));
+    const totalAnnualGrossPayroll = yearSlips.reduce((acc, s) => acc + (s.grossIncome || 0), 0);
+    const totalAnnualTaxPph21 = yearSlips.reduce((acc, s) => acc + (s.pph21 || 0), 0);
+
+    // Saldo cuti terkini
+    const totalRemainingLeave = users.reduce((acc, u) => {
+      const quota = u.annual_leave_quota ?? 12;
+      const used = u.used_leave_days ?? 0;
+      return acc + Math.max(0, quota - used);
+    }, 0);
+
+    return {
+      year,
+      totalEmployees: users.length,
+      totalPresences,
+      totalAnnualOvertimeHours: Number(totalAnnualOvertimeHours.toFixed(1)),
+      totalAnnualOvertimePay,
+      totalAnnualGrossPayroll,
+      totalAnnualTaxPph21,
+      totalRemainingLeave,
+    };
+  },
+
+  executeYearEndClosing: (params: {
+    closedYear: number;
+    newActiveYear: number;
+    closedBy: string;
+    closedByName: string;
+    leaveCarryOverPolicy: LeaveCarryOverPolicy;
+    maxCarryOverDays: number;
+    newAnnualLeaveQuota: number;
+    notes?: string;
+  }): YearEndClosingRecord => {
+    hrmService.init();
+    const {
+      closedYear,
+      newActiveYear,
+      closedBy,
+      closedByName,
+      leaveCarryOverPolicy,
+      maxCarryOverDays,
+      newAnnualLeaveQuota,
+      notes,
+    } = params;
+
+    const summary = hrmService.getYearEndAuditSummary(closedYear);
+    const users = hrmService.getUsers();
+
+    let totalCarriedOver = 0;
+    let totalForfeited = 0;
+
+    // Update leave quotas for all non-superadmin users
+    const updatedUsers = users.map((u) => {
+      if (u.role === 'superadmin') return u;
+
+      const currentQuota = u.annual_leave_quota ?? 12;
+      const currentUsed = u.used_leave_days ?? 0;
+      const remaining = Math.max(0, currentQuota - currentUsed);
+
+      let carryOver = 0;
+      let forfeited = 0;
+
+      if (leaveCarryOverPolicy === 'carry_over_all') {
+        carryOver = remaining;
+      } else if (leaveCarryOverPolicy === 'partial_max_days') {
+        carryOver = Math.min(remaining, maxCarryOverDays);
+        forfeited = Math.max(0, remaining - maxCarryOverDays);
+      } else {
+        // forfeit
+        forfeited = remaining;
+        carryOver = 0;
+      }
+
+      totalCarriedOver += carryOver;
+      totalForfeited += forfeited;
+
+      const updatedAnnualQuota = newAnnualLeaveQuota + carryOver;
+
+      return {
+        ...u,
+        annual_leave_quota: updatedAnnualQuota,
+        used_leave_days: 0, // Reset usage for new fiscal year
+        previous_year_carried_leave: carryOver,
+        previous_year_forfeited_leave: forfeited,
+      };
+    });
+
+    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(updatedUsers));
+
+    // Create YearEndClosingRecord
+    const closingRecord: YearEndClosingRecord = {
+      id: `closing-${closedYear}-${Date.now()}`,
+      closedYear,
+      newActiveYear,
+      closedAt: new Date().toISOString(),
+      closedBy,
+      closedByName,
+      totalEmployeesProcessed: summary.totalEmployees,
+      leaveCarryOverPolicy,
+      maxCarryOverDays,
+      newAnnualLeaveQuota,
+      totalLeaveCarriedOver: totalCarriedOver,
+      totalLeaveForfeited: totalForfeited,
+      totalAnnualGrossPayroll: summary.totalAnnualGrossPayroll,
+      totalAnnualOvertimePay: summary.totalAnnualOvertimePay,
+      totalAnnualOvertimeHours: summary.totalAnnualOvertimeHours,
+      totalAnnualTaxPph21: summary.totalAnnualTaxPph21,
+      totalAnnualPresences: summary.totalPresences,
+      auditHash: `FRP-AUDIT-${closedYear}-${Date.now().toString(36).toUpperCase()}`,
+      notes: notes || `Tutup buku akhir tahun ${closedYear} berhasil dilaksanakan sesuai kebijakan HR FRP.`,
+      archiveStatus: 'locked',
+    };
+
+    const existingClosings = hrmService.getYearEndClosings();
+    existingClosings.unshift(closingRecord);
+    localStorage.setItem(STORAGE_KEYS.YEAR_END_CLOSINGS, JSON.stringify(existingClosings));
+
+    // Update active fiscal period to new year, Month 1 (Januari)
+    hrmService.updateFiscalPeriod({
+      activeYear: newActiveYear,
+      activeMonth: 1,
+      isPeriodLocked: false,
+    });
+
+    window.dispatchEvent(new Event('hrm_users_updated'));
+    window.dispatchEvent(new Event('hrm_year_end_closing_completed'));
+
+    return closingRecord;
   },
 };

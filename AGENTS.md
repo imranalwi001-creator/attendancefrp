@@ -64,3 +64,5 @@ Pimpinan PT FRP memberikan instruksi ketat untuk pengawasan **3 Karyawan Khusus 
 1. **Pertahankan Bank Pos Multi-Titik**: Jangan pernah mengubah kembali logika penugasan menjadi titik tunggal (single location).
 2. **Defensive Callback Handling**: Komponen UI harus selalu memvalidasi callback props sebelum dieksekusi (contoh: `if (typeof onSaved === 'function') onSaved();`) untuk mencegah error pada build produksi Vite.
 3. **Penyelarasan Database**: Setiap ada perubahan skema, pastikan query DDL dijalankan di PostgreSQL container (`hrm-database`) di VPS produksi.
+4. **Disiplin Rekayasa & Parsimoni (Superpowers × Ponytail)**: Seluruh AI agent wajib menerapkan sinergi skill `superpowers` (Socratic clarification, rencana terstruktur, TDD, dan 4-phase root-cause debugging) bersama `ponytail` (Laziness Ladder, YAGNI, reuse modul yang ada, native browser/TS standard, zero bloat, anti-overengineering).
+

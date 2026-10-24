@@ -789,10 +789,11 @@ export interface PayrollSlip {
   createdAt: string;
 }
 
-// ─── OVERTIME SYSTEM MODELS ───────────────────────────────────────────────────
+export type HolidayOvertimeMode = 'depnaker_tier' | 'multiplier' | 'fixed_nominal';
+
 export interface OvertimeSettings {
   hourlyRate: number;              // Tarif dasar uang lembur per jam (misal Rp 25.000)
-  weekendRateMultiplier: number;   // Pengali hari libur / akhir pekan (misal 2.0x)
+  weekendRateMultiplier: number;   // Pengali akhir pekan Sabtu/Minggu (misal 2.0x)
   minDurationMinutes: number;      // Durasi minimum agar terhitung lembur (misal 30 menit)
   roundingMinutes: number;         // Pembulatan menit (misal per 30 menit)
   maxDailyHours: number;           // Batas maksimal jam lembur per hari (misal 4 jam)
@@ -801,7 +802,54 @@ export interface OvertimeSettings {
   requireApproval: boolean;        // Wajib persetujuan atasan/HRD sebelum cair
   allowEmergencyOvertime?: boolean; // Izinkan lembur darurat instan tanpa menunggu approval
   payoutCutoffRule?: string;       // Rekap berjalan, pencairan bulan depan
+
+  // === PENGATURAN LEMBUR TANGGAL MERAH & SINKRONISASI KALENDER NASIONAL ===
+  holidayCalculationMode: HolidayOvertimeMode; // 'depnaker_tier' (PP 35/2021) | 'multiplier' | 'fixed_nominal'
+  holidayRateMultiplier: number;              // Pengali khusus Libur Nasional (default 2.0x / 3.0x)
+  holidayFixedHourlyRate?: number;            // Nominal flat per jam khusus Libur Nasional
+  syncNationalCalendar: boolean;              // Auto sinkron kalender libur nasional SKB 3 Menteri
+  includeCutiBersamaAsHoliday: boolean;       // Anggap cuti bersama pemerintah sebagai tanggal merah lembur
+  autoApplyHolidayMultiplier: boolean;        // Otomatis terapkan tarif tanggal merah pada tanggal libur
 }
+
+// ─── PERIODE OPERASIONAL & FISCAL PERIOD ──────────────────────────────────────
+export interface FiscalPeriodSettings {
+  activeYear: number;                         // Tahun berjalan aktif (misal: 2026)
+  activeMonth: number;                        // Bulan berjalan aktif 1 - 12 (misal: 10 untuk Oktober)
+  isPeriodLocked: boolean;                    // Kunci transaksi pada periode ini
+  lockedAt?: string;
+  lockedBy?: string;
+  lockedByName?: string;
+  autoCutoffDay: number;                      // Tanggal cut-off operasional bulanan (misal: 25)
+  lastUpdated?: string;
+}
+
+// ─── SISTEM TUTUP BUKU AKHIR TAHUN (YEAR-END CLOSING) ──────────────────────────
+export type LeaveCarryOverPolicy = 'carry_over_all' | 'partial_max_days' | 'forfeit';
+
+export interface YearEndClosingRecord {
+  id: string;
+  closedYear: number;                         // Tahun yang ditutup (misal: 2025)
+  newActiveYear: number;                      // Tahun baru yang diaktifkan (misal: 2026)
+  closedAt: string;                           // Tanggal & waktu penutupan buku (WITA)
+  closedBy: string;                           // ID user penutup buku
+  closedByName: string;                       // Nama Superadmin / Pimpinan penutup buku
+  totalEmployeesProcessed: number;            // Jumlah karyawan yang diproses
+  leaveCarryOverPolicy: LeaveCarryOverPolicy; // Kebijakan saldo cuti
+  maxCarryOverDays: number;                   // Maksimal hari cuti yang dibawa (jika partial)
+  newAnnualLeaveQuota: number;                // Kuota cuti tahunan baru (default: 12 hari)
+  totalLeaveCarriedOver: number;              // Total akumulasi hari cuti yang dibawa
+  totalLeaveForfeited: number;                // Total hari cuti yang hangus
+  totalAnnualGrossPayroll: number;            // Total kompensasi kotor tahunan (Rp)
+  totalAnnualOvertimePay: number;             // Total uang lembur tahunan (Rp)
+  totalAnnualOvertimeHours: number;           // Total akumulasi jam lembur
+  totalAnnualTaxPph21: number;                // Total pajak PPh 21 TER tahunan (Rp)
+  totalAnnualPresences: number;               // Total presensi hadir tahunan
+  auditHash: string;                          // Hash sidik audit integritas data
+  notes?: string;                             // Catatan pimpinan/superadmin
+  archiveStatus: 'locked' | 'archived';
+}
+
 
 export type OvertimeStatus = 'pending' | 'approved' | 'rejected';
 export type OvertimePaymentStatus = 'unpaid' | 'paid' | 'included_in_payroll';
