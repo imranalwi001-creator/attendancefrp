@@ -4,6 +4,7 @@ import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile, Shift } from '@/types/hrm';
 import { HrmAbsenSplModal } from '@/components/hrm/HrmAbsenSplModal';
 import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMonthlyCalendarModal';
+import { HrmLeaveOvertimeLiabilityView } from '@/components/hrm/HrmLeaveOvertimeLiabilityView';
 import defaultLogo from '@/assets/logo.png';
 import {
   FileSpreadsheet,
@@ -53,7 +54,7 @@ import * as XLSX from 'xlsx';
 
 export const HrmReportsPage: React.FC = () => {
   const { user } = useHrmAuth();
-  const [activeTab, setActiveTab] = useState<'attendance' | 'overtime'>('attendance');
+  const [activeTab, setActiveTab] = useState<'attendance' | 'overtime' | 'liability'>('attendance');
   const [attendances, setAttendances] = useState<AttendanceRecord[]>([]);
   const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
@@ -521,17 +522,23 @@ export const HrmReportsPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-foreground tracking-tight flex items-center gap-2">
             {activeTab === 'attendance' ? (
               <FileSpreadsheet className="w-6 h-6 text-primary" />
-            ) : (
+            ) : activeTab === 'overtime' ? (
               <Coins className="w-6 h-6 text-primary" />
+            ) : (
+              <Wallet className="w-6 h-6 text-primary" />
             )}
             {activeTab === 'attendance'
               ? 'Rekapitulasi & Laporan Kehadiran'
-              : 'Laporan Rekapitulasi & Anggaran Lembur'}
+              : activeTab === 'overtime'
+              ? 'Laporan Rekapitulasi & Anggaran Lembur'
+              : 'Audit Saldo Cuti & Kewajiban Lembur'}
           </h1>
           <p className="text-muted-foreground text-sm mt-0.5">
             {activeTab === 'attendance'
               ? 'Laporan presensi lengkap dengan visualisasi data, ekspor Excel/CSV, dan cetak dokumen resmi ber-kop surat.'
-              : 'Laporan rincian jam lembur, tarif per jam, total kompensasi uang lembur, dan pencairan slip gaji.'}
+              : activeTab === 'overtime'
+              ? 'Laporan rincian jam lembur, tarif per jam, total kompensasi uang lembur, dan pencairan slip gaji.'
+              : 'Pantau sisa hak cuti tahunan, jam lembur belum terbayar, dan valuasi liabilitas nominal (rupiah) per karyawan & divisi.'}
           </p>
         </div>
 
@@ -562,6 +569,19 @@ export const HrmReportsPage: React.FC = () => {
             >
               <Coins className="w-3.5 h-3.5 text-primary" />
               <span>Lembur & Anggaran</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('liability')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                activeTab === 'liability'
+                  ? 'bg-card text-foreground shadow-xs border border-border/80'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Wallet className="w-3.5 h-3.5 text-primary" />
+              <span>Saldo Cuti & Lembur (Kewajiban)</span>
             </button>
           </div>
 
@@ -603,7 +623,7 @@ export const HrmReportsPage: React.FC = () => {
                 <Download className="w-4 h-4 text-primary" /> CSV
               </Button>
             </>
-          ) : (
+          ) : activeTab === 'overtime' ? (
             <>
               <Button
                 onClick={() => setOtPrintModalOpen(true)}
@@ -626,7 +646,7 @@ export const HrmReportsPage: React.FC = () => {
                 <Download className="w-4 h-4 text-primary" /> CSV
               </Button>
             </>
-          )}
+          ) : null}
         </div>
       </div>
       {activeTab === 'attendance' ? (
@@ -1142,7 +1162,7 @@ export const HrmReportsPage: React.FC = () => {
             </div>
           )}
         </>
-      ) : (
+      ) : activeTab === 'overtime' ? (
         /* OVERTIME REPORT VIEW */
         <div className="space-y-6">
           {/* Overtime KPI Cards */}
@@ -1571,6 +1591,9 @@ export const HrmReportsPage: React.FC = () => {
             </div>
           </Card>
         </div>
+      ) : (
+        /* LEAVE & OVERTIME LIABILITY VIEW (PER EMPLOYEE, PER DIVISION & COMPANY-WIDE) */
+        <HrmLeaveOvertimeLiabilityView />
       )}
 
       {/* Professional Formal Print Dialog Modal */}
