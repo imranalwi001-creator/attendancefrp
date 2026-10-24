@@ -2709,6 +2709,19 @@ export const hrmService = {
     return normalized;
   },
 
+  getAttendanceRecords: (date?: string): AttendanceRecord[] => {
+    return hrmService.getAttendances(date);
+  },
+
+  getAttendance: (date?: string): AttendanceRecord[] => {
+    return hrmService.getAttendances(date);
+  },
+
+  getCurrentUser: (): UserProfile | null => {
+    hrmService.init();
+    return safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
+  },
+
   getUserTodayAttendance: (userId: string): AttendanceRecord | undefined => {
     const today = getTodayDateStr();
     // 1. Cek dedicated persistent key first untuk kepastian tanpa race condition
@@ -4068,6 +4081,10 @@ export const hrmService = {
       }
       return l;
     });
+  },
+
+  getLeaveRequests: (): LeaveRequest[] => {
+    return hrmService.getLeaves();
   },
 
   getUserLeaves: (userId: string): LeaveRequest[] => {
@@ -5522,7 +5539,7 @@ export const hrmService = {
     const otherAllowances = profile?.otherAllowances || [];
 
     // ── Attendance in this period ──
-    const allAttendance = hrmService.getAttendance();
+    const allAttendance = hrmService.getAttendances();
     const periodAttendance = allAttendance.filter(
       (a) => a.userId === userId && a.attendanceDate >= period.startDate && a.attendanceDate <= period.endDate
     );
@@ -5879,7 +5896,7 @@ export const hrmService = {
 
   isUserOnApprovedPermit(userId: string, date?: string): boolean {
     const checkDate = date || getTodayDateStr();
-    const leaves = hrmService.getLeaveRequests();
+    const leaves = hrmService.getLeaves();
     return leaves.some((l) => {
       if (l.userId !== userId || l.status !== 'approved') return false;
       return l.startDate <= checkDate && l.endDate >= checkDate;
@@ -6100,6 +6117,14 @@ export const hrmService = {
     }
   },
 
+  approveShiftSwap: async (swapId: string, approverName: string, isApprove: boolean): Promise<{ success: boolean; data?: ShiftSwapRecord; error?: string }> => {
+    return hrmService.korlapApproveSwap(swapId, {
+      korlap_id: approverName,
+      status: isApprove ? 'approved' : 'rejected',
+      notes: `Diproses oleh ${approverName}`,
+    });
+  },
+
   getFieldRecap: async (params?: {
     period?: 'current_month' | 'last_month' | 'year' | 'ytd' | 'tahunan';
     divisionId?: string;
@@ -6297,7 +6322,7 @@ export const hrmService = {
   getYearEndAuditSummary: (year: number) => {
     hrmService.init();
     const users = hrmService.getUsers().filter((u) => u.role !== 'superadmin');
-    const attendances = hrmService.getAttendanceRecords();
+    const attendances = hrmService.getAttendances();
     const overtimes = hrmService.getOvertimeRecords();
     const payrollSlips = hrmService.getPayrollSlips();
 

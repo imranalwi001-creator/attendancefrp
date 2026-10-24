@@ -71,6 +71,7 @@ import {
   ShieldCheck,
   AlertCircle,
   FileSpreadsheet,
+  FileCheck2,
 } from 'lucide-react';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
