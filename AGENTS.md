@@ -66,4 +66,9 @@ Pimpinan PT. FAWWAZ RESKI PERWIRA memberikan instruksi ketat untuk pengawasan **
 3. **Penyelarasan Database**: Setiap ada perubahan skema, pastikan query DDL dijalankan di PostgreSQL container (`hrm-database`) di VPS produksi.
 4. **Disiplin Rekayasa & Parsimoni (Superpowers × Ponytail)**: Seluruh AI agent wajib menerapkan sinergi skill `superpowers` (Socratic clarification, rencana terstruktur, TDD, dan 4-phase root-cause debugging) bersama `ponytail` (Laziness Ladder, YAGNI, reuse modul yang ada, native browser/TS standard, zero bloat, anti-overengineering).
 5. **Aturan Baku Cuti PT FRP (Use-It-Or-Lose-It)**: Hak cuti tahunan yang tidak diambil oleh karyawan bersifat **HANGUS di akhir periode dan TIDAK DAPAT DIUANGKAN / TIDAK ADA KOMPENSASI KAS**. Oleh karena itu, sistem TIDAK BOLEH mengonversi sisa hari cuti menjadi beban liabilitas kas/keuangan perusahaan. Satu-satunya beban liabilitas finansial tunai riil perusahaan adalah **Uang Lembur (SPKL) yang belum dicairkan**. Sisa cuti dipantau murni dalam satuan hari kerja (*Quota Tracking*).
+6. **Aturan Kuota Sah Lembur (80 Personil)**: Hak lembur (SPKL) **HANYA BERLAKU UNTUK 80 ORANG KARYAWAN LAPANGAN & OPERASIONAL YANG SAH** yang terbagi dalam dua grup:
+   - **47 Orang Shiftman Lapangan (Grup SHIPMENT)**: Plafon anggaran lembur baku **Rp 72.000.000 / bulan**.
+   - **33 Orang Wisma Biring Ere (Grup RUMAH TANGGA)**: Plafon anggaran lembur baku **Rp 4.000.000 / bulan**.
+   - **Total Plafon Anggaran Lembur Sah Perusahaan**: **Rp 76.000.000 / bulan**.
+   - Karyawan di luar 80 personil ini (11 orang staf kantor, IT, HRD, dan manajemen non-operasional) berstatus **Non-Eligible Lembur** (Pagu Rp 0, kuota jam lembur 0, dan sistem wajib menolak pengajuan lembur mereka). Hak cuti tetap berlaku bagi seluruh karyawan.
 

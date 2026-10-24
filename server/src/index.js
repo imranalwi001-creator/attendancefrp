@@ -7416,6 +7416,16 @@ app.post('/api/overtime', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan dalam sistem' });
     }
 
+    // Aturan Direksi PT FRP: Hak lembur (SPKL) HANYA berlaku untuk 80 orang karyawan lapangan/operasional yang sah (Shipment & Rumah Tangga)
+    const isEligible = userProfile.overtime_eligible === true || 
+                       ['SHIPMENT', 'RUMAH TANGGA'].includes((userProfile.operational_group || '').toUpperCase());
+    if (!isEligible) {
+      return res.status(403).json({
+        success: false,
+        error: 'Sesuai SK Direksi PT. FAWWAZ RESKI PERWIRA, hak lembur (SPKL) hanya berlaku untuk 80 orang personil operasional lapangan & wisma yang sah.'
+      });
+    }
+
     const officialRate = parseFloat(userProfile.hourly_overtime_rate) || 23381.79;
     let hours = durationHours !== undefined ? parseFloat(durationHours) : 2.0;
 

@@ -53,6 +53,7 @@ export interface EmployeeLiabilityRow {
   leaveValuationRp: number; // Nilai kompensasi sisa cuti (leaveRemaining * dailyRate)
 
   // ─── LEMBUR DATA ───
+  isOvertimeEligible: boolean; // Sah berhak lembur (Khusus 80 orang: 47 Shiftman + 33 Wisma)
   totalOtHours: number;     // Total jam lembur disetujui
   totalOtPayRp: number;     // Total uang lembur disetujui
   paidOtHours: number;      // Jam lembur telah diambil / dicairkan
@@ -97,6 +98,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDivision, setSelectedDivision] = useState<string>('all');
   const [filterLiabilityStatus, setFilterLiabilityStatus] = useState<'all' | 'unpaid_ot' | 'remaining_leave'>('all');
+  const [filterEligibility, setFilterEligibility] = useState<'all' | 'eligible_80' | 'ineligible'>('all');
   const [viewLevel, setViewLevel] = useState<'division' | 'employee'>('division');
   const [isBudgetModalOpen, setIsBudgetModalOpen] = useState(false);
   const [printModalOpen, setPrintModalOpen] = useState(false);
@@ -107,14 +109,17 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
   const allOvertimes: OvertimeRecord[] = hrmService.getOvertimeRecords();
   const salaryProfiles = hrmService.getSalaryProfiles();
 
-  // Overtime Settings & Budget Caps
+  // Overtime Settings & Budget Caps (Baku SK Direksi FRP: Total Plafon Rp 76.000.000 untuk 80 personil)
   const [otSettings, setOtSettings] = useState<OvertimeSettings>(() => hrmService.getOvertimeSettings());
-  const [tempBudgetCap, setTempBudgetCap] = useState<number>(otSettings.monthlyOvertimeBudgetCap || 88000000);
+  const [tempBudgetCap, setTempBudgetCap] = useState<number>(otSettings.monthlyOvertimeBudgetCap || 76000000);
   const [tempDivisionCaps, setTempDivisionCaps] = useState<Record<string, number>>(() => ({
     'Shiftman Lapangan': 72000000,
     'Shiftman': 72000000,
     'Wisma Biring Ere': 4000000,
-    'Operasional': 12000000,
+    'Wisma': 4000000,
+    'Operasional': 0,
+    'Teknologi Informasi': 0,
+    'Sumber Daya Manusia': 0,
     ...(otSettings.divisionBudgetCaps || {}),
   }));
 
@@ -201,54 +206,77 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
       // Aturan Intern PT FRP: Hak cuti yang tidak diambil HANGUS dan TIDAK DAPAT DIUANGKAN (Kompensasi Kas: Rp 0)
       const leaveValuationRp = 0;
 
+      // Aturan Direksi PT FRP: Hak lembur (SPKL) HANYA berlaku untuk 80 orang karyawan lapangan/operasional yang sah (Shipment 47 orang & Wisma 33 orang)
+      const opGroup = ((user as any).operational_group || (user as any).operationalGroup || '').toUpperCase();
+      const divNameLower = (user.divisionName || (user as any).division || '').toLowerCase();
+      
+      const isOvertimeEligible = (user as any).overtime_eligible === true ||
+        opGroup === 'SHIPMENT' ||
+        opGroup === 'RUMAH TANGGA' ||
+        divNameLower.includes('shiftman') ||
+        divNameLower.includes('timbangan') ||
+        divNameLower.includes('matching') ||
+        divNameLower.includes('segel') ||
+        divNameLower.includes('wisma') ||
+        divNameLower.includes('biring');
+
       // ─── LEMBUR PER KARYAWAN ───
-      const dbUserOts = liveOvertimes.filter((o: any) => {
-        const matchId = o.user_id === user.id || o.userId === user.id;
-        const matchNip =
-          (o.user_nip && user.nip && o.user_nip.trim().toLowerCase() === user.nip.trim().toLowerCase()) ||
-          (o.nip && user.nip && o.nip.trim().toLowerCase() === user.nip.trim().toLowerCase());
-        return (matchId || matchNip) && (o.status || '').toLowerCase() === 'approved';
-      });
+      let totalOtHours = 0;
+      let totalOtPayRp = 0;
+      let paidOtHours = 0;
+      let paidOtPayRp = 0;
+      let unpaidOtHours = 0;
+      let unpaidOtPayRp = 0;
 
-      const localUserOts = allOvertimes.filter((o) => {
-        const matchId = o.userId === user.id;
-        const matchNip = o.userNip && user.nip && o.userNip.trim().toLowerCase() === user.nip.trim().toLowerCase();
-        return (matchId || matchNip) && o.status === 'approved';
-      });
+      if (isOvertimeEligible) {
+        const dbUserOts = liveOvertimes.filter((o: any) => {
+          const matchId = o.user_id === user.id || o.userId === user.id;
+          const matchNip =
+            (o.user_nip && user.nip && o.user_nip.trim().toLowerCase() === user.nip.trim().toLowerCase()) ||
+            (o.nip && user.nip && o.nip.trim().toLowerCase() === user.nip.trim().toLowerCase());
+          return (matchId || matchNip) && (o.status || '').toLowerCase() === 'approved';
+        });
 
-      const targetOts = dbUserOts.length > 0 ? dbUserOts : localUserOts;
+        const localUserOts = allOvertimes.filter((o) => {
+          const matchId = o.userId === user.id;
+          const matchNip = o.userNip && user.nip && o.userNip.trim().toLowerCase() === user.nip.trim().toLowerCase();
+          return (matchId || matchNip) && o.status === 'approved';
+        });
 
-      const totalOtHours = Number(
-        targetOts.reduce((acc: number, o: any) => acc + Number(o.duration_hours || o.durationHours || 0), 0).toFixed(1)
-      );
-      const totalOtPayRp = targetOts.reduce(
-        (acc: number, o: any) => acc + Number(o.total_pay || o.totalPay || o.compensation_amount || 0),
-        0
-      );
+        const targetOts = dbUserOts.length > 0 ? dbUserOts : localUserOts;
 
-      const paidOts = targetOts.filter((o: any) => {
-        const pStatus = (o.payment_status || o.paymentStatus || '').toLowerCase();
-        return pStatus === 'paid' || pStatus === 'included_in_payroll';
-      });
-      const paidOtHours = Number(
-        paidOts.reduce((acc: number, o: any) => acc + Number(o.duration_hours || o.durationHours || 0), 0).toFixed(1)
-      );
-      const paidOtPayRp = paidOts.reduce(
-        (acc: number, o: any) => acc + Number(o.total_pay || o.totalPay || o.compensation_amount || 0),
-        0
-      );
+        totalOtHours = Number(
+          targetOts.reduce((acc: number, o: any) => acc + Number(o.duration_hours || o.durationHours || 0), 0).toFixed(1)
+        );
+        totalOtPayRp = targetOts.reduce(
+          (acc: number, o: any) => acc + Number(o.total_pay || o.totalPay || o.compensation_amount || 0),
+          0
+        );
 
-      const unpaidOts = targetOts.filter((o: any) => {
-        const pStatus = (o.payment_status || o.paymentStatus || '').toLowerCase();
-        return !pStatus || pStatus === 'unpaid';
-      });
-      const unpaidOtHours = Number(
-        unpaidOts.reduce((acc: number, o: any) => acc + Number(o.duration_hours || o.durationHours || 0), 0).toFixed(1)
-      );
-      const unpaidOtPayRp = unpaidOts.reduce(
-        (acc: number, o: any) => acc + Number(o.total_pay || o.totalPay || o.compensation_amount || 0),
-        0
-      );
+        const paidOts = targetOts.filter((o: any) => {
+          const pStatus = (o.payment_status || o.paymentStatus || '').toLowerCase();
+          return pStatus === 'paid' || pStatus === 'included_in_payroll';
+        });
+        paidOtHours = Number(
+          paidOts.reduce((acc: number, o: any) => acc + Number(o.duration_hours || o.durationHours || 0), 0).toFixed(1)
+        );
+        paidOtPayRp = paidOts.reduce(
+          (acc: number, o: any) => acc + Number(o.total_pay || o.totalPay || o.compensation_amount || 0),
+          0
+        );
+
+        const unpaidOts = targetOts.filter((o: any) => {
+          const pStatus = (o.payment_status || o.paymentStatus || '').toLowerCase();
+          return !pStatus || pStatus === 'unpaid';
+        });
+        unpaidOtHours = Number(
+          unpaidOts.reduce((acc: number, o: any) => acc + Number(o.duration_hours || o.durationHours || 0), 0).toFixed(1)
+        );
+        unpaidOtPayRp = unpaidOts.reduce(
+          (acc: number, o: any) => acc + Number(o.total_pay || o.totalPay || o.compensation_amount || 0),
+          0
+        );
+      }
 
       // Aturan Intern PT FRP: Beban kewajiban kas riil murni dari Uang Lembur yang belum dicairkan
       const totalLiabilityRp = unpaidOtPayRp;
@@ -267,6 +295,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         leaveUsed,
         leaveRemaining,
         leaveValuationRp,
+        isOvertimeEligible,
         totalOtHours,
         totalOtPayRp,
         paidOtHours,
@@ -330,21 +359,23 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
     });
 
     const divisionCaps = otSettings.divisionBudgetCaps || {};
-    const globalCap = otSettings.monthlyOvertimeBudgetCap || 88000000;
-    const totalStaff = employeeLiabilityData.length || 1;
+    const globalCap = otSettings.monthlyOvertimeBudgetCap || 76000000;
 
     return Array.from(map.values()).map((d) => {
-      // Tentukan alokasi plafon divisi
+      // Tentukan alokasi plafon divisi (HANYA BERLAKU UNTUK 80 ORANG SAH: SHIFTMAN LAPANGAN & WISMA BIRING ERE)
       let allocatedBudgetRp = divisionCaps[d.divisionName];
       if (allocatedBudgetRp === undefined) {
-        if (d.divisionName.toLowerCase().includes('shiftman') || d.divisionName.toLowerCase().includes('lapangan')) {
+        const dName = d.divisionName.toLowerCase();
+        const isShiftmanGroup = dName.includes('shiftman') || dName.includes('lapangan') || dName.includes('timbangan') || dName.includes('matching') || dName.includes('segel');
+        const isWismaGroup = dName.includes('wisma') || dName.includes('biring');
+
+        if (isShiftmanGroup) {
           allocatedBudgetRp = 72000000;
-        } else if (d.divisionName.toLowerCase().includes('wisma') || d.divisionName.toLowerCase().includes('biring')) {
+        } else if (isWismaGroup) {
           allocatedBudgetRp = 4000000;
         } else {
-          // Proporsi berdasarkan jumlah personil dari sisa pagu
-          allocatedBudgetRp = Math.round((globalCap - 76000000) * (d.employeeCount / Math.max(1, totalStaff - 80)));
-          if (allocatedBudgetRp <= 0) allocatedBudgetRp = d.employeeCount * 1500000;
+          // Divisi staf kantor / IT / non-operasional tidak memiliki plafon lembur (Non-Eligible)
+          allocatedBudgetRp = 0;
         }
       }
 
@@ -371,7 +402,8 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
 
   // ─── Company-wide Grand Totals ──────────────────────────────────────────────
   const grandTotal = useMemo(() => {
-    const totalBudgetCap = otSettings.monthlyOvertimeBudgetCap || 88000000;
+    const totalBudgetCap = otSettings.monthlyOvertimeBudgetCap || 76000000;
+    const eligibleEmployeesCount = employeeLiabilityData.filter((e) => e.isOvertimeEligible).length;
 
     const base = divisionLiabilityData.reduce(
       (acc, curr) => {
@@ -410,13 +442,14 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
 
     return {
       ...base,
+      eligibleEmployeesCount,
       totalBudgetCap,
       remainingBudgetRp,
       budgetBurnPercent,
       leaveUsagePercent,
       otRealizationPercent,
     };
-  }, [divisionLiabilityData, otSettings]);
+  }, [divisionLiabilityData, employeeLiabilityData, otSettings]);
 
   // ─── Filtered Employees ─────────────────────────────────────────────────────
   const filteredEmployees = useMemo(() => {
@@ -432,9 +465,13 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
       if (filterLiabilityStatus === 'unpaid_ot') matchStatus = emp.unpaidOtHours > 0;
       if (filterLiabilityStatus === 'remaining_leave') matchStatus = emp.leaveRemaining > 0;
 
-      return matchSearch && matchDiv && matchStatus;
+      let matchEligibility = true;
+      if (filterEligibility === 'eligible_80') matchEligibility = emp.isOvertimeEligible;
+      if (filterEligibility === 'ineligible') matchEligibility = !emp.isOvertimeEligible;
+
+      return matchSearch && matchDiv && matchStatus && matchEligibility;
     });
-  }, [employeeLiabilityData, searchQuery, selectedDivision, filterLiabilityStatus]);
+  }, [employeeLiabilityData, searchQuery, selectedDivision, filterLiabilityStatus, filterEligibility]);
 
   // ─── Save Budget Settings ───────────────────────────────────────────────────
   const handleSaveBudget = () => {
@@ -461,7 +498,10 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
       // Sheet 1: Ringkasan Pagu Anggaran
       const summaryDataExport = [
         { Parameter: 'Bulan / Periode Audit', Nilai: new Date().toLocaleString('id-ID', { month: 'long', year: 'numeric' }) },
-        { Parameter: 'Total Personil Karyawan Aktif', Nilai: grandTotal.employees },
+        { Parameter: 'Nama Perusahaan', Nilai: 'PT. FAWWAZ RESKI PERWIRA' },
+        { Parameter: 'Total Personil Karyawan Aktif', Nilai: `${grandTotal.employees} Orang` },
+        { Parameter: 'Personil Sah Berhak Lembur (SK Direksi)', Nilai: `${grandTotal.eligibleEmployeesCount || 80} Orang (Shiftman 47 + Wisma 33)` },
+        { Parameter: 'Personil Non-Eligible Lembur (Staf Kantor)', Nilai: `${grandTotal.employees - (grandTotal.eligibleEmployeesCount || 80)} Orang (Pagu Rp 0)` },
         { Parameter: '----------------------------------------', Nilai: '----------------------------------------' },
         { Parameter: 'REKAPITULASI HAK CUTI KARYAWAN', Nilai: '' },
         { Parameter: 'Total Kuota Hak Cuti', Nilai: `${grandTotal.totalLeaveQuota} Hari` },
@@ -469,13 +509,13 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         { Parameter: 'Jumlah Cuti BELUM DIAMBIL (SISA)', Nilai: `${grandTotal.totalLeaveRemaining} Hari (${100 - grandTotal.leaveUsagePercent}%)` },
         { Parameter: 'Kebijakan Kompensasi Sisa Cuti', Nilai: 'HANGUS (Aturan Intern PT FRP: Tidak Dapat Diuangkan / Beban Kas Rp 0)' },
         { Parameter: '----------------------------------------', Nilai: '----------------------------------------' },
-        { Parameter: 'REKAPITULASI JAM LEMBUR OPERASIONAL', Nilai: '' },
+        { Parameter: 'REKAPITULASI JAM LEMBUR OPERASIONAL (80 PERSONIL SAH)', Nilai: '' },
         { Parameter: 'Total Jam Lembur Disetujui', Nilai: `${grandTotal.totalOtHours} Jam` },
         { Parameter: 'Jam Lembur TELAH DICAIRKAN (TERBAYAR)', Nilai: `${grandTotal.paidOtHours} Jam (${grandTotal.otRealizationPercent}%)` },
         { Parameter: 'Jam Lembur BELUM DICAIRKAN (TERTUNDA)', Nilai: `${grandTotal.unpaidOtHours} Jam (${100 - grandTotal.otRealizationPercent}%)` },
         { Parameter: '----------------------------------------', Nilai: '----------------------------------------' },
-        { Parameter: 'FINANSIAL & PAGU ANGGARAN LEMBUR', Nilai: '' },
-        { Parameter: '1. Nominal Lembur yang TERSEDIA (Pagu Plafon)', Nilai: `Rp ${grandTotal.totalBudgetCap.toLocaleString('id-ID')}` },
+        { Parameter: 'FINANSIAL & PAGU ANGGARAN LEMBUR SAH', Nilai: '' },
+        { Parameter: '1. Nominal Lembur yang TERSEDIA (Pagu Sah 80 Personil)', Nilai: `Rp ${grandTotal.totalBudgetCap.toLocaleString('id-ID')} (Shiftman Rp 72jt + Wisma Rp 4jt)` },
         { Parameter: '2. Nominal Lembur yang TELAH DIGUNAKAN (Cair)', Nilai: `Rp ${grandTotal.usedBudgetRp.toLocaleString('id-ID')}` },
         { Parameter: '3. Nominal Lembur Tertunda (Belum Dicairkan)', Nilai: `Rp ${grandTotal.pendingBudgetRp.toLocaleString('id-ID')}` },
         { Parameter: '4. Nominal Lembur yang TERSISA (Sisa Pagu Bebas)', Nilai: `Rp ${grandTotal.remainingBudgetRp.toLocaleString('id-ID')}` },
@@ -483,7 +523,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         { Parameter: 'Status Plafon Anggaran', Nilai: grandTotal.budgetBurnPercent > 90 ? '🔴 KRITIS / OVERBUDGET' : grandTotal.budgetBurnPercent > 75 ? '🟡 WASPADA' : '🟢 AMAN (Di Bawah Plafon)' },
         { Parameter: '----------------------------------------', Nilai: '----------------------------------------' },
         { Parameter: 'TOTAL BEBAN LIABILITAS KAS PERUSAHAAN (LEMBUR BELUM CAIR)', Nilai: `Rp ${grandTotal.pendingBudgetRp.toLocaleString('id-ID')}` },
-        { Parameter: 'Catatan Kebijakan PT FRP', Nilai: 'Sisa cuti tidak dapat diuangkan dan hangus di akhir periode' },
+        { Parameter: 'Catatan Kebijakan PT FRP', Nilai: 'Sisa cuti hangus di akhir periode. Hak lembur hanya berlaku untuk 80 orang personil sah.' },
       ];
 
       // Sheet 2: Rekap Per Divisi
@@ -513,6 +553,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         'Nama Karyawan': e.name,
         'Divisi': e.divisionName,
         'Jabatan': e.jobTitle || '-',
+        'Hak Lembur': e.isOvertimeEligible ? '80 Personil Sah' : 'Non-Eligible (Staf Kantor)',
         'Gaji Pokok (Rp)': e.baseSalary,
         'Upah Harian (Rp)': e.dailyRate,
         'Kuota Cuti (Hari)': e.leaveQuota,
@@ -616,9 +657,14 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                 <Clock className="w-4 h-4 text-blue-600" />
                 Pilar 2: Realisasi Jam Lembur (SPKL)
               </span>
-              <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 border-blue-300 font-bold">
-                Total {grandTotal.totalOtHours} Jam
-              </Badge>
+              <div className="flex items-center gap-1.5">
+                <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-700 border-emerald-300 font-bold">
+                  80 Personil Sah
+                </Badge>
+                <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 border-blue-300 font-bold">
+                  Total {grandTotal.totalOtHours} Jam
+                </Badge>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="p-4 space-y-3">
@@ -642,7 +688,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
             {/* Visual Realization Bar */}
             <div className="space-y-1">
               <div className="flex justify-between text-[11px] text-muted-foreground">
-                <span>Rasio Pencairan Jam:</span>
+                <span>Rasio Pencairan Jam (80 Personil Sah):</span>
                 <span className="font-semibold text-foreground">{grandTotal.otRealizationPercent}% Telah Cair</span>
               </div>
               <div className="w-full h-2.5 bg-muted rounded-full overflow-hidden flex">
@@ -693,7 +739,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                 <p className="text-xs font-bold text-foreground mt-0.5 font-mono">
                   Rp {(grandTotal.totalBudgetCap / 1000000).toFixed(1)}jt
                 </p>
-                <p className="text-[9px] text-muted-foreground">Plafon Bulanan</p>
+                <p className="text-[9px] text-emerald-700 dark:text-emerald-400 font-semibold">Plafon 80 Org Sah</p>
               </div>
               <div className="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
                 <p className="text-[10px] text-blue-800 dark:text-blue-300 font-bold">2. Digunakan</p>
@@ -734,7 +780,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
             <div className="pt-2 border-t border-border/60 flex items-center justify-between text-xs">
               <div>
                 <span className="text-muted-foreground font-medium">Beban Utang Kas Perusahaan:</span>
-                <p className="text-[10px] text-muted-foreground">*Murni lembur belum cair (sisa cuti hangus/Rp 0)</p>
+                <p className="text-[10px] text-muted-foreground">*Murni lembur 80 personil sah belum cair (sisa cuti hangus)</p>
               </div>
               <span className="font-black text-rose-600 dark:text-rose-400 font-mono text-sm">
                 Rp {grandTotal.totalLiabilityRp.toLocaleString('id-ID')}
@@ -809,13 +855,13 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
 
           {/* Filters for Employee View */}
           {viewLevel === 'employee' && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-border/60">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t border-border/60">
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Cari nama karyawan atau NIP..."
+                  placeholder="Cari nama atau NIP..."
                   className="text-xs pl-8 rounded-xl h-9"
                 />
               </div>
@@ -834,11 +880,22 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
 
               <div>
                 <Select value={filterLiabilityStatus} onValueChange={(v: any) => setFilterLiabilityStatus(v)}>
-                  <SelectTrigger className="text-xs rounded-xl h-9"><SelectValue placeholder="Filter Kewajiban" /></SelectTrigger>
+                  <SelectTrigger className="text-xs rounded-xl h-9"><SelectValue placeholder="Status Cuti/Lembur" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Semua Status Karyawan</SelectItem>
+                    <SelectItem value="all">Semua Status Saldo</SelectItem>
                     <SelectItem value="unpaid_ot">🔴 Ada Lembur Belum Dibayar</SelectItem>
                     <SelectItem value="remaining_leave">🟢 Memiliki Sisa Kuota Cuti</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Select value={filterEligibility} onValueChange={(v: any) => setFilterEligibility(v)}>
+                  <SelectTrigger className="text-xs rounded-xl h-9 font-medium"><SelectValue placeholder="Hak Lembur" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Personil ({employeeLiabilityData.length})</SelectItem>
+                    <SelectItem value="eligible_80">⭐ 80 Karyawan Sah Lembur</SelectItem>
+                    <SelectItem value="ineligible">⚪ Non-Eligible (Staf Kantor)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -925,29 +982,43 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                         </Badge>
                       </td>
 
-                      {/* Lembur */}
-                      <td className="p-2.5 text-center">{d.totalOtHours}j</td>
-                      <td className="p-2.5 text-center font-bold text-blue-600">{d.paidOtHours}j</td>
-                      <td className="p-2.5 text-center font-black text-rose-600 border-r border-border bg-rose-500/5">{d.unpaidOtHours}j</td>
+                      {/* Lembur & Finansial */}
+                      {d.allocatedBudgetRp > 0 ? (
+                        <>
+                          <td className="p-2.5 text-center">{d.totalOtHours}j</td>
+                          <td className="p-2.5 text-center font-bold text-blue-600">{d.paidOtHours}j</td>
+                          <td className="p-2.5 text-center font-black text-rose-600 border-r border-border bg-rose-500/5">{d.unpaidOtHours}j</td>
 
-                      {/* Finansial Lembur */}
-                      <td className="p-2.5 text-right font-mono font-bold text-foreground">
-                        Rp {d.allocatedBudgetRp.toLocaleString('id-ID')}
-                      </td>
-                      <td className="p-2.5 text-right font-mono font-bold text-blue-600">
-                        Rp {d.usedBudgetRp.toLocaleString('id-ID')}
-                      </td>
-                      <td className="p-2.5 text-right font-mono text-rose-600 font-semibold">
-                        Rp {d.pendingBudgetRp.toLocaleString('id-ID')}
-                      </td>
-                      <td className="p-2.5 text-right font-mono font-black text-emerald-700 dark:text-emerald-400 border-r border-border bg-emerald-500/5">
-                        Rp {d.remainingBudgetRp.toLocaleString('id-ID')}
-                      </td>
+                          <td className="p-2.5 text-right font-mono font-bold text-foreground">
+                            Rp {d.allocatedBudgetRp.toLocaleString('id-ID')}
+                          </td>
+                          <td className="p-2.5 text-right font-mono font-bold text-blue-600">
+                            Rp {d.usedBudgetRp.toLocaleString('id-ID')}
+                          </td>
+                          <td className="p-2.5 text-right font-mono text-rose-600 font-semibold">
+                            Rp {d.pendingBudgetRp.toLocaleString('id-ID')}
+                          </td>
+                          <td className="p-2.5 text-right font-mono font-black text-emerald-700 dark:text-emerald-400 border-r border-border bg-emerald-500/5">
+                            Rp {d.remainingBudgetRp.toLocaleString('id-ID')}
+                          </td>
 
-                      {/* Total Liabilitas Kas */}
-                      <td className="p-2.5 text-right font-mono font-black text-rose-600 dark:text-rose-400">
-                        Rp {d.totalLiabilityRp.toLocaleString('id-ID')}
-                      </td>
+                          <td className="p-2.5 text-right font-mono font-black text-rose-600 dark:text-rose-400">
+                            Rp {d.totalLiabilityRp.toLocaleString('id-ID')}
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td colSpan={3} className="p-2.5 text-center border-r border-border bg-muted/20">
+                            <span className="text-[10.5px] text-muted-foreground italic">Non-Eligible Lembur</span>
+                          </td>
+                          <td colSpan={4} className="p-2.5 text-center border-r border-border bg-muted/20">
+                            <span className="text-[10.5px] text-muted-foreground font-medium">Staf Kantor (Pagu Rp 0)</span>
+                          </td>
+                          <td className="p-2.5 text-right font-mono text-muted-foreground">
+                            Rp 0
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -1043,7 +1114,18 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                       <tr key={emp.userId} className="hover:bg-muted/30 transition-colors">
                         <td className="p-3 font-semibold text-foreground">
                           <div>
-                            <p className="font-bold">{emp.name}</p>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className="font-bold">{emp.name}</p>
+                              {emp.isOvertimeEligible ? (
+                                <Badge variant="outline" className="text-[9px] h-4 px-1.5 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-300 font-bold">
+                                  80 Personil Sah
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-[9px] h-4 px-1.5 bg-slate-100 text-slate-500 border-slate-200 font-medium">
+                                  Non-Eligible
+                                </Badge>
+                              )}
+                            </div>
                             <p className="text-[10.5px] text-muted-foreground font-mono">{emp.nip}</p>
                           </div>
                         </td>
@@ -1064,23 +1146,36 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                             Hangus (Rp 0)
                           </Badge>
                         </td>
-                        <td className="p-3 text-center">{emp.totalOtHours}j</td>
-                        <td className="p-3 text-center font-bold text-blue-600">{emp.paidOtHours}j</td>
-                        <td className="p-3 text-center font-bold text-rose-600 bg-rose-500/5">
-                          {emp.unpaidOtHours > 0 ? (
-                            <Badge variant="outline" className="bg-rose-500/10 text-rose-700 border-rose-300 text-[10px]">
-                              {emp.unpaidOtHours} Jam
-                            </Badge>
-                          ) : (
-                            <span className="text-muted-foreground">0 Jam</span>
-                          )}
-                        </td>
-                        <td className="p-3 text-right font-mono font-bold text-rose-600 bg-rose-500/5">
-                          Rp {emp.unpaidOtPayRp.toLocaleString('id-ID')}
-                        </td>
-                        <td className="p-3 text-right font-mono font-black text-rose-600 dark:text-rose-400">
-                          Rp {emp.totalLiabilityRp.toLocaleString('id-ID')}
-                        </td>
+                        {emp.isOvertimeEligible ? (
+                          <>
+                            <td className="p-3 text-center">{emp.totalOtHours}j</td>
+                            <td className="p-3 text-center font-bold text-blue-600">{emp.paidOtHours}j</td>
+                            <td className="p-3 text-center font-bold text-rose-600 bg-rose-500/5">
+                              {emp.unpaidOtHours > 0 ? (
+                                <Badge variant="outline" className="bg-rose-500/10 text-rose-700 border-rose-300 text-[10px]">
+                                  {emp.unpaidOtHours} Jam
+                                </Badge>
+                              ) : (
+                                <span className="text-muted-foreground">0 Jam</span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right font-mono font-bold text-rose-600 bg-rose-500/5">
+                              Rp {emp.unpaidOtPayRp.toLocaleString('id-ID')}
+                            </td>
+                            <td className="p-3 text-right font-mono font-black text-rose-600 dark:text-rose-400">
+                              Rp {emp.totalLiabilityRp.toLocaleString('id-ID')}
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td colSpan={4} className="p-3 text-center bg-muted/20">
+                              <span className="text-[10.5px] text-muted-foreground italic">Non-Eligible Lembur (Staf Kantor)</span>
+                            </td>
+                            <td className="p-3 text-right font-mono font-medium text-muted-foreground">
+                              Rp 0
+                            </td>
+                          </>
+                        )}
                       </tr>
                     ))
                   )}
@@ -1145,13 +1240,13 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                 </div>
 
                 <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-muted/40 border border-border">
-                  <span className="font-medium text-foreground">Operasional &amp; Kantor:</span>
-                  <Input
-                    type="number"
-                    value={tempDivisionCaps['Operasional'] ?? 12000000}
-                    onChange={(e) => setTempDivisionCaps({ ...tempDivisionCaps, 'Operasional': Number(e.target.value) })}
-                    className="w-36 text-xs font-mono font-bold text-right h-8"
-                  />
+                  <div>
+                    <span className="font-medium text-foreground">Staf Kantor &amp; Non-Operasional:</span>
+                    <p className="text-[10px] text-muted-foreground">Tidak berhak lembur (SK Direksi)</p>
+                  </div>
+                  <Badge variant="outline" className="text-xs bg-slate-100 text-slate-500 font-mono font-bold">
+                    Rp 0 (Non-Eligible)
+                  </Badge>
                 </div>
               </div>
             </div>
@@ -1209,7 +1304,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                 <p className="text-[10px] text-slate-500 font-medium">Kompensasi: Hangus (Rp 0 - Kebijakan FRP)</p>
               </div>
               <div>
-                <p className="text-[10px] text-slate-500 font-bold uppercase">Pagu Anggaran Lembur</p>
+                <p className="text-[10px] text-slate-500 font-bold uppercase">Pagu Anggaran Lembur Sah (80 Org)</p>
                 <p className="text-sm font-black text-slate-800">Rp {grandTotal.totalBudgetCap.toLocaleString('id-ID')}</p>
                 <p className="text-[10px] text-slate-500">Telah Digunakan: Rp {grandTotal.usedBudgetRp.toLocaleString('id-ID')}</p>
               </div>
@@ -1222,7 +1317,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
 
             {/* Tabel Cetak Per Divisi */}
             <div className="space-y-2">
-              <h4 className="text-xs font-bold uppercase text-slate-800">Rekapitulasi per Departemen / Divisi:</h4>
+              <h4 className="text-xs font-bold uppercase text-slate-800">Rekapitulasi per Departemen / Divisi (Khusus 80 Personil Sah):</h4>
               <table className="w-full text-[11px] border-collapse border border-slate-300">
                 <thead className="bg-slate-100 font-bold">
                   <tr>
@@ -1247,12 +1342,22 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                       <td className="border border-slate-300 p-1.5 text-center">{d.totalLeaveUsed}h</td>
                       <td className="border border-slate-300 p-1.5 text-center font-bold">{d.totalLeaveRemaining}h</td>
                       <td className="border border-slate-300 p-1.5 text-center text-slate-500 font-medium">Hangus (Rp 0)</td>
-                      <td className="border border-slate-300 p-1.5 text-center">{d.paidOtHours}j</td>
-                      <td className="border border-slate-300 p-1.5 text-center font-bold text-red-600">{d.unpaidOtHours}j</td>
-                      <td className="border border-slate-300 p-1.5 text-right font-mono">Rp {d.allocatedBudgetRp.toLocaleString('id-ID')}</td>
-                      <td className="border border-slate-300 p-1.5 text-right font-mono">Rp {d.usedBudgetRp.toLocaleString('id-ID')}</td>
-                      <td className="border border-slate-300 p-1.5 text-right font-mono font-bold text-emerald-700">Rp {d.remainingBudgetRp.toLocaleString('id-ID')}</td>
-                      <td className="border border-slate-300 p-1.5 text-right font-mono font-black text-rose-600">Rp {d.totalLiabilityRp.toLocaleString('id-ID')}</td>
+                      {d.allocatedBudgetRp > 0 ? (
+                        <>
+                          <td className="border border-slate-300 p-1.5 text-center">{d.paidOtHours}j</td>
+                          <td className="border border-slate-300 p-1.5 text-center font-bold text-red-600">{d.unpaidOtHours}j</td>
+                          <td className="border border-slate-300 p-1.5 text-right font-mono">Rp {d.allocatedBudgetRp.toLocaleString('id-ID')}</td>
+                          <td className="border border-slate-300 p-1.5 text-right font-mono">Rp {d.usedBudgetRp.toLocaleString('id-ID')}</td>
+                          <td className="border border-slate-300 p-1.5 text-right font-mono font-bold text-emerald-700">Rp {d.remainingBudgetRp.toLocaleString('id-ID')}</td>
+                          <td className="border border-slate-300 p-1.5 text-right font-mono font-black text-rose-600">Rp {d.totalLiabilityRp.toLocaleString('id-ID')}</td>
+                        </>
+                      ) : (
+                        <>
+                          <td colSpan={2} className="border border-slate-300 p-1.5 text-center text-slate-400 italic">Non-Eligible</td>
+                          <td colSpan={3} className="border border-slate-300 p-1.5 text-center text-slate-400 italic">Staf Kantor / Pagu Rp 0</td>
+                          <td className="border border-slate-300 p-1.5 text-right font-mono text-slate-400">Rp 0</td>
+                        </>
+                      )}
                     </tr>
                   ))}
                   <tr className="bg-slate-100 font-bold border-t-2 border-slate-400">
