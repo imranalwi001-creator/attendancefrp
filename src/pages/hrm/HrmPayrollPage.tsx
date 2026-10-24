@@ -713,13 +713,12 @@ const SalaryProfileDialog: React.FC<{
 
 // ─── Simulator Panel ──────────────────────────────────────────────────────────
 const SimulatorPanel: React.FC<{ settings: PayrollSettings }> = ({ settings }) => {
-  const [base, setBase] = useState(5000000);
-  const [allow, setAllow] = useState(1500000);
+  const [base, setBase] = useState(4045050);
   const [ot, setOt] = useState(0);
   const [late, setLate] = useState(0);
   const [absent, setAbsent] = useState(0);
 
-  const gross = base + allow + ot;
+  const gross = base + ot;
   const bpjsK = Math.round((settings.bpjsKesehatanEmployee / 100) * base);
   const bpjsT = Math.round((settings.bpjsKetenagakerjaanEmployee / 100) * base);
   const pph = Math.round((settings.defaultTaxRate / 100) * (gross - bpjsK - bpjsT));
@@ -736,7 +735,6 @@ const SimulatorPanel: React.FC<{ settings: PayrollSettings }> = ({ settings }) =
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
             ['Gaji Pokok (Rp)', base, setBase],
-            ['Tunjangan Rutin (Rp)', allow, setAllow],
             ['Uang Lembur (Rp)', ot, setOt],
             ['Menit Terlambat', late, setLate],
             ['Hari Alfa (Tanpa Ket.)', absent, setAbsent],
@@ -1853,38 +1851,59 @@ export const HrmPayrollPage: React.FC = () => {
       {activeTab === 'settings' && (
         <div className="space-y-5">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {/* Card 1: Default Allowances */}
-            <Card className="rounded-2xl border-border/80 shadow-xs bg-card">
+            {/* Card 1: Kebijakan Upah Pokok Tunggal PT FRP */}
+            <Card className="rounded-2xl border-emerald-200/80 dark:border-emerald-800/40 shadow-xs bg-card">
               <CardHeader className="pb-3 border-b border-border/60">
-                <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <DollarSign size={16} className="text-emerald-600" /> Tunjangan Standar Perusahaan
-                </CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-bold flex items-center gap-2">
+                    <Banknote size={16} className="text-emerald-600" /> Kebijakan Remunerasi PT. Fawwaz Reski Perwira
+                  </CardTitle>
+                  <Badge variant="outline" className="text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-emerald-300 font-bold">
+                    Upah Pokok Tunggal
+                  </Badge>
+                </div>
                 <CardDescription className="text-xs">
-                  Nilai acuan standar untuk karyawan baru saat pembuatan profil gaji.
+                  Sesuai ketetapan Direksi PT FRP, sistem remunerasi tidak menggunakan tunjangan. Penambahan hak kas resmi murni berasal dari SPKL bagi 80 personil sah.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                {[
-                  ['Tunj. Makan Default (Rp)', 'defaultMealAllowance'],
-                  ['Tunj. Transport Default (Rp)', 'defaultTransportAllowance'],
-                  ['Tunj. Perumahan (Rp)', 'defaultHousingAllowance'],
-                  ['Tunj. Kesehatan (Rp)', 'defaultHealthAllowance'],
-                ].map(([label, key]) => (
-                  <div key={key} className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">{label}</Label>
+              <CardContent className="p-4 sm:p-5 space-y-4">
+                <div className="p-3 bg-emerald-50/40 dark:bg-emerald-950/20 rounded-xl border border-emerald-200/60 dark:border-emerald-800/40 space-y-1">
+                  <div className="flex items-center justify-between text-xs font-bold text-emerald-900 dark:text-emerald-300">
+                    <span>Status Seluruh Tunjangan Perusahaan</span>
+                    <span className="font-mono text-emerald-700 dark:text-emerald-400">Rp 0 (Non-Aktif / Ditiadakan)</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Komponen tunjangan jabatan, uang makan, transport, perumahan, dan kesehatan tidak berlaku di lingkungan PT. Fawwaz Reski Perwira.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Standar Upah Pokok Baku Acuan (Rp)</Label>
                     <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">Rp</span>
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-emerald-700">Rp</span>
                       <Input
                         type="number"
-                        className="pl-9 rounded-xl text-xs h-9 font-mono"
-                        value={settingsForm[key as keyof PayrollSettings] as number}
-                        onChange={(e) =>
-                          setSettingsForm((f) => ({ ...f, [key]: Number(e.target.value) }))
-                        }
+                        className="pl-9 rounded-xl text-xs h-9 font-mono font-bold"
+                        value={4045050}
+                        disabled
                       />
                     </div>
                   </div>
-                ))}
+
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Plafon Lembur Sah (80 Personil)</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-emerald-700">Rp</span>
+                      <Input
+                        type="text"
+                        className="pl-9 rounded-xl text-xs h-9 font-mono font-bold"
+                        value="76.000.000"
+                        disabled
+                      />
+                    </div>
+                  </div>
+                </div>
               </CardContent>
             </Card>
 

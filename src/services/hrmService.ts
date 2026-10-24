@@ -5346,10 +5346,15 @@ export const hrmService = {
   getPayrollSettings: (): PayrollSettings => {
     hrmService.init();
     try {
-      return JSON.parse(
+      const parsed = JSON.parse(
         localStorage.getItem(STORAGE_KEYS.PAYROLL_SETTINGS) ||
           JSON.stringify(DEFAULT_PAYROLL_SETTINGS)
       );
+      delete parsed.defaultMealAllowance;
+      delete parsed.defaultTransportAllowance;
+      delete parsed.defaultHousingAllowance;
+      delete parsed.defaultHealthAllowance;
+      return parsed;
     } catch {
       return DEFAULT_PAYROLL_SETTINGS;
     }
@@ -5357,6 +5362,10 @@ export const hrmService = {
 
   updatePayrollSettings: (updates: Partial<PayrollSettings>): PayrollSettings => {
     const current = hrmService.getPayrollSettings();
+    delete updates.defaultMealAllowance;
+    delete updates.defaultTransportAllowance;
+    delete updates.defaultHousingAllowance;
+    delete updates.defaultHealthAllowance;
     const updated = { ...current, ...updates };
     localStorage.setItem(STORAGE_KEYS.PAYROLL_SETTINGS, JSON.stringify(updated));
     return updated;
