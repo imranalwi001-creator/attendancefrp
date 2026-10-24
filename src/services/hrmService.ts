@@ -5382,6 +5382,12 @@ export const hrmService = {
     const idx = profiles.findIndex((p) => p.userId === data.userId);
     const updated: EmployeeSalaryProfile = {
       ...data,
+      positionAllowance: 0,
+      mealAllowance: 0,
+      transportAllowance: 0,
+      housingAllowance: 0,
+      healthAllowance: 0,
+      otherAllowances: [],
       id: idx !== -1 ? profiles[idx].id : `sp-${Date.now()}`,
       updatedAt: new Date().toISOString(),
     };
@@ -5397,9 +5403,9 @@ export const hrmService = {
     api.post('/payroll/profiles', {
       userId: data.userId,
       baseSalary: data.baseSalary,
-      positionAllowance: data.positionAllowance,
-      mealAllowance: data.mealAllowance,
-      transportAllowance: data.transportAllowance,
+      positionAllowance: 0,
+      mealAllowance: 0,
+      transportAllowance: 0,
       bankName: data.bankName,
       bankAccount: data.bankAccount,
       bankAccountName: data.bankAccountName,

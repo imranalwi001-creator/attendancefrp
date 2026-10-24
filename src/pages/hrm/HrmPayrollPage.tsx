@@ -241,12 +241,6 @@ const PrintSlipModal: React.FC<{
 
   const incomeRows = [
     { label: 'Gaji Pokok', value: slip.baseSalary },
-    { label: 'Tunjangan Jabatan', value: slip.positionAllowance },
-    { label: 'Tunjangan Transport', value: slip.transportAllowance },
-    { label: 'Tunjangan Makan', value: slip.mealAllowance },
-    { label: 'Tunjangan Perumahan', value: slip.housingAllowance },
-    { label: 'Tunjangan Kesehatan', value: slip.healthAllowance },
-    ...(slip.otherAllowances || []).map((a) => ({ label: a.name, value: a.amount })),
     { label: `Uang Lembur (${slip.overtimeHours.toFixed(1)} jam)`, value: slip.overtimePay },
   ].filter((r) => r.value > 0);
 
@@ -526,69 +520,60 @@ const SalaryProfileDialog: React.FC<{
   const { toast } = useToast();
   const existing = hrmService.getSalaryProfile(userId);
 
-  const isImran = userId === 'eccf6bcb-e7f3-4b90-83dd-5fca513b5b15' || userName.toLowerCase().includes('imran');
-  const initialBase = isImran ? 4045050 : (existing?.baseSalary || 4045050);
-  const initialPos = isImran ? 0 : (existing?.positionAllowance || 0);
-  const initialTrans = isImran ? 0 : (existing?.transportAllowance || 0);
-  const initialMeal = isImran ? 0 : (existing?.mealAllowance || 0);
+  const initialBase = existing?.baseSalary || 4045050;
 
   const [form, setForm] = useState({
     userId,
     baseSalary: initialBase,
-    positionAllowance: initialPos,
-    transportAllowance: initialTrans,
-    mealAllowance: initialMeal,
-    housingAllowance: isImran ? 0 : (existing?.housingAllowance || 0),
-    healthAllowance: isImran ? 0 : (existing?.healthAllowance || 0),
+    positionAllowance: 0,
+    transportAllowance: 0,
+    mealAllowance: 0,
+    housingAllowance: 0,
+    healthAllowance: 0,
     taxSetting: (existing?.taxSetting || 'gross') as 'gross' | 'gross_up' | 'netto',
     employeeType: (existing?.employeeType || 'tetap') as 'tetap' | 'kontrak' | 'magang',
     bankName: existing?.bankName || 'Bank Central Asia (BCA)',
-    bankAccount: existing?.bankAccount || (isImran ? '7140294812' : ''),
+    bankAccount: existing?.bankAccount || '',
     bankAccountName: existing?.bankAccountName || userName,
     effectiveDate: existing?.effectiveDate || new Date().toISOString().split('T')[0],
   });
-  const [others, setOthers] = useState<OtherAllowance[]>(isImran ? [] : (existing?.otherAllowances || []));
 
   useEffect(() => {
     if (!open) return;
     const current = hrmService.getSalaryProfile(userId);
-    const userIsImran = userId === 'eccf6bcb-e7f3-4b90-83dd-5fca513b5b15' || userName.toLowerCase().includes('imran');
-    const base = userIsImran ? 4045050 : (current?.baseSalary || 4045050);
-    const pos = userIsImran ? 0 : (current?.positionAllowance || 0);
-    const trans = userIsImran ? 0 : (current?.transportAllowance || 0);
-    const meal = userIsImran ? 0 : (current?.mealAllowance || 0);
+    const base = current?.baseSalary || 4045050;
 
     setForm({
       userId,
       baseSalary: base,
-      positionAllowance: pos,
-      transportAllowance: trans,
-      mealAllowance: meal,
-      housingAllowance: userIsImran ? 0 : (current?.housingAllowance || 0),
-      healthAllowance: userIsImran ? 0 : (current?.healthAllowance || 0),
+      positionAllowance: 0,
+      transportAllowance: 0,
+      mealAllowance: 0,
+      housingAllowance: 0,
+      healthAllowance: 0,
       taxSetting: (current?.taxSetting || 'gross') as 'gross' | 'gross_up' | 'netto',
       employeeType: (current?.employeeType || 'tetap') as 'tetap' | 'kontrak' | 'magang',
       bankName: current?.bankName || 'Bank Central Asia (BCA)',
-      bankAccount: current?.bankAccount || (userIsImran ? '7140294812' : ''),
+      bankAccount: current?.bankAccount || '',
       bankAccountName: current?.bankAccountName || userName,
       effectiveDate: current?.effectiveDate || new Date().toISOString().split('T')[0],
     });
-    setOthers(userIsImran ? [] : (current?.otherAllowances || []));
   }, [open, userId, userName]);
 
-  const grossTotal =
-    form.baseSalary +
-    form.positionAllowance +
-    form.transportAllowance +
-    form.mealAllowance +
-    form.housingAllowance +
-    form.healthAllowance +
-    others.reduce((s, a) => s + a.amount, 0);
+  const grossTotal = form.baseSalary;
 
   const handleSave = () => {
     try {
-      hrmService.upsertSalaryProfile({ ...form, otherAllowances: others });
-      toast({ title: 'Profil gaji tersimpan', description: `Data gaji ${userName} berhasil diperbarui.` });
+      hrmService.upsertSalaryProfile({
+        ...form,
+        positionAllowance: 0,
+        transportAllowance: 0,
+        mealAllowance: 0,
+        housingAllowance: 0,
+        healthAllowance: 0,
+        otherAllowances: [],
+      });
+      toast({ title: 'Profil gaji tersimpan', description: `Data gaji pokok ${userName} berhasil diperbarui.` });
       onSaved();
       onClose();
     } catch {
@@ -604,7 +589,7 @@ const SalaryProfileDialog: React.FC<{
             <CreditCard size={18} className="text-primary" /> Pengaturan Profil Gaji — {userName}
           </DialogTitle>
           <p className="text-xs text-muted-foreground">
-            Tentukan struktur gaji pokok, tunjangan rutin, dan informasi pembayaran bank karyawan.
+            Tentukan besaran gaji pokok dan informasi rekening pembayaran bank karyawan sesuai kebijakan PT. Fawwaz Reski Perwira.
           </p>
         </DialogHeader>
 
@@ -634,84 +619,38 @@ const SalaryProfileDialog: React.FC<{
             </div>
           </div>
 
-          <div className="rounded-xl border border-emerald-200/80 p-4 space-y-3 bg-emerald-50/30">
-            <p className="text-xs font-bold text-foreground flex items-center gap-1.5">
-              <TrendingUp size={14} className="text-emerald-600" /> Komponen Penghasilan Pokok &amp; Tunjangan
+          {/* Komponen Upah Pokok Tunggal PT FRP (Tanpa Tunjangan) */}
+          <div className="rounded-xl border border-emerald-200/80 dark:border-emerald-800/40 p-4 space-y-3 bg-emerald-50/30 dark:bg-emerald-950/20">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                <Banknote size={15} className="text-emerald-600" /> Komponen Gaji Pokok (Kebijakan PT FRP)
+              </p>
+              <Badge variant="outline" className="text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-emerald-300 font-semibold">
+                Sistem Upah Pokok Tunggal
+              </Badge>
+            </div>
+
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Sesuai aturan baku PT. Fawwaz Reski Perwira, sistem penggajian <strong>tidak memiliki tunjangan</strong> (tanpa tunjangan jabatan, transport, makan, perumahan, maupun tunjangan kesehatan). Penghasilan resmi murni adalah <strong>Gaji Pokok</strong> ditambah <strong>Uang Lembur (SPKL)</strong> bagi personil sah.
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {[
-                ['Gaji Pokok', 'baseSalary'],
-                ['Tunjangan Jabatan', 'positionAllowance'],
-                ['Tunjangan Transport', 'transportAllowance'],
-                ['Tunjangan Makan', 'mealAllowance'],
-                ['Tunjangan Perumahan', 'housingAllowance'],
-                ['Tunjangan Kesehatan', 'healthAllowance'],
-              ].map(([label, key]) => (
-                <div key={key} className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">{label}</Label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground">Rp</span>
-                    <Input
-                      type="number"
-                      className="pl-9 rounded-xl text-xs h-8 font-mono"
-                      value={(form as any)[key]}
-                      onChange={(e) => setForm((f) => ({ ...f, [key]: Number(e.target.value) }))}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
 
-            <div className="space-y-2 pt-1 border-t border-border/60">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-medium text-muted-foreground">Tunjangan Tambahan Lainnya</p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-6 text-xs rounded-lg gap-1 px-2"
-                  onClick={() => setOthers((a) => [...a, { name: '', amount: 0 }])}
-                >
-                  <Plus size={11} /> Tambah Komponen
-                </Button>
+            <div className="space-y-1.5 pt-1">
+              <Label className="text-xs font-bold text-foreground">Gaji Pokok / Upah Bulanan</Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-emerald-700">Rp</span>
+                <Input
+                  type="number"
+                  className="pl-9 rounded-xl text-sm font-bold font-mono h-9 border-emerald-300 focus:border-emerald-500 focus:ring-emerald-500"
+                  value={form.baseSalary}
+                  onChange={(e) => setForm((f) => ({ ...f, baseSalary: Number(e.target.value) }))}
+                  placeholder="4045050"
+                />
               </div>
-              {others.map((a, i) => (
-                <div key={i} className="flex gap-2 items-center">
-                  <Input
-                    placeholder="Nama tunjangan (misal: Insentif)"
-                    className="rounded-xl text-xs h-8 flex-1"
-                    value={a.name}
-                    onChange={(e) =>
-                      setOthers((arr) => arr.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
-                    }
-                  />
-                  <div className="relative w-36">
-                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">Rp</span>
-                    <Input
-                      type="number"
-                      className="pl-7 rounded-xl text-xs h-8 font-mono"
-                      value={a.amount}
-                      onChange={(e) =>
-                        setOthers((arr) =>
-                          arr.map((x, j) => (j === i ? { ...x, amount: Number(e.target.value) } : x))
-                        )
-                      }
-                    />
-                  </div>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-destructive rounded-lg"
-                    onClick={() => setOthers((arr) => arr.filter((_, j) => j !== i))}
-                  >
-                    <X size={13} />
-                  </Button>
-                </div>
-              ))}
             </div>
 
-            <div className="flex justify-between items-center text-xs pt-2 border-t border-emerald-200">
-              <span className="text-muted-foreground font-medium">Estimasi Penghasilan Bruto Rutin</span>
-              <span className="font-bold text-emerald-700 font-mono text-sm">{fmtRp(grossTotal)}</span>
+            <div className="flex justify-between items-center text-xs pt-2 border-t border-emerald-200/80 dark:border-emerald-800/50">
+              <span className="text-muted-foreground font-medium">Total Penghasilan Pokok Rutin</span>
+              <span className="font-bold text-emerald-700 font-mono text-sm">{fmtRp(form.baseSalary || 0)}</span>
             </div>
           </div>
 
@@ -1832,8 +1771,7 @@ export const HrmPayrollPage: React.FC = () => {
                     <TableHead className="text-xs font-bold text-foreground">Karyawan</TableHead>
                     <TableHead className="text-xs font-bold text-foreground">Divisi</TableHead>
                     <TableHead className="text-xs font-bold text-foreground">Status Pegawai</TableHead>
-                    <TableHead className="text-xs font-bold text-foreground text-right">Gaji Pokok</TableHead>
-                    <TableHead className="text-xs font-bold text-foreground text-right">Est. Bruto</TableHead>
+                    <TableHead className="text-xs font-bold text-foreground text-right">Gaji Pokok / Upah Pokok</TableHead>
                     <TableHead className="text-xs font-bold text-foreground">Rekening Pembayaran</TableHead>
                     <TableHead className="text-xs font-bold text-foreground text-center">Aksi</TableHead>
                   </TableRow>
@@ -1841,15 +1779,6 @@ export const HrmPayrollPage: React.FC = () => {
                 <TableBody>
                   {filteredUsers.map((u) => {
                     const profile = profiles.find((p) => p.userId === u.id);
-                    const gross = profile
-                      ? profile.baseSalary +
-                        profile.positionAllowance +
-                        profile.transportAllowance +
-                        profile.mealAllowance +
-                        profile.housingAllowance +
-                        profile.healthAllowance +
-                        profile.otherAllowances.reduce((s, a) => s + a.amount, 0)
-                      : 0;
 
                     return (
                       <TableRow key={u.id} className="hover:bg-muted/20">
@@ -1876,11 +1805,8 @@ export const HrmPayrollPage: React.FC = () => {
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell className="text-xs text-right font-mono font-medium">
-                          {profile ? fmtRp(profile.baseSalary) : <span className="text-muted-foreground">-</span>}
-                        </TableCell>
                         <TableCell className="text-xs text-right font-mono font-bold text-emerald-700">
-                          {profile ? fmtRp(gross) : <span className="text-muted-foreground">-</span>}
+                          {profile ? fmtRp(profile.baseSalary) : <span className="text-muted-foreground">-</span>}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
                           {profile?.bankName ? (

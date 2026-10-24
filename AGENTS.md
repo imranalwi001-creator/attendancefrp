@@ -70,5 +70,8 @@ Pimpinan PT. FAWWAZ RESKI PERWIRA memberikan instruksi ketat untuk pengawasan **
    - **47 Orang Shiftman Lapangan (Grup SHIPMENT)**: Plafon anggaran lembur baku **Rp 72.000.000 / bulan**.
    - **33 Orang Wisma Biring Ere (Grup RUMAH TANGGA)**: Plafon anggaran lembur baku **Rp 4.000.000 / bulan**.
    - **Total Plafon Anggaran Lembur Sah Perusahaan**: **Rp 76.000.000 / bulan**.
-   - Karyawan di luar 80 personil ini (11 orang staf kantor, IT, HRD, dan manajemen non-operasional) berstatus **Non-Eligible Lembur** (Pagu Rp 0, kuota jam lembur 0, dan sistem wajib menolak pengajuan lembur mereka). Hak cuti tetap berlaku bagi seluruh karyawan.
+7. **Aturan Baku Remunerasi PT FRP (Upah Pokok Tunggal - Tanpa Tunjangan)**:
+   - PT. FAWWAZ RESKI PERWIRA menerapkan sistem **Upah Pokok Tunggal** (Gaji Pokok murni sesuai kesepakatan/UMK).
+   - **TIDAK ADA TUNJANGAN** dalam kebijakan perusahaan (tidak ada tunjangan jabatan, transport, makan, perumahan, kesehatan, maupun tunjangan tambahan lainnya). DILARANG memunculkan input/kolom tunjangan-tunjangan tersebut pada UI payroll/profil gaji.
+   - Satu-satunya penambahan hak upah tunai di luar gaji pokok adalah **Uang Lembur (SPKL)** khusus bagi 80 personil sah operasional/lapangan.
 
