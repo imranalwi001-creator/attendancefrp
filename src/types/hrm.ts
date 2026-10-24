@@ -810,6 +810,10 @@ export interface OvertimeSettings {
   syncNationalCalendar: boolean;              // Auto sinkron kalender libur nasional SKB 3 Menteri
   includeCutiBersamaAsHoliday: boolean;       // Anggap cuti bersama pemerintah sebagai tanggal merah lembur
   autoApplyHolidayMultiplier: boolean;        // Otomatis terapkan tarif tanggal merah pada tanggal libur
+
+  // === PLAFON & PAGU ANGGARAN LEMBUR PERUSAHAAN (BUDGET CAPS) ===
+  monthlyOvertimeBudgetCap?: number;          // Total pagu anggaran lembur perusahaan per bulan (cth: Rp 88.000.000)
+  divisionBudgetCaps?: Record<string, number>; // Alokasi plafon per divisi (cth: 'Shiftman': 72000000, 'Wisma Biring Ere': 4000000)
 }
 
 // ─── PERIODE OPERASIONAL & FISCAL PERIOD ──────────────────────────────────────

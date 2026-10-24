@@ -494,6 +494,13 @@ const DEFAULT_OVERTIME_SETTINGS: OvertimeSettings = {
   syncNationalCalendar: true,
   includeCutiBersamaAsHoliday: true,
   autoApplyHolidayMultiplier: true,
+  monthlyOvertimeBudgetCap: 88000000,
+  divisionBudgetCaps: {
+    'Shiftman Lapangan': 72000000,
+    'Shiftman': 72000000,
+    'Wisma Biring Ere': 4000000,
+    'Operasional': 12000000,
+  },
 };
 
 // Initial Fiscal Period (Bulan & Tahun Berjalan)
