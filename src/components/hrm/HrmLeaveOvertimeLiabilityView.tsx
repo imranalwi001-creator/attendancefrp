@@ -198,7 +198,8 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
       // Ambil angka realisasi cuti: terbesar antara used_leave_days profil dan jumlah hari pengajuan cuti yang disetujui
       const leaveUsed = Math.max(profileUsedDays, daysFromApprovedRequests);
       const leaveRemaining = Math.max(0, leaveQuota - leaveUsed);
-      const leaveValuationRp = leaveRemaining * dailyRate;
+      // Aturan Intern PT FRP: Hak cuti yang tidak diambil HANGUS dan TIDAK DAPAT DIUANGKAN (Kompensasi Kas: Rp 0)
+      const leaveValuationRp = 0;
 
       // ─── LEMBUR PER KARYAWAN ───
       const dbUserOts = liveOvertimes.filter((o: any) => {
@@ -249,7 +250,8 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         0
       );
 
-      const totalLiabilityRp = leaveValuationRp + unpaidOtPayRp;
+      // Aturan Intern PT FRP: Beban kewajiban kas riil murni dari Uang Lembur yang belum dicairkan
+      const totalLiabilityRp = unpaidOtPayRp;
 
       return {
         userId: user.id,
@@ -362,6 +364,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         budgetBurnPercent,
         leaveUsagePercent,
         otRealizationPercent,
+        totalLiabilityRp: pendingBudgetRp, // Beban kas riil murni uang lembur belum cair
       };
     }).sort((a, b) => b.totalLiabilityRp - a.totalLiabilityRp);
   }, [employeeLiabilityData, otSettings]);
@@ -464,7 +467,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         { Parameter: 'Total Kuota Hak Cuti', Nilai: `${grandTotal.totalLeaveQuota} Hari` },
         { Parameter: 'Jumlah Cuti TELAH DIAMBIL', Nilai: `${grandTotal.totalLeaveUsed} Hari (${grandTotal.leaveUsagePercent}%)` },
         { Parameter: 'Jumlah Cuti BELUM DIAMBIL (SISA)', Nilai: `${grandTotal.totalLeaveRemaining} Hari (${100 - grandTotal.leaveUsagePercent}%)` },
-        { Parameter: 'Taksiran Valuasi Rupiah Sisa Cuti', Nilai: `Rp ${grandTotal.totalLeaveValuationRp.toLocaleString('id-ID')}` },
+        { Parameter: 'Kebijakan Kompensasi Sisa Cuti', Nilai: 'HANGUS (Aturan Intern PT FRP: Tidak Dapat Diuangkan / Beban Kas Rp 0)' },
         { Parameter: '----------------------------------------', Nilai: '----------------------------------------' },
         { Parameter: 'REKAPITULASI JAM LEMBUR OPERASIONAL', Nilai: '' },
         { Parameter: 'Total Jam Lembur Disetujui', Nilai: `${grandTotal.totalOtHours} Jam` },
@@ -479,7 +482,8 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         { Parameter: 'Persentase Penyerapan Anggaran Lembur', Nilai: `${grandTotal.budgetBurnPercent}%` },
         { Parameter: 'Status Plafon Anggaran', Nilai: grandTotal.budgetBurnPercent > 90 ? '🔴 KRITIS / OVERBUDGET' : grandTotal.budgetBurnPercent > 75 ? '🟡 WASPADA' : '🟢 AMAN (Di Bawah Plafon)' },
         { Parameter: '----------------------------------------', Nilai: '----------------------------------------' },
-        { Parameter: 'TOTAL BEBAN LIABILITAS KEUANGAN PERUSAHAAN', Nilai: `Rp ${grandTotal.totalLiabilityRp.toLocaleString('id-ID')}` },
+        { Parameter: 'TOTAL BEBAN LIABILITAS KAS PERUSAHAAN (LEMBUR BELUM CAIR)', Nilai: `Rp ${grandTotal.pendingBudgetRp.toLocaleString('id-ID')}` },
+        { Parameter: 'Catatan Kebijakan PT FRP', Nilai: 'Sisa cuti tidak dapat diuangkan dan hangus di akhir periode' },
       ];
 
       // Sheet 2: Rekap Per Divisi
@@ -490,7 +494,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         'Kuota Cuti (Hari)': d.totalLeaveQuota,
         'Cuti TELAH DIAMBIL (Hari)': d.totalLeaveUsed,
         'Cuti BELUM DIAMBIL / SISA (Hari)': d.totalLeaveRemaining,
-        'Valuasi Sisa Cuti (Rp)': d.totalLeaveValuationRp,
+        'Kompensasi Sisa Cuti': 'Hangus (Rp 0)',
         'Total Jam Lembur': d.totalOtHours,
         'Lembur TELAH DICAIRKAN (Jam)': d.paidOtHours,
         'Lembur BELUM DICAIRKAN (Jam)': d.unpaidOtHours,
@@ -499,7 +503,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         'Lembur BELUM DICAIRKAN (Rp)': d.pendingBudgetRp,
         'Pagu Lembur TERSISA (Rp)': d.remainingBudgetRp,
         'Serapan Anggaran (%)': `${d.budgetBurnPercent}%`,
-        'Total Liabilitas Divisi (Rp)': d.totalLiabilityRp,
+        'Total Liabilitas Kas Divisi (Rp)': d.pendingBudgetRp,
       }));
 
       // Sheet 3: Detail Per Karyawan
@@ -514,13 +518,13 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         'Kuota Cuti (Hari)': e.leaveQuota,
         'Cuti TELAH DIAMBIL (Hari)': e.leaveUsed,
         'Cuti BELUM DIAMBIL / SISA (Hari)': e.leaveRemaining,
-        'Valuasi Saldo Cuti (Rp)': e.leaveValuationRp,
+        'Kompensasi Sisa Cuti': 'Hangus (Rp 0)',
         'Total Jam Lembur (Jam)': e.totalOtHours,
         'Lembur TELAH DICAIRKAN (Jam)': e.paidOtHours,
         'Uang Lembur TELAH DIGUNAKAN (Rp)': e.paidOtPayRp,
         'Lembur BELUM DICAIRKAN (Jam)': e.unpaidOtHours,
         'Uang Lembur BELUM DICAIRKAN (Rp)': e.unpaidOtPayRp,
-        'Total Kewajiban Finansial (Rp)': e.totalLiabilityRp,
+        'Total Kewajiban Kas (Rp)': e.totalLiabilityRp,
       }));
 
       const wb = XLSX.utils.book_new();
@@ -596,10 +600,10 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
             </div>
 
             <div className="pt-2 border-t border-border/60 flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Valuasi Rupiah Sisa Cuti:</span>
-              <span className="font-bold text-emerald-700 dark:text-emerald-400 font-mono">
-                Rp {grandTotal.totalLeaveValuationRp.toLocaleString('id-ID')}
-              </span>
+              <span className="text-muted-foreground">Kompensasi Sisa Cuti:</span>
+              <Badge variant="outline" className="text-[10px] font-bold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-slate-300 dark:border-slate-700">
+                Hangus (Rp 0 - Aturan Intern FRP)
+              </Badge>
             </div>
           </CardContent>
         </Card>
@@ -728,8 +732,11 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
             </div>
 
             <div className="pt-2 border-t border-border/60 flex items-center justify-between text-xs">
-              <span className="text-muted-foreground font-medium">Beban Finansial Perusahaan:</span>
-              <span className="font-black text-foreground font-mono">
+              <div>
+                <span className="text-muted-foreground font-medium">Beban Utang Kas Perusahaan:</span>
+                <p className="text-[10px] text-muted-foreground">*Murni lembur belum cair (sisa cuti hangus/Rp 0)</p>
+              </div>
+              <span className="font-black text-rose-600 dark:text-rose-400 font-mono text-sm">
                 Rp {grandTotal.totalLiabilityRp.toLocaleString('id-ID')}
               </span>
             </div>
@@ -882,7 +889,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                     <th className="p-2.5 text-center">Total Kuota</th>
                     <th className="p-2.5 text-center text-amber-600">Telah Diambil</th>
                     <th className="p-2.5 text-center bg-teal-500/5 text-teal-800 dark:text-teal-300 font-extrabold">Belum Diambil (Sisa)</th>
-                    <th className="p-2.5 text-right border-r border-border bg-teal-500/5 text-teal-800 dark:text-teal-300">Valuasi Sisa (Rp)</th>
+                    <th className="p-2.5 text-center border-r border-border bg-teal-500/5 text-teal-800 dark:text-teal-300">Kompensasi Sisa</th>
 
                     {/* Lembur Columns */}
                     <th className="p-2.5 text-center">Total Jam</th>
@@ -895,8 +902,8 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                     <th className="p-2.5 text-right text-rose-600 font-bold">Tertunda</th>
                     <th className="p-2.5 text-right border-r border-border bg-emerald-500/5 text-emerald-700 dark:text-emerald-400 font-black">3. Sisa Pagu</th>
 
-                    {/* Total Kewajiban */}
-                    <th className="p-2.5 text-right font-black">Beban Liabilitas</th>
+                    {/* Total Kewajiban Kas */}
+                    <th className="p-2.5 text-right font-black">Lembur Belum Cair (Beban Kas)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60 font-medium">
@@ -912,8 +919,10 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                       <td className="p-2.5 text-center">{d.totalLeaveQuota}h</td>
                       <td className="p-2.5 text-center font-bold text-amber-600">{d.totalLeaveUsed}h</td>
                       <td className="p-2.5 text-center font-black text-emerald-600 bg-teal-500/5">{d.totalLeaveRemaining}h</td>
-                      <td className="p-2.5 text-right font-mono font-semibold text-emerald-700 dark:text-emerald-300 border-r border-border bg-teal-500/5">
-                        Rp {d.totalLeaveValuationRp.toLocaleString('id-ID')}
+                      <td className="p-2.5 text-center text-muted-foreground border-r border-border bg-teal-500/5">
+                        <Badge variant="outline" className="text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700">
+                          Hangus (Rp 0)
+                        </Badge>
                       </td>
 
                       {/* Lembur */}
@@ -935,8 +944,8 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                         Rp {d.remainingBudgetRp.toLocaleString('id-ID')}
                       </td>
 
-                      {/* Total Liabilitas */}
-                      <td className="p-2.5 text-right font-mono font-black text-foreground">
+                      {/* Total Liabilitas Kas */}
+                      <td className="p-2.5 text-right font-mono font-black text-rose-600 dark:text-rose-400">
                         Rp {d.totalLiabilityRp.toLocaleString('id-ID')}
                       </td>
                     </tr>
@@ -951,8 +960,8 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                     <td className="p-3 text-center">{grandTotal.totalLeaveQuota} Hari</td>
                     <td className="p-3 text-center text-amber-600 font-extrabold">{grandTotal.totalLeaveUsed} Hari</td>
                     <td className="p-3 text-center text-emerald-600 bg-teal-500/10 font-black">{grandTotal.totalLeaveRemaining} Hari</td>
-                    <td className="p-3 text-right font-mono bg-teal-500/10 text-emerald-700 dark:text-emerald-300 font-black border-r border-border">
-                      Rp {grandTotal.totalLeaveValuationRp.toLocaleString('id-ID')}
+                    <td className="p-3 text-center bg-teal-500/10 border-r border-border">
+                      <span className="text-[11px] font-bold text-muted-foreground">Hangus (Rp 0)</span>
                     </td>
 
                     {/* Lembur Footer */}
@@ -975,7 +984,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                     </td>
 
                     {/* Total Beban */}
-                    <td className="p-3 text-right font-mono font-black text-amber-700 dark:text-amber-300 text-sm">
+                    <td className="p-3 text-right font-mono font-black text-rose-600 dark:text-rose-400 text-sm">
                       Rp {grandTotal.totalLiabilityRp.toLocaleString('id-ID')}
                     </td>
                   </tr>
@@ -1014,12 +1023,12 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                     <th className="p-3 text-center">Hak Cuti</th>
                     <th className="p-3 text-center text-amber-600">Telah Diambil</th>
                     <th className="p-3 text-center bg-teal-500/5 text-teal-800 dark:text-teal-300 font-extrabold">Belum Diambil</th>
-                    <th className="p-3 text-right bg-teal-500/5 text-teal-800 dark:text-teal-300">Valuasi Cuti</th>
+                    <th className="p-3 text-center bg-teal-500/5 text-teal-800 dark:text-teal-300">Kompensasi Sisa</th>
                     <th className="p-3 text-center">Total Lembur</th>
                     <th className="p-3 text-center text-blue-600">Telah Cair</th>
                     <th className="p-3 text-center bg-rose-500/5 text-rose-800 dark:text-rose-300 font-extrabold">Belum Cair</th>
                     <th className="p-3 text-right bg-rose-500/5 text-rose-800 dark:text-rose-300">Nominal Belum Cair</th>
-                    <th className="p-3 text-right font-black">Total Hak Tertunda</th>
+                    <th className="p-3 text-right font-black">Utang Kas Perusahaan</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60">
@@ -1050,8 +1059,10 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                         <td className="p-3 text-center font-black text-emerald-600 bg-teal-500/5">
                           {emp.leaveRemaining} Hari
                         </td>
-                        <td className="p-3 text-right font-mono font-semibold text-emerald-700 bg-teal-500/5">
-                          Rp {emp.leaveValuationRp.toLocaleString('id-ID')}
+                        <td className="p-3 text-center bg-teal-500/5">
+                          <Badge variant="outline" className="text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700">
+                            Hangus (Rp 0)
+                          </Badge>
                         </td>
                         <td className="p-3 text-center">{emp.totalOtHours}j</td>
                         <td className="p-3 text-center font-bold text-blue-600">{emp.paidOtHours}j</td>
@@ -1067,7 +1078,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                         <td className="p-3 text-right font-mono font-bold text-rose-600 bg-rose-500/5">
                           Rp {emp.unpaidOtPayRp.toLocaleString('id-ID')}
                         </td>
-                        <td className="p-3 text-right font-mono font-black text-foreground">
+                        <td className="p-3 text-right font-mono font-black text-rose-600 dark:text-rose-400">
                           Rp {emp.totalLiabilityRp.toLocaleString('id-ID')}
                         </td>
                       </tr>
@@ -1195,17 +1206,17 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
               <div>
                 <p className="text-[10px] text-slate-500 font-bold uppercase">Sisa Hak Cuti Karyawan</p>
                 <p className="text-sm font-black text-slate-800">{grandTotal.totalLeaveRemaining} Hari</p>
-                <p className="text-[10px] text-slate-500">Valuasi: Rp {grandTotal.totalLeaveValuationRp.toLocaleString('id-ID')}</p>
+                <p className="text-[10px] text-slate-500 font-medium">Kompensasi: Hangus (Rp 0 - Kebijakan FRP)</p>
               </div>
               <div>
                 <p className="text-[10px] text-slate-500 font-bold uppercase">Pagu Anggaran Lembur</p>
                 <p className="text-sm font-black text-slate-800">Rp {grandTotal.totalBudgetCap.toLocaleString('id-ID')}</p>
-                <p className="text-[10px] text-slate-500">Terpakai: Rp {grandTotal.usedBudgetRp.toLocaleString('id-ID')}</p>
+                <p className="text-[10px] text-slate-500">Telah Digunakan: Rp {grandTotal.usedBudgetRp.toLocaleString('id-ID')}</p>
               </div>
               <div>
                 <p className="text-[10px] text-slate-500 font-bold uppercase">Sisa Pagu Anggaran Lembur</p>
                 <p className="text-sm font-black text-emerald-700">Rp {grandTotal.remainingBudgetRp.toLocaleString('id-ID')}</p>
-                <p className="text-[10px] text-slate-500">Beban Tertunda: Rp {grandTotal.pendingBudgetRp.toLocaleString('id-ID')}</p>
+                <p className="text-[10px] text-rose-600 font-bold">Utang Kas Lembur: Rp {grandTotal.pendingBudgetRp.toLocaleString('id-ID')}</p>
               </div>
             </div>
 
@@ -1219,12 +1230,13 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                     <th className="border border-slate-300 p-1.5 text-center">Staf</th>
                     <th className="border border-slate-300 p-1.5 text-center">Cuti Diambil</th>
                     <th className="border border-slate-300 p-1.5 text-center">Sisa Cuti</th>
+                    <th className="border border-slate-300 p-1.5 text-center">Kompensasi</th>
                     <th className="border border-slate-300 p-1.5 text-center">Lembur Cair</th>
                     <th className="border border-slate-300 p-1.5 text-center">Lembur Belum Cair</th>
                     <th className="border border-slate-300 p-1.5 text-right">Pagu Tersedia</th>
                     <th className="border border-slate-300 p-1.5 text-right">Telah Digunakan</th>
                     <th className="border border-slate-300 p-1.5 text-right">Sisa Pagu</th>
-                    <th className="border border-slate-300 p-1.5 text-right">Total Kewajiban</th>
+                    <th className="border border-slate-300 p-1.5 text-right">Utang Kas Lembur</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1234,12 +1246,13 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                       <td className="border border-slate-300 p-1.5 text-center">{d.employeeCount}</td>
                       <td className="border border-slate-300 p-1.5 text-center">{d.totalLeaveUsed}h</td>
                       <td className="border border-slate-300 p-1.5 text-center font-bold">{d.totalLeaveRemaining}h</td>
+                      <td className="border border-slate-300 p-1.5 text-center text-slate-500 font-medium">Hangus (Rp 0)</td>
                       <td className="border border-slate-300 p-1.5 text-center">{d.paidOtHours}j</td>
                       <td className="border border-slate-300 p-1.5 text-center font-bold text-red-600">{d.unpaidOtHours}j</td>
                       <td className="border border-slate-300 p-1.5 text-right font-mono">Rp {d.allocatedBudgetRp.toLocaleString('id-ID')}</td>
                       <td className="border border-slate-300 p-1.5 text-right font-mono">Rp {d.usedBudgetRp.toLocaleString('id-ID')}</td>
                       <td className="border border-slate-300 p-1.5 text-right font-mono font-bold text-emerald-700">Rp {d.remainingBudgetRp.toLocaleString('id-ID')}</td>
-                      <td className="border border-slate-300 p-1.5 text-right font-mono font-black">Rp {d.totalLiabilityRp.toLocaleString('id-ID')}</td>
+                      <td className="border border-slate-300 p-1.5 text-right font-mono font-black text-rose-600">Rp {d.totalLiabilityRp.toLocaleString('id-ID')}</td>
                     </tr>
                   ))}
                   <tr className="bg-slate-100 font-bold border-t-2 border-slate-400">
@@ -1247,12 +1260,13 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                     <td className="border border-slate-300 p-1.5 text-center">{grandTotal.employees}</td>
                     <td className="border border-slate-300 p-1.5 text-center">{grandTotal.totalLeaveUsed}h</td>
                     <td className="border border-slate-300 p-1.5 text-center font-black">{grandTotal.totalLeaveRemaining}h</td>
+                    <td className="border border-slate-300 p-1.5 text-center text-slate-500 font-medium">Hangus (Rp 0)</td>
                     <td className="border border-slate-300 p-1.5 text-center">{grandTotal.paidOtHours}j</td>
                     <td className="border border-slate-300 p-1.5 text-center font-black text-red-600">{grandTotal.unpaidOtHours}j</td>
                     <td className="border border-slate-300 p-1.5 text-right font-mono font-black">Rp {grandTotal.totalBudgetCap.toLocaleString('id-ID')}</td>
                     <td className="border border-slate-300 p-1.5 text-right font-mono font-black">Rp {grandTotal.usedBudgetRp.toLocaleString('id-ID')}</td>
                     <td className="border border-slate-300 p-1.5 text-right font-mono font-black text-emerald-700">Rp {grandTotal.remainingBudgetRp.toLocaleString('id-ID')}</td>
-                    <td className="border border-slate-300 p-1.5 text-right font-mono font-black">Rp {grandTotal.totalLiabilityRp.toLocaleString('id-ID')}</td>
+                    <td className="border border-slate-300 p-1.5 text-right font-mono font-black text-rose-600">Rp {grandTotal.totalLiabilityRp.toLocaleString('id-ID')}</td>
                   </tr>
                 </tbody>
               </table>
