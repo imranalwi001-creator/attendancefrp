@@ -72,6 +72,9 @@ import {
   AlertCircle,
   FileSpreadsheet,
   FileCheck2,
+  Smartphone,
+  Lock,
+  BellRing,
 } from 'lucide-react';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1120,6 +1123,39 @@ export const HrmPayrollPage: React.FC = () => {
     return s;
   }, [slips, filterSlipPeriod, filterDivision, filterSlipStatus, slipSearch]);
 
+  const pendingRequests = useMemo(() => {
+    return slips.filter((s) => s.requestedByEmployee && !s.publishedToEmployee);
+  }, [slips]);
+
+  const handleTogglePublish = (slip: PayrollSlip) => {
+    const nextState = !slip.publishedToEmployee;
+    hrmService.togglePublishPayrollSlip(slip.id, nextState);
+    toast({
+      title: nextState ? 'Slip Diaktifkan di PWA' : 'Slip Dikunci dari PWA',
+      description: nextState
+        ? `Slip gaji ${slip.userName} (${slip.periodLabel}) sekarang DAPAT DILIHAT di PWA mobile karyawan.`
+        : `Slip gaji ${slip.userName} (${slip.periodLabel}) sekarang DITUTUP dari PWA mobile karyawan.`,
+    });
+    setSlips(hrmService.getPayrollSlips());
+  };
+
+  const handleBulkPublish = (published: boolean) => {
+    if (filterSlipPeriod === 'all') {
+      toast({
+        title: 'Pilih Periode',
+        description: 'Silakan pilih periode spesifik pada filter sebelum mengubah akses PWA secara massal.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    const count = hrmService.bulkTogglePublishPayrollSlips(filterSlipPeriod, published);
+    toast({
+      title: published ? 'Akses PWA Diaktifkan' : 'Akses PWA Dikunci',
+      description: `${count} slip gaji periode terpilih berhasil ${published ? 'diaktifkan ke' : 'dikunci dari'} PWA mobile karyawan.`,
+    });
+    setSlips(hrmService.getPayrollSlips());
+  };
+
   const filteredUsers = useMemo(() => {
     let u = allUsers;
     if (profileDivFilter !== 'all') {
@@ -1574,10 +1610,43 @@ export const HrmPayrollPage: React.FC = () => {
                 🔒 Kebijakan Penerbitan Slip Gaji On-Demand PT. Fawwaz Reski Perwira
               </p>
               <p className="text-blue-800/90 dark:text-blue-200/90 text-[11px] leading-relaxed">
-                Slip gaji resmi <strong>hanya diterbitkan oleh Admin apabila ada permintaan resmi dari karyawan</strong>. Perhitungan uang lembur dihitung berdasarkan <strong>rekapitulasi bulan mundur (N-1)</strong>, dan aplikasi PWA mobile tidak menampilkan nominal upah demi menjaga kerahasiaan &amp; ketertiban lingkungan kerja.
+                Slip gaji resmi <strong>hanya muncul di aplikasi PWA mobile karyawan jika diaktifkan oleh Superadmin atau diminta secara resmi oleh karyawan yang bersangkutan</strong>. Secara default seluruh slip berstatus terkunci dari PWA demi kerahasiaan &amp; ketertiban lingkungan kerja.
               </p>
             </div>
           </div>
+
+          {/* Pending Slip Requests Alert (Jika ada karyawan yang meminta) */}
+          {pendingRequests.length > 0 && (
+            <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+              <div className="flex items-start gap-3">
+                <div className="p-2 bg-amber-500/20 text-amber-700 rounded-xl mt-0.5 shrink-0">
+                  <BellRing className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-amber-900 dark:text-amber-200">
+                    Ada {pendingRequests.length} Permintaan Slip Gaji dari Karyawan
+                  </h4>
+                  <p className="text-xs text-amber-800/80 dark:text-amber-300/80 mt-0.5">
+                    Karyawan berikut mengajukan permohonan akses slip: {pendingRequests.slice(0, 3).map((r) => r.userName).join(', ')}{pendingRequests.length > 3 ? ` dan ${pendingRequests.length - 3} lainnya` : ''}.
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                className="bg-amber-600 hover:bg-amber-700 text-white text-xs rounded-xl shadow-xs shrink-0 gap-1.5"
+                onClick={() => {
+                  pendingRequests.forEach((r) => hrmService.togglePublishPayrollSlip(r.id, true));
+                  toast({
+                    title: 'Permintaan Disetujui',
+                    description: `${pendingRequests.length} slip gaji berhasil diaktifkan ke PWA karyawan.`,
+                  });
+                  setSlips(hrmService.getPayrollSlips());
+                }}
+              >
+                <CheckCircle2 size={14} /> Setujui &amp; Buka Semua Akses
+              </Button>
+            </div>
+          )}
 
           {/* Filters Bar */}
           <div className="flex flex-wrap gap-2.5 items-center bg-card p-3.5 rounded-2xl border border-border/80 shadow-xs">
@@ -1627,9 +1696,32 @@ export const HrmPayrollPage: React.FC = () => {
                 <SelectItem value="paid">Lunas</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" className="rounded-xl gap-1.5 text-xs h-9" onClick={handleExportCsv}>
-              <Download size={13} /> Export CSV
-            </Button>
+
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-xl gap-1 text-xs h-9 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                onClick={() => handleBulkPublish(true)}
+                title="Buka akses agar semua karyawan di periode ini dapat melihat slip di PWA"
+              >
+                <Smartphone size={13} />
+                <span className="hidden md:inline">Buka Akses PWA</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-xl gap-1 text-xs h-9 border-slate-300 text-slate-700 hover:bg-slate-50"
+                onClick={() => handleBulkPublish(false)}
+                title="Kunci kembali slip agar tidak tampil di PWA karyawan"
+              >
+                <Lock size={13} />
+                <span className="hidden md:inline">Kunci PWA</span>
+              </Button>
+              <Button variant="outline" className="rounded-xl gap-1.5 text-xs h-9" onClick={handleExportCsv}>
+                <Download size={13} /> Export CSV
+              </Button>
+            </div>
           </div>
 
           {/* Result Info */}
@@ -1672,6 +1764,7 @@ export const HrmPayrollPage: React.FC = () => {
                         Gaji Netto
                       </TableHead>
                       <TableHead className="text-xs font-bold text-foreground">Status</TableHead>
+                      <TableHead className="text-xs font-bold text-foreground text-center">Akses PWA Karyawan</TableHead>
                       <TableHead className="text-xs font-bold text-foreground text-center">Aksi</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1700,6 +1793,56 @@ export const HrmPayrollPage: React.FC = () => {
                           {fmtRp(slip.netSalary)}
                         </TableCell>
                         <TableCell>{slipStatusBadge(slip.status)}</TableCell>
+                        <TableCell className="text-center">
+                          {slip.publishedToEmployee ? (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 text-[10px] gap-1 px-2 py-0.5">
+                                <Smartphone size={10} /> Aktif di PWA
+                              </Badge>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-6 w-6 text-muted-foreground hover:text-red-600 rounded-lg"
+                                title="Kunci / Sembunyikan dari PWA"
+                                onClick={() => handleTogglePublish(slip)}
+                              >
+                                <Lock size={12} />
+                              </Button>
+                            </div>
+                          ) : slip.requestedByEmployee ? (
+                            <div className="flex flex-col items-center gap-1">
+                              <Badge
+                                className="bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 text-[10px] gap-1 px-2 py-0.5"
+                                title={slip.requestReason || 'Diminta karyawan'}
+                              >
+                                <BellRing size={10} className="animate-pulse" /> Diminta Karyawan
+                              </Badge>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-6 text-[10px] rounded-lg px-2 text-amber-700 border-amber-300 hover:bg-amber-50"
+                                onClick={() => handleTogglePublish(slip)}
+                              >
+                                Setujui &amp; Buka
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <Badge variant="outline" className="text-muted-foreground text-[10px] gap-1 px-2 py-0.5">
+                                <Lock size={10} /> Terkunci
+                              </Badge>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 text-[10px] rounded-lg px-2 text-primary hover:bg-primary/10"
+                                title="Aktifkan agar muncul di PWA karyawan"
+                                onClick={() => handleTogglePublish(slip)}
+                              >
+                                Aktifkan
+                              </Button>
+                            </div>
+                          )}
+                        </TableCell>
                         <TableCell className="text-center">
                           <Button
                             size="sm"

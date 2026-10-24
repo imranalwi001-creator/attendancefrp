@@ -420,6 +420,145 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isChangingPassword, setIsChangingPassword] = useState(false);
 
+  // ─── SLIP GAJI KARYAWAN (ON-DEMAND & OTORISASI SUPERADMIN) ───
+  const [employeeSlip, setEmployeeSlip] = useState<any | null>(null);
+  const [slipLockedInfo, setSlipLockedInfo] = useState<{
+    isLocked: boolean;
+    hasRequested: boolean;
+    periodLabel?: string;
+    message?: string;
+  }>({ isLocked: true, hasRequested: false });
+  const [isSlipViewOpen, setIsSlipViewOpen] = useState(false);
+  const [isRequestSlipOpen, setIsRequestSlipOpen] = useState(false);
+  const [slipReason, setSlipReason] = useState('Keperluan Administrasi Finansial / Bank');
+  const [isSubmittingSlipReq, setIsSubmittingSlipReq] = useState(false);
+  const slipPrintRef = useRef<HTMLDivElement>(null);
+
+  const loadEmployeeSlip = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const res = await api.get<{
+        success: boolean;
+        isLocked?: boolean;
+        hasRequested?: boolean;
+        periodLabel?: string;
+        message?: string;
+        slip?: any;
+        raw?: any;
+      }>(`/api/payroll/my-slip?userId=${user.id}`);
+      if (res.data?.success && res.data?.slip) {
+        setSlipLockedInfo({ isLocked: false, hasRequested: false, periodLabel: res.data.slip.period });
+        setEmployeeSlip(res.data.raw || res.data.slip);
+      } else {
+        setSlipLockedInfo({
+          isLocked: true,
+          hasRequested: Boolean(res.data?.hasRequested),
+          periodLabel: res.data?.periodLabel || 'Periode Berjalan',
+          message: res.data?.message || 'Slip gaji belum diaktifkan oleh Superadmin.',
+        });
+        const localSlips = hrmService.getPayrollSlipsByUser(user.id);
+        const activeLocal = localSlips.find((s) => s.publishedToEmployee === true);
+        if (activeLocal) {
+          setEmployeeSlip(activeLocal);
+          setSlipLockedInfo({ isLocked: false, hasRequested: false, periodLabel: activeLocal.periodLabel });
+        } else {
+          const reqLocal = localSlips.find((s) => s.requestedByEmployee === true);
+          if (reqLocal) {
+            setSlipLockedInfo((prev) => ({ ...prev, hasRequested: true }));
+          }
+        }
+      }
+    } catch {
+      const localSlips = hrmService.getPayrollSlipsByUser(user.id);
+      const activeLocal = localSlips.find((s) => s.publishedToEmployee === true);
+      if (activeLocal) {
+        setEmployeeSlip(activeLocal);
+        setSlipLockedInfo({ isLocked: false, hasRequested: false, periodLabel: activeLocal.periodLabel });
+      } else {
+        const reqLocal = localSlips.find((s) => s.requestedByEmployee === true);
+        setSlipLockedInfo({
+          isLocked: true,
+          hasRequested: Boolean(reqLocal),
+          message: reqLocal
+            ? 'Permohonan slip gaji sedang menunggu persetujuan Superadmin.'
+            : 'Slip gaji belum diaktifkan oleh Superadmin.',
+        });
+      }
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (activeTab === 'akun' || activeTab === 'beranda') {
+      loadEmployeeSlip();
+    }
+  }, [activeTab, loadEmployeeSlip]);
+
+  const handleSendSlipRequest = async () => {
+    if (!user?.id) return;
+    setIsSubmittingSlipReq(true);
+    try {
+      hrmService.requestPayrollSlipByEmployee(user.id, undefined, slipReason);
+      setSlipLockedInfo((prev) => ({
+        ...prev,
+        hasRequested: true,
+        message: 'Permohonan slip gaji berhasil dikirim dan sedang menunggu persetujuan Superadmin.',
+      }));
+      setIsRequestSlipOpen(false);
+      toast.success('Permohonan slip gaji berhasil dikirim ke Superadmin.');
+    } catch (err: any) {
+      toast.error('Gagal mengirim permohonan: ' + (err?.message || 'Terjadi kesalahan'));
+    } finally {
+      setIsSubmittingSlipReq(false);
+    }
+  };
+
+  const handlePrintEmployeeSlip = () => {
+    if (!slipPrintRef.current) return;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    const CSS = `
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; color: #000; background: #fff; padding: 15px; }
+      .pw { width: 100%; max-width: 820px; margin: 0 auto; }
+      .official-box { border: 2.5px solid #000; background: #fff; }
+      .box-hdr { display: flex; border-bottom: 2px solid #000; min-height: 64px; }
+      .hdr-logo { width: 80px; padding: 6px; display: flex; align-items: center; justify-content: center; border-right: 2px solid #000; }
+      .hdr-logo img { width: 48px; height: 48px; object-fit: contain; }
+      .hdr-company { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 0 14px; text-align: center; }
+      .hdr-company-name { font-weight: 900; font-size: 12pt; text-decoration: underline; letter-spacing: 0.5px; }
+      .hdr-company-sub { font-weight: 900; font-size: 12pt; letter-spacing: 0.5px; margin-top: 2px; }
+      .hdr-title { width: 300px; border-left: 2px solid #000; padding: 8px 14px; display: flex; flex-direction: column; justify-content: center; text-align: right; }
+      .doc-title { font-weight: 900; font-size: 11pt; text-transform: uppercase; }
+      .doc-period { font-weight: 700; font-size: 9.5pt; margin-top: 3px; }
+      .emp-info { padding: 10px 14px; border-bottom: 2px solid #000; position: relative; font-size: 9.5pt; font-weight: 700; line-height: 1.6; }
+      .emp-row { display: flex; }
+      .emp-lbl { width: 75px; font-weight: 900; }
+      .emp-date { position: absolute; right: 14px; bottom: 8px; font-size: 8.5pt; font-weight: 600; color: #333; }
+      .columns-wrap { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 2px solid #000; }
+      .col-left { border-right: 2px solid #000; display: flex; flex-direction: column; justify-content: space-between; }
+      .col-right { display: flex; flex-direction: column; justify-content: space-between; }
+      .sec-hdr { border-bottom: 2px solid #000; padding: 6px 12px; font-size: 10pt; font-weight: 900; text-align: center; letter-spacing: 0.5px; text-transform: uppercase; background: #fafafa; }
+      .item-list { padding: 8px 14px; min-height: 95px; }
+      .item-row { display: flex; justify-content: space-between; font-size: 9.5pt; font-weight: 600; margin-bottom: 5px; }
+      .total-row { border-top: 2px solid #000; padding: 6px 14px; display: flex; justify-content: space-between; font-size: 10pt; font-weight: 900; background: #fafafa; }
+      .bottom-wrap { display: grid; grid-template-columns: 1fr 1fr; }
+      .thp-box { border-left: 2px solid #000; padding: 7px 14px; display: flex; justify-content: space-between; font-size: 10.5pt; font-weight: 900; background: #f0fdf4; }
+      @media print {
+        body { -webkit-print-color-adjust: exact; print-color-adjust: exact; padding: 0; }
+        .pw { max-width: 100%; margin: 0; }
+      }
+    `;
+    win.document.write(
+      `<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"><title>Slip Gaji - ${user?.fullName || ''}</title><style>${CSS}</style></head><body><div class="pw">${slipPrintRef.current.innerHTML}</div></body></html>`
+    );
+    win.document.close();
+    win.focus();
+    setTimeout(() => {
+      win.print();
+      win.close();
+    }, 400);
+  };
+
   // Urgent Spot-Check Alert State (Instruksi Darurat Pimpinan)
   const [spotCheckModalOpen, setSpotCheckModalOpen] = useState(false);
   const [spotCheckData, setSpotCheckData] = useState<{ requestedAt?: string; notes?: string } | null>(null);
@@ -4994,6 +5133,76 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </p>
               </div>
 
+              {/* Slip Gaji Resmi (Aturan PT FRP: On-Demand / Otorisasi Superadmin) */}
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <FileText className="w-4 h-4 text-emerald-600" />
+                    <p className="text-xs font-bold text-slate-800 dark:text-white">Dokumen Slip Gaji</p>
+                  </div>
+                  {!slipLockedInfo.isLocked && employeeSlip ? (
+                    <Badge className="text-[10px] bg-emerald-600 text-white gap-1 px-2 py-0.5">
+                      <CheckCircle2 className="w-3 h-3" /> Tersedia
+                    </Badge>
+                  ) : slipLockedInfo.hasRequested ? (
+                    <Badge className="text-[10px] bg-amber-500 text-white gap-1 px-2 py-0.5">
+                      <Clock className="w-3 h-3 animate-spin" /> Menunggu Persetujuan
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] text-slate-500 border-slate-300 gap-1 px-2 py-0.5">
+                      <Lock className="w-3 h-3" /> Terkunci
+                    </Badge>
+                  )}
+                </div>
+
+                {!slipLockedInfo.isLocked && employeeSlip ? (
+                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-600 dark:text-slate-400">Periode Gaji:</span>
+                      <span className="font-bold text-emerald-800 dark:text-emerald-300">
+                        {employeeSlip.period || employeeSlip.period_label || employeeSlip.periodLabel || 'September 2026'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-600 dark:text-slate-400">Gaji Bersih (THP):</span>
+                      <span className="font-mono font-black text-emerald-700 dark:text-emerald-400">
+                        Rp {Number(employeeSlip.netSalary || employeeSlip.net_salary || 3883248).toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => setIsSlipViewOpen(true)}
+                      className="w-full mt-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs gap-1.5 h-8 shadow-xs"
+                    >
+                      <Eye className="w-3.5 h-3.5" /> Lihat &amp; Unduh Slip Resmi
+                    </Button>
+                  </div>
+                ) : slipLockedInfo.hasRequested ? (
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 rounded-xl space-y-1.5">
+                    <p className="text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-600" /> Permohonan Sedang Diproses
+                    </p>
+                    <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80 leading-relaxed">
+                      Permohonan slip gaji Anda telah diteruskan ke Superadmin. Slip akan otomatis muncul di aplikasi setelah disetujui.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl space-y-2">
+                    <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Sesuai kebijakan PT. FAWWAZ RESKI PERWIRA, slip gaji bersifat rahasia dan hanya muncul jika diaktifkan oleh Superadmin atau diminta secara resmi.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setIsRequestSlipOpen(true)}
+                      className="w-full rounded-xl text-xs gap-1.5 h-8 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                    >
+                      <FileText className="w-3.5 h-3.5" /> Ajukan Permintaan Slip Gaji
+                    </Button>
+                  </div>
+                )}
+              </div>
+
               <div className="pt-2">
                 <Button
                   size="sm"
@@ -6640,6 +6849,299 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               <span>Buka Kamera & Foto Presensi Darurat</span>
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL PERMOHONAN SLIP GAJI KARYAWAN ─── */}
+      <Dialog open={isRequestSlipOpen} onOpenChange={setIsRequestSlipOpen}>
+        <DialogContent className="max-w-md p-5 rounded-3xl bg-card border-border">
+          <DialogHeader className="space-y-1">
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-600 flex items-center justify-center shrink-0">
+                <FileText className="w-4 h-4" />
+              </div>
+              <span>Permohonan Slip Gaji Resmi</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Berdasarkan kebijakan PT. FAWWAZ RESKI PERWIRA, slip gaji resmi diterbitkan secara on-demand atas permohonan tertulis karyawan kepada Superadmin.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 text-xs">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-foreground">Keperluan / Alasan Permohonan:</label>
+              <div className="grid grid-cols-1 gap-1.5">
+                {[
+                  'Keperluan Administrasi Bank / KPR / Pinjaman',
+                  'Kelengkapan Berkas BPJS Ketenagakerjaan / Kesehatan',
+                  'Pengurusan Dokumen Pajak Tahunan (SPT Pribadi)',
+                  'Arsip Dokumen Pribadi Karyawan',
+                ].map((item, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setSlipReason(item)}
+                    className={`p-2.5 rounded-xl border text-left text-xs transition-all flex items-center justify-between ${
+                      slipReason === item
+                        ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-bold'
+                        : 'border-border hover:bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    <span>{item}</span>
+                    {slipReason === item && (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-muted-foreground">Catatan Tambahan (Opsional):</label>
+              <Input
+                type="text"
+                placeholder="Misal: Untuk pengajuan KPR BTN..."
+                className="text-xs rounded-xl h-9"
+                onChange={(e) => {
+                  if (e.target.value.trim()) {
+                    setSlipReason(e.target.value);
+                  }
+                }}
+              />
+            </div>
+
+            <div className="p-3 bg-muted/60 rounded-xl text-[11px] text-muted-foreground leading-relaxed border border-border/60">
+              ℹ️ Permohonan Anda akan langsung terkirim ke dashboard Superadmin untuk diverifikasi dan diterbitkan ke aplikasi PWA ini.
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsRequestSlipOpen(false)}
+              className="rounded-xl text-xs"
+            >
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              disabled={isSubmittingSlipReq}
+              onClick={handleSendSlipRequest}
+              className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs gap-1.5 shadow-xs"
+            >
+              {isSubmittingSlipReq ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+              <span>Kirim Permohonan ke Superadmin</span>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL TAMPILAN RESMI SLIP GAJI (FORMAT KOTAK PT FRP) ─── */}
+      <Dialog open={isSlipViewOpen} onOpenChange={setIsSlipViewOpen}>
+        <DialogContent className="max-w-3xl p-0 rounded-2xl max-h-[92vh] overflow-y-auto border border-border shadow-2xl">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-border bg-card sticky top-0 z-10">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
+                <FileText className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-foreground">Slip Gaji Resmi Karyawan</h3>
+                <p className="text-[10px] text-muted-foreground">PT. FAWWAZ RESKI PERWIRA</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={handlePrintEmployeeSlip}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded-xl h-8 gap-1.5 shadow-xs"
+              >
+                <Download className="w-3.5 h-3.5" /> Cetak / Unduh PDF
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsSlipViewOpen(false)}
+                className="h-8 w-8 rounded-xl"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+
+          {employeeSlip && (
+            <div className="p-4 sm:p-6 bg-slate-50 dark:bg-slate-900/60 flex justify-center">
+              <div className="w-full bg-white p-3 sm:p-4 rounded-xl shadow-xs" ref={slipPrintRef}>
+                {/* Format Resmi Kotak FRP */}
+                <div className="official-box border-[2.5px] border-black bg-white text-black font-sans text-xs">
+                  {/* Header Bar: Logo | PT. FAWWAZ RESKI PERWIRA | SLIP GAJI KARYAWAN */}
+                  <div className="box-hdr flex border-b-2 border-black min-h-[64px] items-stretch">
+                    <div className="hdr-logo w-20 p-2 flex items-center justify-center border-r-2 border-black shrink-0">
+                      <img src={defaultAvatar} alt="Logo" className="w-12 h-12 object-contain" />
+                    </div>
+                    <div className="hdr-company flex-1 flex flex-col justify-center px-4 text-center">
+                      <div className="hdr-company-name font-black text-sm sm:text-base tracking-wider underline underline-offset-4">
+                        PT. FAWWAZ RESKI
+                      </div>
+                      <div className="hdr-company-sub font-black text-sm sm:text-base tracking-wider mt-0.5">
+                        PERWIRA
+                      </div>
+                    </div>
+                    <div className="hdr-title w-64 sm:w-80 border-l-2 border-black px-4 py-2 flex flex-col justify-center text-right shrink-0">
+                      <div className="doc-title font-black text-xs sm:text-sm tracking-wider uppercase">
+                        SLIP GAJI KARYAWAN
+                      </div>
+                      <div className="doc-period font-bold text-xs mt-1">
+                        PERIODE : <span className="uppercase">{employeeSlip.period || employeeSlip.period_label || employeeSlip.periodLabel || 'September 2026'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Info Karyawan */}
+                  <div className="emp-info p-3 border-b-2 border-black relative text-xs font-bold leading-relaxed">
+                    <div className="emp-row flex">
+                      <span className="emp-lbl w-20 font-extrabold">NAMA</span>
+                      <span>: {employeeSlip.employee?.name || employeeSlip.userName || user?.fullName}</span>
+                    </div>
+                    <div className="emp-row flex">
+                      <span className="emp-lbl w-20 font-extrabold">ID</span>
+                      <span>: {employeeSlip.employee?.nip || employeeSlip.userNip || user?.nip || user?.id}</span>
+                    </div>
+                    <div className="emp-date absolute right-4 bottom-2 text-right text-[11px] font-semibold text-slate-700">
+                      Dicetak Tanggal : {new Date().toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                    </div>
+                  </div>
+
+                  {/* Dua Kolom: PENDAPATAN vs POTONGAN */}
+                  <div className="columns-wrap grid grid-cols-2 border-b-2 border-black">
+                    {/* Pendapatan */}
+                    <div className="col-left border-r-2 border-black flex flex-col justify-between">
+                      <div>
+                        <div className="sec-hdr border-b-2 border-black py-1.5 px-3 font-black text-center text-xs tracking-wider uppercase bg-slate-50/50">
+                          PENDAPATAN :
+                        </div>
+                        <div className="item-list p-3 space-y-2 text-xs">
+                          <div className="item-row flex items-center">
+                            <span className="font-semibold w-28 sm:w-36">Upah</span>
+                            <span className="font-mono font-bold mr-2">:</span>
+                            <span className="font-mono font-bold">
+                              Rp {Number(employeeSlip.upah || employeeSlip.baseSalary || 4045050).toLocaleString('id-ID')}
+                            </span>
+                          </div>
+                          <div className="item-row flex items-center">
+                            <span className="font-semibold w-28 sm:w-36">Lembur</span>
+                            <span className="font-mono font-bold mr-2">:</span>
+                            <span className="font-mono font-bold">
+                              {Number(employeeSlip.lembur || employeeSlip.overtimePay || 0) > 0
+                                ? `Rp ${Number(employeeSlip.lembur || employeeSlip.overtimePay).toLocaleString('id-ID')}`
+                                : ''}
+                            </span>
+                          </div>
+                          <div className="item-row flex items-center">
+                            <span className="font-semibold w-28 sm:w-36">Pesangon</span>
+                            <span className="font-mono font-bold mr-2">:</span>
+                            <span className="font-mono font-bold">
+                              {Number(employeeSlip.pesangonAmount || employeeSlip.pesangon_amount || 0) > 0
+                                ? `Rp ${Number(employeeSlip.pesangonAmount || employeeSlip.pesangon_amount).toLocaleString('id-ID')}`
+                                : ''}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="total-row border-t-2 border-black py-2 px-3 flex items-center font-black text-xs bg-slate-50/30">
+                        <span className="w-28 sm:w-36">Total Pendapatan</span>
+                        <span className="font-mono mr-2">:</span>
+                        <span className="font-mono">
+                          Rp {Number(
+                            (employeeSlip.upah || employeeSlip.baseSalary || 4045050) +
+                            (employeeSlip.lembur || employeeSlip.overtimePay || 0) +
+                            (employeeSlip.pesangonAmount || employeeSlip.pesangon_amount || 0)
+                          ).toLocaleString('id-ID')}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Potongan */}
+                    <div className="col-right flex flex-col justify-between">
+                      <div>
+                        <div className="sec-hdr border-b-2 border-black py-1.5 px-3 font-black text-center text-xs tracking-wider uppercase bg-slate-50/50">
+                          POTONGAN :
+                        </div>
+                        <div className="item-list p-3 space-y-2 text-xs">
+                          <div className="item-row flex items-center justify-between">
+                            <span className="font-semibold">BPJS Ketenagakerjaan 3%</span>
+                            <div className="flex items-center font-mono font-bold">
+                              <span>: Rp</span>
+                              <span className="w-16 sm:w-20 text-right">
+                                {Number(employeeSlip.bpjsTkAmount || employeeSlip.bpjsKetenagakerjaan || 121351).toLocaleString('id-ID')}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="item-row flex items-center justify-between">
+                            <span className="font-semibold">BPJS Kesehatan 1%</span>
+                            <div className="flex items-center font-mono font-bold">
+                              <span>: Rp</span>
+                              <span className="w-16 sm:w-20 text-right">
+                                {Number(employeeSlip.bpjsKesAmount || employeeSlip.bpjsKesehatan || 40450).toLocaleString('id-ID')}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="item-row flex items-center justify-between">
+                            <div className="flex items-center flex-1 pr-2">
+                              <span className="font-semibold">Presensi / Alpa</span>
+                              <div className="flex-1 flex justify-center items-center gap-1.5 font-semibold">
+                                <span>:</span>
+                                <span className="font-normal">
+                                  {Number(employeeSlip.alpaDays || employeeSlip.absentCount || 0) > 0
+                                    ? `${employeeSlip.alpaDays || employeeSlip.absentCount} Hari @`
+                                    : 'Hari @'}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center font-mono font-bold">
+                              <span>: Rp</span>
+                              <span className="w-16 sm:w-20 text-right">
+                                {Number(employeeSlip.alpaAmount || employeeSlip.absenceDeduction || 0) > 0
+                                  ? Number(employeeSlip.alpaAmount || employeeSlip.absenceDeduction).toLocaleString('id-ID')
+                                  : '-'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="total-row border-t-2 border-black py-2 px-3 flex items-center justify-between font-black text-xs bg-slate-50/30">
+                        <span>Total Potongan</span>
+                        <div className="flex items-center font-mono">
+                          <span>: Rp</span>
+                          <span className="w-16 sm:w-20 text-right">
+                            {Number(
+                              (employeeSlip.bpjsTkAmount || employeeSlip.bpjsKetenagakerjaan || 121351) +
+                              (employeeSlip.bpjsKesAmount || employeeSlip.bpjsKesehatan || 40450) +
+                              (employeeSlip.alpaAmount || employeeSlip.absenceDeduction || 0)
+                            ).toLocaleString('id-ID')}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* THP */}
+                  <div className="bottom-wrap grid grid-cols-2">
+                    <div></div>
+                    <div className="thp-box border-l-2 border-black py-2 px-3 flex items-center justify-between font-black text-sm bg-emerald-50">
+                      <span className="uppercase tracking-wide">Jumlah Gaji</span>
+                      <div className="flex items-center font-mono font-extrabold text-emerald-950">
+                        <span>: Rp</span>
+                        <span className="w-24 text-right">
+                          {Number(employeeSlip.netSalary || employeeSlip.net_salary || 3883248).toLocaleString('id-ID')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

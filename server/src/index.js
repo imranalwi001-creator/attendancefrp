@@ -4262,59 +4262,31 @@ app.get('/api/payroll/my-slip', async (req, res) => {
 
     if (result.rows.length > 0) {
       row = result.rows[0];
-    } else {
-      // Fallback query directly from profile
-      const profRes = await pool.query(`
-        SELECT p.*, r.name as role_name, d.name as division_name,
-               COALESCE(sp.employee_sequence_no, p.employee_sequence_no, 0) as employee_sequence_no,
-               COALESCE(sp.severance_scheme, 'tabungan') as severance_scheme,
-               COALESCE(sp.saved_severance_balance, 0) as saved_severance_balance,
-               COALESCE(sp.hourly_overtime_rate, 24173.06) as hourly_overtime_rate,
-               COALESCE(sp.base_salary, 4045050) as base_salary,
-               COALESCE(sp.bank_name, 'Bank Central Asia (BCA)') as bank_name,
-               COALESCE(sp.bank_account_number, '-') as bank_account_number
-        FROM hrm_profiles p
-        LEFT JOIN hrm_roles r ON p.role_id = r.id
-        LEFT JOIN hrm_divisions d ON p.division_id = d.id
-        LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
-        WHERE p.id::text = $1 OR LOWER(p.email) = LOWER($1) OR p.nip = $1
-        LIMIT 1
-      `, [userId]);
-
-      if (profRes.rows.length === 0) {
-        return res.status(404).json({ success: false, message: 'Belum ada dokumen slip gaji untuk karyawan ini.' });
+      // Kebijakan PT. FAWWAZ RESKI PERWIRA:
+      // Slip gaji HANYA muncul di PWA karyawan jika diaktifkan disisi Superadmin (published_to_employee = true)
+      // atau jika karyawan yang bersangkutan memintanya (requested_by_employee = true) dan telah disetujui.
+      if (!row.published_to_employee) {
+        return res.json({
+          success: false,
+          isLocked: true,
+          hasRequested: Boolean(row.requested_by_employee),
+          requestStatus: row.request_status || 'none',
+          requestReason: row.request_reason || null,
+          requestedAt: row.requested_at || null,
+          periodLabel: row.period_label,
+          slipId: row.id,
+          message: row.requested_by_employee
+            ? 'Permintaan slip gaji Anda telah diajukan dan sedang menunggu persetujuan Superadmin.'
+            : 'Slip gaji periode ini belum diaktifkan oleh Superadmin atau belum diajukan permohonan.'
+        });
       }
-
-      const prof = profRes.rows[0];
-      row = {
-        id: `SLIP-2026-09-${prof.nip || 'EMP008'}`,
-        user_id: prof.id,
-        employee_name: prof.full_name,
-        employee_nip: prof.nip,
-        employee_sequence_no: prof.employee_sequence_no,
-        severance_scheme: prof.severance_scheme,
-        placement_location: prof.placement_location,
-        division_name: prof.division_name,
-        role_name: prof.role_name,
-        bank_name: prof.bank_name,
-        bank_account_number: prof.bank_account_number,
-        period_label: 'September 2026',
-        printed_date: new Date().toISOString(),
-        status: 'paid',
-        base_salary: prof.base_salary || '4045050',
-        total_overtime_pay: '0',
-        pesangon_label: 'Pesangon September',
-        pesangon_amount: '0',
-        gross_income: String(prof.base_salary || '4045050'),
-        bpjs_ketenagakerjaan_deduction: '121351',
-        bpjs_kesehatan_deduction: '40450',
-        alpa_days: 0,
-        alpa_rate: '155000',
-        absence_deduction: '0',
-        total_deductions: '161802',
-        net_salary: '3883248',
-        notes: 'Slip gaji resmi PT. FAWWAZ RESKI PERWIRA',
-      };
+    } else {
+      return res.json({
+        success: false,
+        isLocked: true,
+        hasRequested: false,
+        message: 'Belum ada dokumen slip gaji resmi untuk akun Anda.'
+      });
     }
 
     // Dynamic month calculation
@@ -4436,6 +4408,76 @@ app.put('/api/payroll/slips/:id/status', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Slip gaji tidak ditemukan' });
     }
     res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Kontrol Akses PWA Karyawan (Aturan PT FRP) ─────────────────────────
+app.put('/api/payroll/slips/:id/publish', async (req, res) => {
+  const { id } = req.params;
+  const { published } = req.body;
+  try {
+    const isPub = Boolean(published);
+    const result = await pool.query(
+      `UPDATE hrm_payroll_slips 
+       SET published_to_employee = $1, 
+           request_status = CASE WHEN $1 = true AND requested_by_employee = true THEN 'approved' ELSE request_status END,
+           updated_at = NOW() 
+       WHERE id = $2 RETURNING *`,
+      [isPub, id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Slip gaji tidak ditemukan' });
+    }
+    res.json({ success: true, data: result.rows[0], message: isPub ? 'Slip gaji diaktifkan di PWA' : 'Slip gaji dikunci dari PWA' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/payroll/slips/bulk-publish', async (req, res) => {
+  const { periodId, published } = req.body;
+  try {
+    const isPub = Boolean(published);
+    const result = await pool.query(
+      `UPDATE hrm_payroll_slips 
+       SET published_to_employee = $1, 
+           request_status = CASE WHEN $1 = true AND requested_by_employee = true THEN 'approved' ELSE request_status END,
+           updated_at = NOW() 
+       WHERE period_id = $2 RETURNING id`,
+      [isPub, periodId]
+    );
+    res.json({ success: true, count: result.rowCount, message: `${result.rowCount} slip berhasil ${isPub ? 'diaktifkan ke' : 'dikunci dari'} PWA` });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/payroll/request-slip', async (req, res) => {
+  const { userId, periodId, reason } = req.body;
+  try {
+    let query = `
+      UPDATE hrm_payroll_slips 
+      SET requested_by_employee = true,
+          request_reason = $1,
+          requested_at = NOW(),
+          request_status = 'pending',
+          updated_at = NOW()
+      WHERE (user_id::text = $2 OR user_id IN (SELECT id FROM hrm_profiles WHERE id::text = $2 OR nip = $2 OR LOWER(email) = LOWER($2)))
+    `;
+    const params = [reason || 'Permohonan slip gaji karyawan', userId];
+    if (periodId) {
+      params.push(periodId);
+      query += ` AND period_id = $3`;
+    }
+    query += ` RETURNING *`;
+    const result = await pool.query(query, params);
+    res.json({
+      success: true,
+      data: result.rows[0] || null,
+      message: 'Permintaan slip gaji berhasil dikirim ke Superadmin'
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

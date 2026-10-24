@@ -787,6 +787,13 @@ export interface PayrollSlip {
   paidAt?: string;
   notes?: string;
   createdAt: string;
+
+  // Kontrol Akses PWA Karyawan (Kebijakan PT FRP: On-Demand / Otorisasi Superadmin)
+  publishedToEmployee?: boolean;
+  requestedByEmployee?: boolean;
+  requestReason?: string;
+  requestedAt?: string;
+  requestStatus?: 'none' | 'pending' | 'approved' | 'rejected';
 }
 
 export type HolidayOvertimeMode = 'depnaker_tier' | 'multiplier' | 'fixed_nominal';

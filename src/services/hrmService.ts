@@ -5706,6 +5706,10 @@ export const hrmService = {
       overtimeRecordIds,
       status: 'draft',
       createdAt: new Date().toISOString(),
+      // Aturan PT FRP: Default slip TIDAK muncul di PWA kecuali diaktifkan superadmin atau diminta karyawan
+      publishedToEmployee: false,
+      requestedByEmployee: false,
+      requestStatus: 'none',
     };
     return slip;
   },
@@ -5782,6 +5786,65 @@ export const hrmService = {
     };
     localStorage.setItem(STORAGE_KEYS.PAYROLL_SLIPS, JSON.stringify(slips));
     return slips[idx];
+  },
+
+  // ─── Kontrol Akses PWA Karyawan (Aturan PT FRP) ─────────────────────────
+  togglePublishPayrollSlip: (slipId: string, published: boolean): PayrollSlip => {
+    const slips = hrmService.getPayrollSlips();
+    const idx = slips.findIndex((s) => s.id === slipId);
+    if (idx === -1) throw new Error('Slip tidak ditemukan');
+    slips[idx] = {
+      ...slips[idx],
+      publishedToEmployee: published,
+      requestStatus: published && slips[idx].requestedByEmployee ? 'approved' : slips[idx].requestStatus,
+    };
+    localStorage.setItem(STORAGE_KEYS.PAYROLL_SLIPS, JSON.stringify(slips));
+    api.put(`/api/payroll/slips/${slipId}/publish`, { published }).catch(() => {});
+    return slips[idx];
+  },
+
+  bulkTogglePublishPayrollSlips: (periodId: string, published: boolean): number => {
+    const slips = hrmService.getPayrollSlips();
+    let count = 0;
+    const updated = slips.map((s) => {
+      if (s.periodId === periodId) {
+        count++;
+        return {
+          ...s,
+          publishedToEmployee: published,
+          requestStatus: published && s.requestedByEmployee ? ('approved' as const) : s.requestStatus,
+        };
+      }
+      return s;
+    });
+    localStorage.setItem(STORAGE_KEYS.PAYROLL_SLIPS, JSON.stringify(updated));
+    api.post('/api/payroll/slips/bulk-publish', { periodId, published }).catch(() => {});
+    return count;
+  },
+
+  requestPayrollSlipByEmployee: (userId: string, periodId?: string, reason?: string): boolean => {
+    const slips = hrmService.getPayrollSlips();
+    const userSlips = slips.filter((s) => s.userId === userId);
+    const targetSlip = periodId ? userSlips.find((s) => s.periodId === periodId) : userSlips[0];
+    if (targetSlip) {
+      const idx = slips.findIndex((s) => s.id === targetSlip.id);
+      if (idx !== -1) {
+        slips[idx] = {
+          ...slips[idx],
+          requestedByEmployee: true,
+          requestReason: reason || 'Permohonan slip gaji karyawan',
+          requestedAt: new Date().toISOString(),
+          requestStatus: 'pending',
+        };
+        localStorage.setItem(STORAGE_KEYS.PAYROLL_SLIPS, JSON.stringify(slips));
+      }
+    }
+    api.post('/api/payroll/request-slip', { userId, periodId: targetSlip?.periodId || periodId, reason }).catch(() => {});
+    return true;
+  },
+
+  getPublishedSlipsForUser: (userId: string): PayrollSlip[] => {
+    return hrmService.getPayrollSlips().filter((s) => s.userId === userId && s.publishedToEmployee === true);
   },
 
   getPayrollAnalytics: () => {
