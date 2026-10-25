@@ -47,6 +47,7 @@ import {
   Briefcase,
   Users,
   Smartphone,
+  Download,
   DownloadCloud,
   Share,
   PlusSquare,
