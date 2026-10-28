@@ -185,6 +185,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const nativeCameraInputRef = useRef<HTMLInputElement | null>(null);
+  const lastUserRefreshRef = useRef<number>(0);
 
   // Scan Mode: 'auto' (AI automatic 750ms lock) vs 'manual' (Employee shutter tap anytime)
   const [scanMode, setScanMode] = useState<'auto' | 'manual'>('auto');
@@ -1015,6 +1016,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         }
       } catch (e) {}
 
+      // ─── TAHAP 1.5: SINKRONISASI PROFIL REALTIME DARI POSTGRESQL ───
+      // Memastikan perubahan penugasan shift, divisi, atau status akun dari Superadmin langsung aktif
+      if (typeof refreshUser === 'function' && Date.now() - lastUserRefreshRef.current > 10000) {
+        lastUserRefreshRef.current = Date.now();
+        refreshUser().catch(() => null);
+      }
+
       // ─── TAHAP 2: SEGERA RESOLVE SHIFT SECARA SINKRON DARI DATA TERSEDIA ───
       const currentShifts = hrmService.getShifts();
       let currentSched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
@@ -1518,6 +1526,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     window.addEventListener('hrm_settings_updated', handleUpdate);
     window.addEventListener('hrm_users_updated', handleUpdate);
     window.addEventListener('hrm_shifts_updated', handleUpdate);
+    window.addEventListener('hrm_schedules_updated', handleUpdate);
 
     // ─── PWA APP RESUME & WAKEUP LIFECYCLE (HP BANGUN DARI SLEEP / LAYAR NYALA / TAB AKTIF) ───
     const handleResumeOrWakeup = () => {
@@ -1569,6 +1578,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       window.removeEventListener('hrm_settings_updated', handleUpdate);
       window.removeEventListener('hrm_users_updated', handleUpdate);
       window.removeEventListener('hrm_shifts_updated', handleUpdate);
+      window.removeEventListener('hrm_schedules_updated', handleUpdate);
       document.removeEventListener('visibilitychange', handleResumeOrWakeup);
       window.removeEventListener('pageshow', handleResumeOrWakeup);
       window.removeEventListener('focus', handleResumeOrWakeup);

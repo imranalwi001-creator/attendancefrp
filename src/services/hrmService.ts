@@ -2403,6 +2403,60 @@ export const hrmService = {
       safeSetJson(STORAGE_KEYS.USERS, users);
       window.dispatchEvent(new Event('hrm_users_updated'));
 
+      // Sinkronisasi jadwal roster lokal di STORAGE_KEYS.EMPLOYEE_SCHEDULES
+      if (updates.shiftId) {
+        try {
+          const allShifts = hrmService.getShifts();
+          const targetShift = allShifts.find((s) => s.id === updates.shiftId);
+          if (targetShift) {
+            const todayStr = getTodayDateStr();
+            const scheds = safeGetJson<EmployeeSchedule[]>(STORAGE_KEYS.EMPLOYEE_SCHEDULES, []);
+            let foundToday = false;
+            const updatedScheds = scheds.map((sch) => {
+              if (sch.userId === id && sch.scheduleDate >= todayStr) {
+                if (sch.scheduleDate === todayStr) foundToday = true;
+                return {
+                  ...sch,
+                  shiftId: targetShift.id,
+                  shiftCode: targetShift.code || 'SHF',
+                  shiftName: targetShift.name,
+                  startTime: (targetShift.startTime || '07:30').substring(0, 5),
+                  endTime: (targetShift.endTime || '16:30').substring(0, 5),
+                  isNightShift: Boolean(targetShift.isCrossDay || (targetShift.endTime && targetShift.startTime && targetShift.endTime < targetShift.startTime)),
+                  isOff: false,
+                  notes: `Penugasan Shift Resmi (${targetShift.name})`,
+                  updatedAt: new Date().toISOString(),
+                };
+              }
+              return sch;
+            });
+            if (!foundToday) {
+              const uObj = users[idx] || (updates as any);
+              updatedScheds.push({
+                id: `sched-${id}-${todayStr}`,
+                userId: id,
+                userName: uObj?.fullName || 'Karyawan',
+                userNip: uObj?.nip || '',
+                scheduleDate: todayStr,
+                shiftId: targetShift.id,
+                shiftCode: targetShift.code || 'SHF',
+                shiftName: targetShift.name,
+                startTime: (targetShift.startTime || '07:30').substring(0, 5),
+                endTime: (targetShift.endTime || '16:30').substring(0, 5),
+                durationHours: 8,
+                isNightShift: Boolean(targetShift.isCrossDay || (targetShift.endTime && targetShift.startTime && targetShift.endTime < targetShift.startTime)),
+                isOff: false,
+                notes: `Penugasan Shift Resmi (${targetShift.name})`,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              });
+            }
+            safeSetJson(STORAGE_KEYS.EMPLOYEE_SCHEDULES, updatedScheds);
+            window.dispatchEvent(new Event('hrm_schedules_updated'));
+          }
+        } catch (_) {}
+      }
+
       // Persist to PostgreSQL database directly
       api.put(`/users/${id}`, { ...users[idx], ...updates })
         .then(() => {

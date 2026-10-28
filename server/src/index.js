@@ -1499,6 +1499,64 @@ app.put('/api/users/:id', async (req, res) => {
       targetId,
     ]);
 
+    // Sinkronisasi otomatis ke Roster Jadwal Kerja harian (hrm_employee_schedules)
+    // agar perubahan shift dari Superadmin langsung aktif seketika di PWA tanpa konflik jadwal basi
+    if (resolvedShift) {
+      try {
+        const sRes = await pool.query('SELECT * FROM hrm_shifts WHERE id = $1', [resolvedShift]);
+        if (sRes.rows.length > 0) {
+          const s = sRes.rows[0];
+          const sStart = s.start_time ? s.start_time.substring(0, 5) : '07:30';
+          const sEnd = s.end_time ? s.end_time.substring(0, 5) : '16:30';
+          const isNight = Boolean(s.is_cross_day || (sEnd < sStart));
+
+          // 1. Update seluruh jadwal yang ada mulai hari ini ke depan
+          await pool.query(
+            `UPDATE hrm_employee_schedules SET
+              shift_id = $1,
+              shift_code = COALESCE($2, shift_code, 'SHF'),
+              shift_name = $3,
+              start_time = $4,
+              end_time = $5,
+              duration_hours = 8.0,
+              is_night_shift = $6,
+              is_off = false,
+              notes = 'Penugasan Shift Resmi (' || $3 || ')',
+              updated_at = NOW()
+            WHERE user_id = $7
+              AND schedule_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date`,
+            [s.id, s.code || 'SHF', s.name, sStart, sEnd, isNight, targetId]
+          );
+
+          // 2. Pastikan jadwal hari ini terdaftar (upsert)
+          await pool.query(
+            `INSERT INTO hrm_employee_schedules (
+              user_id, schedule_date, shift_id, shift_code, shift_name,
+              start_time, end_time, duration_hours, is_night_shift, is_off, notes, updated_at
+            ) VALUES (
+              $1, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date,
+              $2, COALESCE($3, 'SHF'), $4, $5, $6, 8.0, $7, false,
+              'Penugasan Shift Resmi (' || $4 || ')', NOW()
+            )
+            ON CONFLICT (user_id, schedule_date) DO UPDATE SET
+              shift_id = EXCLUDED.shift_id,
+              shift_code = EXCLUDED.shift_code,
+              shift_name = EXCLUDED.shift_name,
+              start_time = EXCLUDED.start_time,
+              end_time = EXCLUDED.end_time,
+              duration_hours = EXCLUDED.duration_hours,
+              is_night_shift = EXCLUDED.is_night_shift,
+              is_off = false,
+              notes = EXCLUDED.notes,
+              updated_at = NOW()`,
+            [targetId, s.id, s.code || 'SHF', s.name, sStart, sEnd, isNight]
+          );
+        }
+      } catch (schedSyncErr) {
+        console.warn('[Sync Employee Shift Schedules] Notice:', schedSyncErr.message);
+      }
+    }
+
     const fullUserRes = await pool.query(`
       SELECT p.*, r.name as role_code, r.label as role_label,
              kr.full_name as kepala_regu_name,
