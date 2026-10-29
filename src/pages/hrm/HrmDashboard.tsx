@@ -50,7 +50,7 @@ export const HrmDashboard: React.FC = () => {
   // Semua karyawan (termasuk staf Keuangan, Admin, HRD, dll.) yang membuka aplikasi di HP
   // WAJIB mendapatkan antarmuka PWA Presensi resmi (HrmEmployeeDashboard / HrmPwaAttendanceView),
   // kecuali Superadmin yang mengelola radar / pimpinan, atau jika user secara eksplisit memilih mode desktop.
-  if (isMobile && !preferDesktop && !['superadmin'].includes(cleanRole)) {
+  if (isMobile && !preferDesktop && !['superadmin', 'pimpinan', 'dirut'].some((r) => cleanRole.includes(r))) {
     return <HrmEmployeeDashboard onSwitchToDesktop={handleSwitchToDesktop} />;
   }
 

@@ -108,7 +108,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
 
   // Sinkronisasi Sempurna: Tampilan browser HP wajib sama persis 100% dengan tampilan PWA (Lampiran 1 & 2).
   // Hapus layout shell web (header ganda, bottom nav ganda, install banner) saat membuka presensi atau dashboard di mobile browser.
-  const isAttendanceOrEmployeeView = location.pathname === '/presensi' || (location.pathname === '/dashboard' && !['superadmin'].includes(currentRole));
+  const isAttendanceOrEmployeeView = location.pathname === '/presensi' || (location.pathname === '/dashboard' && !['superadmin', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)));
   if ((isPwaStandalone || isMobile) && isAttendanceOrEmployeeView) {
     return <div className="min-h-screen bg-[#062225] text-foreground">{children}</div>;
   }
@@ -315,7 +315,12 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     },
   ];
 
+  const isExecutive = ['pimpinan', 'dirut'].some((r) => currentRole.includes(r));
   const visibleNavItems = navItems.filter((item) => {
+    // Pimpinan dan Dirut dibebaskan sepenuhnya dari absensi mandiri dan pengajuan perorangan
+    if (isExecutive && ['/presensi', '/pengajuan', '/riwayat'].includes(item.path)) {
+      return false;
+    }
     if (!item.roles) return true;
     if (currentRole === 'superadmin' || currentRole.includes('superadmin')) return true;
     return item.roles.some((reqRole) => normalizeRole(reqRole) === currentRole);
@@ -323,7 +328,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
 
   // Mobile Bottom Navigation Bar Items (Primary 4 items + "Lainnya" button)
   const getPrimaryMobileItems = () => {
-    if (['superadmin', 'admin', 'hrd', 'pimpinan', 'pengawas', 'korlap', 'kepala_regu', 'kepalaregu'].some((r) => currentRole.includes(r))) {
+    if (['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'pengawas', 'korlap', 'kepala_regu', 'kepalaregu'].some((r) => currentRole.includes(r))) {
       return [
         { label: 'Beranda', path: '/dashboard', icon: LayoutDashboard },
         { label: 'Monitor', path: '/admin/monitoring', icon: UserCheck },
@@ -845,7 +850,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
 
         {/* Item 2: Pengajuan / Monitor */}
         <Link
-          to={['superadmin', 'admin', 'hrd', 'pimpinan'].includes(currentRole) ? '/admin/monitoring' : '/pengajuan'}
+          to={['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)) ? '/admin/monitoring' : '/pengajuan'}
           onClick={() => setMobileMenuOpen(false)}
           className={cn(
             'flex flex-col items-center justify-center flex-1 py-1 px-0.5 rounded-xl transition-all active:scale-90',
@@ -860,27 +865,32 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
               (location.pathname === '/pengajuan' || location.pathname === '/admin/monitoring') ? 'bg-primary/10 text-primary shadow-xs' : ''
             )}
           >
-            {['superadmin', 'admin', 'hrd', 'pimpinan'].includes(currentRole) ? (
+            {['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)) ? (
               <UserCheck className="w-5 h-5" />
             ) : (
               <CalendarCheck2 className="w-5 h-5" />
             )}
           </div>
           <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-[60px] leading-tight">
-            {['superadmin', 'admin', 'hrd', 'pimpinan'].includes(currentRole) ? 'Monitor' : 'Pengajuan'}
+            {['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)) ? 'Monitor' : 'Pengajuan'}
           </span>
         </Link>
 
         {/* TOMBOL TENGAH (HERO CENTER BUTTON: KAMERA ABSEN ATAU SHORTCUT EKSEKUTIF PIMPINAN) */}
         <div className="flex flex-col items-center justify-center flex-1 -mt-5">
-          {currentRole === 'pimpinan' ? (
+          {['pimpinan', 'dirut'].some((r) => currentRole.includes(r)) ? (
             <Link
-              to="/dashboard"
+              to="/admin/approval"
               onClick={() => setMobileMenuOpen(false)}
-              className="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/30 border-4 border-card ring-2 ring-primary/20 hover:scale-105 active:scale-90 transition-all"
-              title="Portal Eksekutif Pimpinan (Bebas Kewajiban Presensi)"
+              className="relative w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/30 border-4 border-card ring-2 ring-primary/20 hover:scale-105 active:scale-90 transition-all"
+              title="Persetujuan Direksi dan Pimpinan (Bebas Kewajiban Presensi)"
             >
-              <TrendingUp className="w-6 h-6" />
+              <FileCheck2 className="w-6 h-6" />
+              {unreadNotifCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white rounded-full text-[9px] font-bold flex items-center justify-center border-2 border-card animate-pulse">
+                  {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+                </span>
+              )}
             </Link>
           ) : canClockIn ? (
             <Link
@@ -921,7 +931,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
           )}
           <span className="text-[9px] font-bold mt-1 tracking-tight text-center leading-none truncate max-w-[62px]">
             {currentRole === 'pimpinan' ? (
-              <span className="text-primary font-bold">Direksi</span>
+              <span className="text-primary font-bold">Approval</span>
             ) : (
               <>
                 {canClockIn && <span className="text-primary">Masuk</span>}
@@ -935,7 +945,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
 
         {/* Item 4: Riwayat / Laporan */}
         <Link
-          to={['superadmin', 'admin', 'hrd', 'pimpinan'].includes(currentRole) ? '/admin/laporan' : '/riwayat'}
+          to={['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)) ? '/admin/laporan' : '/riwayat'}
           onClick={() => setMobileMenuOpen(false)}
           className={cn(
             'flex flex-col items-center justify-center flex-1 py-1 px-0.5 rounded-xl transition-all active:scale-90',
@@ -950,14 +960,14 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
               (location.pathname === '/riwayat' || location.pathname === '/admin/laporan') ? 'bg-primary/10 text-primary shadow-xs' : ''
             )}
           >
-            {['superadmin', 'admin', 'hrd', 'pimpinan'].includes(currentRole) ? (
+            {['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)) ? (
               <FileSpreadsheet className="w-5 h-5" />
             ) : (
               <CalendarDays className="w-5 h-5" />
             )}
           </div>
           <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-[60px] leading-tight">
-            {['superadmin', 'admin', 'hrd', 'pimpinan'].includes(currentRole) ? 'Laporan' : 'Riwayat'}
+            {['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)) ? 'Laporan' : 'Riwayat'}
           </span>
         </Link>
 
