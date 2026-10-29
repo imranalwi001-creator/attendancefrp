@@ -1120,7 +1120,15 @@ export const HrmPayrollPage: React.FC = () => {
       const q = slipSearch.toLowerCase();
       s = s.filter((sl) => sl.userName.toLowerCase().includes(q) || sl.userNip.toLowerCase().includes(q));
     }
-    return s;
+    return [...s].sort((a, b) => {
+      const nipA = (a.userNip || '').trim();
+      const nipB = (b.userNip || '').trim();
+      if (nipA && nipB) {
+        const cmp = nipA.localeCompare(nipB, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+      }
+      return (a.userName || '').localeCompare(b.userName || '');
+    });
   }, [slips, filterSlipPeriod, filterDivision, filterSlipStatus, slipSearch]);
 
   const pendingRequests = useMemo(() => {
@@ -1165,7 +1173,15 @@ export const HrmPayrollPage: React.FC = () => {
       const q = profileSearch.toLowerCase();
       u = u.filter((usr) => usr.fullName.toLowerCase().includes(q) || usr.nip.toLowerCase().includes(q));
     }
-    return u;
+    return [...u].sort((a, b) => {
+      const nipA = (a.nip || '').trim();
+      const nipB = (b.nip || '').trim();
+      if (nipA && nipB) {
+        const cmp = nipA.localeCompare(nipB, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+      }
+      return (a.fullName || '').localeCompare(b.fullName || '');
+    });
   }, [allUsers, profileDivFilter, profileSearch]);
 
   const handleCreatePeriod = () => {
@@ -1754,6 +1770,7 @@ export const HrmPayrollPage: React.FC = () => {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableHead className="text-xs font-bold text-foreground text-center w-12">No.</TableHead>
                       <TableHead className="text-xs font-bold text-foreground">Karyawan</TableHead>
                       <TableHead className="text-xs font-bold text-foreground">Divisi</TableHead>
                       <TableHead className="text-xs font-bold text-foreground">Periode</TableHead>
@@ -1906,6 +1923,7 @@ export const HrmPayrollPage: React.FC = () => {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
+                    <TableHead className="text-xs font-bold text-foreground text-center w-12">No.</TableHead>
                     <TableHead className="text-xs font-bold text-foreground">Karyawan</TableHead>
                     <TableHead className="text-xs font-bold text-foreground">Divisi</TableHead>
                     <TableHead className="text-xs font-bold text-foreground">Status Pegawai</TableHead>

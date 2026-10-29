@@ -740,15 +740,29 @@ export const HrmEmployeesPage: React.FC = () => {
   };
 
   // Filtered list
-  const filteredUsers = users.filter((u) => {
-    const matchQuery =
-      u.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.nip.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchDiv = filterDivision === 'all' || u.divisionId === filterDivision;
-    const matchRole = filterRole === 'all' || u.roleId === filterRole || u.roleName?.toLowerCase() === filterRole.toLowerCase();
-    return matchQuery && matchDiv && matchRole;
-  });
+  const filteredUsers = users
+    .filter((u) => {
+      const matchQuery =
+        u.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        u.nip.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        u.email.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchDiv = filterDivision === 'all' || u.divisionId === filterDivision;
+      const matchRole = filterRole === 'all' || u.roleId === filterRole || u.roleName?.toLowerCase() === filterRole.toLowerCase();
+      return matchQuery && matchDiv && matchRole;
+    })
+    .sort((a, b) => {
+      const nipA = (a.nip || '').trim();
+      const nipB = (b.nip || '').trim();
+      if (nipA && nipB) {
+        const cmp = nipA.localeCompare(nipB, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+      } else if (nipA) {
+        return -1;
+      } else if (nipB) {
+        return 1;
+      }
+      return a.fullName.localeCompare(b.fullName);
+    });
 
   // Security Reset Hub State for Superadmin (Device, Face, Location)
   const [securityModalUser, setSecurityModalUser] = useState<UserProfile | null>(null);
@@ -951,6 +965,7 @@ export const HrmEmployeesPage: React.FC = () => {
           <table className="w-full text-left text-xs text-foreground">
             <thead className="bg-muted/40 border-b border-border uppercase text-[11px] text-muted-foreground font-medium tracking-wider">
               <tr>
+                <th className="py-3 px-3 text-center w-12 font-bold">No.</th>
                 <th className="py-3 px-4">Karyawan</th>
                 <th className="py-3 px-4">NIP / NIK</th>
                 <th className="py-3 px-4">Divisi</th>
@@ -964,15 +979,18 @@ export const HrmEmployeesPage: React.FC = () => {
             <tbody className="divide-y divide-border">
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-muted-foreground">
+                  <td colSpan={9} className="py-8 text-center text-muted-foreground">
                     Tidak ada karyawan yang sesuai dengan filter pencarian.
                   </td>
                 </tr>
               ) : (
-                filteredUsers.map((u) => {
+                filteredUsers.map((u, idx) => {
                   const remaining = (u.annualLeaveQuota || 12) - (u.usedLeaveDays || 0);
                   return (
                     <tr key={u.id} className="hover:bg-muted/30 transition-colors">
+                      <td className="py-3 px-3 text-center font-mono font-bold text-muted-foreground text-xs">
+                        {idx + 1}
+                      </td>
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2.5">
                           {(() => {

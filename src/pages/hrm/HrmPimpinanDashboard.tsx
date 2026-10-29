@@ -306,19 +306,33 @@ export const HrmPimpinanDashboard: React.FC = () => {
   const estimatedTotalPayroll = totalBaseSalary + approvedOvertimeBudget;
 
   // Filtered Roster for individual drilldown
-  const filteredRoster = rosterData.filter((r) => {
-    if (isExecutiveAccount(r.full_name, r.nip, r.role_name)) return false;
-    const matchDiv =
-      rosterDivisionFilter === 'all' ||
-      r.division_id === rosterDivisionFilter ||
-      r.division_name === rosterDivisionFilter;
-    const matchSearch =
-      !rosterSearch.trim() ||
-      r.full_name?.toLowerCase().includes(rosterSearch.toLowerCase()) ||
-      r.nip?.toLowerCase().includes(rosterSearch.toLowerCase()) ||
-      r.division_name?.toLowerCase().includes(rosterSearch.toLowerCase());
-    return matchDiv && matchSearch;
-  });
+  const filteredRoster = rosterData
+    .filter((r) => {
+      if (isExecutiveAccount(r.full_name, r.nip, r.role_name)) return false;
+      const matchDiv =
+        rosterDivisionFilter === 'all' ||
+        r.division_id === rosterDivisionFilter ||
+        r.division_name === rosterDivisionFilter;
+      const matchSearch =
+        !rosterSearch.trim() ||
+        r.full_name?.toLowerCase().includes(rosterSearch.toLowerCase()) ||
+        r.nip?.toLowerCase().includes(rosterSearch.toLowerCase()) ||
+        r.division_name?.toLowerCase().includes(rosterSearch.toLowerCase());
+      return matchDiv && matchSearch;
+    })
+    .sort((a, b) => {
+      const nipA = (a.nip || '').trim();
+      const nipB = (b.nip || '').trim();
+      if (nipA && nipB) {
+        const cmp = nipA.localeCompare(nipB, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+      } else if (nipA) {
+        return -1;
+      } else if (nipB) {
+        return 1;
+      }
+      return (a.full_name || '').localeCompare(b.full_name || '');
+    });
 
   // Watchlist & Top Performers
   const watchlist = [...rosterData]
@@ -1139,6 +1153,7 @@ export const HrmPimpinanDashboard: React.FC = () => {
           <table className="w-full text-left text-xs text-foreground">
             <thead className="bg-muted/40 border-b border-border uppercase text-[11px] text-muted-foreground font-medium tracking-wider">
               <tr>
+                <th className="py-3 px-3 text-center w-12 font-bold">No.</th>
                 <th className="py-3 px-4">Nama &amp; NIP</th>
                 <th className="py-3 px-4">Divisi</th>
                 <th className="py-3 px-4">Kehadiran</th>
@@ -1152,12 +1167,12 @@ export const HrmPimpinanDashboard: React.FC = () => {
             <tbody className="divide-y divide-border">
               {filteredRoster.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-muted-foreground">
+                  <td colSpan={9} className="py-8 text-center text-muted-foreground">
                     Tidak ada data personil ditemukan.
                   </td>
                 </tr>
               ) : (
-                filteredRoster.map((r) => {
+                filteredRoster.map((r, idx) => {
                   const hadir = Number(r.total_hadir || 0);
                   const tepat = Number(r.tepat_waktu || 0);
                   const telat = Number(r.total_terlambat || 0);
@@ -1169,6 +1184,9 @@ export const HrmPimpinanDashboard: React.FC = () => {
 
                   return (
                     <tr key={r.user_id} className="hover:bg-muted/30 transition-colors">
+                      <td className="py-3 px-3 text-center font-mono font-bold text-muted-foreground text-xs">
+                        {idx + 1}
+                      </td>
                       <td className="py-3 px-4">
                         <p className="font-semibold text-foreground">{r.full_name}</p>
                         <p className="text-[11px] text-muted-foreground font-mono">{r.nip}</p>

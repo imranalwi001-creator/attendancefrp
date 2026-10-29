@@ -81,26 +81,41 @@ export const HrmPresensiManagementTab: React.FC = () => {
     };
   }, [selectedDate]);
 
-  // Filter attendances
-  const filteredAttendances = attendances.filter((att) => {
-    const user = users.find((u) => u.id === att.userId);
-    const userName = att.userName || user?.fullName || '';
-    const userNip = att.userNip || user?.nip || '';
-    const userDiv = att.divisionName || user?.divisionName || user?.division || '';
+  // Filter & Sort attendances secara baku sesuai nomor urut NIP / pendaftaran
+  const filteredAttendances = attendances
+    .filter((att) => {
+      const user = users.find((u) => u.id === att.userId);
+      const userRole = (user?.roleName || (user as any)?.role || '').toLowerCase();
+      if (['pimpinan', 'dirut', 'superadmin'].some((r) => userRole.includes(r))) return false;
 
-    const matchesSearch =
-      userName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      userNip.toLowerCase().includes(searchQuery.toLowerCase());
+      const userName = att.userName || user?.fullName || '';
+      const userNip = att.userNip || user?.nip || '';
+      const userDiv = att.divisionName || user?.divisionName || user?.division || '';
 
-    const matchesDivision =
-      selectedDivision === 'all' ||
-      userDiv.toLowerCase() === selectedDivision.toLowerCase();
+      const matchesSearch =
+        userName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        userNip.toLowerCase().includes(searchQuery.toLowerCase());
 
-    const matchesStatus =
-      statusFilter === 'all' || att.status === statusFilter;
+      const matchesDivision =
+        selectedDivision === 'all' ||
+        userDiv.toLowerCase() === selectedDivision.toLowerCase();
 
-    return matchesSearch && matchesDivision && matchesStatus;
-  });
+      const matchesStatus =
+        statusFilter === 'all' || att.status === statusFilter;
+
+      return matchesSearch && matchesDivision && matchesStatus;
+    })
+    .sort((a, b) => {
+      const userA = users.find((u) => u.id === a.userId);
+      const userB = users.find((u) => u.id === b.userId);
+      const nipA = (a.userNip || userA?.nip || '').trim();
+      const nipB = (b.userNip || userB?.nip || '').trim();
+      if (nipA && nipB) {
+        const cmp = nipA.localeCompare(nipB, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+      }
+      return (a.userName || userA?.fullName || '').localeCompare(b.userName || userB?.fullName || '');
+    });
 
   // Calculate Metrics
   const totalAtt = attendances.length;
@@ -358,6 +373,7 @@ export const HrmPresensiManagementTab: React.FC = () => {
               <table className="w-full text-left text-xs text-foreground">
                 <thead className="bg-muted/40 border-b border-border uppercase text-[11px] text-muted-foreground font-semibold">
                   <tr>
+                    <th className="py-3 px-3 text-center w-12 font-bold">No.</th>
                     <th className="py-3 px-4">Karyawan</th>
                     <th className="py-3 px-4">Divisi</th>
                     <th className="py-3 px-4 text-center">Jam Masuk</th>
@@ -371,16 +387,19 @@ export const HrmPresensiManagementTab: React.FC = () => {
                 <tbody className="divide-y divide-border">
                   {filteredAttendances.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-8 text-center text-muted-foreground">
+                      <td colSpan={9} className="py-8 text-center text-muted-foreground">
                         Tidak ada catatan presensi yang sesuai pada tanggal {selectedDate}.
                       </td>
                     </tr>
                   ) : (
-                    filteredAttendances.map((att) => {
+                    filteredAttendances.map((att, idx) => {
                       const user = users.find((u) => u.id === att.userId);
                       const photoUrl = att.clockInPhoto || att.photoIn;
                       return (
                         <tr key={att.id} className="hover:bg-muted/30 transition-colors">
+                          <td className="py-3 px-3 text-center font-mono font-bold text-muted-foreground text-xs">
+                            {idx + 1}
+                          </td>
                           <td className="py-3 px-4">
                             <div className="flex items-center gap-2.5">
                               {photoUrl ? (
