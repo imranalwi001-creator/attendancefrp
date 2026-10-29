@@ -37,7 +37,11 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
+  FileSpreadsheet,
+  Download,
+  Printer,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -64,6 +68,7 @@ import { FieldPatrolCheck } from '@/types/hrm';
 import { HrmAssignFieldLocationModal } from '@/components/hrm/HrmAssignFieldLocationModal';
 import { HrmPatrolWatermarkPreviewModal } from '@/components/hrm/HrmPatrolWatermarkPreviewModal';
 import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMonthlyCalendarModal';
+import { HrmEmployeeRealtimeReportModal } from '@/components/hrm/HrmEmployeeRealtimeReportModal';
 
 export const HrmLiveMonitoringPage: React.FC = () => {
   const { user } = useHrmAuth();
@@ -123,6 +128,48 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [calendarModalOpen, setCalendarModalOpen] = useState<boolean>(false);
   const [selectedCalendarUser, setSelectedCalendarUser] = useState<UserProfile | null>(null);
   const [isFetchingMonth, setIsFetchingMonth] = useState<boolean>(false);
+  const [realtimeReportModalOpen, setRealtimeReportModalOpen] = useState<boolean>(false);
+  const [selectedReportUser, setSelectedReportUser] = useState<UserProfile | null>(null);
+  const [selectedReportAttendance, setSelectedReportAttendance] = useState<AttendanceRecord | null>(null);
+  const [selectedReportShift, setSelectedReportShift] = useState<any>(null);
+
+  const handleOpenRealtimeReport = (u: UserProfile, att?: AttendanceRecord | null, sft?: any) => {
+    setSelectedReportUser(u);
+    setSelectedReportAttendance(att || null);
+    setSelectedReportShift(sft || null);
+    setRealtimeReportModalOpen(true);
+  };
+
+  const handleExportAllRealtimeExcel = () => {
+    const todayStr = getTodayDateStr();
+    const data = filtered.map(({ user: u, attendance: att, status, shift }, idx) => {
+      const isLate = status === 'terlambat' || (att?.lateMinutes && att.lateMinutes > 0);
+      return {
+        No: idx + 1,
+        NIP: u.nip,
+        'Nama Karyawan': u.fullName,
+        'Divisi': u.divisionName || '-',
+        'Jabatan': u.roleName || u.role || 'Karyawan',
+        'Shift': shift?.name || u.shiftName || 'Day Shift',
+        'Status Kehadiran': isLate
+          ? `TERLAMBAT (${att?.lateMinutes || 0}m)`
+          : (att?.clockIn ? 'HADIR' : (status === 'alfa' ? 'ALFA / MANGKIR' : 'BELUM HADIR')),
+        'Jam Masuk': att?.clockIn ? att.clockIn.substring(0, 5) : '-',
+        'Jam Pulang': att?.clockOut ? att.clockOut.substring(0, 5) : (att?.clockIn ? 'Aktif Bertugas' : '-'),
+        'Durasi Kerja (Jam)': att?.workDurationMinutes ? (att.workDurationMinutes / 60).toFixed(1) : '-',
+        'Terlambat (Menit)': att?.lateMinutes || 0,
+        'Skor Wajah AI': att?.biometricScore ? `${att.biometricScore}%` : '-',
+        'Jarak Geofence': att?.geofenceDistance != null ? `${Math.round(att.geofenceDistance)}m` : '-',
+        'Lokasi Presensi': att?.notes || u.assignedLocationName || '-',
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Monitoring_Realtime');
+    XLSX.writeFile(workbook, `Monitoring_Realtime_Semua_Karyawan_${todayStr}.xlsx`);
+    toast.success(`Rekap realtime ${data.length} karyawan berhasil diunduh!`);
+  };
 
   const loadFieldAgents = async () => {
     try {
@@ -897,6 +944,17 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               </Select>
             </div>
 
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleExportAllRealtimeExcel}
+                className="h-9 px-3 text-xs rounded-xl gap-1.5 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 font-medium shadow-xs"
+                title="Unduh Rekap Laporan Realtime Seluruh Karyawan (.xlsx)"
+              >
+                <Download size={13} /> Export Excel ({filtered.length})
+              </Button>
             {/* View Mode Toggle */}
             <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border shrink-0 self-end sm:self-auto">
               <Button
@@ -923,6 +981,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 <LayoutGrid size={13} />
                 <span>Kartu</span>
               </Button>
+            </div>
             </div>
           </div>
         </CardContent>
@@ -1601,7 +1660,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     {periodScope === 'today' ? 'Jam Pulang' : 'Denda Payroll'}
                   </TableHead>
                   <TableHead className="min-w-[170px] font-semibold text-muted-foreground">Verifikasi Keamanan</TableHead>
-                  <TableHead className="w-28 text-right font-semibold text-muted-foreground">Forensik</TableHead>
+                  <TableHead className="min-w-[220px] text-right font-semibold text-muted-foreground">Tindakan &amp; Laporan</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody className="divide-y divide-border/60">
@@ -1850,6 +1909,17 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                               <CalendarDays size={12} /> Kalender
                             </Button>
 
+                            {/* Tombol Unduh Laporan Realtime Per Karyawan */}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px] rounded-lg gap-1 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 font-medium"
+                              onClick={() => handleOpenRealtimeReport(u, att, shift)}
+                              title={`Unduh Laporan Realtime & Forensik ${u.fullName}`}
+                            >
+                              <FileSpreadsheet size={12} /> Laporan
+                            </Button>
+
                             {att?.photoIn || (att as any)?.clockInPhoto || att?.photoOut || (att as any)?.clockOutPhoto ? (
                               <Button
                                 size="sm"
@@ -2072,12 +2142,12 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Tombol Kalender Presensi Karyawan */}
-                <div className="pt-2 border-t border-border/60">
+                {/* Tombol Kalender & Laporan Realtime Karyawan */}
+                <div className="pt-2 border-t border-border/60 grid grid-cols-2 gap-2">
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-7 w-full text-[11px] rounded-xl gap-1.5 border-primary/30 text-primary hover:bg-primary/10 font-medium"
+                    className="h-8 w-full text-[11px] rounded-xl gap-1.5 border-primary/30 text-primary hover:bg-primary/10 font-medium"
                     onClick={() => {
                       setSelectedCalendarUser(u);
                       setCalendarModalOpen(true);
@@ -2085,7 +2155,17 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     title={`Buka Kalender Presensi ${u.fullName}`}
                   >
                     <CalendarDays size={12} />
-                    <span>Kalender Presensi</span>
+                    <span>Kalender</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 w-full text-[11px] rounded-xl gap-1.5 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 font-medium"
+                    onClick={() => handleOpenRealtimeReport(u, att, shift)}
+                    title={`Unduh Laporan Realtime & Forensik ${u.fullName}`}
+                  >
+                    <FileSpreadsheet size={12} />
+                    <span>Laporan</span>
                   </Button>
                 </div>
               </CardContent>
@@ -2450,6 +2530,16 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             geofenceDistance: photoData.geofenceDistance,
           });
         }}
+      />
+
+      {/* Modal Unduh Laporan Realtime & Forensik Karyawan */}
+      <HrmEmployeeRealtimeReportModal
+        isOpen={realtimeReportModalOpen}
+        onClose={() => setRealtimeReportModalOpen(false)}
+        user={selectedReportUser}
+        attendance={selectedReportAttendance}
+        allAttendances={allAttendances}
+        shift={selectedReportShift}
       />
     </div>
   );
