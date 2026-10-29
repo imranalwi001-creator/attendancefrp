@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
+import { toast } from 'sonner';
 import {
   Dialog,
   DialogContent,
@@ -12,6 +15,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import {
   FileSpreadsheet,
+  FileText,
   Printer,
   Calendar,
   Clock,
@@ -29,6 +33,7 @@ import {
   Save,
   RotateCcw,
   Sparkles,
+  Loader2,
 } from 'lucide-react';
 import { UserProfile, AttendanceRecord, OvertimeRecord } from '@/types/hrm';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
@@ -607,6 +612,86 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     XLSX.writeFile(wb, filename);
   };
 
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
+
+  // Unduh Langsung Dokumen PDF (.pdf) Otomatis
+  const handleDownloadPdf = async () => {
+    if (!user) return;
+    const reportElement = document.getElementById('printable-timesheet-report');
+    if (!reportElement) {
+      toast.error('Elemen dokumen tidak ditemukan.');
+      return;
+    }
+
+    setIsGeneratingPdf(true);
+    toast.info('Sedang membuat file PDF berkualitas tinggi...');
+
+    try {
+      // Delay mikro agar render DOM selesai stabil
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      const canvas = await html2canvas(reportElement, {
+        scale: 2, // Skala 2x agar teks tajam dan tidak pecah
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: 1280,
+      });
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const pdf = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth(); // 297mm
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // 210mm
+      const margin = 8;
+      const printWidth = pdfWidth - margin * 2; // 281mm
+      const printHeight = (canvas.height * printWidth) / canvas.width;
+
+      if (printHeight <= pdfHeight - margin * 2) {
+        // Pas dalam 1 lembar A4 Landscape
+        pdf.addImage(imgData, 'JPEG', margin, margin, printWidth, printHeight);
+      } else {
+        const maxAvailableHeight = pdfHeight - margin * 2;
+        const fitScale = maxAvailableHeight / printHeight;
+        if (fitScale >= 0.72) {
+          // Skala sedikit agar presisi 1 lembar utuh
+          const scaledWidth = printWidth * fitScale;
+          const xOffset = (pdfWidth - scaledWidth) / 2;
+          pdf.addImage(imgData, 'JPEG', xOffset, margin, scaledWidth, maxAvailableHeight);
+        } else {
+          // Multi-halaman jika data sangat panjang
+          let heightLeft = printHeight;
+          let position = margin;
+          pdf.addImage(imgData, 'JPEG', margin, position, printWidth, printHeight);
+          heightLeft -= maxAvailableHeight;
+
+          while (heightLeft > 0) {
+            position = heightLeft - printHeight + margin;
+            pdf.addPage('a4', 'landscape');
+            pdf.addImage(imgData, 'JPEG', margin, position, printWidth, printHeight);
+            heightLeft -= maxAvailableHeight;
+          }
+        }
+      }
+
+      const cleanName = user.fullName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+      const cleanNip = user.nip.replace(/[^a-zA-Z0-9]/g, '_');
+      const filename = `Laporan_Presensi_Lembur_${cleanNip}_${cleanName}_${selectedMonth}.pdf`;
+      pdf.save(filename);
+      toast.success(`Laporan PDF berhasil diunduh: ${filename}`);
+    } catch (error) {
+      console.error('Gagal generate PDF via canvas:', error);
+      toast.error('Gagal membuat PDF otomatis. Mengalihkan ke dialog cetak...');
+      window.print();
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
   // Cetak Dokumen Resmi / PDF
   const handlePrintPdf = () => {
     window.print();
@@ -655,6 +740,22 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               <Button
                 size="sm"
                 variant="outline"
+                onClick={handleDownloadPdf}
+                disabled={isGeneratingPdf}
+                className="h-8 px-3 text-xs rounded-xl gap-1.5 border-rose-500/40 text-rose-700 dark:text-rose-300 hover:bg-rose-500/10 font-medium shadow-xs"
+                title="Unduh langsung dokumen PDF (.pdf) resmi ke perangkat"
+              >
+                {isGeneratingPdf ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-600" />
+                ) : (
+                  <FileText className="w-3.5 h-3.5 text-rose-600" />
+                )}
+                <span>{isGeneratingPdf ? 'Membuat PDF...' : 'Unduh PDF (.pdf)'}</span>
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
                 onClick={handleExportExcel}
                 className="h-8 px-3 text-xs rounded-xl gap-1.5 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 font-medium shadow-xs"
                 title="Unduh format spreadsheet Excel (.xlsx) persis seperti template"
@@ -664,11 +765,12 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
               <Button
                 size="sm"
+                variant="ghost"
                 onClick={handlePrintPdf}
-                className="h-8 px-3 text-xs rounded-xl gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-xs"
-                title="Cetak langsung atau simpan sebagai file PDF A4 Landscape"
+                className="h-8 px-2.5 text-xs rounded-xl gap-1.5 text-muted-foreground hover:text-foreground hover:bg-muted font-medium"
+                title="Cetak langsung ke mesin printer fisik / dialog cetak"
               >
-                <Printer className="w-3.5 h-3.5" /> Cetak / Unduh PDF
+                <Printer className="w-3.5 h-3.5" /> Cetak
               </Button>
             </div>
           </div>
