@@ -800,12 +800,25 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
                   <p className="text-xs text-muted-foreground font-normal">{user?.email}</p>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => navigate('/presensi')}>
-                  Presensi Saya
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => navigate('/pengajuan')}>
-                  Pengajuan Cuti / Izin
-                </DropdownMenuItem>
+                {isExecutive ? (
+                  <>
+                    <DropdownMenuItem onClick={() => navigate('/dashboard')}>
+                      Dashboard Eksekutif
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => navigate('/admin/approval')}>
+                      Persetujuan Direksi
+                    </DropdownMenuItem>
+                  </>
+                ) : (
+                  <>
+                    <DropdownMenuItem onClick={() => navigate('/presensi')}>
+                      Presensi Saya
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => navigate('/pengajuan')}>
+                      Pengajuan Cuti / Izin
+                    </DropdownMenuItem>
+                  </>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
                   <LogOut className="w-4 h-4 mr-2" />

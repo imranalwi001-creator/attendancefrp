@@ -78,7 +78,7 @@ export const App: React.FC = () => {
                 <Route
                   path="/presensi"
                   element={
-                    <HrmProtectedRoute>
+                    <HrmProtectedRoute excludedRoles={['pimpinan', 'dirut']}>
                       <HrmEmployeeDashboard />
                     </HrmProtectedRoute>
                   }
@@ -99,7 +99,7 @@ export const App: React.FC = () => {
                 <Route
                   path="/pengajuan"
                   element={
-                    <HrmProtectedRoute>
+                    <HrmProtectedRoute excludedRoles={['pimpinan', 'dirut']}>
                       <HrmLeavePage />
                     </HrmProtectedRoute>
                   }
@@ -108,7 +108,7 @@ export const App: React.FC = () => {
                 <Route
                   path="/riwayat"
                   element={
-                    <HrmProtectedRoute>
+                    <HrmProtectedRoute excludedRoles={['pimpinan', 'dirut']}>
                       <HrmAttendanceHistoryPage />
                     </HrmProtectedRoute>
                   }

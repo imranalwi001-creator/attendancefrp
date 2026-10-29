@@ -7,9 +7,14 @@ import { Loader2 } from 'lucide-react';
 interface ProtectedRouteProps {
   children: React.ReactNode;
   allowedRoles?: string[];
+  excludedRoles?: string[];
 }
 
-export const HrmProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRoles }) => {
+export const HrmProtectedRoute: React.FC<ProtectedRouteProps> = ({
+  children,
+  allowedRoles,
+  excludedRoles,
+}) => {
   const { isAuthenticated, isLoading, role } = useHrmAuth();
   const location = useLocation();
 
@@ -26,21 +31,40 @@ export const HrmProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, all
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  // Check role permission if specified
-  if (allowedRoles && allowedRoles.length > 0) {
-    const userRole = (role || '').toLowerCase();
-    const cleanUserRole = userRole.replace(/[\s_-]/g, '');
-    const isSuper = cleanUserRole.includes('superadmin');
+  const userRole = (role || '').toLowerCase();
+  const cleanUserRole = userRole.replace(/[\s_-]/g, '');
 
-    const isMatch = isSuper || allowedRoles.some((allowed) => {
-      const cleanAllowed = allowed.toLowerCase().replace(/[\s_-]/g, '');
+  // 1. Excluded Roles Check (e.g. pimpinan/dirut dibebaskan dari absensi mandiri)
+  if (excludedRoles && excludedRoles.length > 0) {
+    const isExcluded = excludedRoles.some((exc) => {
+      const cleanExc = exc.toLowerCase().replace(/[\s_-]/g, '');
       return (
-        cleanAllowed === cleanUserRole ||
-        userRole === allowed.toLowerCase() ||
-        cleanUserRole.includes(cleanAllowed) ||
-        cleanAllowed.includes(cleanUserRole)
+        cleanExc === cleanUserRole ||
+        cleanUserRole.includes(cleanExc) ||
+        userRole === exc.toLowerCase()
       );
     });
+
+    if (isExcluded) {
+      return <Navigate to="/dashboard" replace />;
+    }
+  }
+
+  // 2. Allowed Roles Check
+  if (allowedRoles && allowedRoles.length > 0) {
+    const isSuper = cleanUserRole.includes('superadmin');
+
+    const isMatch =
+      isSuper ||
+      allowedRoles.some((allowed) => {
+        const cleanAllowed = allowed.toLowerCase().replace(/[\s_-]/g, '');
+        return (
+          cleanAllowed === cleanUserRole ||
+          userRole === allowed.toLowerCase() ||
+          cleanUserRole.includes(cleanAllowed) ||
+          cleanAllowed.includes(cleanUserRole)
+        );
+      });
 
     if (!isMatch) {
       return <Navigate to="/dashboard" replace />;
