@@ -60,6 +60,18 @@ import {
   Line,
 } from 'recharts';
 
+
+// Helper pengecualian akun pimpinan / direksi / superadmin dari tracking absensi operasional
+const isExecutiveAccount = (name?: string, nip?: string, role?: string) => {
+  const check = `${name || ''} ${nip || ''} ${role || ''}`.toLowerCase();
+  return (
+    check.includes('pimpinan') ||
+    check.includes('dirut') ||
+    check.includes('superadmin') ||
+    check.includes('reski')
+  );
+};
+
 // 3 Petugas Lapangan Khusus Pimpinan PT. FAWWAZ RESKI PERWIRA
 const SPECIAL_OFFICERS = [
   {
@@ -165,7 +177,11 @@ export const HrmPimpinanDashboard: React.FC = () => {
       // 1. Sync & fetch live attendances today
       const todayStr = getTodayDateStr();
       const atts = hrmService.getAttendances(todayStr);
-      setTodayAttendances(atts);
+      // Filter keluar akun pimpinan / direksi dari daftar presensi
+      const sanitizedAtts = (atts || []).filter(
+        (a) => !isExecutiveAccount(a.userName, a.userNip, (a as any).userRole)
+      );
+      setTodayAttendances(sanitizedAtts);
 
       // 2. Pending leaves & overtimes
       const leaves = hrmService.getLeaves().filter((l) => l.status === 'pending');
@@ -291,6 +307,7 @@ export const HrmPimpinanDashboard: React.FC = () => {
 
   // Filtered Roster for individual drilldown
   const filteredRoster = rosterData.filter((r) => {
+    if (isExecutiveAccount(r.full_name, r.nip, r.role_name)) return false;
     const matchDiv =
       rosterDivisionFilter === 'all' ||
       r.division_id === rosterDivisionFilter ||
@@ -319,9 +336,15 @@ export const HrmPimpinanDashboard: React.FC = () => {
     .filter((r) => Number(r.total_mangkir) === 0)
     .slice(0, 4);
 
-  // Today's Recent Clock-Ins (Live Feed)
-  const recentClockIns = [...todayAttendances]
-    .sort((a, b) => ((b.clockIn || '') > (a.clockIn || '') ? 1 : -1))
+  // Hanya personil operasional yang BENAR-BENAR telah clock-in masuk hari ini
+  const actualClockIns = todayAttendances.filter((a) => {
+    const hasValidClockIn = Boolean(a.clockIn && a.clockIn !== '--:--' && a.clockIn.trim() !== '');
+    return hasValidClockIn && !isExecutiveAccount(a.userName, a.userNip, (a as any).userRole);
+  });
+
+  // Today's Recent Clock-Ins (Live Feed: terurut dari waktu masuk paling baru)
+  const recentClockIns = [...actualClockIns]
+    .sort((a, b) => (b.clockIn || '').localeCompare(a.clockIn || ''))
     .slice(0, 6);
 
   const totalPendingActionCount = pendingLeaves.length + pendingOvertimes.length;
@@ -793,8 +816,11 @@ export const HrmPimpinanDashboard: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-              <CardTitle className="text-sm font-bold text-foreground">
-                Feed Presensi Lapangan Terkini Hari Ini ({todayAttendances.length} Sesi Masuk)
+              <CardTitle className="text-sm font-bold text-foreground flex items-center gap-2">
+                <span>Feed Presensi Masuk Lapangan Terkini (Hari Ini)</span>
+                <Badge variant="outline" className="border-emerald-500/40 text-emerald-600 bg-emerald-500/10 text-xs font-mono font-bold">
+                  {actualClockIns.length} Personil Masuk
+                </Badge>
               </CardTitle>
             </div>
             <Link to="/admin/laporan" className="text-xs text-primary hover:underline font-semibold flex items-center gap-1">
@@ -806,8 +832,12 @@ export const HrmPimpinanDashboard: React.FC = () => {
 
         <CardContent className="p-3">
           {recentClockIns.length === 0 ? (
-            <div className="py-6 text-center text-xs text-muted-foreground">
-              Belum ada rekaman presensi masuk yang tercatat hari ini.
+            <div className="py-8 text-center text-xs text-muted-foreground flex flex-col items-center justify-center gap-1.5">
+              <Clock className="w-5 h-5 text-muted-foreground/60" />
+              <p className="font-semibold text-foreground text-sm">Belum Ada Personil Yang Melakukan Presensi Masuk Hari Ini</p>
+              <p className="text-[11px] text-muted-foreground max-w-md">
+                Aktivitas kehadiran akan otomatis muncul secara live di sini saat personil lapangan melakukan scan verifikasi masuk di pos masing-masing.
+              </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
@@ -833,9 +863,13 @@ export const HrmPimpinanDashboard: React.FC = () => {
                       <Clock className="w-3 h-3 text-muted-foreground" />
                       <span>{att.clockIn || '--:--'}</span>
                     </div>
-                    {att.status === 'terlambat' ? (
+                    {att.clockOut ? (
+                      <Badge variant="outline" className="border-blue-500/30 text-blue-600 bg-blue-500/10 text-[9px] px-1 py-0 mt-0.5">
+                        Pulang {att.clockOut.slice(0, 5)}
+                      </Badge>
+                    ) : att.status === 'terlambat' ? (
                       <Badge variant="outline" className="border-amber-500/30 text-amber-600 bg-amber-500/10 text-[9px] px-1 py-0 mt-0.5">
-                        Terlambat
+                        Terlambat {att.lateMinutes ? `(${att.lateMinutes}m)` : ''}
                       </Badge>
                     ) : (
                       <Badge variant="outline" className="border-emerald-500/30 text-emerald-600 bg-emerald-500/10 text-[9px] px-1 py-0 mt-0.5">

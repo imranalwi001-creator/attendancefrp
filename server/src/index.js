@@ -8029,7 +8029,7 @@ app.get('/api/analytics/executive-radar', async (req, res) => {
     const dayPatternRes = await pool.query(dayPatternSql, [targetYear]);
 
     // 4. Overall Health Metric & KPI Cards
-    const totalEmployeesRes = await pool.query('SELECT COUNT(*)::int as count FROM hrm_profiles WHERE is_active = true;');
+    const totalEmployeesRes = await pool.query("SELECT COUNT(*)::int as count FROM hrm_profiles p LEFT JOIN hrm_roles r ON p.role_id = r.id WHERE p.is_active = true AND COALESCE(r.name, '') NOT IN ('pimpinan', 'dirut', 'superadmin');");
     const totalEmployees = totalEmployeesRes.rows[0]?.count || 0;
 
     const todayStr = new Date().toISOString().split('T')[0];
@@ -11378,7 +11378,7 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
       FROM hrm_profiles p
       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
       WHERE p.is_active = true 
-        AND p.role_id != (SELECT id FROM hrm_roles WHERE name = 'superadmin' LIMIT 1)
+        AND p.role_id NOT IN (SELECT id FROM hrm_roles WHERE name IN ('superadmin', 'pimpinan', 'dirut'))
     `);
 
     let markedCount = 0;
