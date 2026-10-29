@@ -614,7 +614,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
 
-  // Unduh Langsung Dokumen PDF (.pdf) Otomatis
+  // Unduh Langsung Dokumen PDF (.pdf) Otomatis - WAJIB TEPAT 1 HALAMAN TUNGGAL
   const handleDownloadPdf = async () => {
     if (!user) return;
     const reportElement = document.getElementById('printable-timesheet-report');
@@ -624,65 +624,53 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     }
 
     setIsGeneratingPdf(true);
-    toast.info('Sedang membuat file PDF berkualitas tinggi...');
+    toast.info('Sedang merender laporan PDF presisi 1 halaman...');
 
     try {
       // Delay mikro agar render DOM selesai stabil
       await new Promise((resolve) => setTimeout(resolve, 150));
 
       const canvas = await html2canvas(reportElement, {
-        scale: 2, // Skala 2x agar teks tajam dan tidak pecah
+        scale: 2.2, // Skala 2.2x agar teks sangat tajam, bersih dan terbaca jelas
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
-        windowWidth: 1280,
+        windowWidth: 1240,
       });
 
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const imgData = canvas.toDataURL('image/jpeg', 0.98);
       const pdf = new jsPDF({
         orientation: 'landscape',
         unit: 'mm',
         format: 'a4',
       });
 
-      const pdfWidth = pdf.internal.pageSize.getWidth(); // 297mm
-      const pdfHeight = pdf.internal.pageSize.getHeight(); // 210mm
-      const margin = 8;
-      const printWidth = pdfWidth - margin * 2; // 281mm
-      const printHeight = (canvas.height * printWidth) / canvas.width;
+      const pdfWidth = pdf.internal.pageSize.getWidth(); // 297mm (A4 Landscape)
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // 210mm (A4 Landscape)
+      const marginX = 6;
+      const marginY = 5;
+      const maxAvailableWidth = pdfWidth - marginX * 2; // 285mm
+      const maxAvailableHeight = pdfHeight - marginY * 2; // 200mm
 
-      if (printHeight <= pdfHeight - margin * 2) {
-        // Pas dalam 1 lembar A4 Landscape
-        pdf.addImage(imgData, 'JPEG', margin, margin, printWidth, printHeight);
-      } else {
-        const maxAvailableHeight = pdfHeight - margin * 2;
-        const fitScale = maxAvailableHeight / printHeight;
-        if (fitScale >= 0.72) {
-          // Skala sedikit agar presisi 1 lembar utuh
-          const scaledWidth = printWidth * fitScale;
-          const xOffset = (pdfWidth - scaledWidth) / 2;
-          pdf.addImage(imgData, 'JPEG', xOffset, margin, scaledWidth, maxAvailableHeight);
-        } else {
-          // Multi-halaman jika data sangat panjang
-          let heightLeft = printHeight;
-          let position = margin;
-          pdf.addImage(imgData, 'JPEG', margin, position, printWidth, printHeight);
-          heightLeft -= maxAvailableHeight;
+      // Skala presisi agar TEPAT 100% mencukupi 1 halaman penuh (TIDAK ADA HALAMAN KE-2)
+      const scaleW = maxAvailableWidth / canvas.width;
+      const scaleH = maxAvailableHeight / canvas.height;
+      const finalScale = Math.min(scaleW, scaleH);
 
-          while (heightLeft > 0) {
-            position = heightLeft - printHeight + margin;
-            pdf.addPage('a4', 'landscape');
-            pdf.addImage(imgData, 'JPEG', margin, position, printWidth, printHeight);
-            heightLeft -= maxAvailableHeight;
-          }
-        }
-      }
+      const finalWidth = canvas.width * finalScale;
+      const finalHeight = canvas.height * finalScale;
+
+      // Posisikan persis di tengah halaman (Center alignment)
+      const xOffset = (pdfWidth - finalWidth) / 2;
+      const yOffset = (pdfHeight - finalHeight) / 2;
+
+      pdf.addImage(imgData, 'JPEG', xOffset, yOffset, finalWidth, finalHeight);
 
       const cleanName = user.fullName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
       const cleanNip = user.nip.replace(/[^a-zA-Z0-9]/g, '_');
       const filename = `Laporan_Presensi_Lembur_${cleanNip}_${cleanName}_${selectedMonth}.pdf`;
       pdf.save(filename);
-      toast.success(`Laporan PDF berhasil diunduh: ${filename}`);
+      toast.success(`Laporan PDF (1 Halaman Pas) berhasil diunduh: ${filename}`);
     } catch (error) {
       console.error('Gagal generate PDF via canvas:', error);
       toast.error('Gagal membuat PDF otomatis. Mengalihkan ke dialog cetak...');
@@ -876,29 +864,29 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
             </div>
           )}
 
-          {/* DOKUMEN CONTAINER (FORMAT PERSIS SEPERTI LAMPIRAN) */}
-          <div id="printable-timesheet-report" className="p-4 sm:p-8 space-y-6 bg-card text-foreground">
+          {/* DOKUMEN CONTAINER (FORMAT PERSIS SEPERTI LAMPIRAN - DIOPTIMALKAN PAS 1 HALAMAN TUNGGAL) */}
+          <div id="printable-timesheet-report" className="p-3 sm:p-5 space-y-2.5 max-w-[1240px] mx-auto bg-card text-foreground">
             {/* KOTAK HEADER KARYAWAN (PERSIS SEPERTI GAMBAR LAMPIRAN) */}
-            <div className="border border-slate-300 dark:border-slate-700 bg-slate-50/40 dark:bg-slate-900/40 rounded-sm p-4 text-xs font-sans">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-y-2 gap-x-8">
+            <div className="border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40 rounded-sm p-2.5 text-[11px] font-sans leading-tight">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-y-1.5 gap-x-8">
                 {/* Kolom Kiri */}
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   <div className="flex items-baseline">
-                    <span className="w-28 font-bold text-slate-800 dark:text-slate-200">NAMA</span>
+                    <span className="w-24 font-bold text-slate-800 dark:text-slate-200">NAMA</span>
                     <span className="mr-2 font-bold">:</span>
                     <span className="font-bold text-slate-900 dark:text-white uppercase tracking-wide">
                       {user.fullName}
                     </span>
                   </div>
                   <div className="flex items-baseline">
-                    <span className="w-28 font-bold text-slate-800 dark:text-slate-200">NO.ID</span>
+                    <span className="w-24 font-bold text-slate-800 dark:text-slate-200">NO.ID</span>
                     <span className="mr-2 font-bold">:</span>
                     <span className="font-bold text-slate-900 dark:text-white font-mono">
                       {user.nip}
                     </span>
                   </div>
                   <div className="flex items-baseline">
-                    <span className="w-28 font-bold text-slate-800 dark:text-slate-200">POLA SHIFT</span>
+                    <span className="w-24 font-bold text-slate-800 dark:text-slate-200">POLA SHIFT</span>
                     <span className="mr-2 font-bold">:</span>
                     <span className="font-medium text-slate-800 dark:text-slate-300">
                       {employeeShiftPattern || 'SIFT NORMAL ( 2/1/3)'}
@@ -907,23 +895,23 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                 </div>
 
                 {/* Kolom Kanan */}
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   <div className="flex items-baseline">
-                    <span className="w-28 font-bold text-slate-800 dark:text-slate-200">SEKSI</span>
+                    <span className="w-24 font-bold text-slate-800 dark:text-slate-200">SEKSI</span>
                     <span className="mr-2 font-bold">:</span>
                     <span className="font-medium text-slate-800 dark:text-slate-300">
                       {employeeSeksi || '-'}
                     </span>
                   </div>
                   <div className="flex items-baseline">
-                    <span className="w-28 font-bold text-slate-800 dark:text-slate-200">UNIT</span>
+                    <span className="w-24 font-bold text-slate-800 dark:text-slate-200">UNIT</span>
                     <span className="mr-2 font-bold">:</span>
                     <span className="font-medium text-slate-800 dark:text-slate-300">
                       {employeeUnit || '-'}
                     </span>
                   </div>
                   <div className="flex items-baseline">
-                    <span className="w-28 font-bold text-slate-800 dark:text-slate-200">DEPARTEMEN</span>
+                    <span className="w-24 font-bold text-slate-800 dark:text-slate-200">DEPARTEMEN</span>
                     <span className="mr-2 font-bold">:</span>
                     <span className="font-medium text-slate-800 dark:text-slate-300">
                       {employeeDept || 'kantor pusat semen tonasa'}
@@ -935,51 +923,51 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
             {/* TABEL DOKUMEN REKAPITULASI (PERSIS SEPERTI LAMPIRAN) */}
             <div className="overflow-x-auto border border-slate-300 dark:border-slate-700 rounded-sm">
-              <table className="w-full border-collapse text-center text-xs font-sans">
+              <table className="w-full border-collapse text-center text-[10px] font-sans">
                 <thead>
                   {/* Baris Header 1 */}
-                  <tr className="bg-[#E9EEF5] dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-bold border-b border-slate-300 dark:border-slate-700">
-                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-2 py-2 w-10">
+                  <tr className="bg-[#E9EEF5] dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-bold border-b border-slate-300 dark:border-slate-700 leading-tight">
+                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-1 py-1 w-8">
                       NO
                     </th>
-                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-3 py-2 w-24">
+                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-2 py-1 w-20">
                       TANGGAL
                     </th>
-                    <th colSpan={3} className="border border-slate-300 dark:border-slate-700 px-2 py-1.5">
+                    <th colSpan={3} className="border border-slate-300 dark:border-slate-700 px-1 py-0.5">
                       ABSEN
                     </th>
-                    <th colSpan={2} className="border border-slate-300 dark:border-slate-700 px-2 py-1.5">
+                    <th colSpan={2} className="border border-slate-300 dark:border-slate-700 px-1 py-0.5">
                       LEMBUR
                     </th>
-                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-2 py-2 w-24 leading-tight">
+                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-1 py-1 w-20 leading-tight">
                       REALISASI<br />JAM LEMBUR
                     </th>
-                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-3 py-2 min-w-[180px]">
+                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-2 py-1 min-w-[160px]">
                       URAIAN PEKERJAAN
                     </th>
-                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-3 py-2 w-32 leading-tight">
+                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-2 py-1 w-28 leading-tight">
                       MEMERINTAHKAN<br />(KAUR)
                     </th>
-                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-2 py-2 w-16">
+                    <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-1 py-1 w-14">
                       KET.
                     </th>
                   </tr>
 
                   {/* Baris Header 2 (Sub-Kolom) */}
-                  <tr className="bg-[#E9EEF5] dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-bold border-b border-slate-300 dark:border-slate-700">
-                    <th className="border border-slate-300 dark:border-slate-700 px-2 py-1.5 w-16">
+                  <tr className="bg-[#E9EEF5] dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-bold border-b border-slate-300 dark:border-slate-700 leading-tight">
+                    <th className="border border-slate-300 dark:border-slate-700 px-1 py-0.5 w-14">
                       MASUK
                     </th>
-                    <th className="border border-slate-300 dark:border-slate-700 px-2 py-1.5 w-16">
+                    <th className="border border-slate-300 dark:border-slate-700 px-1 py-0.5 w-14">
                       PULANG
                     </th>
-                    <th className="border border-slate-300 dark:border-slate-700 px-2 py-1.5 w-16 text-[#b45309] dark:text-amber-400 bg-[#FFF7ED] dark:bg-amber-950/30">
+                    <th className="border border-slate-300 dark:border-slate-700 px-1 py-0.5 w-14 text-[#b45309] dark:text-amber-400 bg-[#FFF7ED] dark:bg-amber-950/30">
                       TELAT<br />(MNT)
                     </th>
-                    <th className="border border-slate-300 dark:border-slate-700 px-2 py-1.5 w-16">
+                    <th className="border border-slate-300 dark:border-slate-700 px-1 py-0.5 w-14">
                       MULAI
                     </th>
-                    <th className="border border-slate-300 dark:border-slate-700 px-2 py-1.5 w-16">
+                    <th className="border border-slate-300 dark:border-slate-700 px-1 py-0.5 w-14">
                       SELESAI
                     </th>
                   </tr>
@@ -1003,18 +991,18 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                         }`}
                       >
                         {/* NO */}
-                        <td className="border border-slate-300 dark:border-slate-700 py-1.5 text-slate-500 font-mono text-[11px]">
+                        <td className="border border-slate-300 dark:border-slate-700 py-[2.5px] px-1 text-slate-500 font-mono text-[9.5px]">
                           {r.no}
                         </td>
 
                         {/* TANGGAL */}
-                        <td className="border border-slate-300 dark:border-slate-700 py-1.5 text-slate-700 dark:text-slate-300 font-medium">
+                        <td className="border border-slate-300 dark:border-slate-700 py-[2.5px] px-1 text-slate-700 dark:text-slate-300 font-medium">
                           {r.tanggal}
                         </td>
 
                         {/* ABSEN MASUK */}
                         <td
-                          className={`border border-slate-300 dark:border-slate-700 py-1.5 font-mono ${
+                          className={`border border-slate-300 dark:border-slate-700 py-[2.5px] px-1 font-mono ${
                             isOff
                               ? 'text-slate-400 dark:text-slate-500 font-normal'
                               : 'font-semibold text-slate-900 dark:text-slate-100'
@@ -1025,7 +1013,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
                         {/* ABSEN PULANG */}
                         <td
-                          className={`border border-slate-300 dark:border-slate-700 py-1.5 font-mono ${
+                          className={`border border-slate-300 dark:border-slate-700 py-[2.5px] px-1 font-mono ${
                             isOff
                               ? 'text-slate-400 dark:text-slate-500 font-normal'
                               : 'font-semibold text-slate-900 dark:text-slate-100'
@@ -1036,7 +1024,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
                         {/* TELAT (MNT) */}
                         <td
-                          className={`border border-slate-300 dark:border-slate-700 py-1.5 font-mono font-medium ${
+                          className={`border border-slate-300 dark:border-slate-700 py-[2.5px] px-1 font-mono font-medium ${
                             hasLate
                               ? 'text-amber-700 dark:text-amber-400 font-bold bg-amber-50/60 dark:bg-amber-950/20'
                               : 'text-slate-400 dark:text-slate-500'
@@ -1046,18 +1034,18 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                         </td>
 
                         {/* LEMBUR MULAI */}
-                        <td className="border border-slate-300 dark:border-slate-700 py-1.5 text-slate-700 dark:text-slate-300 font-mono">
+                        <td className="border border-slate-300 dark:border-slate-700 py-[2.5px] px-1 text-slate-700 dark:text-slate-300 font-mono">
                           {r.lemburMulai}
                         </td>
 
                         {/* LEMBUR SELESAI */}
-                        <td className="border border-slate-300 dark:border-slate-700 py-1.5 text-slate-700 dark:text-slate-300 font-mono">
+                        <td className="border border-slate-300 dark:border-slate-700 py-[2.5px] px-1 text-slate-700 dark:text-slate-300 font-mono">
                           {r.lemburSelesai}
                         </td>
 
                         {/* REALISASI JAM LEMBUR */}
                         <td
-                          className={`border border-slate-300 dark:border-slate-700 py-1.5 font-semibold ${
+                          className={`border border-slate-300 dark:border-slate-700 py-[2.5px] px-1 font-semibold ${
                             hasOt
                               ? 'text-blue-700 dark:text-blue-400 font-bold bg-blue-50/50 dark:bg-blue-950/20'
                               : 'text-slate-400 dark:text-slate-500'
@@ -1067,18 +1055,18 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                         </td>
 
                         {/* URAIAN PEKERJAAN */}
-                        <td className="border border-slate-300 dark:border-slate-700 py-1.5 text-left px-2.5 text-slate-700 dark:text-slate-300 text-[11px] truncate max-w-[220px]">
+                        <td className="border border-slate-300 dark:border-slate-700 py-[2.5px] text-left px-2 text-slate-700 dark:text-slate-300 text-[9.5px] truncate max-w-[200px]">
                           {r.uraianPekerjaan}
                         </td>
 
                         {/* MEMERINTAHKAN (KAUR) */}
-                        <td className="border border-slate-300 dark:border-slate-700 py-1.5 text-slate-700 dark:text-slate-300 text-[11px]">
+                        <td className="border border-slate-300 dark:border-slate-700 py-[2.5px] px-1 text-slate-700 dark:text-slate-300 text-[9.5px]">
                           {r.memerintahkanKaur}
                         </td>
 
                         {/* KET. */}
                         <td
-                          className={`border border-slate-300 dark:border-slate-700 py-1.5 font-bold text-[11px] ${
+                          className={`border border-slate-300 dark:border-slate-700 py-[2.5px] px-1 font-bold text-[9.5px] ${
                             r.ket === 'OFF'
                               ? 'text-slate-400 dark:text-slate-500'
                               : r.ket === 'HADIR'
@@ -1101,32 +1089,32 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
                 {/* Baris Total / Rekapan Tabel */}
                 <tfoot>
-                  <tr className="bg-[#E9EEF5] dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-bold border-t-2 border-slate-400 dark:border-slate-600 text-xs">
-                    <td colSpan={2} className="border border-slate-300 dark:border-slate-700 py-2 px-3 text-center uppercase tracking-wide">
+                  <tr className="bg-[#E9EEF5] dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-bold border-t-2 border-slate-400 dark:border-slate-600 text-[10px]">
+                    <td colSpan={2} className="border border-slate-300 dark:border-slate-700 py-1 px-2 text-center uppercase tracking-wide">
                       TOTAL / REKAP
                     </td>
-                    <td className="border border-slate-300 dark:border-slate-700 py-2 font-mono text-emerald-700 dark:text-emerald-400 font-bold">
+                    <td className="border border-slate-300 dark:border-slate-700 py-1 font-mono text-emerald-700 dark:text-emerald-400 font-bold">
                       {stats.totalHadir} Hari
                     </td>
-                    <td className="border border-slate-300 dark:border-slate-700 py-2 font-mono text-slate-600 dark:text-slate-300">
+                    <td className="border border-slate-300 dark:border-slate-700 py-1 font-mono text-slate-600 dark:text-slate-300">
                       {stats.totalOff} OFF
                     </td>
-                    <td className="border border-slate-300 dark:border-slate-700 py-2 font-mono text-amber-700 dark:text-amber-400 font-bold bg-[#FFF7ED] dark:bg-amber-950/30">
+                    <td className="border border-slate-300 dark:border-slate-700 py-1 font-mono text-amber-700 dark:text-amber-400 font-bold bg-[#FFF7ED] dark:bg-amber-950/30">
                       {stats.totalTelatMnt > 0 ? `${stats.totalTelatMnt}m` : '-'}
                     </td>
-                    <td colSpan={2} className="border border-slate-300 dark:border-slate-700 py-2 text-slate-400">
+                    <td colSpan={2} className="border border-slate-300 dark:border-slate-700 py-1 text-slate-400">
                       -
                     </td>
-                    <td className="border border-slate-300 dark:border-slate-700 py-2 font-mono text-blue-700 dark:text-blue-400 font-bold">
+                    <td className="border border-slate-300 dark:border-slate-700 py-1 font-mono text-blue-700 dark:text-blue-400 font-bold">
                       {stats.totalJamLembur > 0 ? `${stats.totalJamLembur} Jam` : '-'}
                     </td>
-                    <td className="border border-slate-300 dark:border-slate-700 py-2 text-left px-2 text-[11px] text-slate-700 dark:text-slate-300">
+                    <td className="border border-slate-300 dark:border-slate-700 py-1 text-left px-2 text-[9.5px] text-slate-700 dark:text-slate-300">
                       Izin/Sakit/Cuti: {stats.totalIzinSakit + stats.totalCuti} Hari
                     </td>
-                    <td className="border border-slate-300 dark:border-slate-700 py-2 text-slate-400">
+                    <td className="border border-slate-300 dark:border-slate-700 py-1 text-slate-400">
                       -
                     </td>
-                    <td className="border border-slate-300 dark:border-slate-700 py-2 font-mono text-rose-700 dark:text-rose-400 font-bold">
+                    <td className="border border-slate-300 dark:border-slate-700 py-1 font-mono text-rose-700 dark:text-rose-400 font-bold">
                       {stats.totalAlpa > 0 ? `${stats.totalAlpa} Alpa` : 'Nihil'}
                     </td>
                   </tr>
@@ -1134,93 +1122,88 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               </table>
             </div>
 
-            {/* KOTAK REKAPAN RINGKAS DI BAWAH TABEL */}
-            <div className="p-4 rounded-sm border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40 space-y-3">
-              <h3 className="font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white flex items-center gap-2">
-                <Activity className="w-4 h-4 text-emerald-600" />
-                REKAPAN KEHADIRAN &amp; LEMBUR PEGAWAI (PERIODE: {monthLabel.toUpperCase()})
-              </h3>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 text-xs">
-                <div className="p-2.5 rounded-sm border border-emerald-500/20 bg-emerald-50/60 dark:bg-emerald-950/20 text-center">
-                  <p className="text-[10px] text-emerald-800 dark:text-emerald-300 font-semibold uppercase">Total Hadir</p>
-                  <p className="text-lg font-black text-emerald-700 dark:text-emerald-400">{stats.totalHadir} <span className="text-xs font-normal">Hari</span></p>
+            {/* KOTAK REKAPAN RINGKAS DI BAWAH TABEL (KOMPAK 1 BARIS) */}
+            <div className="p-2 rounded-sm border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40">
+              <div className="grid grid-cols-6 gap-2 text-center text-xs">
+                <div className="p-1 rounded bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                  <span className="text-[9px] uppercase font-bold text-emerald-800 dark:text-emerald-300">Total Hadir</span>
+                  <p className="text-xs font-black text-emerald-700 dark:text-emerald-400 leading-tight">{stats.totalHadir} <span className="text-[9px] font-normal">Hari</span></p>
                 </div>
 
-                <div className="p-2.5 rounded-sm border border-amber-500/20 bg-amber-50/60 dark:bg-amber-950/20 text-center">
-                  <p className="text-[10px] text-amber-800 dark:text-amber-300 font-semibold uppercase">Keterlambatan</p>
-                  <p className="text-lg font-black text-amber-700 dark:text-amber-400">{stats.totalTelatMnt} <span className="text-xs font-normal">Mnt</span></p>
-                  <p className="text-[9.5px] text-amber-600 dark:text-amber-400">({stats.totalTelatKali} kali)</p>
+                <div className="p-1 rounded bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                  <span className="text-[9px] uppercase font-bold text-amber-800 dark:text-amber-300">Keterlambatan</span>
+                  <p className="text-xs font-black text-amber-700 dark:text-amber-400 leading-tight">{stats.totalTelatMnt} <span className="text-[9px] font-normal">Mnt</span> ({stats.totalTelatKali}x)</p>
                 </div>
 
-                <div className="p-2.5 rounded-sm border border-blue-500/20 bg-blue-50/60 dark:bg-blue-950/20 text-center">
-                  <p className="text-[10px] text-blue-800 dark:text-blue-300 font-semibold uppercase">Jam Lembur</p>
-                  <p className="text-lg font-black text-blue-700 dark:text-blue-400">{stats.totalJamLembur} <span className="text-xs font-normal">Jam</span></p>
+                <div className="p-1 rounded bg-blue-50/80 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800">
+                  <span className="text-[9px] uppercase font-bold text-blue-800 dark:text-blue-300">Jam Lembur</span>
+                  <p className="text-xs font-black text-blue-700 dark:text-blue-400 leading-tight">{stats.totalJamLembur} <span className="text-[9px] font-normal">Jam</span></p>
                 </div>
 
-                <div className="p-2.5 rounded-sm border border-slate-300 dark:border-slate-700 bg-slate-100/60 dark:bg-slate-800/40 text-center">
-                  <p className="text-[10px] text-slate-700 dark:text-slate-300 font-semibold uppercase">Libur / OFF</p>
-                  <p className="text-lg font-black text-slate-700 dark:text-slate-200">{stats.totalOff} <span className="text-xs font-normal">Hari</span></p>
+                <div className="p-1 rounded bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700">
+                  <span className="text-[9px] uppercase font-bold text-slate-700 dark:text-slate-300">Libur / OFF</span>
+                  <p className="text-xs font-black text-slate-800 dark:text-slate-200 leading-tight">{stats.totalOff} <span className="text-[9px] font-normal">Hari</span></p>
                 </div>
 
-                <div className="p-2.5 rounded-sm border border-purple-500/20 bg-purple-50/60 dark:bg-purple-950/20 text-center">
-                  <p className="text-[10px] text-purple-800 dark:text-purple-300 font-semibold uppercase">Izin / Sakit / Cuti</p>
-                  <p className="text-lg font-black text-purple-700 dark:text-purple-400">{stats.totalIzinSakit + stats.totalCuti} <span className="text-xs font-normal">Hari</span></p>
+                <div className="p-1 rounded bg-purple-50/80 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800">
+                  <span className="text-[9px] uppercase font-bold text-purple-800 dark:text-purple-300">Izin/Sakit/Cuti</span>
+                  <p className="text-xs font-black text-purple-700 dark:text-purple-400 leading-tight">{stats.totalIzinSakit + stats.totalCuti} <span className="text-[9px] font-normal">Hari</span></p>
                 </div>
 
-                <div className="p-2.5 rounded-sm border border-rose-500/20 bg-rose-50/60 dark:bg-rose-950/20 text-center">
-                  <p className="text-[10px] text-rose-800 dark:text-rose-300 font-semibold uppercase">Mangkir / Alpa</p>
-                  <p className="text-lg font-black text-rose-700 dark:text-rose-400">{stats.totalAlpa} <span className="text-xs font-normal">Hari</span></p>
+                <div className="p-1 rounded bg-rose-50/80 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800">
+                  <span className="text-[9px] uppercase font-bold text-rose-800 dark:text-rose-300">Mangkir / Alpa</span>
+                  <p className="text-xs font-black text-rose-700 dark:text-rose-400 leading-tight">{stats.totalAlpa} <span className="text-[9px] font-normal">Hari</span></p>
                 </div>
               </div>
             </div>
 
-            {/* PENGESAHAN & TANDA TANGAN (3 KOLOM RESMI) */}
-            <div className="pt-4 border-t border-slate-300 dark:border-slate-700">
-              <div className="text-right text-[11px] text-muted-foreground mb-6 font-medium">
+            {/* PENGESAHAN & TANDA TANGAN (3 KOLOM RESMI - KOMPAK 1 HALAMAN) */}
+            <div className="pt-2 border-t border-slate-300 dark:border-slate-700">
+              <div className="text-right text-[10px] text-muted-foreground mb-2 font-medium">
                 Pangkep / Makassar, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
               </div>
 
-              <div className="grid grid-cols-3 gap-6 text-center text-xs">
+              <div className="grid grid-cols-3 gap-4 text-center text-xs">
                 {/* Kolom 1: Karyawan */}
-                <div className="space-y-16">
-                  <p className="font-semibold text-slate-800 dark:text-slate-200">
+                <div className="space-y-8">
+                  <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
                     Karyawan Yang Bersangkutan,
                   </p>
                   <div className="space-y-0.5">
-                    <p className="font-bold text-slate-900 dark:text-white uppercase tracking-wide">
+                    <p className="font-bold text-slate-900 dark:text-white uppercase tracking-wide text-[11px]">
                       ( {user.fullName} )
                     </p>
-                    <p className="text-[11px] text-muted-foreground font-mono">
+                    <p className="text-[9.5px] text-muted-foreground font-mono">
                       NIP. {user.nip}
                     </p>
                   </div>
                 </div>
 
                 {/* Kolom 2: KAUR / Pengawas */}
-                <div className="space-y-16">
-                  <p className="font-semibold text-slate-800 dark:text-slate-200">
+                <div className="space-y-8">
+                  <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
                     Memerintahkan (KAUR),
                   </p>
                   <div className="space-y-0.5">
-                    <p className="font-bold text-slate-900 dark:text-white uppercase tracking-wide">
+                    <p className="font-bold text-slate-900 dark:text-white uppercase tracking-wide text-[11px]">
                       ( {employeeKaur || '................................'} )
                     </p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-[9.5px] text-muted-foreground">
                       Pengawas Lapangan / KAUR
                     </p>
                   </div>
                 </div>
 
                 {/* Kolom 3: Pimpinan / Direktur Utama */}
-                <div className="space-y-16">
-                  <p className="font-semibold text-slate-800 dark:text-slate-200">
+                <div className="space-y-8">
+                  <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
                     Mengetahui / Menyetujui,
                   </p>
                   <div className="space-y-0.5">
-                    <p className="font-bold text-slate-900 dark:text-white">
+                    <p className="font-bold text-slate-900 dark:text-white text-[11px]">
                       ( Alam AS simpuang ago, S.Sos / Reski Faisal )
                     </p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-[9.5px] text-muted-foreground">
                       Direktur Utama / Pimpinan PT. FRP
                     </p>
                   </div>
@@ -1231,12 +1214,17 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         </DialogContent>
       </Dialog>
 
-      {/* CSS PRINT MEDIA STYLES */}
+      {/* CSS PRINT MEDIA STYLES (PRESISI 1 LEMBAR CETAK A4 LANDSCAPE) */}
       <style>{`
         @media print {
           @page {
             size: A4 landscape;
-            margin: 8mm;
+            margin: 6mm 8mm;
+          }
+          html, body {
+            height: 100% !important;
+            overflow: hidden !important;
+            background: #ffffff !important;
           }
           body * {
             visibility: hidden;
@@ -1249,17 +1237,23 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
             position: absolute;
             left: 0;
             top: 0;
-            width: 100%;
+            width: 100% !important;
+            max-width: 100% !important;
             background: #ffffff !important;
             color: #000000 !important;
             padding: 0 !important;
+            margin: 0 !important;
             box-shadow: none !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
           }
           .no-print {
             display: none !important;
           }
           table {
             border-color: #333333 !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
           }
           th, td {
             border-color: #333333 !important;
