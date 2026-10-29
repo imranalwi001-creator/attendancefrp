@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -614,67 +614,244 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
 
-  // Unduh Langsung Dokumen PDF (.pdf) Otomatis - WAJIB TEPAT 1 HALAMAN TUNGGAL
-  const handleDownloadPdf = async () => {
+  // Unduh Langsung Dokumen PDF (.pdf) Otomatis - VEKTOR ASLI PRESTINE 1 HALAMAN PENUH
+  const handleDownloadPdf = () => {
     if (!user) return;
-    const reportElement = document.getElementById('printable-timesheet-report');
-    if (!reportElement) {
-      toast.error('Elemen dokumen tidak ditemukan.');
-      return;
-    }
-
     setIsGeneratingPdf(true);
-    toast.info('Sedang merender laporan PDF presisi 1 halaman...');
+    toast.info('Membuat dokumen PDF resmi presisi 1 halaman...');
 
     try {
-      // Delay mikro agar render DOM selesai stabil
-      await new Promise((resolve) => setTimeout(resolve, 150));
-
-      const canvas = await html2canvas(reportElement, {
-        scale: 2.2, // Skala 2.2x agar teks sangat tajam, bersih dan terbaca jelas
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        windowWidth: 1240,
-      });
-
-      const imgData = canvas.toDataURL('image/jpeg', 0.98);
-      const pdf = new jsPDF({
+      const doc = new jsPDF({
         orientation: 'landscape',
         unit: 'mm',
         format: 'a4',
       });
 
-      const pdfWidth = pdf.internal.pageSize.getWidth(); // 297mm (A4 Landscape)
-      const pdfHeight = pdf.internal.pageSize.getHeight(); // 210mm (A4 Landscape)
-      const marginX = 6;
-      const marginY = 5;
-      const maxAvailableWidth = pdfWidth - marginX * 2; // 285mm
-      const maxAvailableHeight = pdfHeight - marginY * 2; // 200mm
+      const pageWidth = doc.internal.pageSize.getWidth(); // 297mm (A4 Landscape)
+      const marginX = 8;
+      const contentWidth = pageWidth - marginX * 2; // 281mm
 
-      // Skala presisi agar TEPAT 100% mencukupi 1 halaman penuh (TIDAK ADA HALAMAN KE-2)
-      const scaleW = maxAvailableWidth / canvas.width;
-      const scaleH = maxAvailableHeight / canvas.height;
-      const finalScale = Math.min(scaleW, scaleH);
+      // 1. KOTAK INFORMASI PEGAWAI (HEADER BOX)
+      doc.setDrawColor(180, 190, 205);
+      doc.setLineWidth(0.25);
+      doc.setFillColor(250, 252, 255);
+      doc.rect(marginX, 6, contentWidth, 15, 'FD');
 
-      const finalWidth = canvas.width * finalScale;
-      const finalHeight = canvas.height * finalScale;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(30, 41, 59);
 
-      // Posisikan persis di tengah halaman (Center alignment)
-      const xOffset = (pdfWidth - finalWidth) / 2;
-      const yOffset = (pdfHeight - finalHeight) / 2;
+      // Kolom Kiri
+      doc.text('NAMA', marginX + 3, 10.2);
+      doc.text(':', marginX + 26, 10.2);
+      doc.text((user.fullName || '').toUpperCase(), marginX + 29, 10.2);
 
-      pdf.addImage(imgData, 'JPEG', xOffset, yOffset, finalWidth, finalHeight);
+      doc.text('NO.ID', marginX + 3, 14.2);
+      doc.text(':', marginX + 26, 14.2);
+      doc.setFont('helvetica', 'normal');
+      doc.text(user.nip || '-', marginX + 29, 14.2);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text('POLA SHIFT', marginX + 3, 18.2);
+      doc.text(':', marginX + 26, 18.2);
+      doc.setFont('helvetica', 'normal');
+      doc.text(employeeShiftPattern || 'SIFT NORMAL ( 2/1/3)', marginX + 29, 18.2);
+
+      // Kolom Kanan
+      const rightColX = marginX + 142;
+      doc.setFont('helvetica', 'bold');
+      doc.text('SEKSI', rightColX, 10.2);
+      doc.text(':', rightColX + 26, 10.2);
+      doc.setFont('helvetica', 'normal');
+      doc.text(employeeSeksi || '-', rightColX + 29, 10.2);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text('UNIT', rightColX, 14.2);
+      doc.text(':', rightColX + 26, 14.2);
+      doc.setFont('helvetica', 'normal');
+      doc.text(employeeUnit || '-', rightColX + 29, 14.2);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text('DEPARTEMEN', rightColX, 18.2);
+      doc.text(':', rightColX + 26, 18.2);
+      doc.setFont('helvetica', 'normal');
+      doc.text(employeeDept || 'kantor pusat semen tonasa', rightColX + 29, 18.2);
+
+      // 2. TABEL PRESENSI & LEMBUR (2 TINGKAT)
+      const header = [
+        [
+          { content: 'NO', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
+          { content: 'TANGGAL', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
+          { content: 'ABSEN', colSpan: 3, styles: { halign: 'center' } },
+          { content: 'LEMBUR', colSpan: 2, styles: { halign: 'center' } },
+          { content: 'REALISASI\nJAM LEMBUR', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
+          { content: 'URAIAN PEKERJAAN', rowSpan: 2, styles: { valign: 'middle', halign: 'left' } },
+          { content: 'MEMERINTAHKAN\n(KAUR)', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
+          { content: 'KET.', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
+        ],
+        [
+          { content: 'MASUK', styles: { halign: 'center' } },
+          { content: 'PULANG', styles: { halign: 'center' } },
+          { content: 'TELAT\n(MNT)', styles: { halign: 'center', textColor: [180, 83, 9], fillColor: [255, 248, 238] } },
+          { content: 'MULAI', styles: { halign: 'center' } },
+          { content: 'SELESAI', styles: { halign: 'center' } },
+        ],
+      ];
+
+      const body: any[] = monthlyRows.map((r) => {
+        const isOff = r.absenMasuk === 'OFF';
+        const isLate = r.telatMnt !== '-';
+        const hasOt = r.realisasiJamLembur !== '-';
+
+        return [
+          { content: r.no, styles: { halign: 'center', textColor: [100, 116, 139] } },
+          { content: r.tanggal, styles: { halign: 'center', fontStyle: 'bold' } },
+          { content: r.absenMasuk, styles: { halign: 'center', textColor: isOff ? [148, 163, 184] : [15, 23, 42], fontStyle: isOff ? 'normal' : 'bold' } },
+          { content: r.absenPulang, styles: { halign: 'center', textColor: isOff ? [148, 163, 184] : [15, 23, 42], fontStyle: isOff ? 'normal' : 'bold' } },
+          { content: r.telatMnt, styles: { halign: 'center', textColor: isLate ? [180, 83, 9] : [148, 163, 184], fontStyle: isLate ? 'bold' : 'normal', fillColor: isLate ? [255, 251, 235] : undefined } },
+          { content: r.lemburMulai, styles: { halign: 'center' } },
+          { content: r.lemburSelesai, styles: { halign: 'center' } },
+          { content: r.realisasiJamLembur, styles: { halign: 'center', textColor: hasOt ? [29, 78, 216] : [148, 163, 184], fontStyle: hasOt ? 'bold' : 'normal' } },
+          { content: r.uraianPekerjaan, styles: { halign: 'left' } },
+          { content: r.memerintahkanKaur, styles: { halign: 'center' } },
+          {
+            content: r.ket,
+            styles: {
+              halign: 'center',
+              fontStyle: 'bold',
+              textColor:
+                r.ket === 'HADIR'
+                  ? [4, 120, 87]
+                  : r.ket === 'TELAT'
+                  ? [180, 83, 9]
+                  : r.ket === 'LEMBUR'
+                  ? [29, 78, 216]
+                  : r.ket === 'OFF'
+                  ? [148, 163, 184]
+                  : [190, 18, 60],
+            },
+          },
+        ];
+      });
+
+      // Baris Total / Rekapan
+      body.push([
+        { content: 'TOTAL / REKAP', colSpan: 2, styles: { halign: 'center', fontStyle: 'bold', fillColor: [233, 238, 245] } },
+        { content: `${stats.totalHadir} Hari`, styles: { halign: 'center', fontStyle: 'bold', textColor: [4, 120, 87] } },
+        { content: `${stats.totalOff} OFF`, styles: { halign: 'center', textColor: [71, 85, 105] } },
+        { content: stats.totalTelatMnt > 0 ? `${stats.totalTelatMnt}m` : '-', styles: { halign: 'center', fontStyle: 'bold', textColor: [180, 83, 9], fillColor: [255, 248, 238] } },
+        { content: '-', styles: { halign: 'center' } },
+        { content: '-', styles: { halign: 'center' } },
+        { content: stats.totalJamLembur > 0 ? `${stats.totalJamLembur} Jam` : '-', styles: { halign: 'center', fontStyle: 'bold', textColor: [29, 78, 216] } },
+        { content: `Izin/Sakit/Cuti: ${stats.totalIzinSakit + stats.totalCuti} Hari`, styles: { halign: 'left' } },
+        { content: '-', styles: { halign: 'center' } },
+        { content: stats.totalAlpa > 0 ? `${stats.totalAlpa} Alpa` : 'Nihil', styles: { halign: 'center', fontStyle: 'bold', textColor: stats.totalAlpa > 0 ? [190, 18, 60] : [71, 85, 105] } },
+      ]);
+
+      autoTable(doc, {
+        startY: 23,
+        tableWidth: contentWidth,
+        margin: { left: marginX, right: marginX },
+        head: header,
+        body: body,
+        theme: 'grid',
+        styles: {
+          fontSize: 6.8,
+          cellPadding: 0.42,
+          lineColor: [180, 190, 205],
+          lineWidth: 0.12,
+          overflow: 'ellipsize',
+        },
+        headStyles: {
+          fillColor: [233, 238, 245],
+          textColor: [30, 41, 59],
+          fontStyle: 'bold',
+          fontSize: 6.8,
+        },
+        columnStyles: {
+          0: { cellWidth: 9, halign: 'center' },   // NO
+          1: { cellWidth: 19, halign: 'center' },  // TANGGAL
+          2: { cellWidth: 14, halign: 'center' },  // MASUK
+          3: { cellWidth: 14, halign: 'center' },  // PULANG
+          4: { cellWidth: 14, halign: 'center' },  // TELAT
+          5: { cellWidth: 13, halign: 'center' },  // MULAI
+          6: { cellWidth: 13, halign: 'center' },  // SELESAI
+          7: { cellWidth: 21, halign: 'center' },  // REALISASI
+          8: { cellWidth: 88, halign: 'left' },    // URAIAN
+          9: { cellWidth: 46, halign: 'center' },  // KAUR
+          10: { cellWidth: 30, halign: 'center' }, // KET
+        },
+      });
+
+      const finalY = (doc as any).lastAutoTable.finalY;
+
+      // 3. KOTAK REKAPAN RINGKAS (6 BLOK INDIKATOR)
+      const boxY = finalY + 2.5;
+      const boxWidth = contentWidth / 6;
+      const boxHeight = 7.5;
+      const metrics = [
+        { label: 'TOTAL HADIR', val: `${stats.totalHadir} Hari`, color: [4, 120, 87] },
+        { label: 'KETERLAMBATAN', val: `${stats.totalTelatMnt} Mnt (${stats.totalTelatKali}x)`, color: [180, 83, 9] },
+        { label: 'JAM LEMBUR', val: `${stats.totalJamLembur} Jam`, color: [29, 78, 216] },
+        { label: 'LIBUR / OFF', val: `${stats.totalOff} Hari`, color: [71, 85, 105] },
+        { label: 'IZIN / SAKIT / CUTI', val: `${stats.totalIzinSakit + stats.totalCuti} Hari`, color: [126, 34, 206] },
+        { label: 'MANGKIR / ALPA', val: `${stats.totalAlpa} Hari`, color: [190, 18, 60] },
+      ];
+
+      metrics.forEach((m, idx) => {
+        const bx = marginX + idx * boxWidth;
+        doc.setDrawColor(200, 210, 225);
+        doc.setFillColor(248, 250, 252);
+        doc.rect(bx, boxY, boxWidth - 1, boxHeight, 'FD');
+
+        doc.setFontSize(5.5);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(71, 85, 105);
+        doc.text(m.label, bx + (boxWidth - 1) / 2, boxY + 2.7, { align: 'center' });
+
+        doc.setFontSize(7.2);
+        doc.setTextColor(m.color[0], m.color[1], m.color[2]);
+        doc.text(m.val, bx + (boxWidth - 1) / 2, boxY + 6.1, { align: 'center' });
+      });
+
+      // 4. PENGESAHAN & TANDA TANGAN RESMI 3 KOLOM
+      const sigY = boxY + boxHeight + 3.2;
+      doc.setFontSize(6.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Pangkep / Makassar, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageWidth - marginX - 1, sigY, { align: 'right' });
+
+      const sigColWidth = contentWidth / 3;
+      const titlesY = sigY + 3.2;
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(30, 41, 59);
+
+      doc.text('Karyawan Yang Bersangkutan,', marginX + sigColWidth * 0.5, titlesY, { align: 'center' });
+      doc.text('Memerintahkan (KAUR),', marginX + sigColWidth * 1.5, titlesY, { align: 'center' });
+      doc.text('Mengetahui / Menyetujui,', marginX + sigColWidth * 2.5, titlesY, { align: 'center' });
+
+      const nameY = titlesY + 14;
+      doc.text(`( ${user.fullName} )`, marginX + sigColWidth * 0.5, nameY, { align: 'center' });
+      doc.text(`( ${employeeKaur || '........................................'} )`, marginX + sigColWidth * 1.5, nameY, { align: 'center' });
+      doc.text('( Alam AS simpuang ago, S.Sos / Reski Faisal )', marginX + sigColWidth * 2.5, nameY, { align: 'center' });
+
+      const subY = nameY + 3.2;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`NIP. ${user.nip}`, marginX + sigColWidth * 0.5, subY, { align: 'center' });
+      doc.text('Pengawas Lapangan / KAUR', marginX + sigColWidth * 1.5, subY, { align: 'center' });
+      doc.text('Direktur Utama / Pimpinan PT. FRP', marginX + sigColWidth * 2.5, subY, { align: 'center' });
 
       const cleanName = user.fullName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
       const cleanNip = user.nip.replace(/[^a-zA-Z0-9]/g, '_');
       const filename = `Laporan_Presensi_Lembur_${cleanNip}_${cleanName}_${selectedMonth}.pdf`;
-      pdf.save(filename);
-      toast.success(`Laporan PDF (1 Halaman Pas) berhasil diunduh: ${filename}`);
+      doc.save(filename);
+      toast.success(`Laporan PDF (1 Halaman Penuh Presisi) berhasil diunduh: ${filename}`);
     } catch (error) {
-      console.error('Gagal generate PDF via canvas:', error);
-      toast.error('Gagal membuat PDF otomatis. Mengalihkan ke dialog cetak...');
-      window.print();
+      console.error('Gagal generate PDF:', error);
+      toast.error('Gagal membuat PDF otomatis.');
     } finally {
       setIsGeneratingPdf(false);
     }
