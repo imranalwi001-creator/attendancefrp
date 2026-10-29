@@ -2147,23 +2147,55 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       }
     }
 
-    // Cek apakah karyawan masih memiliki presensi aktif yang belum clock-out
-    // Pada sesi simulasi, prioritaskan pencarian rekaman simulasi yang belum clock-out
+    // Auto-close presensi terbuka dari hari-hari sebelumnya yang belum clock-out agar tidak memblokir presensi hari ini
+    await pool.query(
+      `UPDATE hrm_attendances 
+       SET clock_out = COALESCE(
+         (SELECT COALESCE(s.end_time, '16:30')::time FROM hrm_profiles p LEFT JOIN hrm_shifts s ON p.shift_id = s.id WHERE p.id = $1),
+         '16:30'::time
+       ),
+       auto_closed_type = 'AUTO_CLOCKOUT_PREVIOUS_DAY',
+       notes = COALESCE(notes, '') || ' [Auto-closed sistem: presensi hari berikutnya]',
+       updated_at = NOW()
+       WHERE user_id = $1 AND attendance_date < $2::date AND clock_out IS NULL;`,
+      [validUserId, date]
+    ).catch(e => console.warn('[AutoClosePastDays Warning]:', e.message));
+
+    // Cek apakah karyawan masih memiliki presensi aktif KHUSUS HARI INI yang belum clock-out
     const openAttRes = isSimulationSession
       ? await pool.query(
-          `SELECT * FROM hrm_attendances WHERE user_id = $1 AND clock_out IS NULL AND (is_simulation = true OR notes LIKE '%[SIMULASI%') ORDER BY created_at DESC LIMIT 1`,
-          [validUserId]
+          `SELECT * FROM hrm_attendances WHERE user_id = $1 AND attendance_date = $2::date AND clock_out IS NULL AND (is_simulation = true OR notes LIKE '%[SIMULASI%') ORDER BY created_at DESC LIMIT 1`,
+          [validUserId, date]
         )
       : await pool.query(
-          `SELECT * FROM hrm_attendances WHERE user_id = $1 AND clock_out IS NULL ORDER BY created_at DESC LIMIT 1`,
-          [validUserId]
+          `SELECT * FROM hrm_attendances WHERE user_id = $1 AND attendance_date = $2::date AND clock_out IS NULL ORDER BY created_at DESC LIMIT 1`,
+          [validUserId, date]
         );
 
     let result;
     const flagsJson = JSON.stringify(Array.isArray(detectedFlags) ? detectedFlags : []);
     if (openAttRes.rows.length > 0) {
-      // Jika karyawan sudah dalam status clock-in dan belum clock-out, pertahankan rekaman aktif
-      result = openAttRes;
+      // Jika karyawan sudah dalam status clock-in dan belum clock-out hari ini, perbarui foto/koordinat jika ada
+      const existingAtt = openAttRes.rows[0];
+      const updateQuery = `
+        UPDATE hrm_attendances SET
+          photo_in = COALESCE($1, photo_in),
+          lat_in = COALESCE($2, lat_in),
+          long_in = COALESCE($3, long_in),
+          biometric_score = COALESCE($4, biometric_score),
+          biometric_match = COALESCE($5, biometric_match),
+          updated_at = NOW()
+        WHERE id = $6
+        RETURNING *;
+      `;
+      result = await pool.query(updateQuery, [
+        photo || null,
+        latitude || null,
+        longitude || null,
+        computedBiometricScore != null ? computedBiometricScore : null,
+        computedBiometricMatch != null ? computedBiometricMatch : null,
+        existingAtt.id
+      ]);
     } else {
       // Server-side authoritative late minutes computation
       let finalStatus = 'hadir';
@@ -2198,7 +2230,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         }
       }
 
-      // Buat rekaman presensi baru (mendukung multi-shift berurutan: Shift 1 -> Shift 2 -> Shift 3)
+      // Buat rekaman presensi baru atau update jika sudah ada row hari ini (misal status alfa auto-mangkir)
       const finalNotes = isSimulationSession
         ? `[SIMULASI SOSIALISASI] ${notes || ''}`.trim()
         : (notes || '');
@@ -2207,8 +2239,33 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         INSERT INTO hrm_attendances (
           user_id, attendance_date, clock_in, photo_in, lat_in, long_in, status, late_minutes, notes,
           biometric_score, biometric_match, geofence_distance_meters, geofence_valid, is_mock_location, security_flags,
-          shift_id, shift_name, is_simulation
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+          shift_id, shift_name, is_simulation, is_verified, is_locked, is_perimeter_breached, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, true, false, false, NOW(), NOW())
+        ON CONFLICT (user_id, attendance_date) DO UPDATE
+        SET clock_in = EXCLUDED.clock_in,
+            photo_in = COALESCE(EXCLUDED.photo_in, hrm_attendances.photo_in),
+            lat_in = COALESCE(EXCLUDED.lat_in, hrm_attendances.lat_in),
+            long_in = COALESCE(EXCLUDED.long_in, hrm_attendances.long_in),
+            status = EXCLUDED.status,
+            late_minutes = EXCLUDED.late_minutes,
+            notes = CASE 
+              WHEN hrm_attendances.notes IS NOT NULL AND hrm_attendances.notes != '' AND hrm_attendances.notes NOT LIKE '%MANGKIR%'
+              THEN hrm_attendances.notes || ' | ' || EXCLUDED.notes 
+              ELSE EXCLUDED.notes 
+            END,
+            biometric_score = COALESCE(EXCLUDED.biometric_score, hrm_attendances.biometric_score),
+            biometric_match = COALESCE(EXCLUDED.biometric_match, hrm_attendances.biometric_match),
+            geofence_distance_meters = COALESCE(EXCLUDED.geofence_distance_meters, hrm_attendances.geofence_distance_meters),
+            geofence_valid = EXCLUDED.geofence_valid,
+            is_mock_location = EXCLUDED.is_mock_location,
+            security_flags = EXCLUDED.security_flags,
+            shift_id = COALESCE(EXCLUDED.shift_id, hrm_attendances.shift_id),
+            shift_name = COALESCE(EXCLUDED.shift_name, hrm_attendances.shift_name),
+            is_simulation = EXCLUDED.is_simulation,
+            is_verified = true,
+            is_locked = false,
+            is_perimeter_breached = false,
+            updated_at = NOW()
         RETURNING *;
       `;
       result = await pool.query(query, [

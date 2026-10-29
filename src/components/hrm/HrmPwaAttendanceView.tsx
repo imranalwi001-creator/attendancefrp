@@ -2877,6 +2877,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`, JSON.stringify(normSaved));
           }
         } catch (e) {}
+        window.dispatchEvent(new Event('hrm_attendance_updated'));
       }
 
       // Haptic feedback
@@ -3102,10 +3103,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return 'Selamat Malam';
   }, [currentTime]);
 
-  const isCurrentlyOnDuty = Boolean(todayAttendance?.clockIn && !todayAttendance?.clockOut);
-  const isCurrentSessionClosed = Boolean(todayAttendance?.clockIn && todayAttendance?.clockOut);
-  const hasClockedIn = Boolean(todayAttendance?.clockIn);
-  const hasClockedOut = Boolean(todayAttendance?.clockOut);
+  const isCurrentlyOnDuty = Boolean((todayAttendance?.clockIn || todayAttendance?.clock_in) && (!todayAttendance?.clockOut && !todayAttendance?.clock_out));
+  const isCurrentSessionClosed = Boolean((todayAttendance?.clockIn || todayAttendance?.clock_in) && (todayAttendance?.clockOut || todayAttendance?.clock_out));
+  const hasClockedIn = Boolean(todayAttendance?.clockIn || todayAttendance?.clock_in);
+  const hasClockedOut = Boolean(todayAttendance?.clockOut || todayAttendance?.clock_out);
   const isFieldSpecial = isSpecialDutyOfficer(user);
 
   // 1. Cuti / Izin / Sakit yang Disetujui Hari Ini
@@ -6390,6 +6391,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               try {
                 localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`, JSON.stringify(normSaved));
               } catch (e) {}
+              window.dispatchEvent(new Event('hrm_attendance_updated'));
             }
 
             if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
