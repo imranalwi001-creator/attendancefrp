@@ -822,6 +822,9 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
             </div>
 
             {/* Official Signatures Block (Bottom Section) */}
+            <div className="text-right text-[10px] text-slate-600 mt-6 font-medium">
+              Pangkep, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+            </div>
             {isSpecialTarget ? (
               <div className="mt-8 pt-4 grid grid-cols-2 gap-8 text-center text-xs font-serif">
                 <div>

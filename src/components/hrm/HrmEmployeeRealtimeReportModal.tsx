@@ -79,6 +79,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
   const [serverAttendances, setServerAttendances] = useState<AttendanceRecord[]>([]);
   const [serverOvertimes, setServerOvertimes] = useState<OvertimeRecord[]>([]);
+  const [serverLeaves, setServerLeaves] = useState<any[]>([]);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
 
   // Tab view: format lembar kerja resmi vs forensik
@@ -207,7 +208,25 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         setServerOvertimes(localOt);
       });
 
-    Promise.allSettled([attPromise, otPromise]).finally(() => {
+    // Fetch leaves dari API & LocalStorage
+    const leavePromise = api
+      .get<{ success: boolean; data?: any[] }>(`/leaves?userId=${encodeURIComponent(user.id)}`)
+      .then((res) => {
+        if (!isMounted) return;
+        if (res && res.success && Array.isArray(res.data)) {
+          setServerLeaves(res.data);
+        } else {
+          const localLeaves = hrmService.getLeaveRequests().filter((l) => validIds.includes(l.userId) || validIds.includes(l.userNip));
+          setServerLeaves(localLeaves);
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        const localLeaves = hrmService.getLeaveRequests().filter((l) => validIds.includes(l.userId) || validIds.includes(l.userNip));
+        setServerLeaves(localLeaves);
+      });
+
+    Promise.allSettled([attPromise, otPromise, leavePromise]).finally(() => {
       if (isMounted) setIsLoadingData(false);
     });
 
@@ -215,6 +234,31 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       isMounted = false;
     };
   }, [isOpen, user, allAttendances]);
+
+  // Status Cuti Karyawan Realtime (Sinkron Database PostgreSQL & Quota Tracking)
+  const leaveStats = useMemo(() => {
+    if (!user) return { quota: 12, used: 0, remaining: 12 };
+    const quota = Number(user.annualLeaveQuota ?? (user as any).annual_leave_quota ?? 12);
+    const profileUsed = Number(user.usedLeaveDays ?? (user as any).used_leave_days ?? 0);
+
+    const validIds = [user.id, user.nip, user.email].filter(Boolean).map((s) => String(s).toLowerCase().trim());
+    const leaveSource = serverLeaves.length > 0 ? serverLeaves : hrmService.getLeaveRequests();
+    const approvedCutiList = leaveSource.filter((l: any) => {
+      const uId = String(l.userId || l.user_id || '').toLowerCase().trim();
+      const uNip = String(l.userNip || l.user_nip || l.nip || '').toLowerCase().trim();
+      const match = validIds.includes(uId) || (uNip && validIds.includes(uNip));
+      const isApproved = String(l.status || '').toLowerCase() === 'approved';
+      const lType = String(l.leaveType || l.leave_type || '').toLowerCase();
+      const isCuti = lType.includes('cuti') || lType === 'annual_leave';
+      return match && isApproved && isCuti;
+    });
+
+    const daysFromRequests = approvedCutiList.reduce((acc: number, l: any) => acc + Number(l.totalDays || l.total_days || 1), 0);
+    const used = Math.max(profileUsed, daysFromRequests);
+    const remaining = Math.max(0, quota - used);
+
+    return { quota, used, remaining };
+  }, [user, serverLeaves]);
 
   // Gabungkan attendance hari ini agar realtime
   const combinedAttendances = useMemo(() => {
@@ -494,10 +538,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     wsData.push([`REKAPITULASI PRESENSI & LEMBUR - BULAN ${monthLabel.toUpperCase()}`]);
     wsData.push([]);
 
-    // Kotak Metadata Karyawan (Sesuai Lampiran)
-    wsData.push(['NAMA', ':', user.fullName, '', '', 'SEKSI', ':', employeeSeksi]);
-    wsData.push(['NO.ID', ':', user.nip, '', '', 'UNIT', ':', employeeUnit]);
-    wsData.push(['POLA SHIFT', ':', employeeShiftPattern, '', '', 'DEPARTEMEN', ':', employeeDept]);
+    // Kotak Metadata Karyawan (Sesuai Lampiran + Informasi Cuti Realtime)
+    wsData.push(['NAMA', ':', user.fullName, '', '', 'SEKSI', ':', employeeSeksi, '', 'HAK CUTI TAHUNAN', ':', `${leaveStats.quota} Hari`]);
+    wsData.push(['NO.ID', ':', user.nip, '', '', 'UNIT', ':', employeeUnit, '', 'CUTI TERPAKAI', ':', `${leaveStats.used} Hari (Realtime)`]);
+    wsData.push(['POLA SHIFT', ':', employeeShiftPattern, '', '', 'DEPARTEMEN', ':', employeeDept, '', 'SISA CUTI', ':', `${leaveStats.remaining} Hari`]);
     wsData.push([]);
 
     // Baris Header Tabel Tingkat 1
@@ -577,6 +621,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     wsData.push([]);
 
     // Tanda Tangan Pengesahan (Khusus Petugas Lapangan Khusus Pimpinan 2 Kolom, Reguler 3 Kolom)
+    const exportCityDate = `Pangkep, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`;
+    wsData.push(['', '', '', '', '', '', '', '', exportCityDate]);
     if (isSpecialTarget) {
       wsData.push([
         '',
@@ -701,10 +747,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
 
   // Unduh Langsung Dokumen PDF (.pdf) Otomatis - VEKTOR ASLI PRESTINE 1 HALAMAN PENUH
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
     if (!user) return;
     setIsGeneratingPdf(true);
-    toast.info('Membuat dokumen PDF resmi presisi 1 halaman...');
+    toast.info('Membuat dokumen PDF resmi dengan Kop & Logo...');
 
     try {
       const doc = new jsPDF({
@@ -717,51 +763,172 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       const marginX = 8;
       const contentWidth = pageWidth - marginX * 2; // 281mm
 
-      // 1. KOTAK INFORMASI PEGAWAI (HEADER BOX)
-      doc.setDrawColor(180, 190, 205);
-      doc.setLineWidth(0.25);
-      doc.setFillColor(250, 252, 255);
-      doc.rect(marginX, 6, contentWidth, 15, 'FD');
+      // Helper load image data to base64 Data URL
+      const loadImgData = (src: string): Promise<string> => {
+        return new Promise((resolve) => {
+          if (!src) {
+            resolve('');
+            return;
+          }
+          if (src.startsWith('data:')) {
+            resolve(src);
+            return;
+          }
+          const img = new Image();
+          img.crossOrigin = 'Anonymous';
+          img.onload = () => {
+            try {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth || img.width;
+              canvas.height = img.naturalHeight || img.height;
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(img, 0, 0);
+                resolve(canvas.toDataURL('image/png'));
+              } else {
+                resolve(src);
+              }
+            } catch {
+              resolve(src);
+            }
+          };
+          img.onerror = () => resolve(src);
+          img.src = src;
+        });
+      };
+
+      // 0. KOP SURAT RESMI PT. FAWWAZ RESKI PERWIRA & LOGO
+      const logoSrc = appSettings?.companyLogo || defaultLogo;
+      try {
+        const logoData = await loadImgData(logoSrc);
+        if (logoData) {
+          doc.addImage(logoData, 'PNG', marginX + 1, 5, 14, 14);
+        }
+      } catch (e) {
+        console.warn('Gagal memuat logo untuk PDF:', e);
+      }
+
+      // Keterangan Instansi di samping logo
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text('PT. FAWWAZ RESKI PERWIRA', marginX + 17, 9.5);
 
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.5);
+      doc.setFontSize(7.2);
+      doc.setTextColor(4, 120, 87);
+      doc.text('PENGELOLAAN FASILITAS OPERASIONAL & SUMBER DAYA KARYAWAN', marginX + 17, 13.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.2);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Tamanroja Desa Batara, Kec. Minasatene, Kab. Pangkep, Sulawesi Selatan 90651 • Web: fawwazreskiperwira.com', marginX + 17, 17.5);
+
+      // Kanan Kop: Judul Dokumen & Periode
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text('LEMBAR REKAPITULASI PRESENSI & LEMBUR', pageWidth - marginX - 1, 9.5, { align: 'right' });
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(29, 78, 216);
+      doc.text(`Periode: ${monthLabel.toUpperCase()}`, pageWidth - marginX - 1, 14, { align: 'right' });
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.2);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Format Resmi Dokumen Lampiran 2', pageWidth - marginX - 1, 17.5, { align: 'right' });
+
+      // Garis Ganda Pembatas Kop Surat
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.35);
+      doc.line(marginX, 21, pageWidth - marginX, 21);
+
+      doc.setLineWidth(0.12);
+      doc.line(marginX, 21.7, pageWidth - marginX, 21.7);
+
+      // 1. KOTAK INFORMASI PEGAWAI & STATUS CUTI REALTIME (HEADER BOX)
+      const boxY = 23.5;
+      const boxH = 14;
+      doc.setDrawColor(180, 190, 205);
+      doc.setLineWidth(0.2);
+      doc.setFillColor(250, 252, 255);
+      doc.rect(marginX, boxY, contentWidth, boxH, 'FD');
+
+      // Kolom 1 (Data Diri)
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
       doc.setTextColor(30, 41, 59);
 
-      // Kolom Kiri
-      doc.text('NAMA', marginX + 3, 10.2);
-      doc.text(':', marginX + 26, 10.2);
-      doc.text((user.fullName || '').toUpperCase(), marginX + 29, 10.2);
+      doc.text('NAMA', marginX + 3, boxY + 3.8);
+      doc.text(':', marginX + 22, boxY + 3.8);
+      doc.text((user.fullName || '').toUpperCase(), marginX + 25, boxY + 3.8);
 
-      doc.text('NO.ID', marginX + 3, 14.2);
-      doc.text(':', marginX + 26, 14.2);
+      doc.text('NO.ID', marginX + 3, boxY + 7.5);
+      doc.text(':', marginX + 22, boxY + 7.5);
       doc.setFont('helvetica', 'normal');
-      doc.text(user.nip || '-', marginX + 29, 14.2);
-
-      doc.setFont('helvetica', 'bold');
-      doc.text('POLA SHIFT', marginX + 3, 18.2);
-      doc.text(':', marginX + 26, 18.2);
-      doc.setFont('helvetica', 'normal');
-      doc.text(employeeShiftPattern || 'SIFT NORMAL ( 2/1/3)', marginX + 29, 18.2);
-
-      // Kolom Kanan
-      const rightColX = marginX + 142;
-      doc.setFont('helvetica', 'bold');
-      doc.text('SEKSI', rightColX, 10.2);
-      doc.text(':', rightColX + 26, 10.2);
-      doc.setFont('helvetica', 'normal');
-      doc.text(employeeSeksi || '-', rightColX + 29, 10.2);
+      doc.text(user.nip || '-', marginX + 25, boxY + 7.5);
 
       doc.setFont('helvetica', 'bold');
-      doc.text('UNIT', rightColX, 14.2);
-      doc.text(':', rightColX + 26, 14.2);
+      doc.text('POLA SHIFT', marginX + 3, boxY + 11.2);
+      doc.text(':', marginX + 22, boxY + 11.2);
       doc.setFont('helvetica', 'normal');
-      doc.text(employeeUnit || '-', rightColX + 29, 14.2);
+      doc.text(employeeShiftPattern || 'SIFT NORMAL ( 2/1/3)', marginX + 25, boxY + 11.2);
+
+      // Kolom 2 (Divisi/Unit)
+      const midColX = marginX + 98;
+      doc.setFont('helvetica', 'bold');
+      doc.text('SEKSI', midColX, boxY + 3.8);
+      doc.text(':', midColX + 22, boxY + 3.8);
+      doc.setFont('helvetica', 'normal');
+      doc.text(employeeSeksi || '-', midColX + 25, boxY + 3.8);
 
       doc.setFont('helvetica', 'bold');
-      doc.text('DEPARTEMEN', rightColX, 18.2);
-      doc.text(':', rightColX + 26, 18.2);
+      doc.text('UNIT', midColX, boxY + 7.5);
+      doc.text(':', midColX + 22, boxY + 7.5);
       doc.setFont('helvetica', 'normal');
-      doc.text(employeeDept || 'kantor pusat semen tonasa', rightColX + 29, 18.2);
+      doc.text(employeeUnit || '-', midColX + 25, boxY + 7.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text('DEPARTEMEN', midColX, boxY + 11.2);
+      doc.text(':', midColX + 22, boxY + 11.2);
+      doc.setFont('helvetica', 'normal');
+      doc.text(employeeDept || 'kantor pusat semen tonasa', midColX + 25, boxY + 11.2);
+
+      // Kolom 3 (Informasi Sisa Cuti Realtime)
+      const rightColX = marginX + 192;
+      doc.setFillColor(240, 253, 244); // light emerald
+      doc.setDrawColor(167, 243, 208);
+      doc.rect(rightColX - 2, boxY + 1, (pageWidth - marginX) - rightColX + 1, boxH - 2, 'FD');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.8);
+      doc.setTextColor(6, 95, 70); // emerald-800
+      doc.text('STATUS CUTI REALTIME', rightColX + 1, boxY + 3.8);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(51, 65, 85);
+      doc.text('KUOTA TAHUNAN', rightColX + 1, boxY + 7.2);
+      doc.text(':', rightColX + 30, boxY + 7.2);
+      doc.text(`${leaveStats.quota} Hari`, rightColX + 33, boxY + 7.2);
+
+      doc.text('CUTI TERPAKAI', rightColX + 1, boxY + 10.5);
+      doc.text(':', rightColX + 30, boxY + 10.5);
+      doc.text(`${leaveStats.used} Hari (Realtime)`, rightColX + 33, boxY + 10.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(4, 120, 87);
+      doc.text('SISA CUTI', rightColX + 54, boxY + 7.2);
+      doc.text(':', rightColX + 67, boxY + 7.2);
+      doc.setFontSize(7.5);
+      doc.text(`${leaveStats.remaining} Hari`, rightColX + 70, boxY + 7.2);
+
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(5.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text('*Update sinkron PostgreSQL', rightColX + 54, boxY + 10.5);
 
       // 2. TABEL PRESENSI & LEMBUR (2 TINGKAT)
       const header = [
@@ -835,15 +1002,15 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       ]);
 
       autoTable(doc, {
-        startY: 23,
+        startY: 39.5,
         tableWidth: contentWidth,
         margin: { left: marginX, right: marginX },
         head: header,
         body: body,
         theme: 'grid',
         styles: {
-          fontSize: 6.8,
-          cellPadding: 0.42,
+          fontSize: 6.2,
+          cellPadding: 0.32,
           lineColor: [180, 190, 205],
           lineWidth: 0.12,
           overflow: 'ellipsize',
@@ -852,7 +1019,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           fillColor: [233, 238, 245],
           textColor: [30, 41, 59],
           fontStyle: 'bold',
-          fontSize: 6.8,
+          fontSize: 6.2,
         },
         columnStyles: {
           0: { cellWidth: 9, halign: 'center' },   // NO
@@ -872,9 +1039,9 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       const finalY = (doc as any).lastAutoTable.finalY;
 
       // 3. KOTAK REKAPAN RINGKAS (8 BLOK INDIKATOR TERPISAH)
-      const boxY = finalY + 2.5;
+      const boxYMetrics = finalY + 2;
       const boxWidth = contentWidth / 8;
-      const boxHeight = 7.5;
+      const boxHeight = 7.2;
       const metrics = [
         { label: 'TOTAL HADIR', val: `${stats.totalHadir} Hari`, color: [4, 120, 87] },
         { label: 'KETERLAMBATAN', val: `${stats.totalTelatMnt}m (${stats.totalTelatKali}x)`, color: [180, 83, 9] },
@@ -890,24 +1057,24 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         const bx = marginX + idx * boxWidth;
         doc.setDrawColor(200, 210, 225);
         doc.setFillColor(248, 250, 252);
-        doc.rect(bx, boxY, boxWidth - 0.8, boxHeight, 'FD');
+        doc.rect(bx, boxYMetrics, boxWidth - 0.8, boxHeight, 'FD');
 
         doc.setFontSize(4.8);
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(71, 85, 105);
-        doc.text(m.label, bx + (boxWidth - 0.8) / 2, boxY + 2.7, { align: 'center' });
+        doc.text(m.label, bx + (boxWidth - 0.8) / 2, boxYMetrics + 2.5, { align: 'center' });
 
         doc.setFontSize(6.8);
         doc.setTextColor(m.color[0], m.color[1], m.color[2]);
-        doc.text(m.val, bx + (boxWidth - 0.8) / 2, boxY + 6.1, { align: 'center' });
+        doc.text(m.val, bx + (boxWidth - 0.8) / 2, boxYMetrics + 5.8, { align: 'center' });
       });
 
       // 4. PENGESAHAN & TANDA TANGAN (Khusus 3 Petugas Lapangan Khusus Pimpinan 2 Kolom, Reguler 3 Kolom)
-      const sigY = boxY + boxHeight + 3.2;
+      const sigY = boxYMetrics + boxHeight + 2.8;
       doc.setFontSize(6.5);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(100, 116, 139);
-      doc.text(`Pangkep / Makassar, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageWidth - marginX - 1, sigY, { align: 'right' });
+      doc.text(`Pangkep, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageWidth - marginX - 1, sigY, { align: 'right' });
 
       const titlesY = sigY + 3.2;
       doc.setFontSize(7.5);
@@ -1150,10 +1317,46 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
           {/* DOKUMEN CONTAINER (FORMAT PERSIS SEPERTI LAMPIRAN - DIOPTIMALKAN PAS 1 HALAMAN TUNGGAL) */}
           <div id="printable-timesheet-report" className="p-3 sm:p-5 space-y-2.5 max-w-[1240px] mx-auto bg-card text-foreground">
-            {/* KOTAK HEADER KARYAWAN (PERSIS SEPERTI GAMBAR LAMPIRAN) */}
+            {/* ═══ KOP SURAT RESMI PT. FAWWAZ RESKI PERWIRA & LOGO ═══ */}
+            <div className="flex items-center justify-between border-b-2 border-slate-800 dark:border-slate-300 pb-2.5 mb-2.5 gap-4">
+              <div className="flex items-center gap-3.5">
+                <img
+                  src={appSettings?.companyLogo || defaultLogo}
+                  alt="Logo PT. FRP"
+                  className="w-14 h-14 object-contain shrink-0"
+                />
+                <div>
+                  <h1 className="text-base sm:text-lg font-extrabold uppercase tracking-wider text-slate-900 dark:text-white leading-tight">
+                    PT. FAWWAZ RESKI PERWIRA
+                  </h1>
+                  <p className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide">
+                    PENGELOLAAN FASILITAS OPERASIONAL &amp; SUMBER DAYA KARYAWAN
+                  </p>
+                  <p className="text-[10px] text-muted-foreground leading-tight">
+                    Tamanroja Desa Batara, Minasatene, Kab. Pangkep, Sulawesi Selatan 90651 • Web: fawwazreskiperwira.com
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-right shrink-0">
+                <div className="inline-block border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 rounded-lg px-3 py-1.5 shadow-2xs">
+                  <p className="text-[9.5px] font-bold text-muted-foreground uppercase tracking-wider">
+                    DOKUMEN RESMI LAMPIRAN 2
+                  </p>
+                  <p className="text-xs font-black text-slate-900 dark:text-white uppercase">
+                    LEMBAR REKAPITULASI
+                  </p>
+                  <p className="text-[10px] font-bold text-primary font-mono">
+                    Periode: {monthLabel.toUpperCase()}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* KOTAK HEADER KARYAWAN & INFORMASI CUTI REALTIME */}
             <div className="border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40 rounded-sm p-2.5 text-[11px] font-sans leading-tight">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-y-1.5 gap-x-8">
-                {/* Kolom Kiri */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-y-2 gap-x-6">
+                {/* Kolom 1: Identitas Karyawan */}
                 <div className="space-y-1">
                   <div className="flex items-baseline">
                     <span className="w-24 font-bold text-slate-800 dark:text-slate-200">NAMA</span>
@@ -1178,7 +1381,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* Kolom Kanan */}
+                {/* Kolom 2: Penugasan Unit / Departemen */}
                 <div className="space-y-1">
                   <div className="flex items-baseline">
                     <span className="w-24 font-bold text-slate-800 dark:text-slate-200">SEKSI</span>
@@ -1200,6 +1403,30 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                     <span className="font-medium text-slate-800 dark:text-slate-300">
                       {employeeDept || 'kantor pusat semen tonasa'}
                     </span>
+                  </div>
+                </div>
+
+                {/* Kolom 3: Status Cuti Realtime Karyawan */}
+                <div className="space-y-1 bg-emerald-500/10 dark:bg-emerald-950/20 p-2 rounded-md border border-emerald-500/30">
+                  <div className="flex items-center justify-between pb-1 border-b border-emerald-500/20 text-[10.5px]">
+                    <span className="font-bold text-emerald-950 dark:text-emerald-200">
+                      STATUS CUTI REALTIME
+                    </span>
+                    <span className="text-[9px] font-mono text-emerald-700 dark:text-emerald-300 font-semibold">
+                      Kuotasi Tahunan
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between text-[10.5px]">
+                    <span className="text-slate-700 dark:text-slate-300">Total Hak Cuti:</span>
+                    <span className="font-bold font-mono text-slate-900 dark:text-white">{leaveStats.quota} Hari</span>
+                  </div>
+                  <div className="flex items-baseline justify-between text-[10.5px]">
+                    <span className="text-amber-700 dark:text-amber-400 font-medium">Cuti Terpakai:</span>
+                    <span className="font-bold font-mono text-amber-700 dark:text-amber-400">{leaveStats.used} Hari</span>
+                  </div>
+                  <div className="flex items-baseline justify-between text-[11px] pt-0.5 border-t border-emerald-500/20">
+                    <span className="font-bold text-emerald-800 dark:text-emerald-300">Sisa Cuti:</span>
+                    <span className="font-extrabold font-mono text-emerald-700 dark:text-emerald-300 text-xs">{leaveStats.remaining} Hari</span>
                   </div>
                 </div>
               </div>
@@ -1454,7 +1681,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
             {/* PENGESAHAN & TANDA TANGAN (3 KOLOM RESMI - KOMPAK 1 HALAMAN) */}
             <div className="pt-2 border-t border-slate-300 dark:border-slate-700">
               <div className="text-right text-[10px] text-muted-foreground mb-2 font-medium">
-                Pangkep / Makassar, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                Pangkep, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
               </div>
 
               {isSpecialTarget ? (
