@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/select';
 import { TimePicker } from '@/components/ui/time-picker';
 import { toast } from 'sonner';
-import { UserProfile, AttendanceRecord, Shift, AttendanceStatus } from '@/types/hrm';
+import { UserProfile, AttendanceRecord, Shift, AttendanceStatus, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
 import { hrmService } from '@/services/hrmService';
 import { hrmHolidayService, NationalHoliday } from '@/services/hrmHolidayService';
 import { resolveEffectiveShift } from '@/lib/hrmShiftResolver';
