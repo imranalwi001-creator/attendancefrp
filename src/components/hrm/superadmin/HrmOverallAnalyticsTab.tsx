@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { hrmService } from '@/services/hrmService';
-import { AttendanceRecord, UserProfile, OvertimeRecord, LeaveRequest, EmployeeKpiRecord, DisciplinaryRecord } from '@/types/hrm';
+import { AttendanceRecord, UserProfile, OvertimeRecord, LeaveRequest, EmployeeKpiRecord, DisciplinaryRecord, isOfficialFrEmployee } from '@/types/hrm';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -86,9 +86,9 @@ export const HrmOverallAnalyticsTab: React.FC = () => {
 
   const loadAllData = () => {
     setIsLoading(true);
-    setUsers(hrmService.getUsers());
+    setUsers(hrmService.getUsers().filter((u) => isOfficialFrEmployee(u)));
     setDivisions(hrmService.getDivisions());
-    setAttendances(hrmService.getAttendances());
+    setAttendances(hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip)));
     setOvertimes(hrmService.getOvertimeRecords());
     setLeaves(hrmService.getLeaves());
     setKpis(hrmService.getKpiRecords());

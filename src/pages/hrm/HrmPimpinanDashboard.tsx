@@ -3,7 +3,7 @@ import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { api } from '@/services/apiClient';
-import { UserProfile, AttendanceRecord } from '@/types/hrm';
+import { UserProfile, AttendanceRecord, isOfficialFrEmployee } from '@/types/hrm';
 import {
   Briefcase,
   Building2,
@@ -109,7 +109,7 @@ export const HrmPimpinanDashboard: React.FC = () => {
 
   // Basic States
   const [divisions, setDivisions] = useState(hrmService.getDivisions());
-  const [users, setUsers] = useState(hrmService.getUsers());
+  const [users, setUsers] = useState<UserProfile[]>(() => hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)));
   const [todayAttendances, setTodayAttendances] = useState<AttendanceRecord[]>([]);
   const [pendingLeaves, setPendingLeaves] = useState<any[]>([]);
   const [pendingOvertimes, setPendingOvertimes] = useState<any[]>([]);
@@ -179,7 +179,7 @@ export const HrmPimpinanDashboard: React.FC = () => {
       const atts = hrmService.getAttendances(todayStr);
       // Filter keluar akun pimpinan / direksi dari daftar presensi
       const sanitizedAtts = (atts || []).filter(
-        (a) => !isExecutiveAccount(a.userName, a.userNip, (a as any).userRole)
+        (a) => isOfficialFrEmployee(a.userNip) && !isExecutiveAccount(a.userName, a.userNip, (a as any).userRole)
       );
       setTodayAttendances(sanitizedAtts);
 
@@ -251,7 +251,7 @@ export const HrmPimpinanDashboard: React.FC = () => {
 
       // 8. Basic structures
       setDivisions(hrmService.getDivisions());
-      setUsers(hrmService.getUsers());
+      setUsers(hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)));
 
       // Record refresh timestamp
       const now = new Date();

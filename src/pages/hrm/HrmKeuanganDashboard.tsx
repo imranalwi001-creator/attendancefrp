@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService } from '@/services/hrmService';
+import { isOfficialFrEmployee } from '@/types/hrm';
 import { FileSpreadsheet, DollarSign, Clock, Download, Users } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -13,12 +14,12 @@ interface HrmKeuanganDashboardProps {
 
 export const HrmKeuanganDashboard: React.FC<HrmKeuanganDashboardProps> = ({ onSwitchToPwa }) => {
   const { user } = useHrmAuth();
-  const [attendances, setAttendances] = useState(hrmService.getAttendances());
-  const [users, setUsers] = useState(hrmService.getUsers());
+  const [attendances, setAttendances] = useState(() => hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip)));
+  const [users, setUsers] = useState(() => hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)));
 
   useEffect(() => {
-    setAttendances(hrmService.getAttendances());
-    setUsers(hrmService.getUsers());
+    setAttendances(hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip)));
+    setUsers(hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)));
   }, []);
 
   const totalLateMinutes = attendances.reduce((acc, a) => acc + (a.lateMinutes || 0), 0);

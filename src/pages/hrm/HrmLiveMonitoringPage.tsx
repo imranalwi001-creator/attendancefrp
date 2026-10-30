@@ -3,7 +3,7 @@ import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { toast } from 'sonner';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer } from '@/types/hrm';
+import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer, isOfficialFrEmployee } from '@/types/hrm';
 import { resolveEffectiveShift, calculateAttendanceLateness } from '@/lib/hrmShiftResolver';
 import {
   UserCheck,
@@ -262,7 +262,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     try {
       const res = await api.get<{ success: boolean; data: UserProfile[] }>('/users');
       if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
-        const activeUsers = res.data.filter((u) => u.isActive);
+        const activeUsers = res.data.filter((u) => u.isActive && isOfficialFrEmployee(u));
         setUsers(activeUsers);
         hrmService.setInMemoryUsers(res.data);
       }
@@ -273,13 +273,13 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
   const loadData = () => {
     const today = getTodayDateStr();
-    setUsers(hrmService.getUsers().filter((u) => u.isActive));
+    setUsers(hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)));
     setDivisions(hrmService.getDivisions());
-    const all = hrmService.getAttendances();
+    const all = hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip));
     setAllAttendances(all);
-    setAttendances(hrmService.getAttendances(today));
-    setOvertimes(hrmService.getOvertimeRecords());
-    setPerimeterViolations(hrmService.getPerimeterViolations());
+    setAttendances(hrmService.getAttendances(today).filter((a) => isOfficialFrEmployee(a.userNip)));
+    setOvertimes(hrmService.getOvertimeRecords().filter((o) => isOfficialFrEmployee(o.userNip)));
+    setPerimeterViolations(hrmService.getPerimeterViolations().filter((v) => isOfficialFrEmployee(v.userNip)));
     loadFieldAgents();
     fetchLiveUsersFast();
   };
@@ -291,12 +291,12 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
-          const freshTodayAtts: AttendanceRecord[] = json.data;
+          const freshTodayAtts: AttendanceRecord[] = json.data.filter((a) => isOfficialFrEmployee(a.userNip));
           setAttendances(freshTodayAtts);
           setAllAttendances((prev) => {
             const map = new Map(prev.map((a) => [a.id, a]));
             freshTodayAtts.forEach((a) => map.set(a.id, a));
-            return Array.from(map.values());
+            return Array.from(map.values()).filter((a) => isOfficialFrEmployee(a.userNip));
           });
         }
       }

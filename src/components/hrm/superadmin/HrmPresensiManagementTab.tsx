@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, AttendanceStatus, UserProfile, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
+import { AttendanceRecord, AttendanceStatus, UserProfile, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isOfficialFrEmployee } from '@/types/hrm';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -64,11 +64,11 @@ export const HrmPresensiManagementTab: React.FC = () => {
 
   const loadData = () => {
     setIsLoading(true);
-    const uList = hrmService.getUsers();
+    const uList = hrmService.getUsers().filter((u) => isOfficialFrEmployee(u));
     setUsers(uList);
     setDivisions(hrmService.getDivisions());
 
-    const atts = hrmService.getAttendances(selectedDate);
+    const atts = hrmService.getAttendances(selectedDate).filter((a) => isOfficialFrEmployee(a.userNip));
     setAttendances(atts);
     setIsLoading(false);
   };

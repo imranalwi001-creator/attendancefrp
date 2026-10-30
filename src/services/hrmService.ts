@@ -33,6 +33,7 @@ import {
   EmployeeKpiRecord,
   isLeadershipSpecialFieldOfficer,
   isSimulationAccount,
+  isOfficialFrEmployee,
   FiscalPeriodSettings,
   YearEndClosingRecord,
   HolidayOvertimeMode,

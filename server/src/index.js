@@ -359,31 +359,22 @@ function isExemptFieldOfficer(user) {
   return exemptEmails.includes(email) || exemptNips.includes(cleanNip) || exemptIds.includes(id);
 }
 
-// Helper: Akun Simulasi (Demo / Testing) yang dibebaskan dari rekapan mangkir, terlambat, gaji, lembur
+// Helper: Memeriksa apakah karyawan merupakan personil resmi PT FRP (NIP berawalan FR)
+function isOfficialFrEmployee(user) {
+  if (!user) return false;
+  let nip = '';
+  if (typeof user === 'string') {
+    nip = user.toUpperCase().trim().replace(/[\s.]/g, '');
+  } else {
+    nip = (user.nip || user.userNip || user.employee_nip || user.employeeNip || '').toUpperCase().trim().replace(/[\s.]/g, '');
+  }
+  return nip.startsWith('FR');
+}
+
+// Helper: Akun Simulasi (Semua akun selain yang memiliki NIP berawalan FR)
 function isSimulationAccount(user) {
   if (!user) return false;
-  let email = '';
-  let nip = '';
-  let name = '';
-  if (typeof user === 'string') {
-    email = user.toLowerCase().trim();
-    nip = user.toUpperCase().trim().replace(/[\s.]/g, '');
-    name = user.toLowerCase().trim();
-  } else {
-    email = (user.email || '').toLowerCase().trim();
-    nip = (user.nip || '').toUpperCase().trim().replace(/[\s.]/g, '');
-    name = (user.full_name || user.fullName || user.name || '').toLowerCase().trim();
-  }
-  return (
-    email.endsWith('@hrm.local') ||
-    ['SA001', 'ADM001', 'DIR001', 'FIN001', 'EMP001', 'EMP002', 'EMP007'].includes(nip) ||
-    name.includes('master super administrator') ||
-    name.includes('budi prakoso') ||
-    name.includes('anisa lestari') ||
-    name.includes('ahmad fauzi') ||
-    name.includes('dewi sartika') ||
-    name.includes('karyawan emp007')
-  );
+  return !isOfficialFrEmployee(user);
 }
 
 // Helper: Format PostgreSQL row to match TypeScript UserProfile
@@ -4337,8 +4328,7 @@ app.get('/api/payroll/slips', async (req, res) => {
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
       LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
       WHERE 1=1
-        AND p.email NOT LIKE '%@hrm.local'
-        AND p.nip NOT IN ('SA001', 'ADM001', 'DIR001', 'FIN001', 'EMP001', 'EMP002', 'EMP007')
+        AND UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'
     `;
     const params = [];
 
@@ -5608,6 +5598,10 @@ app.get('/api/attendances', async (req, res) => {
          LEFT JOIN hrm_divisions d ON p.division_id = d.id`;
     const params = [];
     const conditions = [];
+    // Rekapan hanya mencakup karyawan dengan NIP berawalan FR
+    if (!userId) {
+      conditions.push(`UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'`);
+    }
     if (date) {
       params.push(date);
       conditions.push(`a.attendance_date = $${params.length}`);
@@ -6678,6 +6672,10 @@ app.get('/api/leaves', async (req, res) => {
     `;
     const params = [];
     const conditions = [];
+    // Rekapan hanya mencakup karyawan dengan NIP berawalan FR
+    if (!userId) {
+      conditions.push(`UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'`);
+    }
 
     if (userId) {
       params.push(userId);
@@ -7576,6 +7574,10 @@ app.get('/api/overtime', async (req, res) => {
     `;
     const params = [];
     const conditions = [];
+    // Rekapan hanya mencakup karyawan dengan NIP berawalan FR
+    if (!userId) {
+      conditions.push(`UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'`);
+    }
 
     if (userId) {
       params.push(userId);
@@ -10615,8 +10617,7 @@ app.get('/api/employee-schedules', async (req, res) => {
       FROM hrm_employee_schedules s
       JOIN hrm_profiles p ON s.user_id = p.id
       WHERE 1=1
-        AND p.email NOT LIKE '%@hrm.local'
-        AND p.nip NOT IN ('SA001', 'ADM001', 'DIR001', 'FIN001', 'EMP001', 'EMP002', 'EMP007')
+        AND UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'
     `;
     const params = [];
 
@@ -11506,9 +11507,7 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
       FROM hrm_profiles p
       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
       WHERE p.is_active = true 
-        AND p.role_id NOT IN (SELECT id FROM hrm_roles WHERE name IN ('superadmin', 'pimpinan', 'dirut'))
-        AND p.nip NOT IN ('SA001', 'ADM001', 'DIR001', 'FIN001', 'EMP001', 'EMP002', 'EMP007')
-        AND p.email NOT LIKE '%@hrm.local'
+        AND UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'
         AND p.is_face_enrolled = true
         AND (p.face_embedding IS NOT NULL OR p.face_descriptor IS NOT NULL)
     `);
@@ -11516,8 +11515,8 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
     let markedCount = 0;
 
     for (const emp of usersRes.rows) {
-      // Safeguard ganda: Akun simulasi atau belum enroll wajah tidak boleh mangkir
-      if (isSimulationAccount(emp) || !emp.is_face_enrolled || !emp.has_face) {
+      // Safeguard ganda: Hanya personil resmi NIP FR dan sudah enroll wajah yang dievaluasi
+      if (!isOfficialFrEmployee(emp) || !emp.is_face_enrolled || !emp.has_face) {
         continue;
       }
 

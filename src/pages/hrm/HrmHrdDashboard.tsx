@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, LeaveRequest } from '@/types/hrm';
+import { AttendanceRecord, LeaveRequest, isOfficialFrEmployee } from '@/types/hrm';
 import { UserCheck, Clock, FileCheck2, Users, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -20,13 +20,13 @@ export const HrmHrdDashboard: React.FC<HrmHrdDashboardProps> = ({ onSwitchToPwa 
 
   useEffect(() => {
     const today = getTodayDateStr();
-    const atts = hrmService.getAttendances(today);
+    const atts = hrmService.getAttendances(today).filter((a) => isOfficialFrEmployee(a.userNip));
     setTodayAttendances(atts);
 
     const leaves = hrmService.getLeaves();
     setPendingLeaves(leaves.filter((l) => l.status === 'pending'));
 
-    setTotalEmployees(hrmService.getUsers().length);
+    setTotalEmployees(hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)).length);
   }, []);
 
   const hadirCount = todayAttendances.filter((a) => a.status === 'hadir').length;

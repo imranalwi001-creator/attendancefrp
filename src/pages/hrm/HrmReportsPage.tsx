@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile, Shift } from '@/types/hrm';
+import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile, Shift, isOfficialFrEmployee } from '@/types/hrm';
 import { HrmAbsenSplModal } from '@/components/hrm/HrmAbsenSplModal';
 import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMonthlyCalendarModal';
 import { HrmLeaveOvertimeLiabilityView } from '@/components/hrm/HrmLeaveOvertimeLiabilityView';
@@ -114,7 +114,7 @@ export const HrmReportsPage: React.FC = () => {
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
-          const monthAtts: AttendanceRecord[] = json.data;
+          const monthAtts: AttendanceRecord[] = json.data.filter((a: any) => isOfficialFrEmployee(a.userNip));
           setAttendances((prev) => {
             const map = new Map(prev.map((a) => [a.id, a]));
             monthAtts.forEach((a) => map.set(a.id, a));
@@ -130,12 +130,12 @@ export const HrmReportsPage: React.FC = () => {
   }, []);
 
   const loadData = () => {
-    setAttendances(hrmService.getAttendances());
-    setOvertimes(hrmService.getOvertimeRecords());
+    setAttendances(hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip)));
+    setOvertimes(hrmService.getOvertimeRecords().filter((o) => isOfficialFrEmployee(o.userNip)));
     setDivisions(hrmService.getDivisions());
     setAppSettings(hrmService.getAppSettings());
     setOffice(hrmService.getOfficeLocation());
-    setEmployees(hrmService.getUsers().filter((u) => u.isActive));
+    setEmployees(hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)));
     setAllShifts(hrmService.getShifts());
     fetchMonthAttendances(selectedMonth);
   };

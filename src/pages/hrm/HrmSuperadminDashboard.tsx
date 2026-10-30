@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
+import { isOfficialFrEmployee } from '@/types/hrm';
 import {
   ShieldCheck,
   Users,
@@ -64,7 +65,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
   const [rankings, setRankings] = useState<any[]>([]);
 
   useEffect(() => {
-    const users = hrmService.getUsers();
+    const users = hrmService.getUsers().filter((u) => isOfficialFrEmployee(u));
     setUserCount(users.length);
 
     const roles = hrmService.getRoles();
@@ -74,7 +75,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
     setDivisionCount(divs.length);
 
     const today = getTodayDateStr();
-    const atts = hrmService.getAttendances(today);
+    const atts = hrmService.getAttendances(today).filter((a) => isOfficialFrEmployee(a.userNip));
     setTodayAttCount(atts.length);
     setTodayLateCount(atts.filter((a) => a.status === 'terlambat').length);
 
