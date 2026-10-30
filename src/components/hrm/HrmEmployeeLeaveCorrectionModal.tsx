@@ -127,12 +127,13 @@ export const HrmEmployeeLeaveCorrectionModal: React.FC<HrmEmployeeLeaveCorrectio
       }
 
       // 2. Update state lokal hrmService
-      const updatedUser: UserProfile = {
-        ...currentUser,
+      const updatedUser = hrmService.updateUser(currentUser.id, {
         annualLeaveQuota: Number(quota),
         usedLeaveDays: Number(used),
-      };
-      hrmService.updateUser(updatedUser);
+      });
+
+      window.dispatchEvent(new Event('hrm_users_updated'));
+      window.dispatchEvent(new Event('hrm_data_updated'));
 
       toast.success(`Saldo cuti untuk ${currentUser.fullName} berhasil diperbarui!`, {
         description: `Hak Kuota: ${quota} Hari | Terpakai: ${used} Hari | Sisa: ${remaining} Hari`,

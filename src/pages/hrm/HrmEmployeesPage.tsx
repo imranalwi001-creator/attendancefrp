@@ -41,12 +41,15 @@ import {
   Sliders,
   Clock,
   CalendarCheck,
+  CalendarDays,
+  Edit3,
 } from 'lucide-react';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
 import { HrmAssignFieldLocationModal } from '@/components/hrm/HrmAssignFieldLocationModal';
 import { HrmEmployeePolicyModal } from '@/components/hrm/HrmEmployeePolicyModal';
 import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
 import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
+import { HrmEmployeeLeaveCorrectionModal } from '@/components/hrm/HrmEmployeeLeaveCorrectionModal';
 import {
   preprocessKtpImage,
   parseAndValidateNik,
@@ -108,6 +111,10 @@ export const HrmEmployeesPage: React.FC = () => {
   const [manualLemburUser, setManualLemburUser] = useState<UserProfile | null>(null);
   const [manualLeaveModalOpen, setManualLeaveModalOpen] = useState(false);
   const [manualLeaveUser, setManualLeaveUser] = useState<UserProfile | null>(null);
+
+  // Koreksi Saldo Cuti Realtime Database Modal State
+  const [leaveCorrectionModalOpen, setLeaveCorrectionModalOpen] = useState(false);
+  const [leaveCorrectionUser, setLeaveCorrectionUser] = useState<UserProfile | null>(null);
 
   // Bulk Import State
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
@@ -1088,11 +1095,25 @@ export const HrmEmployeesPage: React.FC = () => {
                           </Button>
                         )}
                       </td>
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <span className="font-medium text-foreground text-xs">{remaining} Hari</span>
-                        <span className="text-[10px] text-muted-foreground block">
-                          Terpakai: {u.usedLeaveDays || 0}
-                        </span>
+                      <td
+                        className="py-3 px-4 whitespace-nowrap cursor-pointer group/cuti hover:bg-emerald-500/10 rounded-lg transition-colors"
+                        onClick={() => {
+                          setLeaveCorrectionUser(u);
+                          setLeaveCorrectionModalOpen(true);
+                        }}
+                        title={`Klik untuk Koreksi Saldo Cuti Database - ${u.fullName}`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <div>
+                            <span className="font-semibold text-foreground text-xs block group-hover/cuti:text-emerald-700 dark:group-hover/cuti:text-emerald-300 transition-colors">
+                              {remaining} Hari
+                            </span>
+                            <span className="text-[10px] text-muted-foreground block">
+                              Terpakai: {u.usedLeaveDays || 0}
+                            </span>
+                          </div>
+                          <Edit3 className="w-3.5 h-3.5 text-emerald-600 opacity-60 group-hover/cuti:opacity-100 transition-opacity shrink-0" />
+                        </div>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
                         {u.isActive ? (
@@ -1165,6 +1186,20 @@ export const HrmEmployeesPage: React.FC = () => {
                             title={`Input Cuti & Izin Manual - ${u.fullName}`}
                           >
                             <CalendarCheck className="w-4 h-4 text-indigo-600" />
+                          </Button>
+
+                          {/* Koreksi Saldo Cuti Database Button */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setLeaveCorrectionUser(u);
+                              setLeaveCorrectionModalOpen(true);
+                            }}
+                            className="h-8 w-8 p-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/10 rounded-lg transition-colors"
+                            title={`Koreksi Saldo & Hak Cuti Database - ${u.fullName}`}
+                          >
+                            <CalendarDays className="w-4 h-4 text-emerald-600" />
                           </Button>
 
                           {/* Mutasi / Pindah Lokasi Button */}
@@ -2527,6 +2562,21 @@ export const HrmEmployeesPage: React.FC = () => {
         preselectedUser={manualLeaveUser}
         onSuccess={() => {
           loadData();
+        }}
+      />
+
+      {/* Modal Koreksi Saldo Cuti Karyawan Sinkron Database */}
+      <HrmEmployeeLeaveCorrectionModal
+        isOpen={leaveCorrectionModalOpen}
+        onClose={() => {
+          setLeaveCorrectionModalOpen(false);
+          setLeaveCorrectionUser(null);
+        }}
+        user={leaveCorrectionUser}
+        currentQuota={leaveCorrectionUser?.annualLeaveQuota ?? 12}
+        currentUsed={leaveCorrectionUser?.usedLeaveDays ?? 0}
+        onSaved={async () => {
+          await loadData();
         }}
       />
     </div>
