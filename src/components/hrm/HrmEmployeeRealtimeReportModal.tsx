@@ -57,6 +57,12 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   allAttendances = [],
   shift,
 }) => {
+  // 3 Petugas Lapangan Khusus Pimpinan (Muh Aslam Faisal, La Unga Samsi, Takdir)
+  const isSpecialTarget = useMemo(() => {
+    if (!user) return false;
+    return isLeadershipSpecialFieldOfficer(user) || isSpecialDutyOfficer(user);
+  }, [user]);
+
   const todayStr = getTodayDateStr(); // e.g. '2026-10-29'
   const currentMonthStr = todayStr.slice(0, 7); // e.g. '2026-10'
 

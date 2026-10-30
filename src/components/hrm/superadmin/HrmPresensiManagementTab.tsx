@@ -130,11 +130,12 @@ export const HrmPresensiManagementTab: React.FC = () => {
   // Helper hitung keterlambatan otomatis berdasarkan Shift & Jam Masuk
   const computeTabLateness = (userId?: string, dateStr?: string, clockInStr?: string) => {
     const userObj = users.find((u) => u.id === userId);
-    const isSpecial = isLeadershipSpecialFieldOfficer(userObj) || isSpecialDutyOfficer(userObj);
+    const isLeadership = isLeadershipSpecialFieldOfficer(userObj);
+    const isSpecial = isLeadership || isSpecialDutyOfficer(userObj);
     const sched = userObj && dateStr ? hrmService.getEmployeeTodaySchedule(userObj.id, dateStr) : null;
     const targetShift = resolveEffectiveShift(userObj, shifts, sched);
-    const shiftStartTime = targetShift?.startTime?.substring(0, 5) || (isSpecial ? '08:00' : '07:30');
-    const tolerance = userObj?.lateToleranceMinutes ?? targetShift?.lateToleranceMinutes ?? 15;
+    const shiftStartTime = isLeadership ? '08:00' : (targetShift?.startTime?.substring(0, 5) || (isSpecial ? '08:00' : '07:30'));
+    const tolerance = isLeadership ? 15 : (userObj?.lateToleranceMinutes ?? targetShift?.lateToleranceMinutes ?? 15);
     const isCrossDay = Boolean(targetShift?.isCrossDay);
 
     if (!clockInStr || !clockInStr.includes(':')) {

@@ -1,4 +1,4 @@
-import { Shift, UserProfile, EmployeeSchedule, isSpecialDutyOfficer } from '@/types/hrm';
+import { Shift, UserProfile, EmployeeSchedule, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
 
 /**
  * Helper untuk mengekstrak jam dari string seperti "Shift III (22:30 - 07:30 WITA)" atau "22:30 - 07:30"
@@ -33,10 +33,24 @@ export function resolveEffectiveShift(
   allShifts: Shift[],
   dailySchedule?: EmployeeSchedule | null
 ): Shift {
-  const isSpecialDuty = isSpecialDutyOfficer(user);
-
   // 0. KHUSUS 3 PETUGAS LAPANGAN KHUSUS PIMPINAN (Samsi, Takdir, Aslam):
   // Sesuai Instruksi Mutlak Pimpinan: Jam Masuk Baku 08:00 WITA dengan Toleransi 15 Menit (Batas Akhir Toleransi: 08:15 WITA)!
+  const isSpecialLeadership = isLeadershipSpecialFieldOfficer(user);
+  if (isSpecialLeadership) {
+    return {
+      id: 'shift-field-special-leadership',
+      code: 'FIELD-PIMPINAN',
+      name: 'Petugas Lapangan Khusus Pimpinan (08:00 - 16:00)',
+      startTime: '08:00',
+      endTime: '16:00',
+      lateToleranceMinutes: 15,
+      earliestClockInMinutes: 120,
+      isCrossDay: false,
+      colorTag: '#10b981',
+    };
+  }
+
+  const isSpecialDuty = isSpecialDutyOfficer(user);
   if (isSpecialDuty) {
     const sStart = (user?.customStartTime || (user as any)?.custom_start_time || '08:00').substring(0, 5);
     const sEnd = (user?.customEndTime || (user as any)?.custom_end_time || '16:00').substring(0, 5);

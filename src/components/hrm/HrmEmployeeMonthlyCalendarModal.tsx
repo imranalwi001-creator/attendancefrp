@@ -283,10 +283,11 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
   // Helper hitung keterlambatan otomatis berdasarkan Jam Masuk dan Shift aktif di tanggal terpilih
   const computeLateness = React.useCallback(
     (clockInStr: string, dateStr: string) => {
-      const isSpecial = isLeadershipSpecialFieldOfficer(user) || isSpecialDutyOfficer(user);
+      const isLeadership = isLeadershipSpecialFieldOfficer(user);
+      const isSpecial = isLeadership || isSpecialDutyOfficer(user);
       const targetShift = getShiftForDate(dateStr);
-      const shiftStartTime = targetShift?.startTime?.substring(0, 5) || (isSpecial ? '08:00' : '07:30');
-      const lateTolerance = user?.lateToleranceMinutes ?? targetShift?.lateToleranceMinutes ?? 15;
+      const shiftStartTime = isLeadership ? '08:00' : (targetShift?.startTime?.substring(0, 5) || (isSpecial ? '08:00' : '07:30'));
+      const lateTolerance = isLeadership ? 15 : (user?.lateToleranceMinutes ?? targetShift?.lateToleranceMinutes ?? 15);
       const isCrossDay = Boolean(targetShift?.isCrossDay);
 
       if (!clockInStr || !clockInStr.includes(':')) {
@@ -858,17 +859,13 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
 
                       // Hitung otomatis lateness dari jam masuk agar nilai keterlambatan sinkron & akurat
                       const computed = computeLateness(cIn, selectedDateStr);
-                      if (selectedRecord.status === 'terlambat') {
-                        setEditStatus('terlambat');
-                        setEditLateMinutes(computed.lateMinutes > 0 ? computed.lateMinutes : (selectedRecord.lateMinutes || 0));
-                      } else {
-                        setEditStatus(selectedRecord.status);
-                        setEditLateMinutes(selectedRecord.lateMinutes || 0);
-                      }
+                      setEditStatus(computed.status);
+                      setEditLateMinutes(computed.lateMinutes);
                     } else {
+                      const isLeadership = isLeadershipSpecialFieldOfficer(user);
                       const targetShift = getShiftForDate(selectedDateStr);
-                      const defaultStart = targetShift?.startTime?.substring(0, 5) || '07:30';
-                      const defaultEnd = targetShift?.endTime?.substring(0, 5) || '16:30';
+                      const defaultStart = isLeadership ? '08:00' : (targetShift?.startTime?.substring(0, 5) || '07:30');
+                      const defaultEnd = isLeadership ? '16:00' : (targetShift?.endTime?.substring(0, 5) || '16:30');
                       setEditStatus('hadir');
                       setEditClockIn(defaultStart);
                       setEditClockOut(defaultEnd);
