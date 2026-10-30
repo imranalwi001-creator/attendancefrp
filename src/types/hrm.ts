@@ -318,6 +318,32 @@ export const isSpecialDutyOfficer = (userOrNipOrEmail: any): boolean => {
   return isMobileOnlineOfficer(userOrNipOrEmail) || isLeadershipSpecialFieldOfficer(userOrNipOrEmail);
 };
 
+export const isSimulationAccount = (userOrNipOrEmail: any): boolean => {
+  if (!userOrNipOrEmail) return false;
+  let email = '';
+  let nip = '';
+  let name = '';
+  if (typeof userOrNipOrEmail === 'string') {
+    email = userOrNipOrEmail.toLowerCase().trim();
+    nip = userOrNipOrEmail.toUpperCase().trim().replace(/[\s.]/g, '');
+    name = userOrNipOrEmail.toLowerCase().trim();
+  } else {
+    email = (userOrNipOrEmail.email || '').toLowerCase().trim();
+    nip = (userOrNipOrEmail.nip || '').toUpperCase().trim().replace(/[\s.]/g, '');
+    name = (userOrNipOrEmail.fullName || userOrNipOrEmail.name || userOrNipOrEmail.employeeName || '').toLowerCase().trim();
+  }
+  return (
+    email.endsWith('@hrm.local') ||
+    ['SA001', 'ADM001', 'DIR001', 'FIN001', 'EMP001', 'EMP002', 'EMP007'].includes(nip) ||
+    name.includes('master super administrator') ||
+    name.includes('budi prakoso') ||
+    name.includes('anisa lestari') ||
+    name.includes('ahmad fauzi') ||
+    name.includes('dewi sartika') ||
+    name.includes('karyawan emp007')
+  );
+};
+
 
 export interface Division {
   id: string;

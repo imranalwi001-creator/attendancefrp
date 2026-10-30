@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, safeSetJson } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { UserProfile, Role, Division, Shift, EmployeeDocument, EmployeeDocumentType } from '@/types/hrm';
+import { UserProfile, Role, Division, Shift, EmployeeDocument, EmployeeDocumentType, isSimulationAccount } from '@/types/hrm';
 import {
   Users,
   Plus,
@@ -1033,6 +1033,11 @@ export const HrmEmployeesPage: React.FC = () => {
                           <div>
                             <div className="flex items-center gap-1.5">
                               <p className="font-semibold text-foreground">{u.fullName}</p>
+                              {isSimulationAccount(u) && (
+                                <Badge variant="outline" className="bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 text-[9px] py-0 px-1.5 font-medium">
+                                  Akun Simulasi
+                                </Badge>
+                              )}
                               {u.isFieldSentinelEnabled && (
                                 <Badge className="bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[9px] py-0 px-1.5 font-normal">
                                   Sentinel

@@ -359,6 +359,33 @@ function isExemptFieldOfficer(user) {
   return exemptEmails.includes(email) || exemptNips.includes(cleanNip) || exemptIds.includes(id);
 }
 
+// Helper: Akun Simulasi (Demo / Testing) yang dibebaskan dari rekapan mangkir, terlambat, gaji, lembur
+function isSimulationAccount(user) {
+  if (!user) return false;
+  let email = '';
+  let nip = '';
+  let name = '';
+  if (typeof user === 'string') {
+    email = user.toLowerCase().trim();
+    nip = user.toUpperCase().trim().replace(/[\s.]/g, '');
+    name = user.toLowerCase().trim();
+  } else {
+    email = (user.email || '').toLowerCase().trim();
+    nip = (user.nip || '').toUpperCase().trim().replace(/[\s.]/g, '');
+    name = (user.full_name || user.fullName || user.name || '').toLowerCase().trim();
+  }
+  return (
+    email.endsWith('@hrm.local') ||
+    ['SA001', 'ADM001', 'DIR001', 'FIN001', 'EMP001', 'EMP002', 'EMP007'].includes(nip) ||
+    name.includes('master super administrator') ||
+    name.includes('budi prakoso') ||
+    name.includes('anisa lestari') ||
+    name.includes('ahmad fauzi') ||
+    name.includes('dewi sartika') ||
+    name.includes('karyawan emp007')
+  );
+}
+
 // Helper: Format PostgreSQL row to match TypeScript UserProfile
 function formatUserRow(r) {
   const descriptor = parseDescriptorRow(r.face_descriptor) || parseDescriptorRow(r.face_embedding);
@@ -4310,6 +4337,8 @@ app.get('/api/payroll/slips', async (req, res) => {
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
       LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
       WHERE 1=1
+        AND p.email NOT LIKE '%@hrm.local'
+        AND p.nip NOT IN ('SA001', 'ADM001', 'DIR001', 'FIN001', 'EMP001', 'EMP002', 'EMP007')
     `;
     const params = [];
 
@@ -10586,6 +10615,8 @@ app.get('/api/employee-schedules', async (req, res) => {
       FROM hrm_employee_schedules s
       JOIN hrm_profiles p ON s.user_id = p.id
       WHERE 1=1
+        AND p.email NOT LIKE '%@hrm.local'
+        AND p.nip NOT IN ('SA001', 'ADM001', 'DIR001', 'FIN001', 'EMP001', 'EMP002', 'EMP007')
     `;
     const params = [];
 
@@ -11467,19 +11498,29 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
 
     console.log(`[Auto-Mangkir Engine] Memeriksa status ketidakhadiran untuk tanggal ${nowWitaDate} (pk ${nowWitaTime} WITA)...`);
 
-    // 1. Ambil seluruh karyawan aktif non-superadmin yang sudah mendaftar (termasuk jadwal & shift mereka)
+    // 1. Ambil seluruh karyawan aktif yang SUDAH TERDAFTAR BIOMETRIK WAJAH & BUKAN AKUN SIMULASI
     const usersRes = await pool.query(`
-      SELECT p.id, p.full_name, p.nip, p.phone, p.shift_id,
+      SELECT p.id, p.full_name, p.nip, p.email, p.phone, p.shift_id, p.is_face_enrolled,
+             (p.face_embedding IS NOT NULL OR p.face_descriptor IS NOT NULL) as has_face,
              s.name as shift_name, s.start_time as shift_start, s.end_time as shift_end, s.is_cross_day
       FROM hrm_profiles p
       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
       WHERE p.is_active = true 
         AND p.role_id NOT IN (SELECT id FROM hrm_roles WHERE name IN ('superadmin', 'pimpinan', 'dirut'))
+        AND p.nip NOT IN ('SA001', 'ADM001', 'DIR001', 'FIN001', 'EMP001', 'EMP002', 'EMP007')
+        AND p.email NOT LIKE '%@hrm.local'
+        AND p.is_face_enrolled = true
+        AND (p.face_embedding IS NOT NULL OR p.face_descriptor IS NOT NULL)
     `);
 
     let markedCount = 0;
 
     for (const emp of usersRes.rows) {
+      // Safeguard ganda: Akun simulasi atau belum enroll wajah tidak boleh mangkir
+      if (isSimulationAccount(emp) || !emp.is_face_enrolled || !emp.has_face) {
+        continue;
+      }
+
       // 2. Periksa apakah sudah ada presensi pada tanggal tersebut
       const attCheck = await pool.query(`
         SELECT id, status, clock_in FROM hrm_attendances 
@@ -11526,6 +11567,7 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
           $1, $2, 'alfa', 0, 0,
           0, false, $3, $4, $5, NOW(), NOW()
         )
+        ON CONFLICT DO NOTHING
       `, [emp.id, nowWitaDate, notesMsg, emp.shift_id, emp.shift_name || 'Shift Reguler']);
 
       markedCount++;

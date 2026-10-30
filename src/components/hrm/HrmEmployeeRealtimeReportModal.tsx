@@ -36,7 +36,7 @@ import {
   Loader2,
   CalendarCheck,
 } from 'lucide-react';
-import { UserProfile, AttendanceRecord, OvertimeRecord, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
+import { UserProfile, AttendanceRecord, OvertimeRecord, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isSimulationAccount } from '@/types/hrm';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
 import defaultLogo from '@/assets/logo.png';
@@ -430,6 +430,27 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         memerintahkanKaur = employeeKaur || '-';
       }
 
+      // Aturan Khusus Akun Simulasi & Akun Belum Terdaftar Wajah
+      const isSimUser = isSimulationAccount(user);
+      const isFaceEnrolled = Boolean(user?.isFaceEnrolled || user?.faceEnrolledPhoto || user?.faceDescriptor);
+
+      if (isSimUser) {
+        // Akun simulasi tidak diberlakukan rekapan mangkir, terlambat, lembur
+        if (ket === 'ALPA') ket = '-';
+        if (ket === 'TELAT') ket = 'HADIR';
+        telatMnt = '-';
+        realisasiJamLembur = '-';
+        lemburMulai = '-';
+        lemburSelesai = '-';
+        if (uraianPekerjaan === 'Mangkir / Tanpa Keterangan') {
+          uraianPekerjaan = '-';
+        }
+      } else if (!isFaceEnrolled && ket === 'ALPA') {
+        // Akun yang belum terdaftar wajah absensi belum bisa berlaku mangkir
+        ket = '-';
+        uraianPekerjaan = 'Belum Terdaftar Wajah Absensi';
+      }
+
       rows.push({
         no: day,
         tanggal: dateLabel,
@@ -494,6 +515,20 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       }
     });
 
+    if (isSimulationAccount(user)) {
+      return {
+        totalHadir,
+        totalTelatKali: 0,
+        totalTelatMnt: 0,
+        totalOff,
+        totalCuti,
+        totalIzin,
+        totalSakit,
+        totalAlpa: 0,
+        totalJamLembur: 0,
+      };
+    }
+
     return {
       totalHadir,
       totalTelatKali,
@@ -505,7 +540,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       totalAlpa,
       totalJamLembur: Number(totalJamLembur.toFixed(1)),
     };
-  }, [monthlyRows]);
+  }, [monthlyRows, user]);
 
   // Status Cuti Karyawan Realtime (Sinkron Database PostgreSQL & Quota Tracking)
   const leaveStats = useMemo(() => {

@@ -32,6 +32,7 @@ import {
   DisciplinaryStatus,
   EmployeeKpiRecord,
   isLeadershipSpecialFieldOfficer,
+  isSimulationAccount,
   FiscalPeriodSettings,
   YearEndClosingRecord,
   HolidayOvertimeMode,
@@ -5616,7 +5617,7 @@ export const hrmService = {
   calculateSlipForEmployee: (userId: string, period: PayrollPeriod): PayrollSlip | null => {
     const users = hrmService.getUsers();
     const employee = users.find((u) => u.id === userId && u.isActive);
-    if (!employee) return null;
+    if (!employee || isSimulationAccount(employee)) return null;
 
     const profile = hrmService.getSalaryProfile(userId);
     const settings = hrmService.getPayrollSettings();
@@ -5904,8 +5905,8 @@ export const hrmService = {
   getPayrollAnalytics: () => {
     hrmService.init();
     const periods = hrmService.getPayrollPeriods();
-    const slips = hrmService.getPayrollSlips();
-    const users = hrmService.getUsers().filter((u) => u.isActive);
+    const slips = hrmService.getPayrollSlips().filter((s) => !isSimulationAccount(s.employeeName || s.employeeNip || s.userId));
+    const users = hrmService.getUsers().filter((u) => u.isActive && !isSimulationAccount(u));
     const divisions = hrmService.getDivisions();
 
     const paidPeriods = periods.filter((p) => p.status === 'paid' || p.status === 'approved');
