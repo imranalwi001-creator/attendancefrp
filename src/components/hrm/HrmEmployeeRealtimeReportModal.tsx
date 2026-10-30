@@ -235,31 +235,6 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     };
   }, [isOpen, user, allAttendances]);
 
-  // Status Cuti Karyawan Realtime (Sinkron Database PostgreSQL & Quota Tracking)
-  const leaveStats = useMemo(() => {
-    if (!user) return { quota: 12, used: 0, remaining: 12 };
-    const quota = Number(user.annualLeaveQuota ?? (user as any).annual_leave_quota ?? 12);
-    const profileUsed = Number(user.usedLeaveDays ?? (user as any).used_leave_days ?? 0);
-
-    const validIds = [user.id, user.nip, user.email].filter(Boolean).map((s) => String(s).toLowerCase().trim());
-    const leaveSource = serverLeaves.length > 0 ? serverLeaves : hrmService.getLeaveRequests();
-    const approvedCutiList = leaveSource.filter((l: any) => {
-      const uId = String(l.userId || l.user_id || '').toLowerCase().trim();
-      const uNip = String(l.userNip || l.user_nip || l.nip || '').toLowerCase().trim();
-      const match = validIds.includes(uId) || (uNip && validIds.includes(uNip));
-      const isApproved = String(l.status || '').toLowerCase() === 'approved';
-      const lType = String(l.leaveType || l.leave_type || '').toLowerCase();
-      const isCuti = lType.includes('cuti') || lType === 'annual_leave';
-      return match && isApproved && isCuti;
-    });
-
-    const daysFromRequests = approvedCutiList.reduce((acc: number, l: any) => acc + Number(l.totalDays || l.total_days || 1), 0);
-    const used = Math.max(profileUsed, daysFromRequests);
-    const remaining = Math.max(0, quota - used);
-
-    return { quota, used, remaining };
-  }, [user, serverLeaves]);
-
   // Gabungkan attendance hari ini agar realtime
   const combinedAttendances = useMemo(() => {
     if (!user) return [];
@@ -525,6 +500,76 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       totalJamLembur: Number(totalJamLembur.toFixed(1)),
     };
   }, [monthlyRows]);
+
+  // Status Cuti Karyawan Realtime (Sinkron Database PostgreSQL & Quota Tracking)
+  const leaveStats = useMemo(() => {
+    if (!user) return { quota: 12, used: 0, remaining: 12 };
+    const quota = Number(user.annualLeaveQuota ?? (user as any).annual_leave_quota ?? 12);
+    const profileUsed = Number(user.usedLeaveDays ?? (user as any).used_leave_days ?? 0);
+
+    const validIds = [user.id, user.nip, user.email].filter(Boolean).map((s) => String(s).toLowerCase().trim());
+
+    // 1. Akumulasi tanggal cuti unik dari seluruh riwayat presensi (serverAttendances & combinedAttendances)
+    const cutiDatesSet = new Set<string>();
+    const allAtts = serverAttendances.length > 0 ? serverAttendances : combinedAttendances;
+    allAtts.forEach((a: any) => {
+      const st = String(a.status || '').toLowerCase().trim();
+      const notes = String(a.notes || '').toLowerCase().trim();
+      const isCuti = st === 'cuti' || (notes.includes('cuti') && (!a.clockIn || a.clockIn === '-' || a.clockIn === 'CUTI'));
+      const d = a.attendanceDate || a.date;
+      if (isCuti && d) {
+        cutiDatesSet.add(String(d).substring(0, 10));
+      }
+    });
+
+    // 2. Tambahkan hari cuti dari tabel bulan aktif (monthlyRows)
+    monthlyRows.forEach((r) => {
+      if (r.ket === 'CUTI' || r.absenMasuk === 'CUTI') {
+        if (r.rawDate) {
+          cutiDatesSet.add(String(r.rawDate).substring(0, 10));
+        }
+      }
+    });
+
+    // 3. Sertakan pengajuan cuti yang disetujui (hrm_leave_requests)
+    const leaveSource = serverLeaves.length > 0 ? serverLeaves : hrmService.getLeaveRequests();
+    const approvedCutiList = leaveSource.filter((l: any) => {
+      const uId = String(l.userId || l.user_id || '').toLowerCase().trim();
+      const uNip = String(l.userNip || l.user_nip || l.nip || '').toLowerCase().trim();
+      const match = validIds.includes(uId) || (uNip && validIds.includes(uNip));
+      const isApproved = String(l.status || '').toLowerCase() === 'approved';
+      const lType = String(l.leaveType || l.leave_type || '').toLowerCase();
+      const isCuti = lType.includes('cuti') || lType === 'annual_leave';
+      return match && isApproved && isCuti;
+    });
+
+    let leaveReqDays = 0;
+    approvedCutiList.forEach((l: any) => {
+      const totalDays = Number(l.totalDays || l.total_days || 1);
+      if (l.startDate && l.endDate) {
+        const s = new Date(l.startDate);
+        const e = new Date(l.endDate);
+        for (let dt = new Date(s); dt <= e; dt.setDate(dt.getDate() + 1)) {
+          cutiDatesSet.add(dt.toISOString().substring(0, 10));
+        }
+      } else {
+        leaveReqDays += totalDays;
+      }
+    });
+
+    // 4. Hitung total cuti terpakai realtime
+    const used = Math.max(
+      profileUsed,
+      cutiDatesSet.size,
+      stats.totalCuti,
+      leaveReqDays
+    );
+
+    // 5. Hitung sisa cuti (tidak boleh negatif)
+    const remaining = Math.max(0, quota - used);
+
+    return { quota, used, remaining };
+  }, [user, serverLeaves, serverAttendances, combinedAttendances, monthlyRows, stats.totalCuti]);
 
   // Ekspor Excel (.xlsx) dengan Format Persis Lampiran
   const handleExportExcel = () => {

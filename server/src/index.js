@@ -10750,6 +10750,21 @@ app.put('/api/attendances/:id/manual-correct', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
     }
+
+    // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime
+    const targetUserId = result.rows[0].user_id;
+    if (targetUserId) {
+      await pool.query(`
+        UPDATE hrm_profiles
+        SET used_leave_days = (
+          SELECT COUNT(DISTINCT attendance_date)
+          FROM hrm_attendances
+          WHERE user_id = $1 AND status = 'cuti'
+        )
+        WHERE id = $1;
+      `, [targetUserId]);
+    }
+
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
     console.error('Manual attendance correct error:', err);
@@ -10787,6 +10802,20 @@ app.post('/api/attendances/manual-entry', async (req, res) => {
       notes || 'Presensi manual divalidasi oleh Superadmin',
       lateMinutes || 0,
     ]);
+
+    // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime
+    if (userId) {
+      await pool.query(`
+        UPDATE hrm_profiles
+        SET used_leave_days = (
+          SELECT COUNT(DISTINCT attendance_date)
+          FROM hrm_attendances
+          WHERE user_id = $1 AND status = 'cuti'
+        )
+        WHERE id = $1;
+      `, [userId]);
+    }
+
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
     console.error('Manual attendance entry error:', err);
