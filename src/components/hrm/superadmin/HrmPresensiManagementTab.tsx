@@ -12,6 +12,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
 import { HrmEmployeeSearchInput } from '@/components/hrm/HrmEmployeeSearchInput';
 import { customNotify } from '@/lib/customNotification';
+import { resolveEffectiveShift } from '@/lib/hrmShiftResolver';
 import {
   Clock,
   CheckCircle2,
@@ -55,6 +56,8 @@ export const HrmPresensiManagementTab: React.FC = () => {
   const [manualClockIn, setManualClockIn] = useState<string>('07:30');
   const [manualClockOut, setManualClockOut] = useState<string>('16:30');
   const [manualNotes, setManualNotes] = useState<string>('');
+  const [manualLateMinutes, setManualLateMinutes] = useState<number>(0);
+  const [shifts, setShifts] = useState<any[]>(() => hrmService.getShifts());
 
   // Photo Preview Modal
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
@@ -124,14 +127,82 @@ export const HrmPresensiManagementTab: React.FC = () => {
   const leaveCount = attendances.filter((a) => a.status === 'izin' || a.status === 'cuti' || a.status === 'sakit').length;
   const alphaCount = attendances.filter((a) => a.status === 'alpha').length;
 
+  // Helper hitung keterlambatan otomatis berdasarkan Shift & Jam Masuk
+  const computeTabLateness = (userId?: string, dateStr?: string, clockInStr?: string) => {
+    if (!clockInStr || !clockInStr.includes(':')) {
+      return { status: 'hadir' as AttendanceStatus, lateMinutes: 0, shiftInfo: '07:30 WITA' };
+    }
+    const userObj = users.find((u) => u.id === userId);
+    const sched = userObj && dateStr ? hrmService.getEmployeeTodaySchedule(userObj.id, dateStr) : null;
+    const targetShift = resolveEffectiveShift(userObj, shifts, sched);
+    const shiftStartTime = targetShift?.startTime?.substring(0, 5) || '07:30';
+    const tolerance = userObj?.lateToleranceMinutes ?? targetShift?.lateToleranceMinutes ?? 15;
+    const isCrossDay = Boolean(targetShift?.isCrossDay);
+
+    const [sH, sM] = shiftStartTime.split(':').map(Number);
+    const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 30);
+    const [cH, cM] = clockInStr.split(':').map(Number);
+    const clockInMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);
+
+    let diff = clockInMins - startMins;
+    if (isCrossDay && clockInMins < 720 && startMins >= 720) {
+      diff = (clockInMins + 1440) - startMins;
+    }
+
+    const shiftInfo = `${shiftStartTime} WITA (Toleransi ${tolerance}m)`;
+
+    if (diff > tolerance) {
+      return { status: 'terlambat' as AttendanceStatus, lateMinutes: diff, shiftInfo };
+    } else {
+      return { status: 'hadir' as AttendanceStatus, lateMinutes: 0, shiftInfo };
+    }
+  };
+
+  const handleEditClockInChange = (newClockIn: string) => {
+    setEditClockIn(newClockIn);
+    const computed = computeTabLateness(selectedRecord?.userId, selectedRecord?.attendanceDate || selectedDate, newClockIn);
+    setEditLateMinutes(computed.lateMinutes);
+    if (editStatus === 'hadir' || editStatus === 'terlambat') {
+      setEditStatus(computed.status);
+    }
+  };
+
+  const handleEditStatusChange = (newStatus: AttendanceStatus) => {
+    setEditStatus(newStatus);
+    if (newStatus === 'terlambat') {
+      const computed = computeTabLateness(selectedRecord?.userId, selectedRecord?.attendanceDate || selectedDate, editClockIn);
+      setEditLateMinutes(computed.lateMinutes > 0 ? computed.lateMinutes : 15);
+    } else {
+      setEditLateMinutes(0);
+    }
+  };
+
+  const handleManualClockInChange = (newClockIn: string) => {
+    setManualClockIn(newClockIn);
+    const computed = computeTabLateness(manualUserId, manualDate, newClockIn);
+    setManualLateMinutes(computed.lateMinutes);
+    if (manualStatus === 'hadir' || manualStatus === 'terlambat') {
+      setManualStatus(computed.status);
+    }
+  };
+
   const handleOpenCorrect = (rec: AttendanceRecord) => {
     setSelectedRecord(rec);
-    setEditStatus(rec.status);
-    setEditClockIn(rec.clockIn ? rec.clockIn.substring(0, 5) : '07:30');
+    const cIn = rec.clockIn ? rec.clockIn.substring(0, 5) : '07:30';
+    setEditClockIn(cIn);
     // Jika belum ada jam pulang (karyawan masih bertugas), jangan dipaksa default 16:30!
     setEditClockOut(rec.clockOut ? rec.clockOut.substring(0, 5) : '');
     setEditNotes(rec.notes || '');
-    setEditLateMinutes(rec.lateMinutes || 0);
+
+    // Hitung otomatis lateness dari jam masuk agar data akurat & sinkron
+    const computed = computeTabLateness(rec.userId, rec.attendanceDate || selectedDate, cIn);
+    if (rec.status === 'terlambat') {
+      setEditStatus('terlambat');
+      setEditLateMinutes(computed.lateMinutes > 0 ? computed.lateMinutes : (rec.lateMinutes || 0));
+    } else {
+      setEditStatus(rec.status);
+      setEditLateMinutes(rec.lateMinutes || 0);
+    }
     setCorrectModalOpen(true);
   };
 
@@ -512,7 +583,7 @@ export const HrmPresensiManagementTab: React.FC = () => {
                   <Label className="text-xs font-semibold">Jam Masuk</Label>
                   <TimePicker
                     value={editClockIn}
-                    onChange={(val) => setEditClockIn(val)}
+                    onChange={(val) => handleEditClockInChange(val)}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -541,14 +612,23 @@ export const HrmPresensiManagementTab: React.FC = () => {
               </div>
 
               {editStatus === 'terlambat' && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold">Menit Keterlambatan</Label>
+                <div className="space-y-1.5 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-semibold">Menit Keterlambatan</Label>
+                    <span className="text-[10px] text-primary font-mono font-medium">
+                      Otomatis: {computeTabLateness(selectedRecord?.userId, selectedRecord?.attendanceDate || selectedDate, editClockIn).shiftInfo}
+                    </span>
+                  </div>
                   <Input
                     type="number"
                     value={editLateMinutes}
                     onChange={(e) => setEditLateMinutes(Number(e.target.value))}
                     className="h-9 text-xs rounded-xl font-mono"
+                    placeholder="0"
                   />
+                  <p className="text-[10px] text-muted-foreground">
+                    Dihitung otomatis: Jam Masuk ({editClockIn}) dikurangi Jam Mulai Shift. Angka ini tetap dapat disesuaikan manual jika ada dispensasi pimpinan.
+                  </p>
                 </div>
               )}
 

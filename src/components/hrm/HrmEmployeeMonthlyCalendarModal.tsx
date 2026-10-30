@@ -266,6 +266,81 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
     return resolveEffectiveShift(user, allShifts, sched);
   }, [user, allShifts]);
 
+  const shiftsList = useMemo(() => {
+    return allShifts && allShifts.length > 0 ? allShifts : hrmService.getShifts();
+  }, [allShifts]);
+
+  // Helper untuk mendapatkan shift yang berlaku pada tanggal tertentu
+  const getShiftForDate = React.useCallback(
+    (dateStr: string) => {
+      if (!user) return effectiveShift;
+      const sched = monthSchedules.get(dateStr) || hrmService.getEmployeeTodaySchedule(user.id, dateStr);
+      return resolveEffectiveShift(user, shiftsList, sched) || effectiveShift;
+    },
+    [user, monthSchedules, shiftsList, effectiveShift]
+  );
+
+  // Helper hitung keterlambatan otomatis berdasarkan Jam Masuk dan Shift aktif di tanggal terpilih
+  const computeLateness = React.useCallback(
+    (clockInStr: string, dateStr: string) => {
+      if (!clockInStr || !clockInStr.includes(':')) {
+        return { status: 'hadir' as AttendanceStatus, lateMinutes: 0, shiftInfo: '07:30 WITA' };
+      }
+      const targetShift = getShiftForDate(dateStr);
+      const shiftStartTime = targetShift?.startTime?.substring(0, 5) || '07:30';
+      const lateTolerance = user?.lateToleranceMinutes ?? targetShift?.lateToleranceMinutes ?? 15;
+      const isCrossDay = Boolean(targetShift?.isCrossDay);
+
+      const [sH, sM] = shiftStartTime.split(':').map(Number);
+      const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 30);
+
+      const [cH, cM] = clockInStr.split(':').map(Number);
+      const clockInMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);
+
+      let diff = clockInMins - startMins;
+      if (isCrossDay && clockInMins < 720 && startMins >= 720) {
+        diff = (clockInMins + 1440) - startMins;
+      }
+
+      const shiftInfo = `${shiftStartTime} WITA (Toleransi ${lateTolerance}m)`;
+
+      if (diff > lateTolerance) {
+        return {
+          status: 'terlambat' as AttendanceStatus,
+          lateMinutes: diff,
+          shiftInfo,
+        };
+      } else {
+        return {
+          status: 'hadir' as AttendanceStatus,
+          lateMinutes: 0,
+          shiftInfo,
+        };
+      }
+    },
+    [getShiftForDate, user]
+  );
+
+  const handleClockInChange = (newClockIn: string) => {
+    setEditClockIn(newClockIn);
+    const computed = computeLateness(newClockIn, selectedDateStr);
+    setEditLateMinutes(computed.lateMinutes);
+    if (editStatus === 'hadir' || editStatus === 'terlambat') {
+      setEditStatus(computed.status);
+    }
+  };
+
+  const handleStatusChange = (newStatus: AttendanceStatus) => {
+    setEditStatus(newStatus);
+    if (newStatus === 'terlambat') {
+      const computed = computeLateness(editClockIn, selectedDateStr);
+      setEditLateMinutes(computed.lateMinutes > 0 ? computed.lateMinutes : 15);
+    } else {
+      setEditLateMinutes(0);
+    }
+  };
+
+
   // Kalender Grid: Hitung hari-hari dalam bulan (1 s.d akhir bulan)
   const calendarDays = useMemo(() => {
     const firstDayIndex = new Date(yearNum, monthNum - 1, 1).getDay(); // 0 = Minggu
@@ -766,15 +841,27 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                   variant="outline"
                   onClick={() => {
                     if (selectedRecord) {
-                      setEditStatus(selectedRecord.status);
-                      setEditClockIn(selectedRecord.clockIn ? selectedRecord.clockIn.substring(0, 5) : '07:30');
+                      const cIn = selectedRecord.clockIn ? selectedRecord.clockIn.substring(0, 5) : '07:30';
+                      setEditClockIn(cIn);
                       setEditClockOut(selectedRecord.clockOut ? selectedRecord.clockOut.substring(0, 5) : '');
-                      setEditLateMinutes(selectedRecord.lateMinutes || 0);
                       setEditNotes(selectedRecord.notes || '');
+
+                      // Hitung otomatis lateness dari jam masuk agar nilai keterlambatan sinkron & akurat
+                      const computed = computeLateness(cIn, selectedDateStr);
+                      if (selectedRecord.status === 'terlambat') {
+                        setEditStatus('terlambat');
+                        setEditLateMinutes(computed.lateMinutes > 0 ? computed.lateMinutes : (selectedRecord.lateMinutes || 0));
+                      } else {
+                        setEditStatus(selectedRecord.status);
+                        setEditLateMinutes(selectedRecord.lateMinutes || 0);
+                      }
                     } else {
+                      const targetShift = getShiftForDate(selectedDateStr);
+                      const defaultStart = targetShift?.startTime?.substring(0, 5) || '07:30';
+                      const defaultEnd = targetShift?.endTime?.substring(0, 5) || '16:30';
                       setEditStatus('hadir');
-                      setEditClockIn(effectiveShift?.startTime?.substring(0, 5) || '07:30');
-                      setEditClockOut(effectiveShift?.endTime?.substring(0, 5) || '');
+                      setEditClockIn(defaultStart);
+                      setEditClockOut(defaultEnd);
                       setEditLateMinutes(0);
                       setEditNotes('[Koreksi Superadmin: Kehadiran Disahkan]');
                     }
@@ -997,7 +1084,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
             {/* Status Presensi */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Status Presensi</Label>
-              <Select value={editStatus} onValueChange={(val: any) => setEditStatus(val)}>
+              <Select value={editStatus} onValueChange={(val: any) => handleStatusChange(val)}>
                 <SelectTrigger className="h-9 text-xs rounded-xl">
                   <SelectValue placeholder="Pilih status" />
                 </SelectTrigger>
@@ -1016,7 +1103,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Jam Masuk</Label>
-                <TimePicker value={editClockIn} onChange={(val) => setEditClockIn(val)} />
+                <TimePicker value={editClockIn} onChange={(val) => handleClockInChange(val)} />
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -1045,14 +1132,23 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
 
             {/* Menit Terlambat */}
             {editStatus === 'terlambat' && (
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold">Menit Keterlambatan</Label>
+              <div className="space-y-1.5 animate-in fade-in">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold">Menit Keterlambatan</Label>
+                  <span className="text-[10px] text-primary font-mono font-medium">
+                    Otomatis: {computeLateness(editClockIn, selectedDateStr).shiftInfo}
+                  </span>
+                </div>
                 <Input
                   type="number"
                   value={editLateMinutes}
                   onChange={(e) => setEditLateMinutes(Number(e.target.value))}
                   className="h-9 text-xs rounded-xl font-mono"
+                  placeholder="0"
                 />
+                <p className="text-[10px] text-muted-foreground">
+                  Dihitung otomatis: Jam Masuk ({editClockIn}) dikurangi Jam Mulai Shift. Angka ini tetap dapat disesuaikan manual jika ada dispensasi pimpinan.
+                </p>
               </div>
             )}
 
