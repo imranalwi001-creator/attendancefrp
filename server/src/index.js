@@ -6440,6 +6440,9 @@ app.post('/api/leaves/correct-quota', async (req, res) => {
       return res.status(400).json({ success: false, error: 'userId wajib diisi' });
     }
 
+    const cleanQuota = annualLeaveQuota !== undefined && annualLeaveQuota !== null && !isNaN(annualLeaveQuota) ? parseInt(annualLeaveQuota, 10) : null;
+    const cleanUsed = usedLeaveDays !== undefined && usedLeaveDays !== null && !isNaN(usedLeaveDays) ? parseInt(usedLeaveDays, 10) : null;
+
     let validUserId = userId;
     if (!UUID_REGEX.test(userId)) {
       const uRes = await pool.query(
@@ -6456,7 +6459,7 @@ app.post('/api/leaves/correct-quota', async (req, res) => {
           updated_at = NOW()
       WHERE id = $3
       RETURNING id, full_name, nip, annual_leave_quota, used_leave_days;
-    `, [annualLeaveQuota, usedLeaveDays, validUserId]);
+    `, [cleanQuota, cleanUsed, validUserId]);
 
     if (updateRes.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });

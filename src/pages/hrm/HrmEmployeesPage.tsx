@@ -992,7 +992,7 @@ export const HrmEmployeesPage: React.FC = () => {
                 </tr>
               ) : (
                 filteredUsers.map((u, idx) => {
-                  const remaining = (u.annualLeaveQuota || 12) - (u.usedLeaveDays || 0);
+                  const remaining = (u.annualLeaveQuota ?? 12) - (u.usedLeaveDays ?? 0);
                   return (
                     <tr key={u.id} className="hover:bg-muted/30 transition-colors">
                       <td className="py-3 px-3 text-center font-mono font-bold text-muted-foreground text-xs">
@@ -2575,7 +2575,16 @@ export const HrmEmployeesPage: React.FC = () => {
         user={leaveCorrectionUser}
         currentQuota={leaveCorrectionUser?.annualLeaveQuota ?? 12}
         currentUsed={leaveCorrectionUser?.usedLeaveDays ?? 0}
-        onSaved={async () => {
+        onSaved={async (updated) => {
+          if (updated && updated.user) {
+            setUsers((prev) =>
+              prev.map((u) =>
+                u.id === updated.user?.id || u.nip === updated.user?.nip
+                  ? { ...u, annualLeaveQuota: updated.quota, usedLeaveDays: updated.used }
+                  : u
+              )
+            );
+          }
           await loadData();
         }}
       />
