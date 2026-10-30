@@ -35,7 +35,7 @@ import {
   Sparkles,
   Loader2,
 } from 'lucide-react';
-import { UserProfile, AttendanceRecord, OvertimeRecord } from '@/types/hrm';
+import { UserProfile, AttendanceRecord, OvertimeRecord, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
 import defaultLogo from '@/assets/logo.png';
@@ -146,7 +146,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       setEmployeeUnit('Unit Operasional Lapangan');
       setEmployeeDept('kantor pusat semen tonasa');
       setEmployeeShiftPattern(shift?.name || user.shiftName || 'SIFT NORMAL ( 2/1/3)');
-      setEmployeeKaur(user.kepalaReguName || 'Kaur Operasional');
+      setEmployeeKaur(isSpecialTarget ? 'Pimpinan PT. FRP' : (user.kepalaReguName || 'Kaur Operasional'));
     }
   }, [user, shift]);
 
@@ -360,8 +360,42 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         if (ket === '-' || ket === 'OFF') ket = 'LEMBUR';
       }
 
-      // Default KAUR jika ada kehadiran tapi belum ada data nama pengawas
-      if (hasClockIn && memerintahkanKaur === '-') {
+      // Tentukan Uraian Pekerjaan secara Dinamis & Elegan (bebas tag teknis sistem)
+      if (ket === 'CUTI') {
+        uraianPekerjaan = 'Cuti Tahunan';
+      } else if (ket === 'SAKIT') {
+        uraianPekerjaan = 'Izin Sakit (Surat Dokter)';
+      } else if (ket === 'IZIN') {
+        uraianPekerjaan = 'Izin Tidak Masuk Kerja';
+      } else if (ket === 'ALPA') {
+        uraianPekerjaan = 'Mangkir / Tanpa Keterangan';
+      } else if (ket === 'OFF') {
+        uraianPekerjaan = '-';
+      } else if (ot && ot.taskDescription) {
+        uraianPekerjaan = ot.taskDescription;
+      } else if (att && att.notes) {
+        let clean = att.notes;
+        clean = clean
+          .replace(/\[Koreksi Superadmin: Kehadiran Disahkan\]/gi, '')
+          .replace(/\[AUTO-CLOSED.*?\]/gi, '')
+          .replace(/\[Dispensasi.*?\]/gi, '')
+          .trim();
+        const posMatch = clean.match(/\[Pos:\s*([^\]]+)\]/i);
+        if (posMatch) {
+          uraianPekerjaan = `Tugas Lapangan di Pos ${posMatch[1].trim()}`;
+        } else if (clean.length > 0 && !clean.startsWith('[')) {
+          uraianPekerjaan = clean;
+        } else {
+          uraianPekerjaan = isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : 'Tugas Lapangan Operasional';
+        }
+      } else if (hasClockIn) {
+        uraianPekerjaan = isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : 'Tugas Lapangan Operasional';
+      }
+
+      // Default KAUR / Pengesahan: Khusus 3 Petugas Lapangan Khusus Pimpinan langsung oleh Pimpinan PT. FRP
+      if (isSpecialTarget) {
+        memerintahkanKaur = ket === 'OFF' ? '-' : 'Pimpinan PT. FRP';
+      } else if (hasClockIn && memerintahkanKaur === '-') {
         memerintahkanKaur = employeeKaur || '-';
       }
 
@@ -388,19 +422,21 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     return rows;
   }, [selectedMonth, user, todayStr, combinedAttendances, combinedOvertimes, employeeKaur]);
 
-  // Statistik Rekapan Bulanan
+  // Statistik Rekapan Bulanan (Presisi & Dinamis)
   const stats = useMemo(() => {
     let totalHadir = 0;
     let totalTelatKali = 0;
     let totalTelatMnt = 0;
     let totalOff = 0;
     let totalCuti = 0;
-    let totalIzinSakit = 0;
+    let totalIzin = 0;
+    let totalSakit = 0;
     let totalAlpa = 0;
     let totalJamLembur = 0;
 
     monthlyRows.forEach((r) => {
-      if (r.ket === 'HADIR' || r.ket === 'TELAT' || (r.absenMasuk !== '-' && r.absenMasuk !== 'OFF')) {
+      // HANYA hitung Hadir jika benar-benar HADIR atau TELAT atau LEMBUR (Bukan Cuti/Sakit/Izin/Off/Alpa)
+      if (r.ket === 'HADIR' || r.ket === 'TELAT' || r.ket === 'LEMBUR') {
         totalHadir++;
       }
       if (r.telatMnt !== '-') {
@@ -413,8 +449,11 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       if (r.ket === 'CUTI') {
         totalCuti++;
       }
-      if (r.ket === 'IZIN' || r.ket === 'SAKIT') {
-        totalIzinSakit++;
+      if (r.ket === 'IZIN') {
+        totalIzin++;
+      }
+      if (r.ket === 'SAKIT') {
+        totalSakit++;
       }
       if (r.ket === 'ALPA') {
         totalAlpa++;
@@ -430,7 +469,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       totalTelatMnt,
       totalOff,
       totalCuti,
-      totalIzinSakit,
+      totalIzin,
+      totalSakit,
       totalAlpa,
       totalJamLembur: Number(totalJamLembur.toFixed(1)),
     };
@@ -512,7 +552,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       '',
       '',
       stats.totalJamLembur > 0 ? `${stats.totalJamLembur} Jam` : '-',
-      `Izin/Sakit/Cuti: ${stats.totalIzinSakit + stats.totalCuti} Hari`,
+      `Cuti: ${stats.totalCuti} | Sakit: ${stats.totalSakit} | Izin: ${stats.totalIzin}`,
       '',
       `Alpa: ${stats.totalAlpa} Hari`,
     ]);
@@ -524,49 +564,89 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     wsData.push(['2. Total Keterlambatan', ':', `${stats.totalTelatMnt} Menit (${stats.totalTelatKali} kali)`]);
     wsData.push(['3. Total Realisasi Jam Lembur', ':', `${stats.totalJamLembur} Jam`]);
     wsData.push(['4. Total Hari Libur / OFF', ':', `${stats.totalOff} Hari`]);
-    wsData.push(['5. Total Izin / Sakit / Cuti', ':', `${stats.totalIzinSakit + stats.totalCuti} Hari`]);
-    wsData.push(['6. Total Mangkir / Alpa', ':', `${stats.totalAlpa} Hari`]);
+    wsData.push(['5. Total Cuti Tahunan', ':', `${stats.totalCuti} Hari`]);
+    wsData.push(['6. Total Izin Sakit', ':', `${stats.totalSakit} Hari`]);
+    wsData.push(['7. Total Izin Lainnya', ':', `${stats.totalIzin} Hari`]);
+    wsData.push(['8. Total Mangkir / Alpa', ':', `${stats.totalAlpa} Hari`]);
     wsData.push([]);
 
-    // Tanda Tangan Pengesahan (3 Kolom)
-    wsData.push([
-      '',
-      'Karyawan Bersangkutan,',
-      '',
-      '',
-      'Memerintahkan (KAUR),',
-      '',
-      '',
-      '',
-      'Mengetahui / Menyetujui,',
-      '',
-    ]);
-    wsData.push([]);
-    wsData.push([]);
-    wsData.push([
-      '',
-      user.fullName,
-      '',
-      '',
-      employeeKaur || '(...........................)',
-      '',
-      '',
-      '',
-      'Alam AS simpuang ago, S.Sos / Reski Faisal',
-      '',
-    ]);
-    wsData.push([
-      '',
-      `NIP. ${user.nip}`,
-      '',
-      '',
-      'Pengawas Lapangan / KAUR',
-      '',
-      '',
-      '',
-      'Direktur Utama / Pimpinan PT. FRP',
-      '',
-    ]);
+    // Tanda Tangan Pengesahan (Khusus Petugas Lapangan Khusus Pimpinan 2 Kolom, Reguler 3 Kolom)
+    if (isSpecialTarget) {
+      wsData.push([
+        '',
+        'Karyawan Bersangkutan,',
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Mengetahui / Menyetujui,',
+        '',
+      ]);
+      wsData.push([]);
+      wsData.push([]);
+      wsData.push([
+        '',
+        user.fullName,
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Alam AS simpuang ago, S.Sos / Reski Faisal',
+        '',
+      ]);
+      wsData.push([
+        '',
+        `NIP. ${user.nip}`,
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Direktur Utama / Pimpinan PT. FRP',
+        '',
+      ]);
+    } else {
+      wsData.push([
+        '',
+        'Karyawan Bersangkutan,',
+        '',
+        '',
+        'Memerintahkan (KAUR),',
+        '',
+        '',
+        '',
+        'Mengetahui / Menyetujui,',
+        '',
+      ]);
+      wsData.push([]);
+      wsData.push([]);
+      wsData.push([
+        '',
+        user.fullName,
+        '',
+        '',
+        employeeKaur || '(...........................)',
+        '',
+        '',
+        '',
+        'Alam AS simpuang ago, S.Sos / Reski Faisal',
+        '',
+      ]);
+      wsData.push([
+        '',
+        `NIP. ${user.nip}`,
+        '',
+        '',
+        'Pengawas Lapangan / KAUR',
+        '',
+        '',
+        '',
+        'Direktur Utama / Pimpinan PT. FRP',
+        '',
+      ]);
+    }
 
     const ws = XLSX.utils.aoa_to_sheet(wsData);
 
@@ -686,7 +766,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           { content: 'LEMBUR', colSpan: 2, styles: { halign: 'center' } },
           { content: 'REALISASI\nJAM LEMBUR', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
           { content: 'URAIAN PEKERJAAN', rowSpan: 2, styles: { valign: 'middle', halign: 'left' } },
-          { content: 'MEMERINTAHKAN\n(KAUR)', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
+          { content: isSpecialTarget ? 'PENGESAHAN\n(PIMPINAN)' : 'MEMERINTAHKAN\n(KAUR)', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
           { content: 'KET.', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
         ],
         [
@@ -743,7 +823,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         { content: '-', styles: { halign: 'center' } },
         { content: '-', styles: { halign: 'center' } },
         { content: stats.totalJamLembur > 0 ? `${stats.totalJamLembur} Jam` : '-', styles: { halign: 'center', fontStyle: 'bold', textColor: [29, 78, 216] } },
-        { content: `Izin/Sakit/Cuti: ${stats.totalIzinSakit + stats.totalCuti} Hari`, styles: { halign: 'left' } },
+        { content: `Cuti: ${stats.totalCuti} | Sakit: ${stats.totalSakit} | Izin: ${stats.totalIzin}`, styles: { halign: 'left' } },
         { content: '-', styles: { halign: 'center' } },
         { content: stats.totalAlpa > 0 ? `${stats.totalAlpa} Alpa` : 'Nihil', styles: { halign: 'center', fontStyle: 'bold', textColor: stats.totalAlpa > 0 ? [190, 18, 60] : [71, 85, 105] } },
       ]);
@@ -785,64 +865,85 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
       const finalY = (doc as any).lastAutoTable.finalY;
 
-      // 3. KOTAK REKAPAN RINGKAS (6 BLOK INDIKATOR)
+      // 3. KOTAK REKAPAN RINGKAS (8 BLOK INDIKATOR TERPISAH)
       const boxY = finalY + 2.5;
-      const boxWidth = contentWidth / 6;
+      const boxWidth = contentWidth / 8;
       const boxHeight = 7.5;
       const metrics = [
         { label: 'TOTAL HADIR', val: `${stats.totalHadir} Hari`, color: [4, 120, 87] },
-        { label: 'KETERLAMBATAN', val: `${stats.totalTelatMnt} Mnt (${stats.totalTelatKali}x)`, color: [180, 83, 9] },
+        { label: 'KETERLAMBATAN', val: `${stats.totalTelatMnt}m (${stats.totalTelatKali}x)`, color: [180, 83, 9] },
         { label: 'JAM LEMBUR', val: `${stats.totalJamLembur} Jam`, color: [29, 78, 216] },
         { label: 'LIBUR / OFF', val: `${stats.totalOff} Hari`, color: [71, 85, 105] },
-        { label: 'IZIN / SAKIT / CUTI', val: `${stats.totalIzinSakit + stats.totalCuti} Hari`, color: [126, 34, 206] },
-        { label: 'MANGKIR / ALPA', val: `${stats.totalAlpa} Hari`, color: [190, 18, 60] },
+        { label: 'CUTI', val: `${stats.totalCuti} Hari`, color: [126, 34, 206] },
+        { label: 'SAKIT', val: `${stats.totalSakit} Hari`, color: [219, 39, 119] },
+        { label: 'IZIN', val: `${stats.totalIzin} Hari`, color: [79, 70, 229] },
+        { label: 'MANGKIR', val: `${stats.totalAlpa} Hari`, color: [190, 18, 60] },
       ];
 
       metrics.forEach((m, idx) => {
         const bx = marginX + idx * boxWidth;
         doc.setDrawColor(200, 210, 225);
         doc.setFillColor(248, 250, 252);
-        doc.rect(bx, boxY, boxWidth - 1, boxHeight, 'FD');
+        doc.rect(bx, boxY, boxWidth - 0.8, boxHeight, 'FD');
 
-        doc.setFontSize(5.5);
+        doc.setFontSize(4.8);
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(71, 85, 105);
-        doc.text(m.label, bx + (boxWidth - 1) / 2, boxY + 2.7, { align: 'center' });
+        doc.text(m.label, bx + (boxWidth - 0.8) / 2, boxY + 2.7, { align: 'center' });
 
-        doc.setFontSize(7.2);
+        doc.setFontSize(6.8);
         doc.setTextColor(m.color[0], m.color[1], m.color[2]);
-        doc.text(m.val, bx + (boxWidth - 1) / 2, boxY + 6.1, { align: 'center' });
+        doc.text(m.val, bx + (boxWidth - 0.8) / 2, boxY + 6.1, { align: 'center' });
       });
 
-      // 4. PENGESAHAN & TANDA TANGAN RESMI 3 KOLOM
+      // 4. PENGESAHAN & TANDA TANGAN (Khusus 3 Petugas Lapangan Khusus Pimpinan 2 Kolom, Reguler 3 Kolom)
       const sigY = boxY + boxHeight + 3.2;
       doc.setFontSize(6.5);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(100, 116, 139);
       doc.text(`Pangkep / Makassar, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageWidth - marginX - 1, sigY, { align: 'right' });
 
-      const sigColWidth = contentWidth / 3;
       const titlesY = sigY + 3.2;
       doc.setFontSize(7.5);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(30, 41, 59);
 
-      doc.text('Karyawan Yang Bersangkutan,', marginX + sigColWidth * 0.5, titlesY, { align: 'center' });
-      doc.text('Memerintahkan (KAUR),', marginX + sigColWidth * 1.5, titlesY, { align: 'center' });
-      doc.text('Mengetahui / Menyetujui,', marginX + sigColWidth * 2.5, titlesY, { align: 'center' });
+      if (isSpecialTarget) {
+        // 2 Kolom Paraf Khusus 3 Petugas Lapangan Khusus Pimpinan (Karyawan & Pimpinan)
+        const sigColWidth = contentWidth / 2;
+        doc.text('Karyawan Yang Bersangkutan,', marginX + sigColWidth * 0.5, titlesY, { align: 'center' });
+        doc.text('Mengetahui / Menyetujui,', marginX + sigColWidth * 1.5, titlesY, { align: 'center' });
 
-      const nameY = titlesY + 14;
-      doc.text(`( ${user.fullName} )`, marginX + sigColWidth * 0.5, nameY, { align: 'center' });
-      doc.text(`( ${employeeKaur || '........................................'} )`, marginX + sigColWidth * 1.5, nameY, { align: 'center' });
-      doc.text('( Alam AS simpuang ago, S.Sos / Reski Faisal )', marginX + sigColWidth * 2.5, nameY, { align: 'center' });
+        const nameY = titlesY + 14;
+        doc.text(`( ${user.fullName} )`, marginX + sigColWidth * 0.5, nameY, { align: 'center' });
+        doc.text('( Alam AS simpuang ago, S.Sos / Reski Faisal )', marginX + sigColWidth * 1.5, nameY, { align: 'center' });
 
-      const subY = nameY + 3.2;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(6.5);
-      doc.setTextColor(100, 116, 139);
-      doc.text(`NIP. ${user.nip}`, marginX + sigColWidth * 0.5, subY, { align: 'center' });
-      doc.text('Pengawas Lapangan / KAUR', marginX + sigColWidth * 1.5, subY, { align: 'center' });
-      doc.text('Direktur Utama / Pimpinan PT. FRP', marginX + sigColWidth * 2.5, subY, { align: 'center' });
+        const subY = nameY + 3.2;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text(`NIP. ${user.nip}`, marginX + sigColWidth * 0.5, subY, { align: 'center' });
+        doc.text('Direktur Utama / Pimpinan PT. FRP', marginX + sigColWidth * 1.5, subY, { align: 'center' });
+      } else {
+        // 3 Kolom Paraf Reguler
+        const sigColWidth = contentWidth / 3;
+        doc.text('Karyawan Yang Bersangkutan,', marginX + sigColWidth * 0.5, titlesY, { align: 'center' });
+        doc.text('Memerintahkan (KAUR),', marginX + sigColWidth * 1.5, titlesY, { align: 'center' });
+        doc.text('Mengetahui / Menyetujui,', marginX + sigColWidth * 2.5, titlesY, { align: 'center' });
+
+        const nameY = titlesY + 14;
+        doc.text(`( ${user.fullName} )`, marginX + sigColWidth * 0.5, nameY, { align: 'center' });
+        doc.text(`( ${employeeKaur || '........................................'} )`, marginX + sigColWidth * 1.5, nameY, { align: 'center' });
+        doc.text('( Alam AS simpuang ago, S.Sos / Reski Faisal )', marginX + sigColWidth * 2.5, nameY, { align: 'center' });
+
+        const subY = nameY + 3.2;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text(`NIP. ${user.nip}`, marginX + sigColWidth * 0.5, subY, { align: 'center' });
+        doc.text('Pengawas Lapangan / KAUR', marginX + sigColWidth * 1.5, subY, { align: 'center' });
+        doc.text('Direktur Utama / Pimpinan PT. FRP', marginX + sigColWidth * 2.5, subY, { align: 'center' });
+      }
 
       const cleanName = user.fullName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
       const cleanNip = user.nip.replace(/[^a-zA-Z0-9]/g, '_');
@@ -1123,7 +1224,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                       URAIAN PEKERJAAN
                     </th>
                     <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-2 py-1 w-28 leading-tight">
-                      MEMERINTAHKAN<br />(KAUR)
+                      {isSpecialTarget ? <>PENGESAHAN<br />(PIMPINAN)</> : <>MEMERINTAHKAN<br />(KAUR)</>}
                     </th>
                     <th rowSpan={2} className="border border-slate-300 dark:border-slate-700 px-1 py-1 w-14">
                       KET.
@@ -1285,8 +1386,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                     <td className="border border-slate-300 dark:border-slate-700 py-1 font-mono text-blue-700 dark:text-blue-400 font-bold">
                       {stats.totalJamLembur > 0 ? `${stats.totalJamLembur} Jam` : '-'}
                     </td>
-                    <td className="border border-slate-300 dark:border-slate-700 py-1 text-left px-2 text-[9.5px] text-slate-700 dark:text-slate-300">
-                      Izin/Sakit/Cuti: {stats.totalIzinSakit + stats.totalCuti} Hari
+                    <td className="border border-slate-300 dark:border-slate-700 py-1 text-left px-2 text-[9.5px] text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                      Cuti: {stats.totalCuti} Hr | Sakit: {stats.totalSakit} Hr | Izin: {stats.totalIzin} Hr
                     </td>
                     <td className="border border-slate-300 dark:border-slate-700 py-1 text-slate-400">
                       -
@@ -1299,37 +1400,47 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               </table>
             </div>
 
-            {/* KOTAK REKAPAN RINGKAS DI BAWAH TABEL (KOMPAK 1 BARIS) */}
+            {/* KOTAK REKAPAN RINGKAS DI BAWAH TABEL (8 KARTU TERPISAH & DINAMIS) */}
             <div className="p-2 rounded-sm border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40">
-              <div className="grid grid-cols-6 gap-2 text-center text-xs">
+              <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 text-center text-xs">
                 <div className="p-1 rounded bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-                  <span className="text-[9px] uppercase font-bold text-emerald-800 dark:text-emerald-300">Total Hadir</span>
-                  <p className="text-xs font-black text-emerald-700 dark:text-emerald-400 leading-tight">{stats.totalHadir} <span className="text-[9px] font-normal">Hari</span></p>
+                  <span className="text-[8.5px] uppercase font-bold text-emerald-800 dark:text-emerald-300">Total Hadir</span>
+                  <p className="text-xs font-black text-emerald-700 dark:text-emerald-400 leading-tight">{stats.totalHadir} <span className="text-[8.5px] font-normal">Hari</span></p>
                 </div>
 
                 <div className="p-1 rounded bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
-                  <span className="text-[9px] uppercase font-bold text-amber-800 dark:text-amber-300">Keterlambatan</span>
-                  <p className="text-xs font-black text-amber-700 dark:text-amber-400 leading-tight">{stats.totalTelatMnt} <span className="text-[9px] font-normal">Mnt</span> ({stats.totalTelatKali}x)</p>
+                  <span className="text-[8.5px] uppercase font-bold text-amber-800 dark:text-amber-300">Keterlambatan</span>
+                  <p className="text-xs font-black text-amber-700 dark:text-amber-400 leading-tight">{stats.totalTelatMnt}m <span className="text-[8.5px] font-normal">({stats.totalTelatKali}x)</span></p>
                 </div>
 
                 <div className="p-1 rounded bg-blue-50/80 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800">
-                  <span className="text-[9px] uppercase font-bold text-blue-800 dark:text-blue-300">Jam Lembur</span>
-                  <p className="text-xs font-black text-blue-700 dark:text-blue-400 leading-tight">{stats.totalJamLembur} <span className="text-[9px] font-normal">Jam</span></p>
+                  <span className="text-[8.5px] uppercase font-bold text-blue-800 dark:text-blue-300">Jam Lembur</span>
+                  <p className="text-xs font-black text-blue-700 dark:text-blue-400 leading-tight">{stats.totalJamLembur} <span className="text-[8.5px] font-normal">Jam</span></p>
                 </div>
 
                 <div className="p-1 rounded bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700">
-                  <span className="text-[9px] uppercase font-bold text-slate-700 dark:text-slate-300">Libur / OFF</span>
-                  <p className="text-xs font-black text-slate-800 dark:text-slate-200 leading-tight">{stats.totalOff} <span className="text-[9px] font-normal">Hari</span></p>
+                  <span className="text-[8.5px] uppercase font-bold text-slate-700 dark:text-slate-300">Libur / OFF</span>
+                  <p className="text-xs font-black text-slate-800 dark:text-slate-200 leading-tight">{stats.totalOff} <span className="text-[8.5px] font-normal">Hari</span></p>
                 </div>
 
                 <div className="p-1 rounded bg-purple-50/80 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800">
-                  <span className="text-[9px] uppercase font-bold text-purple-800 dark:text-purple-300">Izin/Sakit/Cuti</span>
-                  <p className="text-xs font-black text-purple-700 dark:text-purple-400 leading-tight">{stats.totalIzinSakit + stats.totalCuti} <span className="text-[9px] font-normal">Hari</span></p>
+                  <span className="text-[8.5px] uppercase font-bold text-purple-800 dark:text-purple-300">Cuti</span>
+                  <p className="text-xs font-black text-purple-700 dark:text-purple-400 leading-tight">{stats.totalCuti} <span className="text-[8.5px] font-normal">Hari</span></p>
+                </div>
+
+                <div className="p-1 rounded bg-pink-50/80 dark:bg-pink-950/30 border border-pink-200 dark:border-pink-800">
+                  <span className="text-[8.5px] uppercase font-bold text-pink-800 dark:text-pink-300">Sakit</span>
+                  <p className="text-xs font-black text-pink-700 dark:text-pink-400 leading-tight">{stats.totalSakit} <span className="text-[8.5px] font-normal">Hari</span></p>
+                </div>
+
+                <div className="p-1 rounded bg-indigo-50/80 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800">
+                  <span className="text-[8.5px] uppercase font-bold text-indigo-800 dark:text-indigo-300">Izin</span>
+                  <p className="text-xs font-black text-indigo-700 dark:text-indigo-400 leading-tight">{stats.totalIzin} <span className="text-[8.5px] font-normal">Hari</span></p>
                 </div>
 
                 <div className="p-1 rounded bg-rose-50/80 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800">
-                  <span className="text-[9px] uppercase font-bold text-rose-800 dark:text-rose-300">Mangkir / Alpa</span>
-                  <p className="text-xs font-black text-rose-700 dark:text-rose-400 leading-tight">{stats.totalAlpa} <span className="text-[9px] font-normal">Hari</span></p>
+                  <span className="text-[8.5px] uppercase font-bold text-rose-800 dark:text-rose-300">Mangkir / Alpa</span>
+                  <p className="text-xs font-black text-rose-700 dark:text-rose-400 leading-tight">{stats.totalAlpa} <span className="text-[8.5px] font-normal">Hari</span></p>
                 </div>
               </div>
             </div>
@@ -1340,52 +1451,85 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                 Pangkep / Makassar, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
               </div>
 
-              <div className="grid grid-cols-3 gap-4 text-center text-xs">
-                {/* Kolom 1: Karyawan */}
-                <div className="space-y-8">
-                  <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
-                    Karyawan Yang Bersangkutan,
-                  </p>
-                  <div className="space-y-0.5">
-                    <p className="font-bold text-slate-900 dark:text-white uppercase tracking-wide text-[11px]">
-                      ( {user.fullName} )
+              {isSpecialTarget ? (
+                /* Khusus 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir): 2 Kolom Paraf (Karyawan & Pimpinan Saja, Tanpa KAUR) */
+                <div className="grid grid-cols-2 gap-8 text-center text-xs">
+                  {/* Kolom 1: Karyawan */}
+                  <div className="space-y-8">
+                    <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
+                      Karyawan Yang Bersangkutan,
                     </p>
-                    <p className="text-[9.5px] text-muted-foreground font-mono">
-                      NIP. {user.nip}
-                    </p>
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-slate-900 dark:text-white uppercase tracking-wide text-[11px]">
+                        ( {user.fullName} )
+                      </p>
+                      <p className="text-[9.5px] text-muted-foreground font-mono">
+                        NIP. {user.nip}
+                      </p>
+                    </div>
                   </div>
-                </div>
 
-                {/* Kolom 2: KAUR / Pengawas */}
-                <div className="space-y-8">
-                  <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
-                    Memerintahkan (KAUR),
-                  </p>
-                  <div className="space-y-0.5">
-                    <p className="font-bold text-slate-900 dark:text-white uppercase tracking-wide text-[11px]">
-                      ( {employeeKaur || '................................'} )
+                  {/* Kolom 2: Pimpinan / Direktur Utama */}
+                  <div className="space-y-8">
+                    <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
+                      Mengetahui / Menyetujui,
                     </p>
-                    <p className="text-[9.5px] text-muted-foreground">
-                      Pengawas Lapangan / KAUR
-                    </p>
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-slate-900 dark:text-white text-[11px]">
+                        ( Alam AS simpuang ago, S.Sos / Reski Faisal )
+                      </p>
+                      <p className="text-[9.5px] text-muted-foreground">
+                        Direktur Utama / Pimpinan PT. FRP
+                      </p>
+                    </div>
                   </div>
                 </div>
+              ) : (
+                /* Karyawan Reguler: 3 Kolom Paraf (Karyawan, KAUR, Pimpinan) */
+                <div className="grid grid-cols-3 gap-4 text-center text-xs">
+                  <div className="space-y-8">
+                    <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
+                      Karyawan Yang Bersangkutan,
+                    </p>
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-slate-900 dark:text-white uppercase tracking-wide text-[11px]">
+                        ( {user.fullName} )
+                      </p>
+                      <p className="text-[9.5px] text-muted-foreground font-mono">
+                        NIP. {user.nip}
+                      </p>
+                    </div>
+                  </div>
 
-                {/* Kolom 3: Pimpinan / Direktur Utama */}
-                <div className="space-y-8">
-                  <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
-                    Mengetahui / Menyetujui,
-                  </p>
-                  <div className="space-y-0.5">
-                    <p className="font-bold text-slate-900 dark:text-white text-[11px]">
-                      ( Alam AS simpuang ago, S.Sos / Reski Faisal )
+                  <div className="space-y-8">
+                    <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
+                      Memerintahkan (KAUR),
                     </p>
-                    <p className="text-[9.5px] text-muted-foreground">
-                      Direktur Utama / Pimpinan PT. FRP
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-slate-900 dark:text-white uppercase tracking-wide text-[11px]">
+                        ( {employeeKaur || '................................'} )
+                      </p>
+                      <p className="text-[9.5px] text-muted-foreground">
+                        Pengawas Lapangan / KAUR
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-8">
+                    <p className="font-semibold text-slate-800 dark:text-slate-200 text-[10.5px]">
+                      Mengetahui / Menyetujui,
                     </p>
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-slate-900 dark:text-white text-[11px]">
+                        ( Alam AS simpuang ago, S.Sos / Reski Faisal )
+                      </p>
+                      <p className="text-[9.5px] text-muted-foreground">
+                        Direktur Utama / Pimpinan PT. FRP
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </DialogContent>

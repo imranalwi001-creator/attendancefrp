@@ -822,36 +822,60 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
             </div>
 
             {/* Official Signatures Block (Bottom Section) */}
-            <div className="mt-8 pt-4 grid grid-cols-3 gap-6 text-center text-xs font-serif">
-              <div>
-                <p className="font-semibold text-slate-700">Karyawan / Pemohon,</p>
-                <div className="h-16"></div>
-                <p className="font-bold underline uppercase text-slate-950">
-                  ( {selectedEmployee?.fullName || '...........................'} )
-                </p>
-                <p className="text-[10px] font-mono text-slate-600">
-                  NIP: {selectedEmployee?.nip || '-'}
-                </p>
-              </div>
+            {isSpecialTarget ? (
+              <div className="mt-8 pt-4 grid grid-cols-2 gap-8 text-center text-xs font-serif">
+                <div>
+                  <p className="font-semibold text-slate-700">Karyawan / Pemohon,</p>
+                  <div className="h-16"></div>
+                  <p className="font-bold underline uppercase text-slate-950">
+                    ( {selectedEmployee?.fullName || '...........................'} )
+                  </p>
+                  <p className="text-[10px] font-mono text-slate-600">
+                    NIP: {selectedEmployee?.nip || '-'}
+                  </p>
+                </div>
 
-              <div>
-                <p className="font-semibold text-slate-700">Kepala Urusan (KAUR),</p>
-                <div className="h-16"></div>
-                <p className="font-bold underline uppercase text-slate-950">
-                  ( {kaurName || '...........................'} )
-                </p>
-                <p className="text-[10px] text-slate-600">Pemberi Perintah</p>
+                <div>
+                  <p className="font-semibold text-slate-700">Mengetahui / Menyetujui,</p>
+                  <div className="h-16"></div>
+                  <p className="font-bold underline text-slate-950">
+                    ( Alam AS simpuang ago, S.Sos / Reski Faisal )
+                  </p>
+                  <p className="text-[10px] text-slate-600">Direktur Utama / Pimpinan PT. FRP</p>
+                </div>
               </div>
+            ) : (
+              <div className="mt-8 pt-4 grid grid-cols-3 gap-6 text-center text-xs font-serif">
+                <div>
+                  <p className="font-semibold text-slate-700">Karyawan / Pemohon,</p>
+                  <div className="h-16"></div>
+                  <p className="font-bold underline uppercase text-slate-950">
+                    ( {selectedEmployee?.fullName || '...........................'} )
+                  </p>
+                  <p className="text-[10px] font-mono text-slate-600">
+                    NIP: {selectedEmployee?.nip || '-'}
+                  </p>
+                </div>
 
-              <div>
-                <p className="font-semibold text-slate-700">Kepala Departemen / Pimpinan,</p>
-                <div className="h-16"></div>
-                <p className="font-bold underline uppercase text-slate-950">
-                  ( Drs. Hendra Setiawan, M.M. )
-                </p>
-                <p className="text-[10px] text-slate-600">Manajemen PT FRP</p>
+                <div>
+                  <p className="font-semibold text-slate-700">Kepala Urusan (KAUR),</p>
+                  <div className="h-16"></div>
+                  <p className="font-bold underline uppercase text-slate-950">
+                    ( {kaurName || '...........................'} )
+                  </p>
+                  <p className="text-[10px] text-slate-600">Pemberi Perintah</p>
+                </div>
+
+                <div>
+                  <p className="font-semibold text-slate-700">Mengetahui / Menyetujui,</p>
+                  <div className="h-16"></div>
+                  <p className="font-bold underline text-slate-950">
+                    ( Alam AS simpuang ago, S.Sos / Reski Faisal )
+                  </p>
+                  <p className="text-[10px] text-slate-600">Direktur Utama / Pimpinan PT. FRP</p>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Official Watermark / Footer Stamp */}
             <div className="mt-6 pt-2 border-t border-slate-300 flex items-center justify-between text-[9px] text-slate-500 font-mono">
