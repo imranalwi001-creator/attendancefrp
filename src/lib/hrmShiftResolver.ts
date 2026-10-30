@@ -33,6 +33,27 @@ export function resolveEffectiveShift(
   allShifts: Shift[],
   dailySchedule?: EmployeeSchedule | null
 ): Shift {
+  const isSpecialDuty = isSpecialDutyOfficer(user);
+
+  // 0. KHUSUS 3 PETUGAS LAPANGAN KHUSUS PIMPINAN (Samsi, Takdir, Aslam):
+  // Sesuai Instruksi Mutlak Pimpinan: Jam Masuk Baku 08:00 WITA dengan Toleransi 15 Menit (Batas Akhir Toleransi: 08:15 WITA)!
+  if (isSpecialDuty) {
+    const sStart = (user?.customStartTime || (user as any)?.custom_start_time || '08:00').substring(0, 5);
+    const sEnd = (user?.customEndTime || (user as any)?.custom_end_time || '16:00').substring(0, 5);
+    const tol = Number(user?.lateToleranceMinutes ?? (user as any)?.late_tolerance_minutes ?? 15);
+    return {
+      id: 'shift-field-special',
+      code: 'FIELD',
+      name: 'Petugas Lapangan Khusus Pimpinan (08:00 - 16:00)',
+      startTime: sStart,
+      endTime: sEnd,
+      lateToleranceMinutes: tol > 0 ? tol : 15,
+      earliestClockInMinutes: 120,
+      isCrossDay: false,
+      colorTag: '#10b981',
+    };
+  }
+
   // 1. Jadwal Roster Harian (Jika Ada dan Bukan Libur)
   if (dailySchedule && !dailySchedule.isOff && dailySchedule.startTime && dailySchedule.endTime) {
     const isNight = Boolean(dailySchedule.isNightShift || (dailySchedule.endTime < dailySchedule.startTime));
@@ -48,8 +69,6 @@ export function resolveEffectiveShift(
       colorTag: dailySchedule.shiftCode === 'DAY' ? '#10b981' : dailySchedule.shiftCode === 'P' ? '#3b82f6' : dailySchedule.shiftCode === 'S' ? '#f59e0b' : '#8b5cf6',
     };
   }
-
-  const isSpecialDuty = isSpecialDutyOfficer(user);
 
   // 2. Cek langsung shiftStartTime & shiftEndTime yang terpasang pada userProfile (dari PostgreSQL p.shift_start_time / p.shift_end_time)
   if (user?.shiftStartTime && user?.shiftEndTime) {

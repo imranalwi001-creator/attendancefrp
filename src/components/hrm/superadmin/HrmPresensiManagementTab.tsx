@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, AttendanceStatus, UserProfile } from '@/types/hrm';
+import { AttendanceRecord, AttendanceStatus, UserProfile, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -129,18 +129,20 @@ export const HrmPresensiManagementTab: React.FC = () => {
 
   // Helper hitung keterlambatan otomatis berdasarkan Shift & Jam Masuk
   const computeTabLateness = (userId?: string, dateStr?: string, clockInStr?: string) => {
-    if (!clockInStr || !clockInStr.includes(':')) {
-      return { status: 'hadir' as AttendanceStatus, lateMinutes: 0, shiftInfo: '07:30 WITA' };
-    }
     const userObj = users.find((u) => u.id === userId);
+    const isSpecial = isLeadershipSpecialFieldOfficer(userObj) || isSpecialDutyOfficer(userObj);
     const sched = userObj && dateStr ? hrmService.getEmployeeTodaySchedule(userObj.id, dateStr) : null;
     const targetShift = resolveEffectiveShift(userObj, shifts, sched);
-    const shiftStartTime = targetShift?.startTime?.substring(0, 5) || '07:30';
+    const shiftStartTime = targetShift?.startTime?.substring(0, 5) || (isSpecial ? '08:00' : '07:30');
     const tolerance = userObj?.lateToleranceMinutes ?? targetShift?.lateToleranceMinutes ?? 15;
     const isCrossDay = Boolean(targetShift?.isCrossDay);
 
+    if (!clockInStr || !clockInStr.includes(':')) {
+      return { status: 'hadir' as AttendanceStatus, lateMinutes: 0, grossMinutes: 0, shiftInfo: `${shiftStartTime} WITA (Toleransi ${tolerance}m)` };
+    }
+
     const [sH, sM] = shiftStartTime.split(':').map(Number);
-    const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 30);
+    const startMins = (Number.isFinite(sH) ? sH : (isSpecial ? 8 : 7)) * 60 + (Number.isFinite(sM) ? sM : (isSpecial ? 0 : 30));
     const [cH, cM] = clockInStr.split(':').map(Number);
     const clockInMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);
 
@@ -152,9 +154,10 @@ export const HrmPresensiManagementTab: React.FC = () => {
     const shiftInfo = `${shiftStartTime} WITA (Toleransi ${tolerance}m)`;
 
     if (diff > tolerance) {
-      return { status: 'terlambat' as AttendanceStatus, lateMinutes: diff, shiftInfo };
+      const netLate = Math.max(0, diff - tolerance);
+      return { status: 'terlambat' as AttendanceStatus, lateMinutes: netLate > 0 ? netLate : diff, grossMinutes: diff, shiftInfo };
     } else {
-      return { status: 'hadir' as AttendanceStatus, lateMinutes: 0, shiftInfo };
+      return { status: 'hadir' as AttendanceStatus, lateMinutes: 0, grossMinutes: 0, shiftInfo };
     }
   };
 
@@ -627,8 +630,7 @@ export const HrmPresensiManagementTab: React.FC = () => {
                     placeholder="0"
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    Dihitung otomatis: Jam Masuk ({editClockIn}) dikurangi Jam Mulai Shift. Angka ini tetap dapat disesuaikan manual jika ada dispensasi pimpinan.
-                  </p>
+                    Dihitung otomatis: Jam Masuk ({editClockIn}) melebihi batas toleransi 15 menit ({editLateMinutes} menit setelah toleransi). Total selisih dari jam mulai shift: {computeTabLateness(selectedRecord?.userId, selectedRecord?.attendanceDate || selectedDate, editClockIn).grossMinutes} menit. Angka dapat disesuaikan manual.</p>
                 </div>
               )}
 

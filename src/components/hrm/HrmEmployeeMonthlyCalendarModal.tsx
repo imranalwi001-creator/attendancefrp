@@ -283,16 +283,23 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
   // Helper hitung keterlambatan otomatis berdasarkan Jam Masuk dan Shift aktif di tanggal terpilih
   const computeLateness = React.useCallback(
     (clockInStr: string, dateStr: string) => {
-      if (!clockInStr || !clockInStr.includes(':')) {
-        return { status: 'hadir' as AttendanceStatus, lateMinutes: 0, shiftInfo: '07:30 WITA' };
-      }
+      const isSpecial = isLeadershipSpecialFieldOfficer(user) || isSpecialDutyOfficer(user);
       const targetShift = getShiftForDate(dateStr);
-      const shiftStartTime = targetShift?.startTime?.substring(0, 5) || '07:30';
+      const shiftStartTime = targetShift?.startTime?.substring(0, 5) || (isSpecial ? '08:00' : '07:30');
       const lateTolerance = user?.lateToleranceMinutes ?? targetShift?.lateToleranceMinutes ?? 15;
       const isCrossDay = Boolean(targetShift?.isCrossDay);
 
+      if (!clockInStr || !clockInStr.includes(':')) {
+        return {
+          status: 'hadir' as AttendanceStatus,
+          lateMinutes: 0,
+          grossMinutes: 0,
+          shiftInfo: `${shiftStartTime} WITA (Toleransi ${lateTolerance}m)`,
+        };
+      }
+
       const [sH, sM] = shiftStartTime.split(':').map(Number);
-      const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 30);
+      const startMins = (Number.isFinite(sH) ? sH : (isSpecial ? 8 : 7)) * 60 + (Number.isFinite(sM) ? sM : (isSpecial ? 0 : 30));
 
       const [cH, cM] = clockInStr.split(':').map(Number);
       const clockInMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);
@@ -305,15 +312,18 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
       const shiftInfo = `${shiftStartTime} WITA (Toleransi ${lateTolerance}m)`;
 
       if (diff > lateTolerance) {
+        const netLate = Math.max(0, diff - lateTolerance);
         return {
           status: 'terlambat' as AttendanceStatus,
-          lateMinutes: diff,
+          lateMinutes: netLate > 0 ? netLate : diff,
+          grossMinutes: diff,
           shiftInfo,
         };
       } else {
         return {
           status: 'hadir' as AttendanceStatus,
           lateMinutes: 0,
+          grossMinutes: 0,
           shiftInfo,
         };
       }
@@ -1147,8 +1157,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                   placeholder="0"
                 />
                 <p className="text-[10px] text-muted-foreground">
-                  Dihitung otomatis: Jam Masuk ({editClockIn}) dikurangi Jam Mulai Shift. Angka ini tetap dapat disesuaikan manual jika ada dispensasi pimpinan.
-                </p>
+                  Dihitung otomatis: Jam Masuk ({editClockIn}) melebihi batas toleransi 15 menit ({editLateMinutes} menit setelah toleransi). Total selisih dari jam mulai shift: {computeLateness(editClockIn, selectedDateStr).grossMinutes} menit. Angka dapat disesuaikan manual.</p>
               </div>
             )}
 
