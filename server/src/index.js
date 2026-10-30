@@ -6432,6 +6432,70 @@ app.get('/api/leaves/balance', async (req, res) => {
   }
 });
 
+// POST /api/leaves/correct-quota - Fitur Koreksi Hak & Saldo Cuti Karyawan Realtime
+app.post('/api/leaves/correct-quota', async (req, res) => {
+  try {
+    const { userId, annualLeaveQuota, usedLeaveDays, reason, operatorName } = req.body;
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId wajib diisi' });
+    }
+
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const uRes = await pool.query(
+        'SELECT id FROM hrm_profiles WHERE LOWER(TRIM(email)) = LOWER(TRIM($1)) OR LOWER(TRIM(nip)) = LOWER(TRIM($1)) OR id::text = $1 LIMIT 1',
+        [userId]
+      );
+      if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
+    }
+
+    const updateRes = await pool.query(`
+      UPDATE hrm_profiles
+      SET annual_leave_quota = COALESCE($1::integer, annual_leave_quota),
+          used_leave_days = COALESCE($2::integer, used_leave_days),
+          updated_at = NOW()
+      WHERE id = $3
+      RETURNING id, full_name, nip, annual_leave_quota, used_leave_days;
+    `, [annualLeaveQuota, usedLeaveDays, validUserId]);
+
+    if (updateRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+
+    const updated = updateRes.rows[0];
+
+    // Catat notifikasi / audit trail
+    try {
+      await pool.query(`
+        INSERT INTO hrm_notifications (user_id, title, message, type, is_read, created_at)
+        VALUES ($1, $2, $3, 'system', false, NOW());
+      `, [
+        validUserId,
+        'Koreksi Saldo Cuti Karyawan',
+        `Saldo cuti Anda telah disesuaikan oleh ${operatorName || 'Superadmin'}: Hak Kuota ${annualLeaveQuota} Hari, Cuti Terpakai ${usedLeaveDays} Hari. Alasan: ${reason || 'Koreksi resmi data cuti'}.`
+      ]);
+    } catch (e) {
+      // ignore notification error
+    }
+
+    res.json({
+      success: true,
+      message: 'Koreksi saldo cuti berhasil disimpan ke PostgreSQL',
+      data: {
+        id: updated.id,
+        fullName: updated.full_name,
+        nip: updated.nip,
+        annualLeaveQuota: parseInt(updated.annual_leave_quota, 10),
+        usedLeaveDays: parseInt(updated.used_leave_days, 10),
+        remainingLeaveDays: Math.max(0, parseInt(updated.annual_leave_quota, 10) - parseInt(updated.used_leave_days, 10)),
+      }
+    });
+  } catch (err) {
+    console.error('[LeaveCorrection] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── HELPER: BROADCAST SYSTEM & ROLE NOTIFICATIONS ─────────────────────────
 async function broadcastNotification({
   title,

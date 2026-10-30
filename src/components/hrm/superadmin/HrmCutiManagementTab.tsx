@@ -22,6 +22,7 @@ import {
   Plus,
 } from 'lucide-react';
 import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
+import { HrmEmployeeLeaveCorrectionModal } from '@/components/hrm/HrmEmployeeLeaveCorrectionModal';
 
 export const HrmCutiManagementTab: React.FC = () => {
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
@@ -44,6 +45,9 @@ export const HrmCutiManagementTab: React.FC = () => {
 
   // Manual Leave Modal State
   const [manualLeaveModalOpen, setManualLeaveModalOpen] = useState(false);
+
+  // Leave Quota Correction Modal State
+  const [leaveCorrectionOpen, setLeaveCorrectionOpen] = useState(false);
 
   const loadData = () => {
     setIsLoading(true);
@@ -244,6 +248,16 @@ export const HrmCutiManagementTab: React.FC = () => {
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
                 Muat Ulang
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setLeaveCorrectionOpen(true)}
+                className="h-8 text-xs rounded-xl gap-1.5 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 font-medium"
+                title="Koreksi kuota dan saldo cuti terpakai karyawan"
+              >
+                <CalendarCheck className="w-3.5 h-3.5 text-emerald-600" />
+                Koreksi Saldo Cuti
               </Button>
               <Button
                 size="sm"
@@ -497,6 +511,14 @@ export const HrmCutiManagementTab: React.FC = () => {
         open={manualLeaveModalOpen}
         onClose={() => setManualLeaveModalOpen(false)}
         onSuccess={() => loadData()}
+      />
+
+      {/* Modal Koreksi Saldo Cuti Karyawan */}
+      <HrmEmployeeLeaveCorrectionModal
+        isOpen={leaveCorrectionOpen}
+        onClose={() => setLeaveCorrectionOpen(false)}
+        allUsers={users}
+        onSaved={() => loadData()}
       />
     </div>
   );

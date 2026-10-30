@@ -34,11 +34,13 @@ import {
   RotateCcw,
   Sparkles,
   Loader2,
+  CalendarCheck,
 } from 'lucide-react';
 import { UserProfile, AttendanceRecord, OvertimeRecord, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
 import defaultLogo from '@/assets/logo.png';
+import { HrmEmployeeLeaveCorrectionModal } from './HrmEmployeeLeaveCorrectionModal';
 
 interface Props {
   isOpen: boolean;
@@ -92,6 +94,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   const [employeeDept, setEmployeeDept] = useState<string>('');
   const [employeeShiftPattern, setEmployeeShiftPattern] = useState<string>('');
   const [employeeKaur, setEmployeeKaur] = useState<string>('');
+
+  // Dialog Koreksi Kuota & Saldo Cuti Karyawan
+  const [isLeaveCorrectionOpen, setIsLeaveCorrectionOpen] = useState<boolean>(false);
+  const [manualLeaveOverride, setManualLeaveOverride] = useState<{ quota: number; used: number; remaining: number } | null>(null);
 
   // Preview foto forensik
   const [previewPhoto, setPreviewPhoto] = useState<{ url: string; title: string } | null>(null);
@@ -503,6 +509,9 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
   // Status Cuti Karyawan Realtime (Sinkron Database PostgreSQL & Quota Tracking)
   const leaveStats = useMemo(() => {
+    if (manualLeaveOverride) {
+      return manualLeaveOverride;
+    }
     if (!user) return { quota: 12, used: 0, remaining: 12 };
     const quota = Number(user.annualLeaveQuota ?? (user as any).annual_leave_quota ?? 12);
     const profileUsed = Number(user.usedLeaveDays ?? (user as any).used_leave_days ?? 0);
@@ -1224,6 +1233,17 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               <Button
                 size="sm"
                 variant="outline"
+                onClick={() => setIsLeaveCorrectionOpen(true)}
+                className="h-8 px-3 text-xs rounded-xl gap-1.5 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 font-medium shadow-xs"
+                title="Koreksi kuota dan saldo cuti terpakai karyawan"
+              >
+                <CalendarCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Koreksi Cuti</span>
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
                 onClick={handleDownloadPdf}
                 disabled={isGeneratingPdf}
                 className="h-8 px-3 text-xs rounded-xl gap-1.5 border-rose-500/40 text-rose-700 dark:text-rose-300 hover:bg-rose-500/10 font-medium shadow-xs"
@@ -1457,9 +1477,15 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                     <span className="font-bold text-emerald-950 dark:text-emerald-200">
                       STATUS CUTI REALTIME
                     </span>
-                    <span className="text-[9px] font-mono text-emerald-700 dark:text-emerald-300 font-semibold">
-                      Kuotasi Tahunan
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsLeaveCorrectionOpen(true)}
+                      className="inline-flex items-center gap-1 text-[9px] font-medium text-emerald-700 dark:text-emerald-300 hover:text-emerald-900 dark:hover:text-white bg-white/70 dark:bg-black/40 px-1.5 py-0.5 rounded border border-emerald-500/30 hover:border-emerald-500 transition-all cursor-pointer shadow-2xs"
+                      title="Klik untuk Koreksi Saldo & Hak Cuti Karyawan"
+                    >
+                      <Edit3 className="w-2.5 h-2.5" />
+                      <span>Koreksi</span>
+                    </button>
                   </div>
                   <div className="flex items-baseline justify-between text-[10.5px]">
                     <span className="text-slate-700 dark:text-slate-300">Total Hak Cuti:</span>
@@ -1812,6 +1838,19 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Modal Koreksi Saldo Cuti Karyawan */}
+      <HrmEmployeeLeaveCorrectionModal
+        isOpen={isLeaveCorrectionOpen}
+        onClose={() => setIsLeaveCorrectionOpen(false)}
+        user={user}
+        currentQuota={leaveStats.quota}
+        currentUsed={leaveStats.used}
+        suggestedAttUsed={stats.totalCuti}
+        onSaved={(upd) => {
+          setManualLeaveOverride(upd);
+        }}
+      />
 
       {/* CSS PRINT MEDIA STYLES (PRESISI 1 LEMBAR CETAK A4 LANDSCAPE) */}
       <style>{`
