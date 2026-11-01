@@ -10769,7 +10769,7 @@ app.get('/api/employee-schedules', async (req, res) => {
 
     if (userId) {
       params.push(userId);
-      query += ` AND s.user_id = $${params.length}`;
+      query += ` AND (s.user_id::text = $${params.length} OR p.nip = $${params.length} OR LOWER(p.email) = LOWER($${params.length}))`;
     }
     if (divisionId && divisionId !== 'all') {
       params.push(divisionId);

@@ -813,10 +813,46 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                       🇮🇩 {holiday?.name}
                     </span>
                   );
-                } else if (sched?.isOff) {
-                  statusBadge = (
-                    <span className="mt-1 text-[9px] text-muted-foreground/60 italic font-medium">Libur (OFF)</span>
-                  );
+                } else if (sched) {
+                  // Jadwal resmi dari Matriks Penjadwalan Roster Karyawan (tersinkron database)
+                  if (sched.isOff || sched.shiftCode === 'OFF') {
+                    statusBadge = (
+                      <span className="mt-1 text-[9px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded w-fit">
+                        OFF (Libur)
+                      </span>
+                    );
+                  } else {
+                    const sCode = (sched.shiftCode || 'Shift').toUpperCase();
+                    const isP = sCode === 'P';
+                    const isS = sCode === 'S';
+                    const isM = sCode === 'M';
+                    const isDay = sCode === 'DAY';
+
+                    const badgeStyle = isP
+                      ? 'bg-sky-100 text-sky-800 border-sky-300 dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-800'
+                      : isS
+                      ? 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800'
+                      : isM
+                      ? 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-950/60 dark:text-purple-300 dark:border-purple-800'
+                      : isDay
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'
+                      : 'bg-primary/10 text-primary border-primary/20';
+
+                    statusBadge = (
+                      <div className="mt-1 flex flex-col gap-0.5">
+                        <span className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded border w-fit font-mono ${badgeStyle}`}>
+                          {sCode === 'DAY' ? 'DAY' : `Shift ${sCode}`}
+                        </span>
+                        {d.isToday ? (
+                          <span className="text-[8px] text-amber-600 font-medium">Belum Absen</span>
+                        ) : (
+                          <span className="text-[8px] text-muted-foreground/80 font-mono">
+                            {sched.startTime ? sched.startTime.substring(0, 5) : ''}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  }
                 } else if (isSunday) {
                   statusBadge = (
                     <span className="mt-1 text-[9px] text-rose-500/60 italic font-medium">Libur</span>
@@ -1123,7 +1159,21 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                   Hari libur nasional resmi Republik Indonesia (Bulan {selectedMonth}). Karyawan bebas tugas atau berhak atas upah lembur khusus jika ditugaskan.
                 </p>
               </div>
-            ) : selectedSched?.isOff ? (
+            ) : selectedSched && !selectedSched.isOff && selectedSched.shiftCode !== 'OFF' ? (
+              <div className="p-3.5 rounded-xl bg-primary/5 border border-primary/20 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Badge className="bg-primary text-white text-[10px]">
+                    Jadwal Roster: Shift {selectedSched.shiftCode} ({selectedSched.shiftName || 'Dinas Operasional'})
+                  </Badge>
+                  <span className="text-xs font-mono font-bold text-primary">
+                    {selectedSched.startTime?.substring(0, 5)} - {selectedSched.endTime?.substring(0, 5)} WITA
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Karyawan terjadwal aktif berdinas pada {selectedDateFormatted} sesuai Matriks Penjadwalan Roster.
+                </p>
+              </div>
+            ) : selectedSched?.isOff || selectedSched?.shiftCode === 'OFF' ? (
               <div className="p-3.5 rounded-xl bg-muted/30 border border-border space-y-1">
                 <Badge variant="outline" className="text-[10px] text-muted-foreground">
                   Jadwal Roster: Libur Operasional (OFF)
