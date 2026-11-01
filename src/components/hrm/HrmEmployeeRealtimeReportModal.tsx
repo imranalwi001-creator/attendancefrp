@@ -532,11 +532,29 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     let totalSakit = 0;
     let totalAlpa = 0;
     let totalJamLembur = 0;
+    let totalJamKerjaBersih = 0;
 
     monthlyRows.forEach((r) => {
       // HANYA hitung Hadir jika benar-benar HADIR atau TELAT atau LEMBUR (Bukan Cuti/Sakit/Izin/Off/Alpa)
       if (r.ket === 'HADIR' || r.ket === 'TELAT' || r.ket === 'LEMBUR') {
         totalHadir++;
+
+        let dayNetMins = 0;
+        if (r.absenMasuk && r.absenPulang && r.absenMasuk !== '-' && r.absenPulang !== '-') {
+          const inParts = r.absenMasuk.split(':').map(Number);
+          const outParts = r.absenPulang.split(':').map(Number);
+          if (inParts.length >= 2 && outParts.length >= 2) {
+            const inMins = inParts[0] * 60 + inParts[1];
+            const outMins = outParts[0] * 60 + outParts[1];
+            const grossMins = Math.max(0, outMins - inMins);
+            // Sesuai UU Ketenagakerjaan & Kebijakan PT FRP: Istirahat 1 jam (60 mnt) tidak termasuk jam kerja jika durasi >= 4 jam
+            dayNetMins = grossMins >= 240 ? Math.max(0, grossMins - 60) : grossMins;
+          }
+        }
+        if (dayNetMins === 0 && r.attRecord?.workDurationMinutes) {
+          dayNetMins = r.attRecord.workDurationMinutes;
+        }
+        totalJamKerjaBersih += dayNetMins / 60;
       }
       if (r.telatMnt !== '-') {
         totalTelatKali++;
@@ -573,6 +591,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         totalSakit,
         totalAlpa: 0,
         totalJamLembur: 0,
+        totalJamKerjaBersih: 0,
       };
     }
 
@@ -586,6 +605,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       totalSakit,
       totalAlpa,
       totalJamLembur: Number(totalJamLembur.toFixed(1)),
+      totalJamKerjaBersih: Number(totalJamKerjaBersih.toFixed(1)),
     };
   }, [monthlyRows, user]);
 
@@ -1247,7 +1267,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       // Baris Total / Rekapan
       body.push([
         { content: 'TOTAL / REKAP', colSpan: 2, styles: { halign: 'center', fontStyle: 'bold', fillColor: [233, 238, 245] } },
-        { content: `${stats.totalHadir} Hari`, styles: { halign: 'center', fontStyle: 'bold', textColor: [4, 120, 87] } },
+        { content: `${stats.totalHadir} Hari\n(${stats.totalJamKerjaBersih} Jam)`, styles: { halign: 'center', fontStyle: 'bold', textColor: [4, 120, 87] } },
         { content: `${stats.totalOff} OFF`, styles: { halign: 'center', textColor: [71, 85, 105] } },
         { content: stats.totalTelatMnt > 0 ? `${stats.totalTelatMnt}m` : '-', styles: { halign: 'center', fontStyle: 'bold', textColor: [180, 83, 9], fillColor: [255, 248, 238] } },
         { content: '-', styles: { halign: 'center' } },
@@ -1300,7 +1320,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       const boxWidth = contentWidth / 8;
       const boxHeight = 7.2;
       const metrics = [
-        { label: 'TOTAL HADIR', val: `${stats.totalHadir} Hari`, color: [4, 120, 87] },
+        { label: 'TOTAL HADIR', val: `${stats.totalHadir} Hari (${stats.totalJamKerjaBersih} Jam)`, color: [4, 120, 87] },
         { label: 'KETERLAMBATAN', val: `${stats.totalTelatMnt}m (${stats.totalTelatKali}x)`, color: [180, 83, 9] },
         { label: 'JAM LEMBUR', val: `${stats.totalJamLembur} Jam`, color: [29, 78, 216] },
         { label: 'LIBUR / OFF', val: `${stats.totalOff} Hari`, color: [71, 85, 105] },
@@ -1895,8 +1915,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                     <td colSpan={2} className="border border-slate-300 dark:border-slate-700 py-1 px-2 text-center uppercase tracking-wide">
                       TOTAL / REKAP
                     </td>
-                    <td className="border border-slate-300 dark:border-slate-700 py-1 font-mono text-emerald-700 dark:text-emerald-400 font-bold">
-                      {stats.totalHadir} Hari
+                    <td className="border border-slate-300 dark:border-slate-700 py-1 font-mono text-emerald-700 dark:text-emerald-400 font-bold whitespace-nowrap">
+                      {stats.totalHadir} Hari ({stats.totalJamKerjaBersih} Jam)
                     </td>
                     <td className="border border-slate-300 dark:border-slate-700 py-1 font-mono text-slate-600 dark:text-slate-300">
                       {stats.totalOff} OFF
@@ -1929,7 +1949,15 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 text-center text-xs">
                 <div className="p-1 rounded bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
                   <span className="text-[8.5px] uppercase font-bold text-emerald-800 dark:text-emerald-300">Total Hadir</span>
-                  <p className="text-xs font-black text-emerald-700 dark:text-emerald-400 leading-tight">{stats.totalHadir} <span className="text-[8.5px] font-normal">Hari</span></p>
+                  <p className="text-xs font-black text-emerald-700 dark:text-emerald-400 leading-tight">
+                    {stats.totalHadir} <span className="text-[8.5px] font-normal">Hari</span>
+                  </p>
+                  <p className="text-[8px] font-bold text-emerald-800 dark:text-emerald-300 mt-0.5 leading-none">
+                    ({stats.totalJamKerjaBersih} Jam)
+                  </p>
+                  <span className="text-[6.5px] text-emerald-700/70 dark:text-emerald-400/70 block mt-0.5 uppercase tracking-tighter">
+                    Excl. Istirahat
+                  </span>
                 </div>
 
                 <div className="p-1 rounded bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">

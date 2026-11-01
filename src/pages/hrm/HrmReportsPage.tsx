@@ -324,8 +324,30 @@ export const HrmReportsPage: React.FC = () => {
       const lateCount = lateAtts.length;
       const totalLateMinutes = empAtts.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
       const lateDeduction = totalLateMinutes * 1000;
-      const totalWorkMinutes = empAtts.reduce((sum, a) => sum + (a.workDurationMinutes || 0), 0);
-      const totalWorkHours = Number((totalWorkMinutes / 60).toFixed(1));
+
+      // Hitung akumulasi jam kerja bersih (tidak termasuk 1 jam istirahat sesuai standar Depnaker & PT FRP)
+      let totalNetWorkMinutes = 0;
+      empAtts.forEach((a) => {
+        if (a.status !== 'hadir' && a.status !== 'terlambat' && a.status !== 'lembur') return;
+
+        let dayNetMins = 0;
+        if (a.clockIn && a.clockOut && a.clockIn !== '-' && a.clockOut !== '-') {
+          const inParts = a.clockIn.split(':').map(Number);
+          const outParts = a.clockOut.split(':').map(Number);
+          if (inParts.length >= 2 && outParts.length >= 2) {
+            const inMins = inParts[0] * 60 + inParts[1];
+            const outMins = outParts[0] * 60 + outParts[1];
+            const grossMins = Math.max(0, outMins - inMins);
+            // Sesuai UU Ketenagakerjaan: waktu istirahat 1 jam tidak dihitung jam kerja jika bekerja >= 4 jam
+            dayNetMins = grossMins >= 240 ? Math.max(0, grossMins - 60) : grossMins;
+          }
+        }
+        if (dayNetMins === 0 && a.workDurationMinutes && a.workDurationMinutes > 0) {
+          dayNetMins = a.workDurationMinutes;
+        }
+        totalNetWorkMinutes += dayNetMins;
+      });
+      const totalWorkHours = Number((totalNetWorkMinutes / 60).toFixed(1));
       const perimeterBreachCount = empAtts.reduce((sum, a) => sum + (a.perimeterBreachCount || (a.isPerimeterBreached ? 1 : 0)), 0);
 
       const otFromRecords = empOvertimes.reduce((sum, o) => sum + (o.durationHours || 0), 0);
