@@ -11698,9 +11698,26 @@ async function runAutoCloseCompliantAttendance() {
 // ─── 11. AUTO-MARKING MANGKIR (ALFA / TANPA KETERANGAN) ────────────────────
 async function runAutoMarkMangkirAttendance(targetDateStr = null) {
   try {
-    // Gunakan tanggal WITA (Asia/Makassar)
+    // Tanggal dan waktu WITA (Asia/Makassar) yang presisi & tahan format 24 jam
     const nowWitaDate = targetDateStr || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' });
-    const nowWitaTime = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Makassar', hour12: false, hour: '2-digit', minute: '2-digit' });
+    const todayWitaDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' });
+
+    // Format jam WITA dengan format en-GB yang aman (menghasilkan 00 s/d 23, BUKAN 24)
+    const timeParts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Makassar',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).formatToParts(new Date());
+
+    let witaH = 0;
+    let witaM = 0;
+    for (const p of timeParts) {
+      if (p.type === 'hour') witaH = parseInt(p.value, 10) % 24;
+      if (p.type === 'minute') witaM = parseInt(p.value, 10);
+    }
+    const nowWitaMinutes = witaH * 60 + witaM;
+    const nowWitaTime = `${String(witaH).padStart(2, '0')}:${String(witaM).padStart(2, '0')}`;
 
     console.log(`[Auto-Mangkir Engine] Memeriksa status ketidakhadiran untuk tanggal ${nowWitaDate} (pk ${nowWitaTime} WITA)...`);
 
@@ -11741,15 +11758,17 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
 
       // 1.5 Cek jadwal roster / shift kerja karyawan pada tanggal ini
       const scheduleCheck = await pool.query(`
-        SELECT id, is_off FROM hrm_employee_schedules 
+        SELECT id, shift_id, shift_code, shift_name, start_time, end_time, is_off, is_night_shift 
+        FROM hrm_employee_schedules 
         WHERE user_id = $1 AND schedule_date = $2 LIMIT 1
       `, [emp.id, nowWitaDate]);
 
       const hasSchedule = scheduleCheck.rows.length > 0;
-      const isScheduleOff = hasSchedule && scheduleCheck.rows[0].is_off === true;
+      const sched = hasSchedule ? scheduleCheck.rows[0] : null;
+      const isScheduleOff = sched && sched.is_off === true;
 
       // Jika karyawan memiliki jadwal OFF atau pada akhir pekan (Sabtu/Minggu) tidak dijadwalkan masuk, lewati (karyawan OFF)
-      if (isScheduleOff || (isWeekend && (!hasSchedule || scheduleCheck.rows[0].is_off))) {
+      if (isScheduleOff || (isWeekend && (!hasSchedule || sched?.is_off))) {
         continue;
       }
 
@@ -11778,19 +11797,51 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
         continue;
       }
 
-      // 4. Periksa apakah jam shift kerja sudah usai
-      const shiftEndStr = (emp.shift_end || '17:00:00').slice(0, 5);
-      const isPastShift = targetDateStr && targetDateStr < new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' })
-        ? true 
-        : nowWitaTime >= shiftEndStr;
+      // 4. Periksa apakah jam shift kerja sudah benar-benar usai
+      const effectiveShiftId = sched?.shift_id || emp.shift_id;
+      const effectiveShiftName = sched?.shift_name || emp.shift_name || 'Shift Reguler';
+      const effectiveShiftStart = (sched?.start_time || emp.shift_start || '07:30').slice(0, 5);
+      const effectiveShiftEnd = (sched?.end_time || emp.shift_end || '16:30').slice(0, 5);
+      const isCrossDay = Boolean(sched?.is_night_shift || emp.is_cross_day || sched?.shift_code === 'M');
 
-      if (!isPastShift) {
-        // Shift kerja belum selesai, beri kesempatan presensi
+      const [startH, startM] = effectiveShiftStart.split(':').map(Number);
+      const [endH, endM] = effectiveShiftEnd.split(':').map(Number);
+      const startMinutes = (startH || 0) * 60 + (startM || 0);
+      const endMinutes = (endH || 0) * 60 + (endM || 0);
+
+      // Karyawan HANYA bisa ditandai Mangkir jika:
+      // a. Tanggal target adalah hari lampau (sebelum hari ini), ATAU
+      // b. Tanggal target adalah HARI INI dan jam sekarang SUDAH MELEWATI jam berakhir shift
+      const isTargetPastDate = nowWitaDate < todayWitaDate;
+      const isTargetToday = nowWitaDate === todayWitaDate;
+
+      if (!isTargetPastDate && !isTargetToday) {
+        // Tanggal masa depan (belum terjadi)
         continue;
       }
 
+      if (isTargetToday) {
+        // DINI HARI / PAGI SEBELUM SHIFT DIMULAI: Sama sekali TIDAK BOLEH ditandai mangkir!
+        if (nowWitaMinutes < startMinutes) {
+          continue;
+        }
+
+        if (!isCrossDay) {
+          // Shift reguler (misal 07:30 - 15:30 atau 15:30 - 22:30):
+          // Jika waktu saat ini masih sebelum jam selesai shift, JANGAN tandai mangkir!
+          if (nowWitaMinutes < endMinutes) {
+            continue;
+          }
+        } else {
+          // Shift lintas hari (malam, misal 22:30 - 07:30):
+          // Jam berakhir adalah keesokan harinya pk 07:30 pagi WITA.
+          // Jadi pada hari berjalan H, shift malam baru selesai besok pagi (H+1).
+          continue;
+        }
+      }
+
       // 5. Buat record resmi Mangkir (status = 'alfa') di hrm_attendances
-      const notesMsg = `[MANGKIR OTOMATIS: Tidak hadir tanpa keterangan hingga jam shift (${shiftEndStr} WITA) berakhir]`;
+      const notesMsg = `[MANGKIR OTOMATIS: Tidak hadir tanpa keterangan hingga jam shift (${effectiveShiftEnd} WITA) berakhir]`;
       await pool.query(`
         INSERT INTO hrm_attendances (
           user_id, attendance_date, status, late_minutes, early_leaving_minutes,
@@ -11800,7 +11851,7 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
           0, false, $3, $4, $5, NOW(), NOW()
         )
         ON CONFLICT DO NOTHING
-      `, [emp.id, nowWitaDate, notesMsg, emp.shift_id, emp.shift_name || 'Shift Reguler']);
+      `, [emp.id, nowWitaDate, notesMsg, effectiveShiftId, effectiveShiftName]);
 
       markedCount++;
       console.log(`[Auto-Mangkir Engine] Berhasil mencatat Mangkir untuk ${emp.full_name} (${emp.nip})`);
