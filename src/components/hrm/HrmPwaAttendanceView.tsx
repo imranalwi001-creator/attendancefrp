@@ -69,6 +69,7 @@ import { geofenceService, GeofenceEvaluation } from '@/services/geofenceService'
 import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { emergencyAlertService } from '@/services/emergencyAlertAudioService';
 import { HrmFieldAuthorityMobileModal } from '@/components/hrm/HrmFieldAuthorityMobileModal';
+import { HrmPwaPersonalCalendarView } from '@/components/hrm/HrmPwaPersonalCalendarView';
 import { HrmPwaSplashScreen } from '@/components/pwa/HrmPwaSplashScreen';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -90,6 +91,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   // Active Bottom Tab: 'beranda' | 'riwayat' | 'aktivitas' | 'akun'
   const [activeTab, setActiveTab] = useState<'beranda' | 'riwayat' | 'aktivitas' | 'akun'>('beranda');
+  const [riwayatViewMode, setRiwayatViewMode] = useState<'kalender' | 'log'>('kalender');
 
   // PWA Splash Screen Preview State
   const [showSplashPreview, setShowSplashPreview] = useState(false);
@@ -4680,7 +4682,36 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
               </div>
 
-              {/* Strip Kehadiran Mingguan 7 Hari Terakhir */}
+              
+            {/* Quick Banner: Kalender Roster & Jadwal Saya */}
+            <div 
+              onClick={() => {
+                setActiveTab('riwayat');
+                setRiwayatViewMode('kalender');
+              }}
+              className="p-3.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white rounded-2xl shadow-sm cursor-pointer hover:shadow-md transition-all active:scale-[0.99] flex items-center justify-between gap-3 group"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/15 backdrop-blur-xs flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <CalendarDays className="w-5 h-5 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-xs font-bold leading-tight">Kalender Roster & Jadwal Saya</p>
+                    <span className="bg-emerald-500/40 text-[9px] uppercase font-mono px-1.5 py-0.2 rounded-md font-bold">LIVE SYNC</span>
+                  </div>
+                  <p className="text-[10.5px] text-emerald-100/90 leading-tight mt-0.5 truncate">
+                    Shift P/S/M/DAY, Libur Nasional, Cuti & Lembur Realtime
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1 text-[11px] font-bold bg-white/20 hover:bg-white/30 px-2.5 py-1.5 rounded-xl shrink-0 transition-colors">
+                <span>Buka</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </div>
+            </div>
+
+            {/* Strip Kehadiran Mingguan 7 Hari Terakhir */}
               <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-200/80 dark:border-slate-800 space-y-2">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="font-semibold text-slate-700 dark:text-slate-300">Rangkaian Kehadiran Minggu Ini</span>
@@ -4723,10 +4754,49 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           </div>
         )}
 
-        {/* ─── TAB 2: RIWAYAT KEHADIRAN DENGAN FILTER MULTI-DIMENSI ─── */}
+        {/* ─── TAB 2: RIWAYAT KEHADIRAN & KALENDER ROSTER ─── */}
         {activeTab === 'riwayat' && (
           <div className="space-y-4 animate-in fade-in duration-200">
-            <div className="flex items-center justify-between">
+            {/* View Mode Toggle: [📅 Kalender Jadwal & Roster] [📋 Log Presensi] */}
+            <div className="flex rounded-2xl bg-slate-100 dark:bg-slate-800/80 p-1 border border-slate-200 dark:border-slate-800 shadow-inner">
+              <button
+                type="button"
+                onClick={() => setRiwayatViewMode('kalender')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                  riwayatViewMode === 'kalender'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                <CalendarDays className="w-3.5 h-3.5" />
+                <span>Kalender Jadwal & Roster</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setRiwayatViewMode('log')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                  riwayatViewMode === 'log'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>Log Presensi Harian</span>
+              </button>
+            </div>
+
+            {riwayatViewMode === 'kalender' ? (
+              user ? (
+                <HrmPwaPersonalCalendarView
+                  user={user}
+                  allShifts={hrmService.getShifts()}
+                  onOpenLeaveModal={() => setLeaveModalOpen(true)}
+                  onOpenOvertimeModal={() => setOvertimeModalOpen(true)}
+                />
+              ) : null
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-base font-bold text-slate-900 dark:text-white">Riwayat Kehadiran</h2>
                 <p className="text-[11px] text-slate-500">Filter data presensi dan ketuk rekaman untuk detail foto watermark</p>
@@ -4865,6 +4935,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               )}
             </div>
           </div>
+            )}
+          </div>
         )}
 
         {/* ─── TAB 3: AKTIVITAS, PENGAJUAN CUTI & LEMBUR ─── */}
@@ -4925,7 +4997,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
 
               <div
-                onClick={() => setScheduleModalOpen(true)}
+                onClick={() => { setActiveTab('riwayat'); setRiwayatViewMode('kalender'); }}
                 className="p-3 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/60 text-center space-y-1 cursor-pointer hover:border-indigo-500 transition-all active:scale-95 group shadow-xs col-span-2 sm:col-span-1"
               >
                 <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
