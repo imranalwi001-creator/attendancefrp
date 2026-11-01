@@ -3212,12 +3212,25 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
             [insidePost.id, insidePost.post_name, validUserId]
           );
 
-          // 📲 MANDAT KHUSUS PIMPINAN:
-          // Untuk 3 Petugas Lapangan Khusus (Aslam, Samsi, Takdir):
-          // Setiap tiba di radius pos yang terdaftar di bank pos, sistem WAJIB & SECARA OTOMATIS
-          // mengirimkan laporan notifikasi WhatsApp ke Bpk Reski Faisal (Pimpinan: 082192755755),
-          // Direktur Utama (Dirut: 082291998026), dan tembusan ke Superadmin (081355904897) tanpa terkendala jam kerja.
-          const shouldSendArrivalAlert = isSpecialDutyOfficer || isCurrentlyOnDuty || isShiftOpenWindow;
+          // 📲 MANDAT PIMPINAN: NOTIFIKASI HANYA DIKIRIMKAN DI JAM KERJA
+          // Notifikasi WhatsApp radar kedatangan HANYA dikirimkan pada hari kerja resmi (Senin - Jumat) & selama jam kerja dinas:
+          // 1. Hari kerja resmi (Senin - Jumat bagi Aslam, Samsi, Takdir; kecuali jika sedang ada lembur resmi SPKL)
+          // 2. Tidak sedang cuti/izin/sakit sah
+          // 3. Berada dalam rentang jam dinas (jendela shift masuk s/d selesai) atau sedang aktif bertugas / lembur resmi
+          const witaNowDate = new Date(Date.now() + 8 * 60 * 60 * 1000);
+          const dayOfWeekWita = witaNowDate.getUTCDay(); // 0 = Minggu, 6 = Sabtu
+          const isWeekendToday = dayOfWeekWita === 0 || dayOfWeekWita === 6;
+
+          const isWorkingDay = isSpecialDutyOfficer 
+            ? (!isWeekendToday || hasActiveOvertime)
+            : (!isWeekendToday || hasActiveOvertime);
+
+          const isWorkingHoursNow = isWorkingDay && !hasActiveLeaveToday && (isCurrentlyOnDuty || isShiftOpenWindow || hasActiveOvertime);
+
+          shouldPromptSelfie = isSpecialDutyOfficer && isWorkingHoursNow;
+
+          // HANYA kirimkan notifikasi jika saat ini adalah JAM KERJA RESMI
+          const shouldSendArrivalAlert = isWorkingHoursNow;
           if (shouldSendArrivalAlert) {
             if (isSpecialDutyOfficer && prof.phone) {
               const officerArrivalWa =
