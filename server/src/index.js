@@ -235,7 +235,7 @@ app.post('/api/users/:id/reset-security', async (req, res) => {
     // 2. Reset Registrasi Biometrik Wajah Master
     if (target === 'face' || target === 'all') {
       await pool.query(
-        `UPDATE hrm_profiles SET is_face_enrolled = false, face_descriptor = NULL, face_enrolled_photo = NULL, face_enrolled_at = NULL, face_photo_url = NULL, face_embedding = NULL, updated_at = NOW() WHERE id = $1`,
+        `UPDATE hrm_profiles SET is_face_enrolled = false, face_descriptor = NULL, face_enrolled_photo = NULL, face_enrolled_at = NULL, face_photo_url = NULL, face_embedding = NULL, avatar_url = NULL, updated_at = NOW() WHERE id = $1`,
         [validUserId]
       );
       actionsDone.push('Data biometrik wajah master berhasil direset');
@@ -6104,6 +6104,8 @@ app.post('/api/biometrics/reset/:userId', async (req, res) => {
         face_enrolled_photo = NULL,
         face_embedding = NULL,
         face_enrolled_at = NULL,
+        avatar_url = NULL,
+        face_photo_url = NULL,
         updated_at = NOW()
       WHERE id::text = $1 OR nip = $1 OR LOWER(email) = LOWER($1)
       RETURNING *;

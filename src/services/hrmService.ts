@@ -2726,6 +2726,7 @@ export const hrmService = {
     users[idx].faceDescriptor = undefined;
     users[idx].faceEnrolledPhoto = undefined;
     users[idx].faceEnrolledAt = undefined;
+    users[idx].avatarUrl = undefined;
 
     safeSetJson(STORAGE_KEYS.USERS, users);
 
