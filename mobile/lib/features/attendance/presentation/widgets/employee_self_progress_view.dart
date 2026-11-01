@@ -221,9 +221,9 @@ class _EmployeeSelfProgressViewState extends State<EmployeeSelfProgressView> {
         const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(child: _kpiMini('Lembur Bulan Ini', '${otHours.toStringAsFixed(1)} jam', Icons.access_time_filled_rounded, const Color(0xFF7C3AED), const Color(0xFFF5F3FF))),
+            Expanded(child: _kpiMini('Lembur (Bulan Mundur)', '${otHours.toStringAsFixed(1)} jam', Icons.access_time_filled_rounded, const Color(0xFF7C3AED), const Color(0xFFF5F3FF))),
             const SizedBox(width: 8),
-            Expanded(child: _kpiMini('Kompensasi Lembur', _formatCurrency(otComp), Icons.payments_rounded, const Color(0xFF059669), const Color(0xFFF0FDF4))),
+            Expanded(child: _kpiMini('Siklus Lembur', 'Bulan Mundur', Icons.history_rounded, const Color(0xFF059669), const Color(0xFFF0FDF4))),
           ],
         ),
         const SizedBox(height: 16),

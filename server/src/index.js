@@ -6518,18 +6518,19 @@ app.get('/api/leaves/balance', async (req, res) => {
     const quota = parseInt(p.annual_leave_quota || 12, 10);
     const used = parseInt(p.used_leave_days || 0, 10);
 
-    // Also fetch approved overtime hours this month for lembur summary
+    // ⚡ ATURAN RESMI PT FRP: Lembur dihitung & dibayarkan adalah BULAN MUNDUR (N-1)
+    // Serta DILARANG menampilkan informasi nominal kompensasi rupiah di PWA karyawan
     const now = new Date();
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevMonthStart = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}-01`;
     const otRes = await pool.query(
       `SELECT
          COUNT(*) FILTER (WHERE status = 'approved') as approved_count,
-         COALESCE(SUM(duration_hours) FILTER (WHERE status = 'approved'), 0) as approved_hours,
-         COALESCE(SUM(compensation_amount) FILTER (WHERE status = 'approved'), 0) as approved_compensation
+         COALESCE(SUM(duration_hours) FILTER (WHERE status = 'approved'), 0) as approved_hours
        FROM hrm_overtime_records
        WHERE user_id = $1
          AND DATE_TRUNC('month', date) = DATE_TRUNC('month', $2::date)`,
-      [validUserId, monthStart]
+      [validUserId, prevMonthStart]
     );
     const ot = otRes.rows[0];
 
@@ -6539,12 +6540,13 @@ app.get('/api/leaves/balance', async (req, res) => {
         annualLeaveQuota: quota,
         usedLeaveDays: used,
         remainingLeaveDays: Math.max(0, quota - used),
-        // Lembur bulan berjalan (approved)
+        // Lembur bulan mundur (approved) - Tanpa nominal rupiah untuk privasi karyawan
         overtimeThisMonth: {
           approvedCount: parseInt(ot.approved_count || 0, 10),
           approvedHours: parseFloat(ot.approved_hours || 0),
-          approvedCompensation: parseFloat(ot.approved_compensation || 0),
-          month: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
+          approvedCompensation: 0, // Informasi nominal disembunyikan dari PWA karyawan
+          month: `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`,
+          cycle: 'bulan_mundur',
         },
       },
     });
@@ -8116,9 +8118,10 @@ app.put('/api/overtime/:id/status', async (req, res) => {
     `, [status, nextPhase, finalHours, compensation, validApproverId || null, id]);
 
     // 📢 NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
+    // Kebijakan PT FRP: Informasi nominal dirahasiakan dari teks pengumuman/karyawan
     await notifyAllPartiesViaWhatsApp({
       submissionType: 'LEMBUR (SPL)',
-      details: `${ot.date} (${ot.start_time} - ${ot.end_time}, ${finalHours} Jam) - Rp ${compensation.toLocaleString('id-ID')}`,
+      details: `${ot.date} (${ot.start_time} - ${ot.end_time}, ${finalHours} Jam)`,
       applicant: {
         id: ot.user_id,
         fullName: ot.user_name,
@@ -9436,63 +9439,25 @@ app.get('/api/payroll/slip/:userId', async (req, res) => {
     query += ` ORDER BY s.created_at DESC LIMIT 1`;
 
     let result = await pool.query(query, params);
-    let row;
+    if (result.rows.length === 0) {
+      return res.json({
+        success: false,
+        isLocked: true,
+        message: 'Slip gaji resmi belum diterbitkan oleh Admin untuk periode ini.'
+      });
+    }
 
-    if (result.rows.length > 0) {
-      row = result.rows[0];
-    } else {
-      // Fallback query profile
-      const profRes = await pool.query(`
-        SELECT p.*, r.name as role_name, d.name as division_name,
-               COALESCE(sp.employee_sequence_no, p.employee_sequence_no, 0) as employee_sequence_no,
-               COALESCE(sp.severance_scheme, 'tabungan') as severance_scheme,
-               COALESCE(sp.saved_severance_balance, 0) as saved_severance_balance,
-               COALESCE(sp.hourly_overtime_rate, 24173.06) as hourly_overtime_rate,
-               COALESCE(sp.base_salary, 4045050) as base_salary,
-               COALESCE(sp.bank_name, 'Bank Central Asia (BCA)') as bank_name,
-               COALESCE(sp.bank_account_number, '-') as bank_account_number
-        FROM hrm_profiles p
-        LEFT JOIN hrm_roles r ON p.role_id = r.id
-        LEFT JOIN hrm_divisions d ON p.division_id = d.id
-        LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
-        WHERE p.id::text = $1 OR LOWER(p.email) = LOWER($1) OR p.nip = $1
-        LIMIT 1
-      `, [userId]);
+    const row = result.rows[0];
 
-      if (profRes.rows.length === 0) {
-        return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
-      }
-
-      const prof = profRes.rows[0];
-      row = {
-        id: `SLIP-2026-09-${prof.nip || 'EMP008'}`,
-        user_id: prof.id,
-        employee_name: prof.full_name,
-        employee_nip: prof.nip,
-        employee_sequence_no: prof.employee_sequence_no,
-        severance_scheme: prof.severance_scheme,
-        placement_location: prof.placement_location,
-        division_name: prof.division_name,
-        role_name: prof.role_name,
-        bank_name: prof.bank_name,
-        bank_account_number: prof.bank_account_number,
-        period_label: 'September 2026',
-        printed_date: new Date().toISOString(),
-        status: 'paid',
-        base_salary: prof.base_salary || '4045050',
-        total_overtime_pay: '0',
-        pesangon_label: 'Pesangon September',
-        pesangon_amount: '0',
-        gross_income: String(prof.base_salary || '4045050'),
-        bpjs_ketenagakerjaan_deduction: '121351',
-        bpjs_kesehatan_deduction: '40450',
-        alpa_days: 0,
-        alpa_rate: '155000',
-        absence_deduction: '0',
-        total_deductions: '161802',
-        net_salary: '3883248',
-        notes: 'Slip gaji resmi PT. FAWWAZ RESKI PERWIRA',
-      };
+    // 🔒 KEBIJAKAN BAKU PT FRP: Slip gaji HANYA terbit jika Admin yang menerbitkan (published_to_employee = true)
+    if (!row.published_to_employee) {
+      return res.json({
+        success: false,
+        isLocked: true,
+        hasRequested: Boolean(row.requested_by_employee),
+        periodLabel: row.period_label,
+        message: 'Slip gaji resmi belum diterbitkan oleh Admin untuk periode ini.'
+      });
     }
 
     // Dynamic month calculation
@@ -9615,51 +9580,18 @@ app.get('/api/payroll/slip/:userId/print', async (req, res) => {
     query += ` ORDER BY s.created_at DESC LIMIT 1`;
 
     let result = await pool.query(query, params);
-    let row;
-
-    if (result.rows.length > 0) {
-      row = result.rows[0];
-    } else {
-      const profRes = await pool.query(`
-        SELECT p.*, r.name as role_name, d.name as division_name,
-               COALESCE(sp.bank_name, 'Bank Central Asia (BCA)') as bank_name,
-               COALESCE(sp.bank_account_number, '-') as bank_account_number
-        FROM hrm_profiles p
-        LEFT JOIN hrm_roles r ON p.role_id = r.id
-        LEFT JOIN hrm_divisions d ON p.division_id = d.id
-        LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
-        WHERE p.id::text = $1 OR LOWER(p.email) = LOWER($1) OR p.nip = $1
-        LIMIT 1
-      `, [userId]);
-
-      if (profRes.rows.length === 0) {
-        return res.status(404).send('<h3>Karyawan tidak ditemukan</h3>');
-      }
-
-      const prof = profRes.rows[0];
-      row = {
-        id: `SLIP-2026-09-${prof.nip || 'EMP008'}`,
-        user_id: prof.id,
-        employee_name: prof.full_name,
-        employee_nip: prof.nip,
-        division_name: prof.division_name,
-        role_name: prof.role_name,
-        period_label: 'September 2026',
-        printed_date: new Date().toISOString(),
-        base_salary: '4045050',
-        total_overtime_pay: '0',
-        pesangon_label: 'Pesangon Agustus',
-        pesangon_amount: '0',
-        gross_income: '4045050',
-        bpjs_ketenagakerjaan_deduction: '121351',
-        bpjs_kesehatan_deduction: '40450',
-        alpa_days: 0,
-        alpa_rate: '155000',
-        absence_deduction: '0',
-        total_deductions: '161802',
-        net_salary: '3883248',
-      };
+    if (result.rows.length === 0 || !result.rows[0].published_to_employee) {
+      return res.status(403).send(`
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 60px 20px; color: #475569;">
+          <h2 style="color: #0f172a; margin-bottom: 8px;">🔒 Dokumen Slip Gaji Belum Diterbitkan</h2>
+          <p style="font-size: 14px; max-width: 480px; margin: 0 auto; line-height: 1.6;">
+            Sesuai kebijakan PT. FAWWAZ RESKI PERWIRA, dokumen slip gaji hanya dapat diakses dan dicetak setelah diterbitkan secara resmi oleh Admin.
+          </p>
+        </div>
+      `);
     }
+
+    const row = result.rows[0];
 
     const fmt = (num) => {
       const n = Number(num || 0);
@@ -10709,8 +10641,8 @@ app.get('/api/analytics/self', async (req, res) => {
         SELECT
           COUNT(*) FILTER (WHERE status = 'approved') as approved_count,
           COALESCE(SUM(duration_hours) FILTER (WHERE status = 'approved'), 0) as total_hours,
-          COALESCE(SUM(compensation_amount) FILTER (WHERE status = 'approved'), 0) as total_compensation
-        FROM hrm_overtime_records WHERE user_id = $1 AND DATE_TRUNC('month', date) = DATE_TRUNC('month', $2::date)
+          0 as total_compensation
+        FROM hrm_overtime_records WHERE user_id = $1 AND DATE_TRUNC('month', date) = DATE_TRUNC('month', ($2::date - INTERVAL '1 month'))
       `, [validUserId, monthStartStr]),
       pool.query(`
         SELECT

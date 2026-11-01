@@ -563,9 +563,9 @@ class _SubmissionsViewState extends State<SubmissionsView> with SingleTickerProv
                 Container(height: 28, width: 1, color: Colors.white24),
                 Column(
                   children: [
-                    const Text("Kompensasi", style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.w500)),
+                    const Text("Siklus Hitung", style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.w500)),
                     const SizedBox(height: 3),
-                    Text(currencyFormat.format(_overtimeApprovedCompensation), style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
+                    const Text("Bulan Mundur", style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
                   ],
                 ),
               ],
@@ -675,8 +675,8 @@ class _SubmissionsViewState extends State<SubmissionsView> with SingleTickerProv
                             style: AppTypography.titleMedium.copyWith(fontSize: 14, fontWeight: FontWeight.w700),
                           ),
                           Text(
-                            currencyFormat.format(compensation),
-                            style: const TextStyle(color: Color(0xFF7C3AED), fontWeight: FontWeight.w800, fontSize: 13),
+                            isApproved ? "Disahkan" : (isRejected ? "Ditolak" : "Menunggu"),
+                            style: TextStyle(color: statusColor, fontWeight: FontWeight.w800, fontSize: 11),
                           ),
                         ],
                       ),

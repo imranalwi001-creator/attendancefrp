@@ -452,40 +452,21 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         setSlipLockedInfo({ isLocked: false, hasRequested: false, periodLabel: res.data.slip.period });
         setEmployeeSlip(res.data.raw || res.data.slip);
       } else {
+        setEmployeeSlip(null);
         setSlipLockedInfo({
           isLocked: true,
           hasRequested: Boolean(res.data?.hasRequested),
           periodLabel: res.data?.periodLabel || 'Periode Berjalan',
-          message: res.data?.message || 'Slip gaji belum diaktifkan oleh Superadmin.',
+          message: res.data?.message || 'Slip gaji belum diterbitkan oleh Admin.',
         });
-        const localSlips = hrmService.getPayrollSlipsByUser(user.id);
-        const activeLocal = localSlips.find((s) => s.publishedToEmployee === true);
-        if (activeLocal) {
-          setEmployeeSlip(activeLocal);
-          setSlipLockedInfo({ isLocked: false, hasRequested: false, periodLabel: activeLocal.periodLabel });
-        } else {
-          const reqLocal = localSlips.find((s) => s.requestedByEmployee === true);
-          if (reqLocal) {
-            setSlipLockedInfo((prev) => ({ ...prev, hasRequested: true }));
-          }
-        }
       }
     } catch {
-      const localSlips = hrmService.getPayrollSlipsByUser(user.id);
-      const activeLocal = localSlips.find((s) => s.publishedToEmployee === true);
-      if (activeLocal) {
-        setEmployeeSlip(activeLocal);
-        setSlipLockedInfo({ isLocked: false, hasRequested: false, periodLabel: activeLocal.periodLabel });
-      } else {
-        const reqLocal = localSlips.find((s) => s.requestedByEmployee === true);
-        setSlipLockedInfo({
-          isLocked: true,
-          hasRequested: Boolean(reqLocal),
-          message: reqLocal
-            ? 'Permohonan slip gaji sedang menunggu persetujuan Superadmin.'
-            : 'Slip gaji belum diaktifkan oleh Superadmin.',
-        });
-      }
+      setEmployeeSlip(null);
+      setSlipLockedInfo({
+        isLocked: true,
+        hasRequested: false,
+        message: 'Slip gaji belum diterbitkan oleh Admin.',
+      });
     }
   }, [user?.id]);
 
@@ -5176,9 +5157,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-600 dark:text-slate-400">Gaji Bersih (THP):</span>
-                      <span className="font-mono font-black text-emerald-700 dark:text-emerald-400">
-                        Rp {Number(employeeSlip.netSalary || employeeSlip.net_salary || 3883248).toLocaleString('id-ID')}
+                      <span className="text-slate-600 dark:text-slate-400">Status Dokumen:</span>
+                      <span className="font-bold text-emerald-700 dark:text-emerald-400">
+                        Resmi Diterbitkan Admin
                       </span>
                     </div>
                     <Button

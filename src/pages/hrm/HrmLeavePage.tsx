@@ -394,13 +394,13 @@ export const HrmLeavePage: React.FC = () => {
               </>
             ) : (
               <>
-                Tarif Lembur Resmi Anda:{' '}
+                Total Jam Lembur Disetujui (Bulan Mundur):{' '}
                 <strong className="text-emerald-600 dark:text-emerald-400 font-semibold font-mono">
-                  Rp {userOvertimeRate.toLocaleString('id-ID')}/jam
+                  {overtimes.filter((o) => o.status === 'approved').reduce((sum, o) => sum + (o.durationHours || 0), 0)} Jam
                 </strong>
-                {' '}· Disetujui:{' '}
+                {' '}· Total Berkas Disetujui:{' '}
                 <strong className="text-primary font-semibold font-mono">
-                  Rp {Number(approvedUserOtPay || 0).toLocaleString('id-ID')}
+                  {overtimes.filter((o) => o.status === 'approved').length} SPL Resmi
                 </strong>
               </>
             )}
@@ -758,7 +758,9 @@ export const HrmLeavePage: React.FC = () => {
                   <th className="py-3 px-4">Tanggal & Jam</th>
                   <th className="py-3 px-4">Kategori Hari</th>
                   <th className="py-3 px-4">Durasi Jam</th>
-                  <th className="py-3 px-4">Uang Lembur (Rp)</th>
+                  {isSupervisorRole && viewScope === 'incoming' && (
+                    <th className="py-3 px-4">Uang Lembur (Rp)</th>
+                  )}
                   <th className="py-3 px-4">Uraian Tugas Pekerjaan</th>
                   <th className="py-3 px-4">Status Approval</th>
                   <th className="py-3 px-4">Status Pencairan</th>
@@ -812,14 +814,16 @@ export const HrmLeavePage: React.FC = () => {
                         {o.durationHours} Jam
                         <span className="text-[10px] text-muted-foreground block font-normal">({o.durationMinutes} mnt)</span>
                       </td>
-                      <td className="py-3 px-4 font-mono">
-                        <span className="text-xs font-bold text-primary">
-                          Rp {Number(o.totalPay ?? o.compensationAmount ?? 0).toLocaleString('id-ID')}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground block">
-                          @Rp {Number(o.hourlyRate ?? o.rateApplied ?? 30000).toLocaleString('id-ID')}/jam
-                        </span>
-                      </td>
+                      {isSupervisorRole && viewScope === 'incoming' && (
+                        <td className="py-3 px-4 font-mono">
+                          <span className="text-xs font-bold text-primary">
+                            Rp {Number(o.totalPay ?? o.compensationAmount ?? 0).toLocaleString('id-ID')}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground block">
+                            @Rp {Number(o.hourlyRate ?? o.rateApplied ?? 30000).toLocaleString('id-ID')}/jam
+                          </span>
+                        </td>
+                      )}
                       <td className="py-3 px-4 max-w-xs truncate text-muted-foreground" title={o.taskDescription}>
                         {o.taskDescription}
                       </td>
@@ -1152,12 +1156,6 @@ export const HrmLeavePage: React.FC = () => {
                   {otCalc.durationHours} Jam ({otCalc.durationMinutes} Menit)
                 </span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Tarif Resmi Anda:</span>
-                <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                  Rp {userOvertimeRate.toLocaleString('id-ID')} / Jam
-                </span>
-              </div>
               {otIsWeekend && (
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Multiplier Hari Libur:</span>
@@ -1166,10 +1164,10 @@ export const HrmLeavePage: React.FC = () => {
                   </span>
                 </div>
               )}
-              <div className="pt-2 border-t border-primary/20 flex items-baseline justify-between">
-                <span className="font-bold text-foreground">Estimasi Uang Lembur:</span>
-                <span className="text-base font-bold font-mono text-primary">
-                  Rp {Number(otCalc?.totalPay || 0).toLocaleString('id-ID')}
+              <div className="pt-2 border-t border-primary/20 flex items-baseline justify-between text-xs text-muted-foreground">
+                <span>Kebijakan Kompensasi:</span>
+                <span className="font-semibold text-primary">
+                  Dihitung pada Siklus Penggajian (Bulan Mundur)
                 </span>
               </div>
             </div>
@@ -1440,12 +1438,21 @@ export const HrmLeavePage: React.FC = () => {
                     </p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-xs font-bold text-primary font-mono block">
-                    Rp {Number(selectedDetailOt.totalPay ?? selectedDetailOt.compensationAmount ?? 0).toLocaleString('id-ID')}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">Kompensasi Upah</span>
-                </div>
+                {isSupervisorRole && viewScope === 'incoming' ? (
+                  <div className="text-right">
+                    <span className="text-xs font-bold text-primary font-mono block">
+                      Rp {Number(selectedDetailOt.totalPay ?? selectedDetailOt.compensationAmount ?? 0).toLocaleString('id-ID')}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">Kompensasi Upah</span>
+                  </div>
+                ) : (
+                  <div className="text-right">
+                    <span className="text-xs font-bold text-primary font-mono block">
+                      {selectedDetailOt.durationHours} Jam
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">Durasi Lembur</span>
+                  </div>
+                )}
               </div>
 
               {/* Time & Duration */}
