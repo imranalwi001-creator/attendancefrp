@@ -1079,7 +1079,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(6.2);
       doc.setTextColor(100, 116, 139);
-      doc.text('Tamanroja Desa Batara, Kec. Minasatene, Kab. Pangkep, Sulawesi Selatan 90651 • Web: fawwazreskiperwira.com', marginX + 17, 17.5);
+      doc.text('Bontoa, Minasatene, Pangkajene and Islands Regency, South Sulawesi • Web: fawwazreskiperwira.com', marginX + 17, 17.5);
 
       // Kanan Kop: Judul Dokumen & Periode
       doc.setFont('helvetica', 'bold');
@@ -1613,7 +1613,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                     PENGELOLAAN FASILITAS OPERASIONAL &amp; SUMBER DAYA KARYAWAN
                   </p>
                   <p className="text-[10px] text-muted-foreground leading-tight">
-                    Tamanroja Desa Batara, Minasatene, Kab. Pangkep, Sulawesi Selatan 90651 • Web: fawwazreskiperwira.com
+                    Bontoa, Minasatene, Pangkajene and Islands Regency, South Sulawesi • Web: fawwazreskiperwira.com
                   </p>
                 </div>
               </div>
