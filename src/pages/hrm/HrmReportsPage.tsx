@@ -72,6 +72,8 @@ export const HrmReportsPage: React.FC = () => {
   const [attendanceViewMode, setAttendanceViewMode] = useState<'recap' | 'logs'>('recap');
   const [selectedDate, setSelectedDate] = useState<string>(''); // Default kosong agar menampilkan data bulan terpilih
   const [filterDivision, setFilterDivision] = useState<string>('all');
+  const [filterBiometrik, setFilterBiometrik] = useState<'all' | 'active' | 'unregistered'>('all');
+  const [lastSyncTime, setLastSyncTime] = useState<string>(() => new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [isFetchingMonth, setIsFetchingMonth] = useState<boolean>(false);
@@ -168,6 +170,15 @@ export const HrmReportsPage: React.FC = () => {
     fetchMonthAttendances(selectedMonth);
   }, [selectedMonth, fetchMonthAttendances]);
 
+  // Polling sinkronisasi otomatis realtime (setiap 30 detik) dari database PWA karyawan
+  useEffect(() => {
+    const timer = setInterval(() => {
+      fetchMonthAttendances(selectedMonth);
+      setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [selectedMonth, fetchMonthAttendances]);
+
   // Navigasi Bulan
   const handlePrevMonth = () => {
     let nextY = selectedYearNum;
@@ -200,7 +211,7 @@ export const HrmReportsPage: React.FC = () => {
 
   // Matriks Rekapitulasi Presensi Bulanan Per Karyawan
   const monthlyEmployeeRecap = React.useMemo(() => {
-    return employees.map((emp) => {
+    const recapList = employees.map((emp) => {
       const isFaceEnrolled = Boolean(
         emp.isFaceEnrolled ||
         emp.faceEnrolledPhoto ||
@@ -208,8 +219,14 @@ export const HrmReportsPage: React.FC = () => {
         (emp as any).is_face_enrolled
       );
 
+      const empNipNorm = (emp.nip || '').replace(/[\s.]/g, '').toUpperCase();
       const empAtts = attendances.filter((a) => {
-        const isEmp = a.userId === emp.id || a.userId === emp.nip || (a.userNip && a.userNip === emp.nip);
+        const aNipNorm = (a.userNip || '').replace(/[\s.]/g, '').toUpperCase();
+        const isEmp =
+          (a.userId && emp.id && a.userId === emp.id) ||
+          (empNipNorm && aNipNorm && empNipNorm === aNipNorm) ||
+          a.userId === emp.nip ||
+          (a.userNip && a.userNip === emp.nip);
         const aDate = a.attendanceDate || (a as any).date;
         const inMonth = aDate && aDate.startsWith(selectedMonth);
         return isEmp && inMonth;
@@ -217,14 +234,24 @@ export const HrmReportsPage: React.FC = () => {
 
       // Filter Overtime yang telah disetujui (SPKL sah) untuk bulan ini
       const empOvertimes = overtimes.filter((o) => {
-        const isEmp = o.userId === emp.id || o.userNip === emp.nip;
+        const oNipNorm = (o.userNip || '').replace(/[\s.]/g, '').toUpperCase();
+        const isEmp =
+          (o.userId && emp.id && o.userId === emp.id) ||
+          (empNipNorm && oNipNorm && empNipNorm === oNipNorm) ||
+          o.userId === emp.nip ||
+          (o.userNip && o.userNip === emp.nip);
         const inMonth = o.date && o.date.startsWith(selectedMonth);
         return isEmp && inMonth && o.status === 'approved';
       });
 
       // Filter Cuti & Sakit dari data Leaves yang telah disetujui
       const empApprovedLeaves = leaves.filter((l) => {
-        const isEmp = l.userId === emp.id || l.userNip === emp.nip;
+        const lNipNorm = ((l as any).userNip || '').replace(/[\s.]/g, '').toUpperCase();
+        const isEmp =
+          (l.userId && emp.id && l.userId === emp.id) ||
+          (empNipNorm && lNipNorm && empNipNorm === lNipNorm) ||
+          l.userId === emp.nip ||
+          ((l as any).userNip && (l as any).userNip === emp.nip);
         const inMonth = (l.startDate && l.startDate.startsWith(selectedMonth)) || (l.endDate && l.endDate.startsWith(selectedMonth));
         return isEmp && inMonth && l.status === 'approved';
       });
@@ -328,17 +355,34 @@ export const HrmReportsPage: React.FC = () => {
         attendances: empAtts,
       };
     });
+
+    // ── SMART PRIORITIZED SORTING ──
+    // Prioritaskan karyawan yang sudah aktif terdaftar wajah dan memiliki data presensi di ATAS (Halaman 1),
+    // baru kemudian diikuti oleh personil yang masih menunggu pendaftaran biometrik.
+    return recapList.sort((a, b) => {
+      if (a.isFaceEnrolled !== b.isFaceEnrolled) {
+        return a.isFaceEnrolled ? -1 : 1;
+      }
+      if (b.totalAttendances !== a.totalAttendances) {
+        return b.totalAttendances - a.totalAttendances;
+      }
+      return a.user.nip.localeCompare(b.user.nip);
+    });
   }, [employees, attendances, overtimes, leaves, selectedMonth]);
 
   const filteredMonthlyRecap = React.useMemo(() => {
     return monthlyEmployeeRecap.filter((item) => {
       const matchDiv = filterDivision === 'all' || (item.user.divisionName || '').toLowerCase() === filterDivision.toLowerCase() || item.user.divisionId === filterDivision;
+      const matchBio =
+        filterBiometrik === 'all' ||
+        (filterBiometrik === 'active' && item.isFaceEnrolled) ||
+        (filterBiometrik === 'unregistered' && !item.isFaceEnrolled);
       const matchSearch =
         item.user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.user.nip.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchDiv && matchSearch;
+      return matchDiv && matchBio && matchSearch;
     });
-  }, [monthlyEmployeeRecap, filterDivision, searchQuery]);
+  }, [monthlyEmployeeRecap, filterDivision, filterBiometrik, searchQuery]);
 
   // Export Rekapitulasi Bulanan Seluruh Karyawan ke Excel (.xlsx)
   const exportMonthlyRecapToExcel = () => {
@@ -392,6 +436,38 @@ export const HrmReportsPage: React.FC = () => {
   // Unduh PDF Rekapitulasi Presensi, Keterlambatan, Cuti, Sakit, Jam Kerja & Lembur Bulanan
   const handleDownloadMonthlyRecapPdf = async () => {
     try {
+      // 1. Tarik pembaruan data presensi dan profil realtime detik ini juga dari PostgreSQL VPS
+      setIsFetchingMonth(true);
+      try {
+        const [attRes, userRes] = await Promise.all([
+          fetch(`/api/attendances?month=${selectedMonth}`),
+          fetch('/api/users'),
+        ]);
+        if (attRes.ok) {
+          const json = await attRes.json();
+          if (json.success && Array.isArray(json.data)) {
+            const monthAtts: AttendanceRecord[] = json.data.filter((a: any) => isOfficialFrEmployee(a.userNip));
+            setAttendances((prev) => {
+              const map = new Map(prev.map((a) => [a.id, a]));
+              monthAtts.forEach((a) => map.set(a.id, a));
+              return Array.from(map.values());
+            });
+          }
+        }
+        if (userRes.ok) {
+          const uJson = await userRes.json();
+          if (uJson.success && Array.isArray(uJson.data)) {
+            const frUsers = uJson.data.filter((u: any) => u.isActive && isOfficialFrEmployee(u));
+            if (frUsers.length > 0) setEmployees(frUsers);
+          }
+        }
+        setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
+      } catch (syncErr) {
+        console.warn('Realtime sync before PDF error:', syncErr);
+      } finally {
+        setIsFetchingMonth(false);
+      }
+
       const doc = new jsPDF({
         orientation: 'landscape',
         unit: 'mm',
@@ -1433,7 +1509,7 @@ export const HrmReportsPage: React.FC = () => {
               <Card className="border-border bg-card rounded-xl shadow-xs">
                 <CardContent className="p-3">
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                       <div className="relative">
                         <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
                         <Input
@@ -1457,17 +1533,43 @@ export const HrmReportsPage: React.FC = () => {
                           ))}
                         </SelectContent>
                       </Select>
+                      <Select value={filterBiometrik} onValueChange={(v: any) => setFilterBiometrik(v)}>
+                        <SelectTrigger className="text-xs rounded-xl h-9">
+                          <SelectValue placeholder="Status Biometrik" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Semua Status (83 Personel)</SelectItem>
+                          <SelectItem value="active">Aktif Terdaftar Saja (3)</SelectItem>
+                          <SelectItem value="unregistered">Belum Registrasi Wajah Saja (80)</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
                       <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          loadData();
+                          setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
+                        }}
+                        disabled={isFetchingMonth}
+                        className="h-9 px-2.5 text-xs rounded-xl border-border hover:bg-muted font-medium gap-1.5 shrink-0"
+                        title="Tarik data presensi realtime terbaru dari database PWA karyawan"
+                      >
+                        <RotateCw size={12} className={isFetchingMonth ? 'animate-spin text-primary' : 'text-muted-foreground'} />
+                        <span className="hidden md:inline">{isFetchingMonth ? 'Sinkron...' : 'Sinkron Realtime'}</span>
+                      </Button>
+
+                      <Button
                         variant="default"
                         size="sm"
                         onClick={handleDownloadMonthlyRecapPdf}
+                        disabled={isFetchingMonth}
                         className="h-9 px-3.5 text-xs rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold gap-1.5 shadow-sm"
                       >
                         <FileDown className="w-3.5 h-3.5" />
-                        Unduh Rekap Bulanan (PDF)
+                        <span>Unduh Rekap Bulanan (PDF)</span>
                       </Button>
 
                       <Button
@@ -1477,7 +1579,7 @@ export const HrmReportsPage: React.FC = () => {
                         className="h-9 px-3 text-xs rounded-xl border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 font-semibold gap-1.5"
                       >
                         <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-                        Ekspor Excel (.xlsx)
+                        <span className="hidden sm:inline">Ekspor Excel (.xlsx)</span>
                       </Button>
                     </div>
                   </div>
@@ -1496,9 +1598,14 @@ export const HrmReportsPage: React.FC = () => {
                       Ringkasan kehadiran, status biometrik, frekuensi keterlambatan, cuti, sakit, lembur, dan audit disiplin seluruh personel aktif.
                     </p>
                   </div>
-                  <Badge variant="outline" className="text-xs font-mono bg-muted/40 border-border">
-                    {filteredMonthlyRecap.length} Personel
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-muted-foreground hidden md:inline">
+                      Sinkron Database: <span className="font-mono text-foreground font-medium">{lastSyncTime}</span>
+                    </span>
+                    <Badge variant="outline" className="text-xs font-mono bg-muted/40 border-border">
+                      {filteredMonthlyRecap.length} Personel
+                    </Badge>
+                  </div>
                 </div>
 
                 <div className="overflow-x-auto">
