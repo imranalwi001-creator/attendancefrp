@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile, Shift, isOfficialFrEmployee } from '@/types/hrm';
+import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile, Shift, isOfficialFrEmployee, LeaveRequest } from '@/types/hrm';
 import { HrmAbsenSplModal } from '@/components/hrm/HrmAbsenSplModal';
 import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMonthlyCalendarModal';
 import { HrmLeaveOvertimeLiabilityView } from '@/components/hrm/HrmLeaveOvertimeLiabilityView';
 import defaultLogo from '@/assets/logo.png';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   FileSpreadsheet,
   Download,
@@ -57,6 +59,7 @@ export const HrmReportsPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'attendance' | 'overtime' | 'liability'>('attendance');
   const [attendances, setAttendances] = useState<AttendanceRecord[]>([]);
   const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
+  const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [appSettings, setAppSettings] = useState<AppSettings>(hrmService.getAppSettings());
   const [office, setOffice] = useState<OfficeLocation>(hrmService.getOfficeLocation());
@@ -129,15 +132,32 @@ export const HrmReportsPage: React.FC = () => {
     }
   }, []);
 
-  const loadData = () => {
+  const loadData = async () => {
     setAttendances(hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip)));
     setOvertimes(hrmService.getOvertimeRecords().filter((o) => isOfficialFrEmployee(o.userNip)));
+    setLeaves(hrmService.getLeaves().filter((l) => isOfficialFrEmployee(l.userNip || l.userId)));
     setDivisions(hrmService.getDivisions());
     setAppSettings(hrmService.getAppSettings());
     setOffice(hrmService.getOfficeLocation());
     setEmployees(hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)));
     setAllShifts(hrmService.getShifts());
     fetchMonthAttendances(selectedMonth);
+
+    // Refresh data karyawan langsung dari API PostgreSQL
+    try {
+      const res = await fetch('/api/users');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          const frUsers = json.data.filter((u: any) => u.isActive && isOfficialFrEmployee(u));
+          if (frUsers.length > 0) {
+            setEmployees(frUsers);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[ReportsPage] Fetch fresh users warning:', e);
+    }
   };
 
   useEffect(() => {
@@ -181,6 +201,13 @@ export const HrmReportsPage: React.FC = () => {
   // Matriks Rekapitulasi Presensi Bulanan Per Karyawan
   const monthlyEmployeeRecap = React.useMemo(() => {
     return employees.map((emp) => {
+      const isFaceEnrolled = Boolean(
+        emp.isFaceEnrolled ||
+        emp.faceEnrolledPhoto ||
+        (emp.faceDescriptor && (emp.faceDescriptor as any).length > 0) ||
+        (emp as any).is_face_enrolled
+      );
+
       const empAtts = attendances.filter((a) => {
         const isEmp = a.userId === emp.id || a.userId === emp.nip || (a.userNip && a.userNip === emp.nip);
         const aDate = a.attendanceDate || (a as any).date;
@@ -188,6 +215,83 @@ export const HrmReportsPage: React.FC = () => {
         return isEmp && inMonth;
       });
 
+      // Filter Overtime yang telah disetujui (SPKL sah) untuk bulan ini
+      const empOvertimes = overtimes.filter((o) => {
+        const isEmp = o.userId === emp.id || o.userNip === emp.nip;
+        const inMonth = o.date && o.date.startsWith(selectedMonth);
+        return isEmp && inMonth && o.status === 'approved';
+      });
+
+      // Filter Cuti & Sakit dari data Leaves yang telah disetujui
+      const empApprovedLeaves = leaves.filter((l) => {
+        const isEmp = l.userId === emp.id || l.userNip === emp.nip;
+        const inMonth = (l.startDate && l.startDate.startsWith(selectedMonth)) || (l.endDate && l.endDate.startsWith(selectedMonth));
+        return isEmp && inMonth && l.status === 'approved';
+      });
+
+      // Hitung Hari Cuti, Sakit, Izin secara akurat & bebas duplikasi tanggal
+      const cutiDates = new Set<string>();
+      const sakitDates = new Set<string>();
+      const izinDates = new Set<string>();
+
+      empAtts.forEach((a) => {
+        const dt = a.attendanceDate || (a as any).date;
+        if (!dt) return;
+        if (a.status === 'cuti') cutiDates.add(dt);
+        if (a.status === 'sakit') sakitDates.add(dt);
+        if (a.status === 'izin') izinDates.add(dt);
+      });
+
+      empApprovedLeaves.forEach((l) => {
+        const type = (l.leaveType || '').toLowerCase();
+        try {
+          const start = new Date(l.startDate);
+          const end = new Date(l.endDate);
+          for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+            const ymd = d.toISOString().slice(0, 10);
+            if (ymd.startsWith(selectedMonth)) {
+              if (type === 'sakit') {
+                sakitDates.add(ymd);
+              } else if (type === 'izin') {
+                izinDates.add(ymd);
+              } else {
+                cutiDates.add(ymd);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Error parsing leave dates:', e);
+        }
+      });
+
+      // ── ATURAN BAKU KARYAWAN BELUM REGISTRASI WAJAH ──
+      // Jika karyawan belum melakukan perekaman wajah biometrik (akun baru / proses pendaftaran):
+      // Status biometrik: "Belum Aktif (Belum Registrasi Wajah)".
+      // Sesuai mandat pimpinan: TIDAK BERLAKU akumulasi mangkir/alpa berjalan, denda, atau metrik kehadiran.
+      if (!isFaceEnrolled) {
+        return {
+          user: emp,
+          isFaceEnrolled: false,
+          statusBiometrikLabel: 'Belum Aktif (Belum Registrasi Wajah)',
+          statusBadge: 'Belum Registrasi',
+          totalAttendances: 0,
+          onTimeCount: 0,
+          lateCount: 0,
+          totalLateMinutes: 0,
+          lateDeduction: 0,
+          cutiCount: 0,
+          sakitCount: 0,
+          izinCount: 0,
+          overtimeHours: 0,
+          totalWorkHours: 0,
+          perimeterBreachCount: 0,
+          alpaCount: 0,
+          keterangan: 'Menunggu Registrasi Biometrik Wajah',
+          attendances: [],
+        };
+      }
+
+      // Karyawan Aktif Terdaftar Wajah
       const onTimeCount = empAtts.filter((a) => a.status === 'hadir').length;
       const lateAtts = empAtts.filter((a) => a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0));
       const lateCount = lateAtts.length;
@@ -197,19 +301,34 @@ export const HrmReportsPage: React.FC = () => {
       const totalWorkHours = Number((totalWorkMinutes / 60).toFixed(1));
       const perimeterBreachCount = empAtts.reduce((sum, a) => sum + (a.perimeterBreachCount || (a.isPerimeterBreached ? 1 : 0)), 0);
 
+      const otFromRecords = empOvertimes.reduce((sum, o) => sum + (o.durationHours || 0), 0);
+      const otFromAtts = empAtts.reduce((sum, a) => sum + (a.overtimeHours || 0), 0);
+      const overtimeHours = Number(Math.max(otFromRecords, otFromAtts).toFixed(1));
+
+      const alpaCount = empAtts.filter((a) => a.status === 'alfa' || a.status === 'mangkir').length;
+
       return {
         user: emp,
-        totalAttendances: empAtts.length,
+        isFaceEnrolled: true,
+        statusBiometrikLabel: 'Aktif (Wajah Terdaftar)',
+        statusBadge: 'Aktif Terdaftar',
+        totalAttendances: onTimeCount + lateCount,
         onTimeCount,
         lateCount,
         totalLateMinutes,
         lateDeduction,
+        cutiCount: cutiDates.size,
+        sakitCount: sakitDates.size,
+        izinCount: izinDates.size,
+        overtimeHours,
         totalWorkHours,
         perimeterBreachCount,
+        alpaCount,
+        keterangan: 'Aktif Bekerja',
         attendances: empAtts,
       };
     });
-  }, [employees, attendances, selectedMonth]);
+  }, [employees, attendances, overtimes, leaves, selectedMonth]);
 
   const filteredMonthlyRecap = React.useMemo(() => {
     return monthlyEmployeeRecap.filter((item) => {
@@ -229,13 +348,18 @@ export const HrmReportsPage: React.FC = () => {
       NIP: r.user.nip,
       'Nama Karyawan': r.user.fullName,
       Divisi: r.user.divisionName || '-',
-      'Total Kehadiran': r.totalAttendances,
-      'Hadir Tepat Waktu': r.onTimeCount,
-      'Hadir Terlambat': r.lateCount,
-      'Total Menit Terlambat': r.totalLateMinutes,
-      'Estimasi Denda Terlambat (Rp)': r.lateDeduction,
-      'Akumulasi Jam Kerja (Jam)': r.totalWorkHours,
-      'Pelanggaran Perimeter': r.perimeterBreachCount > 0 ? `${r.perimeterBreachCount}x Terdeteksi` : 'PATUH / NIHIL',
+      'Status Biometrik': r.statusBiometrikLabel,
+      'Total Kehadiran': r.isFaceEnrolled ? r.totalAttendances : '-',
+      'Hadir Tepat Waktu': r.isFaceEnrolled ? r.onTimeCount : '-',
+      'Hadir Terlambat': r.isFaceEnrolled ? r.lateCount : '-',
+      'Total Menit Terlambat': r.isFaceEnrolled ? r.totalLateMinutes : '-',
+      'Cuti (Hari)': r.isFaceEnrolled ? r.cutiCount : '-',
+      'Sakit (Hari)': r.isFaceEnrolled ? r.sakitCount : '-',
+      'Lembur (Jam SPKL)': r.isFaceEnrolled ? r.overtimeHours : '-',
+      'Akumulasi Jam Kerja (Jam)': r.isFaceEnrolled ? r.totalWorkHours : '-',
+      'Alpa / Mangkir (Hari)': r.isFaceEnrolled ? r.alpaCount : '-',
+      'Estimasi Denda Terlambat (Rp)': r.isFaceEnrolled ? r.lateDeduction : 0,
+      Keterangan: r.keterangan,
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(dataToExport);
@@ -248,16 +372,473 @@ export const HrmReportsPage: React.FC = () => {
       { wch: 14 },
       { wch: 26 },
       { wch: 22 },
+      { wch: 30 },
       { wch: 14 },
       { wch: 16 },
       { wch: 16 },
       { wch: 20 },
-      { wch: 26 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 18 },
       { wch: 24 },
-      { wch: 22 },
+      { wch: 18 },
+      { wch: 26 },
+      { wch: 32 },
     ];
 
     XLSX.writeFile(workbook, `Rekapitulasi_Presensi_Bulanan_${selectedMonth}.xlsx`);
+  };
+
+  // Unduh PDF Rekapitulasi Presensi, Keterlambatan, Cuti, Sakit, Jam Kerja & Lembur Bulanan
+  const handleDownloadMonthlyRecapPdf = async () => {
+    try {
+      const doc = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      const pageWidth = 297;
+      const pageHeight = 210;
+      const marginX = 10;
+      const contentWidth = pageWidth - marginX * 2; // 277mm
+
+      // Helper konversi gambar ke dataURL canvas
+      const loadImgData = (src: string): Promise<string> => {
+        return new Promise((resolve) => {
+          if (!src || src.startsWith('data:')) {
+            resolve(src);
+            return;
+          }
+          const img = new Image();
+          img.crossOrigin = 'Anonymous';
+          img.onload = () => {
+            try {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth || img.width;
+              canvas.height = img.naturalHeight || img.height;
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(img, 0, 0);
+                resolve(canvas.toDataURL('image/png'));
+              } else {
+                resolve(src);
+              }
+            } catch {
+              resolve(src);
+            }
+          };
+          img.onerror = () => resolve(src);
+          img.src = src;
+        });
+      };
+
+      // 1. KOP SURAT RESMI PT. FAWWAZ RESKI PERWIRA & LOGO
+      const logoSrc = appSettings?.companyLogo || defaultLogo;
+      try {
+        const logoData = await loadImgData(logoSrc);
+        if (logoData) {
+          doc.addImage(logoData, 'PNG', marginX + 1, 6, 13, 13);
+        }
+      } catch (e) {
+        console.warn('Gagal memuat logo untuk PDF:', e);
+      }
+
+      // Keterangan Instansi di samping logo
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12.5);
+      doc.setTextColor(15, 23, 42); // slate-900
+      doc.text('PT. FAWWAZ RESKI PERWIRA', marginX + 16, 10);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(4, 120, 87); // emerald-700
+      doc.text('PENGELOLAAN FASILITAS OPERASIONAL & SUMBER DAYA KARYAWAN', marginX + 16, 14);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(100, 116, 139); // slate-500
+      doc.text('Bontoa, Minasatene, Pangkajene and Islands Regency, South Sulawesi • Web: fawwazreskiperwira.com', marginX + 16, 17.5);
+
+      // Kanan Kop: Judul Dokumen & Periode
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(15, 23, 42);
+      doc.text('REKAPITULASI PRESENSI, CUTI, SAKIT & LEMBUR', pageWidth - marginX - 1, 10, { align: 'right' });
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(29, 78, 216); // blue-700
+      doc.text(`PERIODE: ${selectedMonthLabel.toUpperCase()}`, pageWidth - marginX - 1, 14, { align: 'right' });
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Laporan Resmi Eksekutif Perusahaan (Format Sah)', pageWidth - marginX - 1, 17.5, { align: 'right' });
+
+      // Garis Ganda Pembatas Kop Surat
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.35);
+      doc.line(marginX, 20.5, pageWidth - marginX, 20.5);
+
+      doc.setLineWidth(0.12);
+      doc.line(marginX, 21.2, pageWidth - marginX, 21.2);
+
+      // 2. EXECUTIVE KPI OVERVIEW CARDS (5 KOTAK RINGKASAN METRIK BULANAN)
+      const kpiY = 23;
+      const kpiH = 13.5;
+      const gap = 2.5;
+      const cardW = (contentWidth - gap * 4) / 5; // ~53.4mm
+
+      const totalEmployeesCount = filteredMonthlyRecap.length;
+      const activeEnrolledCount = filteredMonthlyRecap.filter((r) => r.isFaceEnrolled).length;
+      const pendingEnrollmentCount = filteredMonthlyRecap.filter((r) => !r.isFaceEnrolled).length;
+      const grandTotalHadir = filteredMonthlyRecap.reduce((sum, r) => sum + r.totalAttendances, 0);
+      const grandTotalOnTime = filteredMonthlyRecap.reduce((sum, r) => sum + r.onTimeCount, 0);
+      const grandTotalLate = filteredMonthlyRecap.reduce((sum, r) => sum + r.lateCount, 0);
+      const grandTotalLateMinutes = filteredMonthlyRecap.reduce((sum, r) => sum + r.totalLateMinutes, 0);
+      const grandTotalCuti = filteredMonthlyRecap.reduce((sum, r) => sum + r.cutiCount, 0);
+      const grandTotalSakit = filteredMonthlyRecap.reduce((sum, r) => sum + r.sakitCount, 0);
+      const grandTotalAlpa = filteredMonthlyRecap.reduce((sum, r) => sum + r.alpaCount, 0);
+      const grandTotalOtHours = Number(filteredMonthlyRecap.reduce((sum, r) => sum + r.overtimeHours, 0).toFixed(1));
+      const grandTotalWorkHours = Number(filteredMonthlyRecap.reduce((sum, r) => sum + r.totalWorkHours, 0).toFixed(1));
+
+      const kpiCards = [
+        {
+          label: 'TOTAL PERSONEL RESMI',
+          val: `${totalEmployeesCount} Orang`,
+          sub: 'Personel PT. FRP Resmi',
+          bg: [248, 250, 252],
+          border: [203, 213, 225],
+          valColor: [15, 23, 42],
+        },
+        {
+          label: 'STATUS BIOMETRIK WAJAH',
+          val: `${activeEnrolledCount} Aktif / ${pendingEnrollmentCount} Belum`,
+          sub: activeEnrolledCount === totalEmployeesCount ? '100% Terverifikasi' : `${pendingEnrollmentCount} Belum Registrasi`,
+          bg: [240, 253, 244],
+          border: [187, 247, 208],
+          valColor: [22, 101, 52],
+        },
+        {
+          label: 'KEHADIRAN & KETEPATAN',
+          val: `${grandTotalHadir} Hadir (${grandTotalOnTime} Tepat)`,
+          sub: `${grandTotalLate}x Terlambat (${grandTotalLateMinutes} mnt)`,
+          bg: [239, 246, 255],
+          border: [191, 219, 254],
+          valColor: [29, 78, 216],
+        },
+        {
+          label: 'CUTI, SAKIT & ALPA',
+          val: `${grandTotalCuti} Cuti / ${grandTotalSakit} Sakit`,
+          sub: grandTotalAlpa > 0 ? `${grandTotalAlpa} Alpa Terakumulasi` : '0 Alpa (Disiplin Terjaga)',
+          bg: [254, 252, 232],
+          border: [254, 240, 138],
+          valColor: [133, 77, 14],
+        },
+        {
+          label: 'TOTAL JAM KERJA & LEMBUR',
+          val: `${grandTotalWorkHours} Jam Kerja`,
+          sub: `${grandTotalOtHours} Jam Lembur Sah SPKL`,
+          bg: [255, 247, 237],
+          border: [254, 215, 170],
+          valColor: [154, 52, 18],
+        },
+      ];
+
+      kpiCards.forEach((c, i) => {
+        const curX = marginX + i * (cardW + gap);
+        doc.setFillColor(c.bg[0], c.bg[1], c.bg[2]);
+        doc.setDrawColor(c.border[0], c.border[1], c.border[2]);
+        doc.setLineWidth(0.2);
+        doc.roundedRect(curX, kpiY, cardW, kpiH, 1, 1, 'FD');
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(5.8);
+        doc.setTextColor(100, 116, 139);
+        doc.text(c.label, curX + 2.5, kpiY + 3.4);
+
+        doc.setFontSize(8.2);
+        doc.setTextColor(c.valColor[0], c.valColor[1], c.valColor[2]);
+        doc.text(c.val, curX + 2.5, kpiY + 7.6);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(5.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text(c.sub, curX + 2.5, kpiY + 11.2);
+      });
+
+      // 3. TABEL UTAMA REKAPITULASI (jspdf-autotable)
+      const tableHead = [
+        [
+          'NO',
+          'NIP',
+          'NAMA KARYAWAN',
+          'DIVISI / PENUGASAN',
+          'STATUS BIOMETRIK',
+          'HADIR',
+          'TERLAMBAT',
+          'CUTI',
+          'SAKIT',
+          'LEMBUR',
+          'JAM KERJA',
+          'ALPA',
+          'KETERANGAN',
+        ],
+      ];
+
+      const tableBody = filteredMonthlyRecap.map((r, idx) => {
+        const isEnrolled = r.isFaceEnrolled;
+        return [
+          String(idx + 1),
+          r.user.nip,
+          (r.user.fullName || '').toUpperCase(),
+          r.user.divisionName || '-',
+          isEnrolled ? 'Aktif (Terdaftar)' : 'Belum Registrasi Wajah',
+          isEnrolled ? `${r.totalAttendances} Hari` : '-',
+          isEnrolled ? (r.lateCount > 0 ? `${r.lateCount}x (${r.totalLateMinutes}m)` : '-') : '-',
+          isEnrolled ? (r.cutiCount > 0 ? `${r.cutiCount} Hari` : '-') : '-',
+          isEnrolled ? (r.sakitCount > 0 ? `${r.sakitCount} Hari` : '-') : '-',
+          isEnrolled ? (r.overtimeHours > 0 ? `${r.overtimeHours} Jam` : '-') : '-',
+          isEnrolled ? `${r.totalWorkHours} Jam` : '-',
+          isEnrolled ? (r.alpaCount > 0 ? `${r.alpaCount} Hari` : '-') : '-',
+          isEnrolled ? r.keterangan : 'Menunggu Registrasi Wajah',
+        ];
+      });
+
+      // Baris Total Akumulasi (Foot Row)
+      const tableFoot = [
+        [
+          'TOTAL',
+          '',
+          `TOTAL KESELURUHAN (${filteredMonthlyRecap.length} PERSONEL)`,
+          '',
+          `${activeEnrolledCount} Aktif / ${pendingEnrollmentCount} Belum`,
+          `${grandTotalHadir} Hari`,
+          `${grandTotalLate}x (${grandTotalLateMinutes}m)`,
+          `${grandTotalCuti} Hari`,
+          `${grandTotalSakit} Hari`,
+          `${grandTotalOtHours} Jam`,
+          `${grandTotalWorkHours} Jam`,
+          `${grandTotalAlpa} Hari`,
+          '-',
+        ],
+      ];
+
+      autoTable(doc, {
+        head: tableHead,
+        body: tableBody,
+        foot: tableFoot,
+        startY: 38.5,
+        margin: { left: marginX, right: marginX, bottom: 25 },
+        theme: 'grid',
+        styles: {
+          font: 'helvetica',
+          fontSize: 6.8,
+          cellPadding: 1.6,
+          lineColor: [226, 232, 240],
+          lineWidth: 0.15,
+          valign: 'middle',
+          textColor: [30, 41, 59],
+        },
+        headStyles: {
+          fillColor: [15, 23, 42], // slate-900
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          fontSize: 6.8,
+          halign: 'center',
+          cellPadding: 2,
+        },
+        footStyles: {
+          fillColor: [241, 245, 249],
+          textColor: [15, 23, 42],
+          fontStyle: 'bold',
+          fontSize: 6.8,
+          cellPadding: 2,
+        },
+        columnStyles: {
+          0: { cellWidth: 8, halign: 'center' }, // NO
+          1: { cellWidth: 22, halign: 'center', fontStyle: 'bold' }, // NIP
+          2: { cellWidth: 42, halign: 'left', fontStyle: 'bold' }, // NAMA
+          3: { cellWidth: 32, halign: 'left' }, // DIVISI
+          4: { cellWidth: 32, halign: 'center', fontStyle: 'bold' }, // STATUS BIOMETRIK
+          5: { cellWidth: 14, halign: 'center' }, // HADIR
+          6: { cellWidth: 20, halign: 'center' }, // TERLAMBAT
+          7: { cellWidth: 13, halign: 'center' }, // CUTI
+          8: { cellWidth: 13, halign: 'center' }, // SAKIT
+          9: { cellWidth: 16, halign: 'center' }, // LEMBUR
+          10: { cellWidth: 18, halign: 'center' }, // JAM KERJA
+          11: { cellWidth: 14, halign: 'center' }, // ALPA
+          12: { cellWidth: 33, halign: 'left' }, // KETERANGAN
+        },
+        didParseCell: (data) => {
+          // Highlight kolom status biometrik
+          if (data.section === 'body' && data.column.index === 4) {
+            const rawVal = String(data.cell.raw || '');
+            if (rawVal.includes('Aktif')) {
+              data.cell.styles.textColor = [22, 101, 52]; // green-800
+              data.cell.styles.fillColor = [240, 253, 244]; // green-50
+            } else {
+              data.cell.styles.textColor = [194, 65, 12]; // amber-700
+              data.cell.styles.fillColor = [254, 243, 199]; // amber-100
+            }
+          }
+          // Highlight baris karyawan yang belum terdaftar agar metrik '-' berwarna lembut
+          if (data.section === 'body') {
+            const rowData = filteredMonthlyRecap[data.row.index];
+            if (rowData && !rowData.isFaceEnrolled) {
+              if (data.column.index >= 5 && data.column.index <= 11) {
+                data.cell.styles.textColor = [148, 163, 184]; // muted slate-400
+              }
+              if (data.column.index === 12) {
+                data.cell.styles.textColor = [194, 65, 12]; // amber note
+                data.cell.styles.fontStyle = 'italic';
+              }
+            } else if (rowData && rowData.isFaceEnrolled) {
+              // Jika ada keterlambatan
+              if (data.column.index === 6 && rowData.lateCount > 0) {
+                data.cell.styles.textColor = [180, 83, 9];
+                data.cell.styles.fontStyle = 'bold';
+              }
+              // Jika ada alpa
+              if (data.column.index === 11 && rowData.alpaCount > 0) {
+                data.cell.styles.textColor = [225, 29, 72];
+                data.cell.styles.fontStyle = 'bold';
+              }
+            }
+          }
+        },
+      });
+
+      // Ambil posisi akhir tabel
+      const finalY = (doc as any).lastAutoTable?.finalY || 160;
+
+      // Cek apakah sisa halaman cukup untuk tanda tangan (butuh ~34mm)
+      let signY = finalY + 7;
+      if (signY + 32 > pageHeight - 12) {
+        doc.addPage();
+        signY = 20;
+      }
+
+      // Catatan Penjelasan Resmi di atas tanda tangan
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(6.2);
+      doc.setTextColor(100, 116, 139);
+      doc.text(
+        '* Catatan Kebijakan: Karyawan berstatus "Belum Registrasi Wajah" adalah akun baru/dalam proses pendaftaran yang belum diwajibkan absensi biometrik, sehingga TIDAK dikenakan sanksi mangkir/alpa berjalan.',
+        marginX,
+        signY
+      );
+
+      signY += 5;
+
+      // 4. DUAL-TIER LEGAL SIGNATURE BLOCK (3 KOLOM PENGESAHAN RESMI)
+      const colW = (contentWidth - 20) / 3;
+      const col1X = marginX + 5;
+      const col2X = marginX + colW + 10;
+      const col3X = marginX + colW * 2 + 15;
+
+      // Kolom 1: HR & Administrasi
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.8);
+      doc.setTextColor(71, 85, 105);
+      doc.text('Diperiksa & Divalidasi oleh,', col1X, signY);
+      doc.setFont('helvetica', 'bold');
+      doc.text('HR & Administrasi Operasional', col1X, signY + 3.8);
+
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(5.8);
+      doc.setTextColor(148, 163, 184);
+      doc.text('( Tanda Tangan & Verifikasi Sistem )', col1X, signY + 7.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(hrdSignName || 'Budi Prakoso, S.Psi.', col1X, signY + 22);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.2);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Dept. Human Capital & General', col1X, signY + 25);
+
+      // Kolom 2: Pimpinan PT. FRP
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.8);
+      doc.setTextColor(71, 85, 105);
+      doc.text('Mengetahui,', col2X, signY);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Pimpinan PT. FAWWAZ RESKI PERWIRA', col2X, signY + 3.8);
+
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(5.8);
+      doc.setTextColor(148, 163, 184);
+      doc.text('( Tanda Tangan & Cap Resmi )', col2X, signY + 7.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text('RESKI FAISAL', col2X, signY + 22);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.2);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Pimpinan PT. FRP', col2X, signY + 25);
+
+      // Kolom 3: Direktur Utama
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.8);
+      doc.setTextColor(71, 85, 105);
+      doc.text('Menyetujui,', col3X, signY);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Direktur Utama PT. FAWWAZ RESKI PERWIRA', col3X, signY + 3.8);
+
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(5.8);
+      doc.setTextColor(148, 163, 184);
+      doc.text('( Tanda Tangan & Cap Perusahaan )', col3X, signY + 7.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text('ALAM AS SIMPUANG AGO, S.Sos', col3X, signY + 22);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.2);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Direktur Utama', col3X, signY + 25);
+
+      // 5. FOOTER TIMESTAMP & PAGE NUMBERING (SEMUA HALAMAN)
+      const pageCount = (doc as any).internal.getNumberOfPages();
+      const printDateStr = new Date().toLocaleString('id-ID', {
+        timeZone: 'Asia/Makassar',
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i);
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.15);
+        doc.line(marginX, pageHeight - 8, pageWidth - marginX, pageHeight - 8);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(5.8);
+        doc.setTextColor(148, 163, 184);
+        doc.text(
+          `Dokumen Resmi Terverifikasi Sistem HRM PT. FAWWAZ RESKI PERWIRA • Waktu Cetak (WITA): ${printDateStr} WITA`,
+          marginX,
+          pageHeight - 5
+        );
+        doc.text(`Halaman ${i} dari ${pageCount}`, pageWidth - marginX, pageHeight - 5, { align: 'right' });
+      }
+
+      // Download File PDF
+      const filename = `Rekapitulasi_Presensi_Bulanan_FRP_${selectedMonth}.pdf`;
+      doc.save(filename);
+    } catch (error) {
+      console.error('Gagal generate PDF Rekap Bulanan:', error);
+    }
   };
 
   const filteredList = attendances.filter((a) => {
@@ -878,15 +1459,27 @@ export const HrmReportsPage: React.FC = () => {
                       </Select>
                     </div>
 
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={exportMonthlyRecapToExcel}
-                      className="h-9 px-3 text-xs rounded-xl border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 font-semibold gap-1.5 shrink-0"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-                      Ekspor Rekap ({selectedMonthLabel})
-                    </Button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={handleDownloadMonthlyRecapPdf}
+                        className="h-9 px-3.5 text-xs rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold gap-1.5 shadow-sm"
+                      >
+                        <FileDown className="w-3.5 h-3.5" />
+                        Unduh Rekap Bulanan (PDF)
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={exportMonthlyRecapToExcel}
+                        className="h-9 px-3 text-xs rounded-xl border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 font-semibold gap-1.5"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                        Ekspor Excel (.xlsx)
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -900,7 +1493,7 @@ export const HrmReportsPage: React.FC = () => {
                       Rekapitulasi Presensi Bulanan Karyawan ({selectedMonthLabel})
                     </h2>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Ringkasan kehadiran, frekuensi keterlambatan, akumulasi denda, dan audit disiplin seluruh personel aktif.
+                      Ringkasan kehadiran, status biometrik, frekuensi keterlambatan, cuti, sakit, lembur, dan audit disiplin seluruh personel aktif.
                     </p>
                   </div>
                   <Badge variant="outline" className="text-xs font-mono bg-muted/40 border-border">
@@ -912,30 +1505,32 @@ export const HrmReportsPage: React.FC = () => {
                   <table className="w-full text-xs text-left">
                     <thead className="bg-muted/50 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
                       <tr>
-                        <th className="py-3 px-3 text-center font-semibold w-10">#</th>
-                        <th className="py-3 px-4 font-semibold min-w-[200px]">Karyawan</th>
-                        <th className="py-3 px-4 font-semibold min-w-[130px]">Divisi</th>
-                        <th className="py-3 px-3 text-center font-semibold">Total Hadir</th>
-                        <th className="py-3 px-3 text-center font-semibold">Tepat Waktu</th>
-                        <th className="py-3 px-3 text-center font-semibold">Terlambat</th>
-                        <th className="py-3 px-3 text-center font-semibold">Akumulasi Telat</th>
-                        <th className="py-3 px-4 text-right font-semibold">Estimasi Denda</th>
-                        <th className="py-3 px-3 text-center font-semibold">Jam Kerja</th>
-                        <th className="py-3 px-4 text-center font-semibold w-28">Aksi</th>
+                        <th className="py-3 px-2 text-center font-semibold w-8">#</th>
+                        <th className="py-3 px-3 font-semibold min-w-[180px]">Karyawan</th>
+                        <th className="py-3 px-3 font-semibold min-w-[110px]">Divisi</th>
+                        <th className="py-3 px-3 text-center font-semibold min-w-[130px]">Status Biometrik</th>
+                        <th className="py-3 px-2 text-center font-semibold">Hadir</th>
+                        <th className="py-3 px-2 text-center font-semibold">Telat</th>
+                        <th className="py-3 px-2 text-center font-semibold">Cuti</th>
+                        <th className="py-3 px-2 text-center font-semibold">Sakit</th>
+                        <th className="py-3 px-2 text-center font-semibold">Lembur</th>
+                        <th className="py-3 px-2 text-center font-semibold">Jam Kerja</th>
+                        <th className="py-3 px-2 text-center font-semibold">Alpa</th>
+                        <th className="py-3 px-3 text-center font-semibold w-24">Aksi</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
                       {filteredMonthlyRecap.length === 0 ? (
                         <tr>
-                          <td colSpan={10} className="py-8 text-center text-muted-foreground">
+                          <td colSpan={12} className="py-8 text-center text-muted-foreground">
                             Tidak ada data karyawan yang cocok dengan kriteria pencarian.
                           </td>
                         </tr>
                       ) : (
                         filteredMonthlyRecap.map((r, idx) => (
                           <tr key={r.user.id} className="hover:bg-muted/30 transition-colors">
-                            <td className="py-3 px-3 text-center font-mono text-muted-foreground">{idx + 1}</td>
-                            <td className="py-3 px-4">
+                            <td className="py-3 px-2 text-center font-mono text-muted-foreground">{idx + 1}</td>
+                            <td className="py-3 px-3">
                               <div className="flex items-center gap-2.5">
                                 <div className="w-7 h-7 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
                                   {r.user.fullName.charAt(0)}
@@ -946,44 +1541,92 @@ export const HrmReportsPage: React.FC = () => {
                                 </div>
                               </div>
                             </td>
-                            <td className="py-3 px-4 text-muted-foreground">
+                            <td className="py-3 px-3 text-muted-foreground text-xs">
                               {r.user.divisionName || '-'}
                             </td>
-                            <td className="py-3 px-3 text-center font-mono font-semibold text-foreground">
-                              {r.totalAttendances} Hari
-                            </td>
                             <td className="py-3 px-3 text-center">
-                              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] rounded-full">
-                                {r.onTimeCount}x
-                              </Badge>
-                            </td>
-                            <td className="py-3 px-3 text-center">
-                              {r.lateCount > 0 ? (
-                                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] rounded-full">
-                                  {r.lateCount}x
+                              {r.isFaceEnrolled ? (
+                                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 text-[10px] rounded-full font-medium gap-1">
+                                  <CheckCircle2 size={10} className="text-emerald-600" />
+                                  Aktif Terdaftar
                                 </Badge>
                               ) : (
-                                <span className="text-muted-foreground/40 text-[11px]">-</span>
+                                <Badge variant="outline" className="bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border-amber-200 dark:border-amber-800 text-[10px] rounded-full font-medium gap-1" title="Karyawan belum melakukan pendaftaran wajah biometrik (tidak berlaku mangkir/alpa).">
+                                  <ShieldAlert size={10} className="text-amber-600" />
+                                  Belum Registrasi Wajah
+                                </Badge>
                               )}
                             </td>
-                            <td className="py-3 px-3 text-center font-mono">
-                              {r.totalLateMinutes > 0 ? (
-                                <span className="font-bold text-amber-600">{r.totalLateMinutes} mnt</span>
+                            <td className="py-3 px-2 text-center font-mono font-semibold text-foreground">
+                              {r.isFaceEnrolled ? `${r.totalAttendances} Hari` : <span className="text-muted-foreground/40 font-normal">-</span>}
+                            </td>
+                            <td className="py-3 px-2 text-center">
+                              {r.isFaceEnrolled ? (
+                                r.lateCount > 0 ? (
+                                  <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] rounded-full">
+                                    {r.lateCount}x ({r.totalLateMinutes}m)
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
+                                )
+                              ) : (
+                                <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-2 text-center">
+                              {r.isFaceEnrolled ? (
+                                r.cutiCount > 0 ? (
+                                  <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] rounded-full">
+                                    {r.cutiCount} Hari
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
+                                )
+                              ) : (
+                                <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-2 text-center">
+                              {r.isFaceEnrolled ? (
+                                r.sakitCount > 0 ? (
+                                  <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-200 text-[10px] rounded-full">
+                                    {r.sakitCount} Hari
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
+                                )
+                              ) : (
+                                <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-2 text-center font-mono">
+                              {r.isFaceEnrolled ? (
+                                r.overtimeHours > 0 ? (
+                                  <span className="font-bold text-orange-600">{r.overtimeHours} Jam</span>
+                                ) : (
+                                  <span className="text-muted-foreground/40">-</span>
+                                )
                               ) : (
                                 <span className="text-muted-foreground/40">-</span>
                               )}
                             </td>
-                            <td className="py-3 px-4 text-right font-mono">
-                              {r.lateDeduction > 0 ? (
-                                <span className="font-bold text-rose-600">Rp {r.lateDeduction.toLocaleString('id-ID')}</span>
+                            <td className="py-3 px-2 text-center font-mono text-foreground">
+                              {r.isFaceEnrolled ? `${r.totalWorkHours} Jam` : <span className="text-muted-foreground/40">-</span>}
+                            </td>
+                            <td className="py-3 px-2 text-center">
+                              {r.isFaceEnrolled ? (
+                                r.alpaCount > 0 ? (
+                                  <Badge variant="destructive" className="text-[10px] rounded-full">
+                                    {r.alpaCount} Hari
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
+                                )
                               ) : (
-                                <span className="text-muted-foreground/40">-</span>
+                                <span className="text-muted-foreground/40 font-mono text-[11px]" title="Tidak dikenakan alpa">-</span>
                               )}
                             </td>
-                            <td className="py-3 px-3 text-center font-mono text-foreground">
-                              {r.totalWorkHours} Jam
-                            </td>
-                            <td className="py-3 px-4 text-center">
+                            <td className="py-3 px-3 text-center">
                               <Button
                                 size="sm"
                                 variant="outline"
