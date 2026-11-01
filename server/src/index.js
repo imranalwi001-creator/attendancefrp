@@ -2384,6 +2384,49 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       ).catch((err) => console.warn('[Photo Retention] Error syncing avatar to profile:', err));
     }
 
+    // 📲 MANDAT PIMPINAN: Laporan Notifikasi WhatsApp Instan saat Aslam, Samsi, atau Takdir Clock-In
+    const isLeadershipSpecial = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+    ].includes(validUserId)
+    || ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes((userProfile?.email || '').toLowerCase())
+    || ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FRP07065', 'FR07066', 'FRP07046'].includes((userProfile?.nip || '').trim());
+
+    if (isLeadershipSpecial) {
+      const witaTimeStr = new Date().toLocaleTimeString('id-ID', {
+        timeZone: 'Asia/Makassar',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }) + ' WITA';
+      const posName = locationName || 'Pos Tugas Lapangan';
+      const waArrivalMsg =
+`📢 *LAPORAN KEHADIRAN / CLOCK-IN POS LAPANGAN (PT FRP)*
+
+👤 Petugas: *${userProfile?.full_name || 'Petugas Khusus'}* (NIP: ${userProfile?.nip || '-'})
+🟢 Status: *BERHASIL CLOCK-IN DI POS TUGAS*
+📍 Lokasi / Pos: *${posName}*
+📏 Jarak Geofence: ${serverDistance != null ? Math.round(serverDistance) : 0} meter
+⏰ Waktu Masuk: *${time || '-'} WITA* (Tercatat: ${witaTimeStr})
+📸 Biometrik Wajah: *${computedBiometricScore != null ? computedBiometricScore : 100}% Confidence*
+
+✅ Kehadiran sah dan terverifikasi di database VPS PT FRP. Laporan diteruskan kepada Bpk Reski Faisal (Pimpinan), Dirut, dan Superadmin.`;
+
+      alertLeadershipViaWhatsAppAndSystem({
+        title: `📍 ${userProfile?.full_name} Masuk Dinas di ${posName}`,
+        message: `${userProfile?.full_name} telah melakukan absen masuk di ${posName} pada ${time} WITA.`,
+        waMessage: waArrivalMsg,
+        link: '/admin/monitoring',
+        metadata: {
+          type: 'officer_clockin',
+          userId: validUserId,
+          attendanceId: insertedAttendance.id,
+          locationName: posName
+        }
+      }).catch(e => console.warn('[Leadership Clock-In Alert Warning]:', e.message));
+    }
+
     res.json({ success: true, data: insertedAttendance });
   } catch (err) {
     console.error('Clock-in error:', err);
@@ -2654,70 +2697,108 @@ async function notifyAllPartiesViaWhatsApp({
           `Tugas penggantian pos ini dihitung sebagai lembur resmi (Relief Duty Pay) sesuai ketentuan perusahaan. Harap bersiap untuk bertugas pada jadwal tersebut.`;
       } else if (isApproved) {
         subMsg =
-          `📋 *SURAT PERINTAH TUGAS PENGGANTI POS DISAHKAN*\n\n` +
+          `📋 *SURAT PERINTAH TUGAS PENGGANTI POS DISAHKAN (PT FRP)*\n\n` +
           `Halo *${substitute.fullName}* (${substitute.nip || '-'}),\n` +
           `Penugasan Anda sebagai *Petugas Pengganti Pos Dinas* resmi *DISETUJUI & DISAHKAN* oleh *${approverName || 'Korlap'}*:\n\n` +
           `👤 Menggantikan: *${applicant.fullName}*\n` +
           `🏢 Pos/Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
           `📅 Jadwal Dinas: *${details}*\n` +
           `💰 Kompensasi: *Otomatis Dihitung Lembur (Relief Duty Pay)*\n\n` +
-          `Tombol presensi masuk (Clock-In) di aplikasi PWA Anda telah otomatis dibuka untuk jadwal ini. Harap hadir tepat waktu dan lakukan absensi di lokasi pos dinas.`;
+          `🚨 *BEBAS KENDALA RADIUS (RADIUS EXEMPTION AKTIF):*\n` +
+          `Radius dan seluruh titik pos penugasan dari rekan yang Anda gantikan telah otomatis ditambahkan ke akun Anda di sistem HRM. Anda dapat langsung melakukan absensi masuk (Clock-In) di lokasi pos tersebut tanpa kendala radius.\n\n` +
+          `⚡ *HUKUM ZERO VACANCY:* Pos dinas tidak boleh kosong tenaga kerja! Harap segera hadir di lokasi pos penugasan.`;
       }
       if (subMsg) {
         await sendWhatsAppAlert({ phone: substitute.phone, message: subMsg });
       }
     }
 
-    // 3. KIRIM KE SELURUH PEJABAT PENGAWAS & PIMPINAN
-    // (Korlap, K3, Admin, Superadmin, Pimpinan, Direktur Utama)
-    const officerPhones = new Set([
+    // 3. LOGIKA ROUTING APPROVAL KORLAP (MUH ASLAM FAISAL) DENGAN DELEGASI OTOMATIS
+    // Aslam membawahi 80 personil lapangan. Jika Aslam sedang cuti/libur (akhir pekan),
+    // wewenang persetujuan & notifikasi otomatis dialihkan (forward) ke LA UNGA SAMSI & TAKDIR.
+    // Laporan tembusan selalu masuk ke Bpk Reski Faisal (Pimpinan), Dirut, dan Superadmin.
+    let isAslamOffOrLeave = false;
+    let aslamPhone = '085342470909';
+    try {
+      const aslamQ = await pool.query(`
+        SELECT p.id, p.phone,
+               EXISTS (
+                 SELECT 1 FROM hrm_leave_requests l 
+                 WHERE l.user_id = p.id AND l.status = 'approved' 
+                   AND (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date BETWEEN l.start_date AND l.end_date
+               ) as is_on_leave
+        FROM hrm_profiles p 
+        WHERE p.nip = 'FRP 07065' OR p.id = 'ebf10b16-ab2f-4b53-ab22-b3ffc00694db' OR LOWER(p.email) = 'aslamfaisal10okt@gmail.com' 
+        LIMIT 1;
+      `);
+      if (aslamQ.rows.length > 0) {
+        if (aslamQ.rows[0].phone) aslamPhone = aslamQ.rows[0].phone;
+        const witaNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Makassar' }));
+        const isWeekend = witaNow.getDay() === 0 || witaNow.getDay() === 6; // Sabtu / Minggu
+        isAslamOffOrLeave = aslamQ.rows[0].is_on_leave || isWeekend;
+      }
+    } catch (err) {
+      console.warn('[Aslam Status Check Warning]:', err.message);
+    }
+
+    if (!isDecision) {
+      if (isAslamOffOrLeave) {
+        // FORWARD KE LA UNGA SAMSI & TAKDIR KARENA ASLAM SEDANG CUTI/LIBUR
+        const forwardedMsg =
+          `🛡️ *DELEGASI OTOMATIS: KORLAP ASLAM SEDANG CUTI/LIBUR (PT FRP)*\n\n` +
+          `Halo Bapak Pengawas Lapangan (*LA UNGA SAMSI / TAKDIR*),\n` +
+          `Koordinator Lapangan (*Muh Aslam Faisal*) saat ini sedang berstatus *LIBUR / CUTI*.\n` +
+          `Sesuai instruksi Direksi, permohonan dinas anggota operasional *DIALIHKAN KEPADA ANDA* untuk ditinjau & disahkan:\n\n` +
+          `👤 Pemohon: *${applicant.fullName}* (${applicant.nip || '-'})\n` +
+          `🏢 Pos/Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
+          `📝 Jenis: *${submissionType}*\n` +
+          `📅 Detail: *${details}*\n` +
+          `💬 Alasan: "${reasonOrTask || '-'}"\n` +
+          (substitute?.fullName ? `🛡️ Usulan Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Pengganti Pos:* Belum ditetapkan (Butuh segera ditetapkan Pengawas)\n') +
+          `\n⚡ *HUKUM ZERO VACANCY:* Pos dinas tidak boleh kosong tenaga kerja! Pekerjaan harus tetap berjalan lancar jika ada yang izin/cuti. Silakan segera buka portal HRM untuk menetapkan pengganti pos:\n` +
+          `🔗 Tautan: https://fawwazreskiperwira.com${approvalLink}`;
+
+        // Kirim ke Samsi (088246270912) dan Takdir (085242606150)
+        await sendWhatsAppAlert({ phone: '088246270912', message: forwardedMsg }).catch(() => {});
+        await sendWhatsAppAlert({ phone: '085242606150', message: forwardedMsg }).catch(() => {});
+      } else {
+        // ASLAM AKTIF: KIRIM LANGSUNG KE ASLAM SELAKU KORLAP 80 KARYAWAN
+        const korlapMsg =
+          `📋 *TUGAS PERSETUJUAN KORLAP: PENGAJUAN ${submissionType} (PT FRP)*\n\n` +
+          `Halo *Muh Aslam Faisal* (Koordinator Lapangan),\n` +
+          `Anggota operasional yang Anda naungi (80 karyawan) telah mengajukan permohonan baru:\n\n` +
+          `👤 Pemohon: *${applicant.fullName}* (${applicant.nip || '-'})\n` +
+          `🏢 Pos/Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
+          `📝 Jenis: *${submissionType}*\n` +
+          `📅 Detail: *${details}*\n` +
+          `💬 Alasan: "${reasonOrTask || '-'}"\n` +
+          (substitute?.fullName ? `🛡️ Usulan Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Pengganti Pos:* Belum ditetapkan (Butuh penetapan Anda)\n') +
+          `\n⚡ *ATURAN ZERO VACANCY:* Pekerjaan tidak boleh kosong tenaga kerja! Pekerjaan harus tetap berjalan lancar jika karyawan izin/sakit/cuti. Silakan segera tinjau dan tetapkan karyawan pengganti di portal HRM:\n` +
+          `🔗 Tautan: https://fawwazreskiperwira.com${approvalLink}`;
+
+        await sendWhatsAppAlert({ phone: aslamPhone, message: korlapMsg }).catch(() => {});
+      }
+    }
+
+    // 4. KIRIM LAPORAN / BROADCAST KE PIMPINAN, DIRUT & SUPERADMIN
+    const leadershipPhones = new Set([
       '081355904897', // Superadmin
       '082192755755', // Bpk Reski Faisal (Pimpinan)
       '082291998026', // Bpk Alam AS simpuang ago, S.Sos (Direktur Utama)
     ]);
 
-    try {
-      const offRes = await pool.query(`
-        SELECT DISTINCT p.phone, r.name as role_name
-        FROM hrm_profiles p
-        JOIN hrm_roles r ON p.role_id = r.id
-        WHERE LOWER(r.name) IN ('korlap', 'k3', 'admin', 'superadmin', 'pimpinan', 'dirut')
-          AND p.is_active = true
-          AND p.phone IS NOT NULL AND p.phone != '';
-      `);
-      offRes.rows.forEach((r) => {
-        if (r.phone) {
-          const c = r.phone.replace(/\D/g, '');
-          if (c) officerPhones.add(c);
-        }
-      });
-    } catch (e) {
-      console.warn('[Officer Query Warning]:', e.message);
-    }
-
-    // Hindari pesan duplikat ke pemohon/pengganti jika mereka juga kebetulan pengawas
-    if (applicant?.phone) {
-      const appClean = applicant.phone.replace(/\D/g, '');
-      officerPhones.delete(appClean);
-      officerPhones.delete('62' + (appClean.startsWith('0') ? appClean.slice(1) : appClean));
-    }
-    if (substitute?.phone) {
-      const subClean = substitute.phone.replace(/\D/g, '');
-      officerPhones.delete(subClean);
-      officerPhones.delete('62' + (subClean.startsWith('0') ? subClean.slice(1) : subClean));
-    }
-
     let managementMsg = '';
     if (!isDecision) {
       managementMsg =
-        `📢 *PENGAJUAN ${submissionType} BARU DARI KARYAWAN*\n\n` +
+        `📢 *LAPORAN PENGAJUAN ${submissionType} KARYAWAN LAPANGAN*\n\n` +
         `👤 Pemohon: *${applicant.fullName}* (NIP: ${applicant.nip || '-'})\n` +
-        `🏢 Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
+        `🏢 Pos/Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
         `📝 Jenis: *${submissionType}*\n` +
         `📅 Detail: *${details}*\n` +
         `💬 Keterangan: "${reasonOrTask || '-'}"\n` +
-        (substitute?.fullName ? `🛡️ Petugas Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Petugas Pengganti:* Belum ditetapkan / butuh penetapan Korlap\n') +
-        `\n⚡ *ATURAN ZERO VACANCY:* Pos dinas tidak boleh kosong! Salah satu dari *Korlap, K3, Admin, Superadmin, atau Pimpinan* dapat meninjau dan menetapkan persetujuan melalui portal HRM.\n` +
+        (substitute?.fullName ? `🛡️ Usulan Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Petugas Pengganti:* Butuh penetapan Korlap (Zero Vacancy)\n') +
+        `📌 Penanggung Jawab Approval: ${isAslamOffOrLeave ? '*LA UNGA SAMSI / TAKDIR* (Forwarded karena Korlap Aslam libur/cuti)' : '*Muh Aslam Faisal* (Korlap 80 Personil)'}\n` +
+        `\n⚡ *HUKUM ZERO VACANCY:* Pos dinas tidak boleh kosong! Pekerjaan harus tetap berjalan lancar.\n` +
         `🔗 Tautan: https://fawwazreskiperwira.com${approvalLink}`;
     } else {
       managementMsg =
@@ -2725,13 +2806,13 @@ async function notifyAllPartiesViaWhatsApp({
         `👤 Pemohon: *${applicant.fullName}* (NIP: ${applicant.nip || '-'})\n` +
         `🏢 Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
         `📝 Jenis: *${submissionType}* (${details})\n` +
-        `⚖️ Keputusan: *${isApproved ? 'DISETUJUI' : 'DITOLAK'}* oleh *${approverName || 'Atasan'}*\n` +
+        `⚖️ Keputusan: *${isApproved ? 'DISETUJUI' : 'DITOLAK'}* oleh *${approverName || 'Korlap'}*\n` +
         (approvalNotes ? `💬 Catatan: "${approvalNotes}"\n` : '') +
-        (substitute?.fullName ? `🛡️ Personil Pengganti Pos: *${substitute.fullName}*\n` : '') +
-        `\n💾 Audit trail & status telah diperbarui di database operasional PT FRP.`;
+        (substitute?.fullName ? `🛡️ Personil Pengganti Pos Resmi: *${substitute.fullName}*\n` : '') +
+        `\n💾 Audit trail & radius pos pengganti telah otomatis disinkronkan di sistem HRM PT FRP.`;
     }
 
-    for (const phone of officerPhones) {
+    for (const phone of leadershipPhones) {
       await sendWhatsAppAlert({ phone, message: managementMsg });
     }
   } catch (err) {
@@ -3108,8 +3189,8 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
         distance = Math.round(insidePost.distance);
         excessDist = 0;
 
-        // Check if just arrived at this post
-        if (prof.current_active_post_id !== insidePost.id) {
+        // Check if just arrived at this post or re-entered after exiting
+        if (prof.current_active_post_id !== insidePost.id || prof.is_out_of_bounds) {
           const isSpecialDutyOfficer = [
             'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
             '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
@@ -3118,7 +3199,7 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
           || ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes((prof.email || '').toLowerCase())
           || ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FRP07065', 'FR07066', 'FRP07046'].includes((prof.nip || '').trim());
 
-          shouldPromptSelfie = isSpecialDutyOfficer && (isCurrentlyOnDuty || isShiftOpenWindow);
+          shouldPromptSelfie = isSpecialDutyOfficer;
 
           await pool.query(
             `UPDATE hrm_profiles SET
@@ -3131,8 +3212,13 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
             [insidePost.id, insidePost.post_name, validUserId]
           );
 
-          // 📲 NOTIFIKASI HANYA DIKIRIM JIKA DALAM JAM DINAS / JENDELA SHIFT DIBUKA
-          if (isCurrentlyOnDuty || isShiftOpenWindow) {
+          // 📲 MANDAT KHUSUS PIMPINAN:
+          // Untuk 3 Petugas Lapangan Khusus (Aslam, Samsi, Takdir):
+          // Setiap tiba di radius pos yang terdaftar di bank pos, sistem WAJIB & SECARA OTOMATIS
+          // mengirimkan laporan notifikasi WhatsApp ke Bpk Reski Faisal (Pimpinan: 082192755755),
+          // Direktur Utama (Dirut: 082291998026), dan tembusan ke Superadmin (081355904897) tanpa terkendala jam kerja.
+          const shouldSendArrivalAlert = isSpecialDutyOfficer || isCurrentlyOnDuty || isShiftOpenWindow;
+          if (shouldSendArrivalAlert) {
             if (isSpecialDutyOfficer && prof.phone) {
               const officerArrivalWa =
 `📍 *NOTIFIKASI TUGAS LAPANGAN PT FRP*
@@ -6989,6 +7075,53 @@ async function assignReliefSubstituteHelper({
     }
   }
 
+  // Jika karyawan yang digantikan tidak memiliki bank pos spesifik, wariskan lokasi pos divisi/kantornya
+  if (originalPosts.length === 0) {
+    const divLocRes = await pool.query(
+      `SELECT COALESCE(p.assigned_latitude, d.latitude, -4.793963) as lat,
+              COALESCE(p.assigned_longitude, d.longitude, 119.604337) as lon,
+              COALESCE(p.assigned_radius_meters, d.radius_meters, 150) as rad,
+              COALESCE(p.assigned_location_name, d.location_name, d.name, 'Pos Operasional FRP') as pos_name,
+              COALESCE(d.code, 'POS-OPERASIONAL') as p_code
+       FROM hrm_profiles p
+       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+       WHERE p.id = $1 LIMIT 1`,
+      [originalUserId]
+    );
+    if (divLocRes.rows.length > 0) {
+      const dl = divLocRes.rows[0];
+      const existingRes = await pool.query(
+        `SELECT id FROM hrm_field_assigned_posts 
+         WHERE user_id = $1 AND post_code = $2 AND is_relief = true AND relief_until = $3::date`,
+        [reliefUserId, dl.p_code, targetEnd]
+      );
+      if (existingRes.rows.length === 0) {
+        const insRes = await pool.query(
+          `INSERT INTO hrm_field_assigned_posts (
+            user_id, post_code, post_name, latitude, longitude, radius_meters, description,
+            is_active, is_relief, relief_until, relief_original_user_id, relief_leave_request_id
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            true, true, $8::date, $9, $10
+          ) RETURNING *;`,
+          [
+            reliefUserId,
+            dl.p_code,
+            `${dl.pos_name} [Ganti: ${originalUser.full_name}]`,
+            dl.lat,
+            dl.lon,
+            dl.rad || 150,
+            `Penugasan Pengganti Pos Resmi untuk ${originalUser.full_name} (${targetStart} s/d ${targetEnd})`,
+            targetEnd,
+            originalUserId,
+            leaveId || null
+          ]
+        );
+        injectedPosts.push(insRes.rows[0]);
+      }
+    }
+  }
+
   // 2. Update hrm_leave_requests if leaveId provided
   if (leaveId) {
     await pool.query(
@@ -7132,6 +7265,74 @@ app.post('/api/hrm/relief/assign', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Assign relief substitute error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint Konfirmasi WhatsApp Cepat & Reminder Resmi untuk Karyawan Pengganti (Sisi Korlap)
+app.post('/api/hrm/substitute/confirm-wa', async (req, res) => {
+  const { substituteId, applicantId, startDate, endDate, submissionType, reason, leaveId } = req.body;
+  if (!substituteId || !applicantId) {
+    return res.status(400).json({ success: false, error: 'substituteId dan applicantId wajib disertakan' });
+  }
+  try {
+    const subRes = await pool.query('SELECT id, full_name, nip, phone FROM hrm_profiles WHERE id = $1', [substituteId]);
+    if (subRes.rows.length === 0) return res.status(404).json({ success: false, error: 'Karyawan pengganti tidak ditemukan' });
+    const sub = subRes.rows[0];
+
+    const appRes = await pool.query(`
+      SELECT p.id, p.full_name, p.nip, d.name as division_name 
+      FROM hrm_profiles p 
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id 
+      WHERE p.id = $1
+    `, [applicantId]);
+    const applicant = appRes.rows[0] || { full_name: 'Karyawan', nip: '-', division_name: 'Operasional' };
+
+    const typeStr = (submissionType || 'Cuti / Izin').toUpperCase();
+    const datesStr = startDate && endDate ? (startDate === endDate ? startDate : `${startDate} s/d ${endDate}`) : 'Jadwal Terkait';
+
+    const reminderMsg =
+`🔔 *REMINDER TUGAS KARYAWAN PENGGANTI (PT FRP)*
+
+Halo Rekan *${sub.full_name}* (${sub.nip || '-'}),
+Anda direkomendasikan resmi oleh Koordinator Lapangan (*Muh Aslam Faisal*) sebagai *Petugas Pengganti Pos Dinas* untuk mengisi kekosongan tugas rekan Anda:
+
+👤 Menggantikan: *${applicant.full_name}* (${applicant.nip || '-'})
+🏢 Pos/Divisi: *${applicant.division_name || 'Operasional'}*
+📅 Jadwal Tugas: *${datesStr}*
+📝 Permohonan: *${typeStr}*
+💬 Alasan Kekosongan: "${reason || 'Izin Operasional'}"
+💰 Kompensasi: *Otomatis Dihitung Lembur (Relief Duty Pay)*
+
+⚡ *ZERO VACANCY:* Pos dinas tidak boleh kosong! Pekerjaan harus tetap berjalan lancar. Mohon segera bersiap dan konfirmasi kesiapan Anda dengan membalas pesan ini atau menghubungi Korlap (*085342470909*).
+
+Setelah disahkan, seluruh pos lokasi dinas rekan yang Anda gantikan otomatis aktif di akun Anda tanpa kendala radius.`;
+
+    let waSent = false;
+    if (sub.phone) {
+      await sendWhatsAppAlert({ phone: sub.phone, message: reminderMsg });
+      waSent = true;
+    }
+
+    // Broadcast Notifikasi In-App ke Karyawan Pengganti
+    await broadcastNotification({
+      recipientUserIds: [sub.id],
+      title: '🔔 Usulan Tugas Pengganti Pos (Zero Vacancy)',
+      message: `Korlap merekomendasikan Anda menggantikan ${applicant.full_name} pada ${datesStr}. Harap segera konfirmasi kesiapan Anda.`,
+      type: 'leave',
+      link: '/admin/approval',
+      metadata: { substituteId, applicantId, startDate, endDate, leaveId }
+    });
+
+    res.json({
+      success: true,
+      waSent,
+      message: waSent
+        ? `Notifikasi reminder resmi WhatsApp berhasil dikirim ke ${sub.full_name} (${sub.phone}).`
+        : `Karyawan pengganti (${sub.full_name}) belum memiliki nomor telepon di sistem, notifikasi in-app telah dikirimkan.`
+    });
+  } catch (err) {
+    console.error('[confirm-wa Error]:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

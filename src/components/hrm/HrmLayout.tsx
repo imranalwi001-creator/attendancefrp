@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import defaultLogo from '@/assets/logo.png';
 import { hrmService } from '@/services/hrmService';
+import { isLeadershipSpecialFieldOfficer } from '@/types/hrm';
 import { cn } from '@/lib/utils';
 import {
   LayoutDashboard,
@@ -316,6 +317,7 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   ];
 
   const isExecutive = ['pimpinan', 'dirut'].some((r) => currentRole.includes(r));
+  const isSpecialDutyUser = isLeadershipSpecialFieldOfficer(user);
   const visibleNavItems = navItems.filter((item) => {
     // Pimpinan dan Dirut dibebaskan sepenuhnya dari absensi mandiri dan pengajuan perorangan
     if (isExecutive && ['/presensi', '/pengajuan', '/riwayat'].includes(item.path)) {
@@ -323,12 +325,15 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     }
     if (!item.roles) return true;
     if (currentRole === 'superadmin' || currentRole.includes('superadmin')) return true;
+    if (isSpecialDutyUser && ['/admin/approval', '/admin/monitoring', '/admin/lembur'].includes(item.path)) {
+      return true;
+    }
     return item.roles.some((reqRole) => normalizeRole(reqRole) === currentRole);
   });
 
   // Mobile Bottom Navigation Bar Items (Primary 4 items + "Lainnya" button)
   const getPrimaryMobileItems = () => {
-    if (['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'pengawas', 'korlap', 'kepala_regu', 'kepalaregu'].some((r) => currentRole.includes(r))) {
+    if (['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'pengawas', 'korlap', 'kepala_regu', 'kepalaregu'].some((r) => currentRole.includes(r)) || isSpecialDutyUser) {
       return [
         { label: 'Beranda', path: '/dashboard', icon: LayoutDashboard },
         { label: 'Monitor', path: '/admin/monitoring', icon: UserCheck },

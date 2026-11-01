@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { LeaveRequest, OvertimeRecord, OvertimeStatus, OvertimePaymentStatus, UserProfile, ShiftSwapRecord, SmartSubstituteCandidate } from '@/types/hrm';
+import { LeaveRequest, OvertimeRecord, OvertimeStatus, OvertimePaymentStatus, UserProfile, ShiftSwapRecord, SmartSubstituteCandidate, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
 import {
   FileCheck2,
   CheckCircle2,
@@ -64,7 +64,7 @@ export const HrmApprovalPage: React.FC = () => {
   const isDanru = isSuperAdmin || userRoleName.includes('danru') || userRoleName.includes('regu') || userRoleName.includes('pengawas');
   const isK3 = isSuperAdmin || userRoleName.includes('k3') || userRoleName.includes('hse') || userRoleName.includes('keselamatan');
   const isAdmin = isSuperAdmin || userRoleName.includes('admin') || userRoleName.includes('hrd');
-  const canApprove = isSuperAdmin || isPimpinan || isKorlap || isDanru || isK3 || isAdmin;
+  const canApprove = isSuperAdmin || isPimpinan || isKorlap || isDanru || isK3 || isAdmin || isLeadershipSpecialFieldOfficer(user);
 
   // Cek apakah pemohon adalah Pejabat Pengawas (Korlap / Admin / K3)
   const isSupervisorApplicant = (userId: string, userNip?: string, forwardedToPimpinan?: boolean) => {
@@ -179,6 +179,37 @@ export const HrmApprovalPage: React.FC = () => {
   }>({ sameDivOff: [], sameDivShift: [], globalAll: [] });
   const [loadingSubstituteCandidates, setLoadingSubstituteCandidates] = useState(false);
   const [submittingDecision, setSubmittingDecision] = useState(false);
+  const [sendingReminderId, setSendingReminderId] = useState<string | null>(null);
+
+  const handleSendWaReminder = async (cand: any) => {
+    if (!cand || !selectedLeave) return;
+    setSendingReminderId(cand.id);
+    try {
+      const res = await fetch('/api/hrm/substitute/confirm-wa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          substituteId: cand.id,
+          applicantId: selectedLeave.userId,
+          startDate: selectedLeave.startDate,
+          endDate: selectedLeave.endDate,
+          submissionType: selectedLeave.type || 'Cuti Tahunan',
+          reason: selectedLeave.reason,
+          leaveId: selectedLeave.id,
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success(json.message || `Reminder tugas pengganti pos berhasil dikirim ke ${cand.fullName || cand.name}`);
+      } else {
+        toast.error(json.error || 'Gagal mengirim reminder WhatsApp.');
+      }
+    } catch (err: any) {
+      toast.error('Gagal terhubung ke gateway WhatsApp: ' + err.message);
+    } finally {
+      setSendingReminderId(null);
+    }
+  };
 
   // Overtime Approval Modal State (with Admin Approved Hours authority)
   const [otModalOpen, setOtModalOpen] = useState(false);
@@ -2210,14 +2241,14 @@ export const HrmApprovalPage: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-bold text-blue-950 dark:text-blue-200 flex items-center gap-1.5">
                     <UserCheck className="w-4 h-4 text-blue-600" />
-                    <span>Penetapan Karyawan Pengganti (Aturan Zero Vacancy)</span>
+                    <span>Mandat Korlap Muh Aslam Faisal (Pengawasan 80 Karyawan - Zero Vacancy)</span>
                   </Label>
                   <Badge variant="outline" className="bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[10px] font-bold">
                     Wajib Diisi Korlap / Admin / K3
                   </Badge>
                 </div>
                 <p className="text-[11px] text-blue-900/80 dark:text-blue-300 leading-relaxed">
-                  Pekerjaan tidak boleh kosong selama masa cuti. Sistem merekomendasikan kandidat pengganti terbaik. Silakan konfirmasi via WhatsApp sebelum menetapkan pilihan.
+                  Hukum Zero Vacancy: Pos dinas tidak boleh kosong tenaga kerja! Jika personil berhalangan izin/sakit/cuti, operasional harus tetap berjalan lancar. Tetapkan 1 karyawan pengganti dan kirimkan reminder WhatsApp sebelum menyahkan permohonan.
                 </p>
 
                 {/* Tab Kategori Rekomendasi Pengganti */}
@@ -2349,7 +2380,26 @@ export const HrmApprovalPage: React.FC = () => {
                               {cand.badge || 'Kandidat'}
                             </Badge>
 
-                            {/* Tombol Konfirmasi WhatsApp Cepat */}
+                            {/* Tombol Konfirmasi WhatsApp & Reminder */}
+                            <Button
+                              size="sm"
+                              type="button"
+                              variant="outline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSendWaReminder(cand);
+                              }}
+                              disabled={sendingReminderId === cand.id}
+                              className="h-7 px-2 text-[10px] font-semibold rounded-lg border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 gap-1"
+                              title="Kirim reminder otomatis resmi dari gateway WhatsApp sistem FRP"
+                            >
+                              {sendingReminderId === cand.id ? (
+                                <Clock className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Zap className="w-3 h-3 text-emerald-600" />
+                              )}
+                              <span>Reminder WA</span>
+                            </Button>
                             <a
                               href={cand.waConfirmUrl || `https://wa.me/?text=Halo`}
                               target="_blank"
@@ -2359,7 +2409,7 @@ export const HrmApprovalPage: React.FC = () => {
                               title="Kirim pesan konfirmasi via WhatsApp"
                             >
                               <MessageCircle className="w-3 h-3" />
-                              <span>Konfirmasi WA</span>
+                              <span>Chat WA</span>
                             </a>
                           </div>
                         </div>
