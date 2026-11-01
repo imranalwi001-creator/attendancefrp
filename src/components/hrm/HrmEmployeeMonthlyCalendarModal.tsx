@@ -43,6 +43,8 @@ import {
   Coffee,
   Edit3,
   Save,
+  Activity,
+  CalendarCheck,
 } from 'lucide-react';
 
 interface Props {
@@ -741,6 +743,61 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                         </span>
                       </div>
                     );
+                  } else if (att.status === 'sakit') {
+                    statusBg = isSelected
+                      ? 'bg-rose-500/15 ring-2 ring-rose-500'
+                      : 'bg-rose-500/5 hover:bg-rose-500/10';
+                    statusBadge = (
+                      <div className="mt-1">
+                        <span className="text-[9px] font-bold text-rose-700 dark:text-rose-400 bg-rose-100 dark:bg-rose-950/40 px-1.5 py-0.5 rounded">
+                          Sakit
+                        </span>
+                      </div>
+                    );
+                  } else if (att.status === 'cuti') {
+                    statusBg = isSelected
+                      ? 'bg-purple-500/15 ring-2 ring-purple-500'
+                      : 'bg-purple-500/5 hover:bg-purple-500/10';
+                    statusBadge = (
+                      <div className="mt-1">
+                        <span className="text-[9px] font-bold text-purple-700 dark:text-purple-400 bg-purple-100 dark:bg-purple-950/40 px-1.5 py-0.5 rounded">
+                          Cuti
+                        </span>
+                      </div>
+                    );
+                  } else if (att.status === 'izin') {
+                    statusBg = isSelected
+                      ? 'bg-blue-500/15 ring-2 ring-blue-500'
+                      : 'bg-blue-500/5 hover:bg-blue-500/10';
+                    statusBadge = (
+                      <div className="mt-1">
+                        <span className="text-[9px] font-bold text-blue-700 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded">
+                          Izin
+                        </span>
+                      </div>
+                    );
+                  } else if (att.status === 'off' || att.status === 'libur') {
+                    statusBg = isSelected
+                      ? 'bg-slate-500/15 ring-2 ring-slate-500'
+                      : 'bg-slate-500/5 hover:bg-slate-500/10';
+                    statusBadge = (
+                      <div className="mt-1">
+                        <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                          OFF
+                        </span>
+                      </div>
+                    );
+                  } else if (att.status === 'alfa' || att.status === 'alpha') {
+                    statusBg = isSelected
+                      ? 'bg-red-500/15 ring-2 ring-red-500'
+                      : 'bg-red-500/5 hover:bg-red-500/10';
+                    statusBadge = (
+                      <div className="mt-1">
+                        <span className="text-[9px] font-bold text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-950/40 px-1.5 py-0.5 rounded">
+                          Alpa
+                        </span>
+                      </div>
+                    );
                   }
                 } else if (leave) {
                   statusBg = 'bg-blue-500/5 hover:bg-blue-500/10';
@@ -834,11 +891,35 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                 {selectedRecord ? (
                   selectedRecord.status === 'hadir' ? (
                     <Badge className="bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 text-[10px] gap-1 rounded-full">
-                      <CheckCircle2 size={11} /> Tepat Waktu
+                      <CheckCircle2 size={11} /> Hadir Tepat Waktu
                     </Badge>
-                  ) : (
+                  ) : selectedRecord.status === 'terlambat' || (selectedRecord.lateMinutes && selectedRecord.lateMinutes > 0) ? (
                     <Badge className="bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300 text-[10px] gap-1 rounded-full">
                       <AlertTriangle size={11} /> Terlambat ({selectedRecord.lateMinutes || 0} Menit)
+                    </Badge>
+                  ) : selectedRecord.status === 'sakit' ? (
+                    <Badge className="bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/40 dark:text-rose-300 text-[10px] gap-1 rounded-full">
+                      <Activity size={11} /> Izin Sakit
+                    </Badge>
+                  ) : selectedRecord.status === 'cuti' ? (
+                    <Badge className="bg-purple-50 text-purple-800 border-purple-300 dark:bg-purple-950/40 dark:text-purple-300 text-[10px] gap-1 rounded-full">
+                      <CalendarCheck size={11} /> Cuti Tahunan
+                    </Badge>
+                  ) : selectedRecord.status === 'izin' ? (
+                    <Badge className="bg-blue-50 text-blue-800 border-blue-300 dark:bg-blue-950/40 dark:text-blue-300 text-[10px] gap-1 rounded-full">
+                      <CalendarIcon size={11} /> Izin Resmi
+                    </Badge>
+                  ) : selectedRecord.status === 'off' || selectedRecord.status === 'libur' ? (
+                    <Badge className="bg-slate-100 text-slate-800 border-slate-300 dark:bg-slate-800 dark:text-slate-300 text-[10px] gap-1 rounded-full">
+                      Libur / OFF
+                    </Badge>
+                  ) : selectedRecord.status === 'alfa' || selectedRecord.status === 'alpha' ? (
+                    <Badge className="bg-red-50 text-red-800 border-red-300 dark:bg-red-950/40 dark:text-red-300 text-[10px] gap-1 rounded-full">
+                      <AlertTriangle size={11} /> Mangkir / Alpa
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px]">
+                      {selectedRecord.status}
                     </Badge>
                   )
                 ) : (
@@ -857,10 +938,15 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                       setEditClockOut(selectedRecord.clockOut ? selectedRecord.clockOut.substring(0, 5) : '');
                       setEditNotes(selectedRecord.notes || '');
 
-                      // Hitung otomatis lateness dari jam masuk agar nilai keterlambatan sinkron & akurat
+                      const recStatus = (selectedRecord.status as AttendanceStatus) || 'hadir';
+                      setEditStatus(recStatus);
+
                       const computed = computeLateness(cIn, selectedDateStr);
-                      setEditStatus(computed.status);
-                      setEditLateMinutes(computed.lateMinutes);
+                      if (recStatus === 'terlambat') {
+                        setEditLateMinutes(Number(selectedRecord.lateMinutes || computed.lateMinutes || 15));
+                      } else {
+                        setEditLateMinutes(Number(selectedRecord.lateMinutes || 0));
+                      }
                     } else {
                       const isLeadership = isLeadershipSpecialFieldOfficer(user);
                       const targetShift = getShiftForDate(selectedDateStr);
@@ -1091,7 +1177,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
             {/* Status Presensi */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Status Presensi</Label>
-              <Select value={editStatus} onValueChange={(val: any) => handleStatusChange(val)}>
+              <Select value={editStatus === 'alpha' ? 'alfa' : editStatus} onValueChange={(val: any) => handleStatusChange(val)}>
                 <SelectTrigger className="h-9 text-xs rounded-xl">
                   <SelectValue placeholder="Pilih status" />
                 </SelectTrigger>
@@ -1102,7 +1188,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                   <SelectItem value="sakit">Sakit</SelectItem>
                   <SelectItem value="cuti">Cuti</SelectItem>
                   <SelectItem value="off">Libur / OFF (Jadwal Libur)</SelectItem>
-                  <SelectItem value="alpha">Alpha (Mangkir)</SelectItem>
+                  <SelectItem value="alfa">Alpha (Mangkir)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1186,13 +1272,14 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                 if (!user || !selectedDateStr) return;
                 setIsSubmittingCorrect(true);
                 try {
+                  const cleanStatus = (editStatus === 'alpha' ? 'alfa' : editStatus) as AttendanceStatus;
                   if (selectedRecord && selectedRecord.id) {
                     const res = await hrmService.correctAttendance(selectedRecord.id, {
-                      status: editStatus,
-                      clockIn: editClockIn ? `${editClockIn}:00` : undefined,
-                      clockOut: editClockOut ? `${editClockOut}:00` : null,
-                      notes: editNotes.trim(),
-                      lateMinutes: editStatus === 'terlambat' ? Number(editLateMinutes) : 0,
+                      status: cleanStatus,
+                      clockIn: cleanStatus === 'hadir' || cleanStatus === 'terlambat' ? (editClockIn ? `${editClockIn}:00` : undefined) : undefined,
+                      clockOut: cleanStatus === 'hadir' || cleanStatus === 'terlambat' ? (editClockOut ? `${editClockOut}:00` : null) : null,
+                      notes: editNotes.trim() || cleanStatus,
+                      lateMinutes: cleanStatus === 'terlambat' ? Number(editLateMinutes) : 0,
                     });
                     if (res.success) {
                       toast.success(`Presensi ${user.fullName} (${selectedDateFormatted}) berhasil dikoreksi dan disinkronkan ke PostgreSQL!`);
@@ -1206,11 +1293,11 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                     const res = await hrmService.addManualAttendance({
                       userId: user.id,
                       attendanceDate: selectedDateStr,
-                      status: editStatus,
-                      clockIn: editClockIn ? `${editClockIn}:00` : '07:30:00',
-                      clockOut: editClockOut ? `${editClockOut}:00` : undefined,
-                      notes: editNotes.trim() || 'Presensi divalidasi langsung oleh Superadmin via Kalender',
-                      lateMinutes: editStatus === 'terlambat' ? Number(editLateMinutes) : 0,
+                      status: cleanStatus,
+                      clockIn: cleanStatus === 'hadir' || cleanStatus === 'terlambat' ? (editClockIn ? `${editClockIn}:00` : '07:30:00') : undefined,
+                      clockOut: cleanStatus === 'hadir' || cleanStatus === 'terlambat' ? (editClockOut ? `${editClockOut}:00` : undefined) : undefined,
+                      notes: editNotes.trim() || cleanStatus,
+                      lateMinutes: cleanStatus === 'terlambat' ? Number(editLateMinutes) : 0,
                     });
                     if (res.success) {
                       toast.success(`Data presensi baru untuk ${user.fullName} (${selectedDateFormatted}) berhasil disimpan ke PostgreSQL!`);

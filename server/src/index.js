@@ -10868,8 +10868,18 @@ app.put('/api/attendances/:id/manual-correct', async (req, res) => {
       return res.json({ success: true, data: offResult.rows[0], message: 'Presensi berhasil diubah menjadi Libur / OFF' });
     }
 
+    const cleanStatus = status || null;
+    const cleanClockIn = clockIn !== undefined ? clockIn : null;
+    const cleanNotes = notes !== undefined ? notes : null;
+    const cleanLate = lateMinutes !== undefined ? Number(lateMinutes) : null;
+
+    let clockInSql = 'clock_in = COALESCE($2, clock_in)';
+    if (clockIn === null || clockIn === '') {
+      clockInSql = 'clock_in = NULL';
+    }
+
     let clockOutSql = 'clock_out = clock_out';
-    const params = [status, clockIn, notes, lateMinutes, id];
+    const params = [cleanStatus, cleanClockIn, cleanNotes, cleanLate, id];
 
     if (clockOut !== undefined) {
       if (clockOut === null || clockOut === '') {
@@ -10883,7 +10893,7 @@ app.put('/api/attendances/:id/manual-correct', async (req, res) => {
     const query = `
       UPDATE hrm_attendances
       SET status = COALESCE($1, status),
-          clock_in = COALESCE($2, clock_in),
+          ${clockInSql},
           ${clockOutSql},
           notes = COALESCE($3, notes),
           late_minutes = COALESCE($4, late_minutes),
