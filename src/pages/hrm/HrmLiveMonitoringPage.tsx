@@ -3,7 +3,7 @@ import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { toast } from 'sonner';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer, isOfficialFrEmployee } from '@/types/hrm';
+import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer, isOfficialFrEmployee, isLeadershipSpecialFieldOfficer, isSimulationAccount, LeaveRequest } from '@/types/hrm';
 import { resolveEffectiveShift, calculateAttendanceLateness } from '@/lib/hrmShiftResolver';
 import {
   UserCheck,
@@ -80,6 +80,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [attendances, setAttendances] = useState<AttendanceRecord[]>([]);
   const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
   const [perimeterViolations, setPerimeterViolations] = useState<PerimeterViolation[]>([]);
+  const [approvedLeaves, setApprovedLeaves] = useState<LeaveRequest[]>([]);
 
   const [activeTab, setActiveTab] = useState<'all' | 'present' | 'late' | 'absent' | 'mangkir' | 'anomalies' | 'breaches' | 'field_radar'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -145,8 +146,27 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
   const handleExportAllRealtimeExcel = () => {
     const todayStr = getTodayDateStr();
-    const data = filtered.map(({ user: u, attendance: att, status, shift }, idx) => {
+    const data = filtered.map(({ user: u, attendance: att, status, absentSubtype, shift }, idx) => {
       const isLate = status === 'terlambat' || (att?.lateMinutes && att.lateMinutes > 0);
+      let statusText = 'BELUM HADIR';
+      if (isLate) {
+        statusText = `TERLAMBAT (${att?.lateMinutes || 0}m)`;
+      } else if (att?.clockIn) {
+        statusText = 'HADIR';
+      } else if (status === 'alfa' || absentSubtype === 'mangkir') {
+        statusText = 'ALPA / MANGKIR';
+      } else if (absentSubtype === 'off') {
+        statusText = 'LIBUR / OFF';
+      } else if (absentSubtype === 'unregistered') {
+        statusText = 'BELUM REGISTRASI WAJAH';
+      } else if (absentSubtype === 'cuti') {
+        statusText = 'CUTI TAHUNAN';
+      } else if (absentSubtype === 'sakit') {
+        statusText = 'IZIN SAKIT';
+      } else if (absentSubtype === 'izin') {
+        statusText = 'IZIN RESMI';
+      }
+
       return {
         No: idx + 1,
         NIP: u.nip,
@@ -154,9 +174,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         'Divisi': u.divisionName || '-',
         'Jabatan': u.roleName || u.role || 'Karyawan',
         'Shift': shift?.name || u.shiftName || 'Day Shift',
-        'Status Kehadiran': isLate
-          ? `TERLAMBAT (${att?.lateMinutes || 0}m)`
-          : (att?.clockIn ? 'HADIR' : (status === 'alfa' ? 'ALFA / MANGKIR' : 'BELUM HADIR')),
+        'Status Kehadiran': statusText,
         'Jam Masuk': att?.clockIn ? att.clockIn.substring(0, 5) : '-',
         'Jam Pulang': att?.clockOut ? att.clockOut.substring(0, 5) : (att?.clockIn ? 'Aktif Bertugas' : '-'),
         'Durasi Kerja (Jam)': att?.workDurationMinutes ? (att.workDurationMinutes / 60).toFixed(1) : '-',
@@ -201,11 +219,26 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       ['No', 'NIP', 'Nama Karyawan', 'Divisi', 'Shift', 'Status Kehadiran', 'Masuk', 'Pulang', 'Telat', 'Skor Wajah', 'Jarak Pos', 'Lokasi']
     ];
 
-    const tableBody = filtered.map(({ user: u, attendance: att, status, shift }, idx) => {
+    const tableBody = filtered.map(({ user: u, attendance: att, status, absentSubtype, shift }, idx) => {
       const isLate = status === 'terlambat' || (att?.lateMinutes && att.lateMinutes > 0);
-      const statusText = isLate
-        ? `TERLAMBAT (${att?.lateMinutes || 0}m)`
-        : (att?.clockIn ? 'HADIR' : (status === 'alfa' ? 'ALPA / MANGKIR' : 'BELUM HADIR'));
+      let statusText = 'BELUM HADIR';
+      if (isLate) {
+        statusText = `TERLAMBAT (${att?.lateMinutes || 0}m)`;
+      } else if (att?.clockIn) {
+        statusText = 'HADIR';
+      } else if (status === 'alfa' || absentSubtype === 'mangkir') {
+        statusText = 'ALPA / MANGKIR';
+      } else if (absentSubtype === 'off') {
+        statusText = 'LIBUR / OFF';
+      } else if (absentSubtype === 'unregistered') {
+        statusText = 'BELUM REGISTRASI WAJAH';
+      } else if (absentSubtype === 'cuti') {
+        statusText = 'CUTI TAHUNAN';
+      } else if (absentSubtype === 'sakit') {
+        statusText = 'IZIN SAKIT';
+      } else if (absentSubtype === 'izin') {
+        statusText = 'IZIN RESMI';
+      }
 
       return [
         idx + 1,
@@ -282,6 +315,18 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     setPerimeterViolations(hrmService.getPerimeterViolations().filter((v) => isOfficialFrEmployee(v.userNip)));
     loadFieldAgents();
     fetchLiveUsersFast();
+    fetch('/api/leaves?status=approved')
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) {
+          setApprovedLeaves(res.data);
+        } else {
+          setApprovedLeaves(hrmService.getLeaves().filter((l) => l.status === 'approved'));
+        }
+      })
+      .catch(() => {
+        setApprovedLeaves(hrmService.getLeaves().filter((l) => l.status === 'approved'));
+      });
   };
 
   const fetchLiveAttendancesFast = async () => {
@@ -514,13 +559,47 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       let isLate = att && (att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0));
       let effectiveLateMinutes = att?.lateMinutes || 0;
 
-      // Evaluasi jadwal kerja dan jam shift untuk mendeteksi mangkir definitif
-      const uShift = resolveEffectiveShift(u, allShifts, hrmService.getEmployeeTodaySchedule(u.id, getTodayDateStr()));
+      // Evaluasi jadwal kerja dan jam shift untuk mendeteksi status kehadiran secara akurat
+      const todayStr = getTodayDateStr();
+      const uShift = resolveEffectiveShift(u, allShifts, hrmService.getEmployeeTodaySchedule(u.id, todayStr));
       const nowWita = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Makassar', hour12: false, hour: '2-digit', minute: '2-digit' });
       
-      let absentSubtype: 'pending_shift' | 'in_progress' | 'mangkir' = 'in_progress';
+      const witaDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Makassar' }));
+      const dayOfWeek = witaDate.getDay(); // 0 = Minggu (Sunday), 6 = Sabtu (Saturday)
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const isSpecialLeadership = isLeadershipSpecialFieldOfficer(u);
+      const isFaceEnrolled = Boolean(u.isFaceEnrolled || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl);
+      const isSimAccount = isSimulationAccount(u);
+
+      // Cek pengajuan cuti / izin resmi yang disetujui hari ini
+      const todayLeave = approvedLeaves.find((l) => {
+        const matchUser = l.userId === u.id || l.userNip === u.nip || (l as any).employeeNip === u.nip || (l as any).employeeId === u.id;
+        if (!matchUser) return false;
+        const start = l.startDate || (l as any).start_date;
+        const end = l.endDate || (l as any).end_date || start;
+        return todayStr >= start && todayStr <= end;
+      });
+
+      let absentSubtype: 'pending_shift' | 'in_progress' | 'mangkir' | 'off' | 'cuti' | 'sakit' | 'izin' | 'unregistered' = 'in_progress';
       if (!att) {
-        if (uShift && uShift.startTime && uShift.endTime) {
+        if (todayLeave) {
+          if (todayLeave.type === 'sakit') {
+            absentSubtype = 'sakit';
+          } else if (todayLeave.type === 'cuti') {
+            absentSubtype = 'cuti';
+          } else {
+            absentSubtype = 'izin';
+          }
+        } else if (isSpecialLeadership && isWeekend) {
+          // 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) resmi LIBUR di akhir pekan (Sabtu & Minggu)
+          absentSubtype = 'off';
+        } else if (isWeekend && (!uShift || uShift.isOff || (uShift as any).code === 'OFF' || !u.isShiftWorker)) {
+          // Karyawan reguler non-shift di akhir pekan adalah LIBUR
+          absentSubtype = 'off';
+        } else if (!isFaceEnrolled || isSimAccount) {
+          // Karyawan belum registrasi wajah atau akun simulasi tidak dikenakan sanksi mangkir
+          absentSubtype = 'unregistered';
+        } else if (uShift && uShift.startTime && uShift.endTime) {
           const shiftEnd = uShift.endTime.slice(0, 5);
           const shiftStart = uShift.startTime.slice(0, 5);
           if (nowWita < shiftStart) {
@@ -555,10 +634,16 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
       const isAlfaRecord = att && (att.status === 'alfa' || att.status === 'alpa' || att.status === 'alpha');
       if (isAlfaRecord) {
-        absentSubtype = 'mangkir';
+        if (isWeekend && (isSpecialLeadership || !u.isShiftWorker)) {
+          absentSubtype = 'off';
+        } else if (!isFaceEnrolled || isSimAccount) {
+          absentSubtype = 'unregistered';
+        } else {
+          absentSubtype = 'mangkir';
+        }
       }
 
-      const calculatedStatus: 'present' | 'late' | 'absent' | 'mangkir' = isAlfaRecord
+      const calculatedStatus: 'present' | 'late' | 'absent' | 'mangkir' = (isAlfaRecord && absentSubtype === 'mangkir')
         ? 'mangkir'
         : !att
         ? (absentSubtype === 'mangkir' ? 'mangkir' : 'absent')
@@ -1828,6 +1913,26 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                               <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
                                 Telat {att?.lateMinutes || 0}m
                               </Badge>
+                            ) : absentSubtype === 'off' ? (
+                              <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                Libur / OFF
+                              </Badge>
+                            ) : absentSubtype === 'unregistered' ? (
+                              <Badge variant="outline" className="bg-amber-50/80 text-amber-800 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                Belum Registrasi Wajah
+                              </Badge>
+                            ) : absentSubtype === 'cuti' ? (
+                              <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 dark:bg-purple-950/40 dark:text-purple-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                Cuti Tahunan
+                              </Badge>
+                            ) : absentSubtype === 'sakit' ? (
+                              <Badge variant="outline" className="bg-pink-50 text-pink-700 border-pink-300 dark:bg-pink-950/40 dark:text-pink-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                Izin Sakit
+                              </Badge>
+                            ) : absentSubtype === 'izin' ? (
+                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300 dark:bg-blue-950/40 dark:text-blue-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                Izin Resmi
+                              </Badge>
                             ) : absentSubtype === 'mangkir' ? (
                               <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 text-[11px] rounded-full px-2.5 py-0.5 font-bold shadow-xs">
                                 Mangkir / Alpa
@@ -2054,6 +2159,12 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 <span className="w-2 h-2 rounded-full bg-amber-500" /> Terlambat
               </span>
               <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-slate-400" /> Libur / OFF
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-rose-500" /> Mangkir / Alpa
+              </span>
+              <span className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-muted-foreground/50" /> Belum Hadir
               </span>
             </div>
@@ -2124,6 +2235,26 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   ) : status === 'late' ? (
                     <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] rounded-full">
                       Telat {att?.lateMinutes}m
+                    </Badge>
+                  ) : absentSubtype === 'off' ? (
+                    <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-300 text-[10px] rounded-full font-medium">
+                      Libur / OFF
+                    </Badge>
+                  ) : absentSubtype === 'unregistered' ? (
+                    <Badge variant="outline" className="bg-amber-50/80 text-amber-800 border-amber-200 text-[10px] rounded-full font-medium">
+                      Belum Registrasi Wajah
+                    </Badge>
+                  ) : absentSubtype === 'cuti' ? (
+                    <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 text-[10px] rounded-full font-medium">
+                      Cuti Tahunan
+                    </Badge>
+                  ) : absentSubtype === 'sakit' ? (
+                    <Badge variant="outline" className="bg-pink-50 text-pink-700 border-pink-300 text-[10px] rounded-full font-medium">
+                      Izin Sakit
+                    </Badge>
+                  ) : absentSubtype === 'izin' ? (
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300 text-[10px] rounded-full font-medium">
+                      Izin Resmi
                     </Badge>
                   ) : absentSubtype === 'mangkir' ? (
                     <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 text-[10px] rounded-full font-bold shadow-xs">
