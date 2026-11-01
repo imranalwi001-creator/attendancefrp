@@ -8,11 +8,16 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
+  DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { TimePicker } from '@/components/ui/time-picker';
 import {
   FileSpreadsheet,
   FileText,
@@ -32,11 +37,13 @@ import {
   Edit3,
   Save,
   RotateCcw,
+  RotateCw,
   Sparkles,
   Loader2,
   CalendarCheck,
+  Trash2,
 } from 'lucide-react';
-import { UserProfile, AttendanceRecord, OvertimeRecord, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isSimulationAccount } from '@/types/hrm';
+import { UserProfile, AttendanceRecord, OvertimeRecord, AttendanceStatus, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isSimulationAccount } from '@/types/hrm';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
 import defaultLogo from '@/assets/logo.png';
@@ -83,6 +90,29 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   const [serverOvertimes, setServerOvertimes] = useState<OvertimeRecord[]>([]);
   const [serverLeaves, setServerLeaves] = useState<any[]>([]);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
+  const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+
+  // Quick Attendance Correction on Table Row Click
+  const [editingRow, setEditingRow] = useState<any | null>(null);
+  const [rowEditStatus, setRowEditStatus] = useState<string>('hadir');
+  const [rowEditClockIn, setRowEditClockIn] = useState<string>('08:00');
+  const [rowEditClockOut, setRowEditClockOut] = useState<string>('16:00');
+  const [rowEditLateMinutes, setRowEditLateMinutes] = useState<number>(0);
+  const [rowEditNotes, setRowEditNotes] = useState<string>('');
+  const [isSavingRowEdit, setIsSavingRowEdit] = useState<boolean>(false);
+
+  // Listener untuk auto-refresh data saat ada event koreksi presensi
+  useEffect(() => {
+    const handleUpdate = () => {
+      setRefreshTrigger((k) => k + 1);
+    };
+    window.addEventListener('hrm_attendance_updated', handleUpdate);
+    window.addEventListener('hrm_data_updated', handleUpdate);
+    return () => {
+      window.removeEventListener('hrm_attendance_updated', handleUpdate);
+      window.removeEventListener('hrm_data_updated', handleUpdate);
+    };
+  }, []);
 
   // Tab view: format lembar kerja resmi vs forensik
   const [activeTab, setActiveTab] = useState<'timesheet' | 'forensic'>('timesheet');
@@ -239,7 +269,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, user, allAttendances]);
+  }, [isOpen, user, allAttendances, refreshTrigger, selectedMonth]);
 
   // Gabungkan attendance hari ini agar realtime
   const combinedAttendances = useMemo(() => {
@@ -313,7 +343,18 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       const hasClockIn = Boolean(att?.clockIn);
       const hasClockOut = Boolean(att?.clockOut);
 
-      if (att) {
+      // JIKA HARI LIBUR / AKHIR PEKAN (SABTU & MINGGU) DAN TIDAK ADA ABSEN FISIK & LEMBUR: MUTLAK OFF
+      if (isWeekend && !hasClockIn && !ot && att?.status !== 'hadir') {
+        absenMasuk = 'OFF';
+        absenPulang = 'OFF';
+        telatMnt = '-';
+        lemburMulai = '-';
+        lemburSelesai = '-';
+        realisasiJamLembur = '-';
+        uraianPekerjaan = '-';
+        memerintahkanKaur = '-';
+        ket = 'OFF';
+      } else if (att) {
         if (hasClockIn) {
           absenMasuk = (att.clockIn || '').substring(0, 5);
         }
@@ -346,9 +387,15 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           absenPulang = 'SAKIT';
           ket = 'SAKIT';
         } else if (att.status === 'alfa') {
-          absenMasuk = '-';
-          absenPulang = '-';
-          ket = 'ALPA';
+          if (isWeekend) {
+            absenMasuk = 'OFF';
+            absenPulang = 'OFF';
+            ket = 'OFF';
+          } else {
+            absenMasuk = '-';
+            absenPulang = '-';
+            ket = 'ALPA';
+          }
         } else if (hasClockIn) {
           ket = 'HADIR';
         }
@@ -472,7 +519,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     }
 
     return rows;
-  }, [selectedMonth, user, todayStr, combinedAttendances, combinedOvertimes, employeeKaur]);
+  }, [selectedMonth, user, todayStr, combinedAttendances, combinedOvertimes, employeeKaur, isSpecialTarget]);
 
   // Statistik Rekapan Bulanan (Presisi & Dinamis)
   const stats = useMemo(() => {
@@ -831,6 +878,127 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     const cleanNip = user.nip.replace(/[^a-zA-Z0-9]/g, '_');
     const filename = `Rekap_Presensi_Lembur_${cleanNip}_${cleanName}_${selectedMonth}.xlsx`;
     XLSX.writeFile(wb, filename);
+  };
+
+  // Handler Interaktif Koreksi Presensi Per Baris Tabel
+  const handleOpenRowEdit = (r: any) => {
+    setEditingRow(r);
+    const existing = r.attRecord;
+    if (existing) {
+      setRowEditStatus(existing.status || (r.ket === 'OFF' ? 'off' : 'hadir'));
+      setRowEditClockIn(existing.clockIn ? existing.clockIn.substring(0, 5) : '08:00');
+      setRowEditClockOut(existing.clockOut ? existing.clockOut.substring(0, 5) : '16:00');
+      setRowEditLateMinutes(Number(existing.lateMinutes || 0));
+      setRowEditNotes(existing.notes || (r.ket === 'OFF' ? 'Jadwal Libur / OFF' : ''));
+    } else {
+      if (r.isWeekend || r.ket === 'OFF') {
+        setRowEditStatus('off');
+        setRowEditClockIn('');
+        setRowEditClockOut('');
+        setRowEditLateMinutes(0);
+        setRowEditNotes('Jadwal Libur / OFF');
+      } else if (r.ket === 'CUTI') {
+        setRowEditStatus('cuti');
+        setRowEditClockIn('');
+        setRowEditClockOut('');
+        setRowEditLateMinutes(0);
+        setRowEditNotes('Cuti Tahunan');
+      } else if (r.ket === 'SAKIT') {
+        setRowEditStatus('sakit');
+        setRowEditClockIn('');
+        setRowEditClockOut('');
+        setRowEditLateMinutes(0);
+        setRowEditNotes('Izin Sakit (Surat Dokter)');
+      } else if (r.ket === 'IZIN') {
+        setRowEditStatus('izin');
+        setRowEditClockIn('');
+        setRowEditClockOut('');
+        setRowEditLateMinutes(0);
+        setRowEditNotes('Izin Tidak Masuk Kerja');
+      } else if (r.ket === 'ALPA') {
+        setRowEditStatus('alfa');
+        setRowEditClockIn('');
+        setRowEditClockOut('');
+        setRowEditLateMinutes(0);
+        setRowEditNotes('Mangkir / Tanpa Keterangan');
+      } else {
+        setRowEditStatus('hadir');
+        setRowEditClockIn('08:00');
+        setRowEditClockOut('16:00');
+        setRowEditLateMinutes(0);
+        setRowEditNotes(isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : 'Tugas Lapangan Operasional');
+      }
+    }
+  };
+
+  const handleSaveRowEdit = async () => {
+    if (!editingRow || !user) return;
+    setIsSavingRowEdit(true);
+    try {
+      const dateStr = editingRow.rawDate;
+      const existing = editingRow.attRecord;
+
+      if (rowEditStatus === 'off') {
+        if (existing?.id) {
+          const delRes = await hrmService.deleteAttendance(existing.id);
+          if (!delRes.success) {
+            await hrmService.correctAttendance(existing.id, {
+              status: 'off' as AttendanceStatus,
+              clockIn: undefined,
+              clockOut: undefined,
+              lateMinutes: 0,
+              notes: rowEditNotes || 'Jadwal Libur / OFF',
+            });
+          }
+        }
+        toast.success(`Jadwal tanggal ${editingRow.tanggal} berhasil diset sebagai Libur / OFF`);
+      } else if (existing?.id) {
+        await hrmService.correctAttendance(existing.id, {
+          status: rowEditStatus as AttendanceStatus,
+          clockIn: rowEditStatus === 'hadir' || rowEditStatus === 'terlambat' ? (rowEditClockIn || '08:00') : undefined,
+          clockOut: rowEditStatus === 'hadir' || rowEditStatus === 'terlambat' ? (rowEditClockOut || '16:00') : undefined,
+          lateMinutes: rowEditStatus === 'hadir' || rowEditStatus === 'terlambat' ? rowEditLateMinutes : 0,
+          notes: rowEditNotes,
+        });
+        toast.success(`Presensi tanggal ${editingRow.tanggal} berhasil dikoreksi`);
+      } else {
+        await hrmService.addManualAttendance({
+          userId: user.id,
+          attendanceDate: dateStr,
+          status: rowEditStatus as AttendanceStatus,
+          clockIn: rowEditStatus === 'hadir' || rowEditStatus === 'terlambat' ? (rowEditClockIn || '08:00') : undefined,
+          clockOut: rowEditStatus === 'hadir' || rowEditStatus === 'terlambat' ? (rowEditClockOut || '16:00') : undefined,
+          lateMinutes: rowEditStatus === 'hadir' || rowEditStatus === 'terlambat' ? rowEditLateMinutes : 0,
+          notes: rowEditNotes,
+        });
+        toast.success(`Presensi tanggal ${editingRow.tanggal} berhasil dicatat`);
+      }
+
+      setRefreshTrigger((k) => k + 1);
+      setEditingRow(null);
+    } catch (err: any) {
+      toast.error(`Gagal menyimpan koreksi: ${err.message || 'Terjadi kesalahan'}`);
+    } finally {
+      setIsSavingRowEdit(false);
+    }
+  };
+
+  const handleDeleteRowAttendance = async () => {
+    if (!editingRow || !editingRow.attRecord?.id) {
+      setEditingRow(null);
+      return;
+    }
+    setIsSavingRowEdit(true);
+    try {
+      await hrmService.deleteAttendance(editingRow.attRecord.id);
+      toast.success(`Catatan presensi tanggal ${editingRow.tanggal} berhasil dihapus`);
+      setRefreshTrigger((k) => k + 1);
+      setEditingRow(null);
+    } catch (err: any) {
+      toast.error(`Gagal menghapus: ${err.message || 'Terjadi kesalahan'}`);
+    } finally {
+      setIsSavingRowEdit(false);
+    }
   };
 
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
@@ -1268,6 +1436,18 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               <Button
                 size="sm"
                 variant="outline"
+                onClick={() => setRefreshTrigger((k) => k + 1)}
+                disabled={isLoadingData}
+                className="h-8 px-2.5 text-xs rounded-xl gap-1.5 border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium shadow-xs"
+                title="Muat ulang sinkronisasi data presensi realtime dari database"
+              >
+                <RotateCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin text-primary' : 'text-slate-600 dark:text-slate-300'}`} />
+                <span className="hidden sm:inline">Muat Ulang</span>
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
                 onClick={() => setIsLeaveCorrectionOpen(true)}
                 className="h-8 px-3 text-xs rounded-xl gap-1.5 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 font-medium shadow-xs"
                 title="Koreksi kuota dan saldo cuti terpakai karyawan"
@@ -1599,12 +1779,14 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                     return (
                       <tr
                         key={r.no}
-                        className={`border-b border-slate-200 dark:border-slate-800 transition-colors ${
+                        onClick={() => handleOpenRowEdit(r)}
+                        title="Klik untuk koreksi presensi tanggal ini (Hadir / Telat / Cuti / Sakit / Libur OFF)"
+                        className={`border-b border-slate-200 dark:border-slate-800 transition-colors cursor-pointer group ${
                           r.isToday
-                            ? 'bg-emerald-500/5 font-semibold'
+                            ? 'bg-emerald-500/5 font-semibold hover:bg-emerald-500/15'
                             : isOff
-                            ? 'bg-slate-50/50 dark:bg-slate-900/30'
-                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                            ? 'bg-slate-50/50 dark:bg-slate-900/30 hover:bg-slate-100/80 dark:hover:bg-slate-800/60'
+                            : 'hover:bg-primary/5 dark:hover:bg-primary/10'
                         }`}
                       >
                         {/* NO */}
@@ -1697,7 +1879,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                               : 'text-purple-700 dark:text-purple-400'
                           }`}
                         >
-                          {r.ket}
+                          <div className="flex items-center justify-center gap-1">
+                            <span>{r.ket}</span>
+                            <Edit3 className="w-2.5 h-2.5 opacity-0 group-hover:opacity-60 text-slate-400 transition-opacity" />
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1871,6 +2056,138 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               )}
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog Koreksi Presensi Harian Langsung */}
+      <Dialog open={!!editingRow} onOpenChange={(open) => !open && setEditingRow(null)}>
+        <DialogContent className="max-w-md p-6 rounded-2xl bg-card border-border shadow-2xl">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                <Edit3 className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-base font-bold">
+                  Koreksi Presensi Tanggal {editingRow?.tanggal}
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-foreground">
+                  {user?.fullName || user?.name} ({user?.nip}) &bull; {editingRow?.isWeekend ? 'Akhir Pekan (Sabtu/Minggu)' : 'Hari Kerja'}
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-foreground">Status Presensi</Label>
+              <Select value={rowEditStatus} onValueChange={setRowEditStatus}>
+                <SelectTrigger className="h-9 text-xs">
+                  <SelectValue placeholder="Pilih status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hadir">Hadir Tepat Waktu</SelectItem>
+                  <SelectItem value="terlambat">Hadir Terlambat</SelectItem>
+                  <SelectItem value="off">Libur / OFF (Jadwal Libur Resmi)</SelectItem>
+                  <SelectItem value="cuti">Cuti Tahunan</SelectItem>
+                  <SelectItem value="sakit">Izin Sakit (Surat Dokter)</SelectItem>
+                  <SelectItem value="izin">Izin Tidak Masuk Kerja</SelectItem>
+                  <SelectItem value="alfa">Mangkir / ALPA</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {(rowEditStatus === 'hadir' || rowEditStatus === 'terlambat') && (
+              <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-muted/40 border border-border/50">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">Jam Masuk</Label>
+                  <Input
+                    type="time"
+                    value={rowEditClockIn}
+                    onChange={(e) => setRowEditClockIn(e.target.value)}
+                    className="h-8 text-xs font-mono"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">Jam Pulang</Label>
+                  <Input
+                    type="time"
+                    value={rowEditClockOut}
+                    onChange={(e) => setRowEditClockOut(e.target.value)}
+                    className="h-8 text-xs font-mono"
+                  />
+                </div>
+                {rowEditStatus === 'terlambat' && (
+                  <div className="col-span-2 space-y-1.5">
+                    <Label className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                      Menit Keterlambatan
+                    </Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={rowEditLateMinutes}
+                      onChange={(e) => setRowEditLateMinutes(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                      className="h-8 text-xs font-mono"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-foreground">Uraian Tugas / Catatan Koreksi</Label>
+              <Input
+                value={rowEditNotes}
+                onChange={(e) => setRowEditNotes(e.target.value)}
+                placeholder="Contoh: Pengawasan Lapangan Khusus Pimpinan / Tugas Lapangan"
+                className="h-9 text-xs"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="flex items-center justify-between gap-2 sm:justify-between pt-2">
+            <div>
+              {editingRow?.attRecord?.id && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleDeleteRowAttendance}
+                  disabled={isSavingRowEdit}
+                  className="h-8 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/20 gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Hapus Catatan</span>
+                </Button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEditingRow(null)}
+                disabled={isSavingRowEdit}
+                className="h-8 text-xs"
+              >
+                Batal
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSaveRowEdit}
+                disabled={isSavingRowEdit}
+                className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 font-semibold"
+              >
+                {isSavingRowEdit ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>Simpan Koreksi</span>
+              </Button>
+            </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

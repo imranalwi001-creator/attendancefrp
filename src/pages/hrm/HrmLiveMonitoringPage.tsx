@@ -2607,6 +2607,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         initialMonth={selectedMonth}
         attendances={allAttendances}
         allShifts={allShifts}
+        onCorrectionSaved={() => {
+          loadData();
+          fetchLiveAttendancesFast();
+        }}
         onOpenPhotoPreview={(photoData) => {
           setPreviewForensic({
             url: photoData.url,

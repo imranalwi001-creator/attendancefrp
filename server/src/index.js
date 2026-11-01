@@ -10814,10 +10814,59 @@ async function enforceEphemeralPhotoRetention() {
 }
 
 // ─── ATTENDANCE MANUAL CORRECTION & CREATION API ────────────────────────────
+app.delete('/api/attendances/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const delRes = await pool.query('DELETE FROM hrm_attendances WHERE id = $1 RETURNING *', [id]);
+    if (delRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
+    }
+    const targetUserId = delRes.rows[0].user_id;
+    if (targetUserId) {
+      await pool.query(`
+        UPDATE hrm_profiles
+        SET used_leave_days = (
+          SELECT COUNT(DISTINCT attendance_date)
+          FROM hrm_attendances
+          WHERE user_id = $1 AND status = 'cuti'
+        )
+        WHERE id = $1;
+      `, [targetUserId]);
+    }
+    res.json({ success: true, message: 'Data presensi berhasil dihapus', data: delRes.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.put('/api/attendances/:id/manual-correct', async (req, res) => {
   try {
     const { id } = req.params;
     const { status, clockIn, clockOut, notes, lateMinutes } = req.body;
+
+    if (status === 'off' || status === 'libur') {
+      const offQuery = `
+        UPDATE hrm_attendances
+        SET status = 'off',
+            clock_in = NULL,
+            clock_out = NULL,
+            photo_in = NULL,
+            photo_out = NULL,
+            notes = COALESCE($1, 'Jadwal Libur / OFF'),
+            late_minutes = 0,
+            is_verified = true,
+            is_locked = false,
+            is_perimeter_breached = false,
+            updated_at = NOW()
+        WHERE id = $2
+        RETURNING *;
+      `;
+      const offResult = await pool.query(offQuery, [notes || 'Jadwal Libur / OFF', id]);
+      if (offResult.rows.length === 0) {
+        return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
+      }
+      return res.json({ success: true, data: offResult.rows[0], message: 'Presensi berhasil diubah menjadi Libur / OFF' });
+    }
 
     let clockOutSql = 'clock_out = clock_out';
     const params = [status, clockIn, notes, lateMinutes, id];
@@ -11499,6 +11548,20 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
 
     console.log(`[Auto-Mangkir Engine] Memeriksa status ketidakhadiran untuk tanggal ${nowWitaDate} (pk ${nowWitaTime} WITA)...`);
 
+    // 0. Periksa apakah tanggal adalah Hari Libur Nasional
+    const holidayCheck = await pool.query(
+      'SELECT id, holiday_name FROM hrm_national_holidays WHERE holiday_date = $1 LIMIT 1',
+      [nowWitaDate]
+    );
+    if (holidayCheck.rows.length > 0) {
+      console.log(`[Auto-Mangkir Engine] ${nowWitaDate} adalah Hari Libur Nasional (${holidayCheck.rows[0].holiday_name}). Melewati auto-mangkir.`);
+      return 0;
+    }
+
+    const dateObj = new Date(nowWitaDate + 'T12:00:00+08:00');
+    const dayOfWeek = dateObj.getDay(); // 0 = Minggu, 6 = Sabtu
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
     // 1. Ambil seluruh karyawan aktif yang SUDAH TERDAFTAR BIOMETRIK WAJAH & BUKAN AKUN SIMULASI
     const usersRes = await pool.query(`
       SELECT p.id, p.full_name, p.nip, p.email, p.phone, p.shift_id, p.is_face_enrolled,
@@ -11517,6 +11580,20 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
     for (const emp of usersRes.rows) {
       // Safeguard ganda: Hanya personil resmi NIP FR dan sudah enroll wajah yang dievaluasi
       if (!isOfficialFrEmployee(emp) || !emp.is_face_enrolled || !emp.has_face) {
+        continue;
+      }
+
+      // 1.5 Cek jadwal roster / shift kerja karyawan pada tanggal ini
+      const scheduleCheck = await pool.query(`
+        SELECT id, is_off FROM hrm_employee_schedules 
+        WHERE user_id = $1 AND schedule_date = $2 LIMIT 1
+      `, [emp.id, nowWitaDate]);
+
+      const hasSchedule = scheduleCheck.rows.length > 0;
+      const isScheduleOff = hasSchedule && scheduleCheck.rows[0].is_off === true;
+
+      // Jika karyawan memiliki jadwal OFF atau pada akhir pekan (Sabtu/Minggu) tidak dijadwalkan masuk, lewati (karyawan OFF)
+      if (isScheduleOff || (isWeekend && (!hasSchedule || scheduleCheck.rows[0].is_off))) {
         continue;
       }
 

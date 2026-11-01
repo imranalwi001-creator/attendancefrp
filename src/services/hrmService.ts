@@ -6410,12 +6410,39 @@ export const hrmService = {
     updates: { status?: AttendanceStatus; clockIn?: string; clockOut?: string; notes?: string; lateMinutes?: number }
   ): Promise<{ success: boolean; data?: AttendanceRecord; error?: string }> => {
     try {
-      const res = await api.put<{ success: boolean; data: any }>(`/attendances/${id}/manual-correct`, updates);
+      const res = await api.put<{ success: boolean; data: any; message?: string }>(`/attendances/${id}/manual-correct`, updates);
       if (res && res.success) {
-        hrmService.syncWithBackend().catch(() => null);
+        if (res.data) {
+          const current = hrmService.getAttendances();
+          const idx = current.findIndex((a) => a.id === id);
+          if (idx !== -1) {
+            current[idx] = { ...current[idx], ...res.data };
+          }
+          hrmService.saveAttendances(current);
+        }
+        window.dispatchEvent(new Event('hrm_attendance_updated'));
+        window.dispatchEvent(new Event('hrm_data_updated'));
+        hrmService.syncWithBackend(true).catch(() => null);
         return { success: true, data: res.data };
       }
       return { success: false, error: 'Gagal mengoreksi data presensi' };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  deleteAttendance: async (id: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await api.delete<{ success: boolean; message?: string }>(`/attendances/${id}`);
+      if (res && res.success) {
+        const current = hrmService.getAttendances().filter((a) => a.id !== id);
+        hrmService.saveAttendances(current);
+        window.dispatchEvent(new Event('hrm_attendance_updated'));
+        window.dispatchEvent(new Event('hrm_data_updated'));
+        hrmService.syncWithBackend(true).catch(() => null);
+        return { success: true };
+      }
+      return { success: false, error: 'Gagal menghapus data presensi' };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -6433,7 +6460,14 @@ export const hrmService = {
     try {
       const res = await api.post<{ success: boolean; data: any }>('/attendances/manual-entry', entry);
       if (res && res.success) {
-        hrmService.syncWithBackend().catch(() => null);
+        if (res.data) {
+          const current = hrmService.getAttendances();
+          current.unshift(res.data);
+          hrmService.saveAttendances(current);
+        }
+        window.dispatchEvent(new Event('hrm_attendance_updated'));
+        window.dispatchEvent(new Event('hrm_data_updated'));
+        hrmService.syncWithBackend(true).catch(() => null);
         return { success: true, data: res.data };
       }
       return { success: false, error: 'Gagal menambah data presensi manual' };

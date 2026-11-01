@@ -1101,6 +1101,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                   <SelectItem value="izin">Izin</SelectItem>
                   <SelectItem value="sakit">Sakit</SelectItem>
                   <SelectItem value="cuti">Cuti</SelectItem>
+                  <SelectItem value="off">Libur / OFF (Jadwal Libur)</SelectItem>
                   <SelectItem value="alpha">Alpha (Mangkir)</SelectItem>
                 </SelectContent>
               </Select>
