@@ -6136,6 +6136,8 @@ export const hrmService = {
 
   async resolvePerimeterBreach(data: {
     violationId: string;
+    userId?: string;
+    attendanceId?: string;
     resolvedBy: string;
     resolutionNotes: string;
     unlockAttendance: boolean;
@@ -6151,15 +6153,21 @@ export const hrmService = {
       violations[vIdx].resolvedByName = resolver?.fullName || 'Atasan / HRD';
       violations[vIdx].resolvedAt = new Date().toISOString();
       localStorage.setItem(STORAGE_KEYS.PERIMETER_VIOLATIONS, JSON.stringify(violations));
+    }
 
-      if (data.unlockAttendance) {
+    if (data.unlockAttendance) {
+      const targetUserId = data.userId || (vIdx !== -1 ? violations[vIdx].userId : undefined);
+      if (targetUserId) {
         const attendances = hrmService.getAttendances();
         const attIdx = attendances.findIndex(
-          (a) => a.userId === violations[vIdx].userId && a.attendanceDate === violations[vIdx].violationDate
+          (a) => a.userId === targetUserId && (data.attendanceId ? a.id === data.attendanceId : true)
         );
         if (attIdx !== -1) {
           attendances[attIdx].isLocked = false;
           attendances[attIdx].isPerimeterBreached = false;
+          attendances[attIdx].isRemoteUnlocked = true;
+          attendances[attIdx].remoteUnlockedBy = resolver?.fullName || data.resolvedBy || 'Superadmin';
+          attendances[attIdx].remoteUnlockedAt = new Date().toISOString();
           attendances[attIdx].notes = (attendances[attIdx].notes ? attendances[attIdx].notes + ' | ' : '') + `[Dispensasi Perimeter oleh Atasan: ${data.resolutionNotes}]`;
           hrmService.saveAttendances(attendances);
         }
@@ -6167,6 +6175,7 @@ export const hrmService = {
     }
 
     window.dispatchEvent(new Event('hrm_data_updated'));
+    window.dispatchEvent(new Event('hrm_attendance_updated'));
 
     try {
       await api.post('/geofence/resolve-breach', data);

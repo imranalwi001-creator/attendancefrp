@@ -554,18 +554,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const isSubmittingPatrolRef = useRef<boolean>(false);
 
   // PWA Standalone Detection & Installation State
-  const [isStandaloneApp, setIsStandaloneApp] = useState<boolean>(true);
+  const checkIsStandalone = () => {
+    if (typeof window === 'undefined') return false;
+    return Boolean(
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true ||
+      document.referrer.includes('android-app://') ||
+      window.location.search.includes('source=pwa')
+    );
+  };
+  const [isStandaloneApp, setIsStandaloneApp] = useState<boolean>(checkIsStandalone);
   const [showPwaInstallModal, setShowPwaInstallModal] = useState<boolean>(false);
   const [pwaGuideTab, setPwaGuideTab] = useState<'android' | 'ios' | 'apk'>('android');
 
   useEffect(() => {
     const checkStandalone = () => {
-      const standalone =
-        window.matchMedia('(display-mode: standalone)').matches ||
-        (window.navigator as any).standalone === true ||
-        document.referrer.includes('android-app://') ||
-        window.location.search.includes('source=pwa');
-      setIsStandaloneApp(standalone);
+      setIsStandaloneApp(checkIsStandalone());
     };
     checkStandalone();
     const ua = window.navigator.userAgent.toLowerCase();
@@ -580,16 +584,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       try {
         await promptEvent.prompt();
         const choice = await promptEvent.userChoice;
-        if (choice.outcome === 'accepted') {
+        if (choice && choice.outcome === 'accepted') {
           toast.success('PWA berhasil dipasang ke Layar Utama HP!');
           (window as any).__pwaInstallPrompt = null;
+          setIsStandaloneApp(true);
+          setShowPwaInstallModal(false);
+          return;
         }
       } catch (e) {
-        setShowPwaInstallModal(true);
+        console.warn('[PWA] Prompt trigger error:', e);
       }
-    } else {
-      setShowPwaInstallModal(true);
     }
+    // Jika belum ada prompt langsung dari browser, buka panduan interaktif
+    setShowPwaInstallModal(true);
   };
 
   // Master Face Descriptor from Database (128-D Normalized Vector)
@@ -3752,6 +3759,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             >
               <RotateCw className="w-3.5 h-3.5" />
             </button>
+
+            {/* Tombol Install / Pasang PWA di Header (Muncul jika dibuka via browser) */}
+            {!isStandaloneApp && (
+              <button
+                type="button"
+                onClick={handleTriggerPwaInstall}
+                className="h-8 px-2.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-md active:scale-95 transition-all"
+                title="Pasang / Install Aplikasi PWA ke Layar Utama HP"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Pasang PWA</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -3761,6 +3781,28 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         {/* ─── TAB 1: BERANDA PRESENSI UTAMA ─── */}
         {activeTab === 'beranda' && (
           <div className="space-y-4 animate-in fade-in duration-200">
+
+            {/* Banner Pasang PWA di Beranda (Jika dibuka via browser) */}
+            {!isStandaloneApp && (
+              <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-100 dark:from-emerald-950/40 dark:via-teal-950/30 dark:to-emerald-900/40 border border-emerald-300 dark:border-emerald-700/50 rounded-2xl p-3 flex items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <Smartphone className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-emerald-950 dark:text-emerald-200 truncate">Pasang Aplikasi PWA di HP</p>
+                    <p className="text-[10px] text-emerald-800/80 dark:text-emerald-300/80 truncate">Absen instan satu sentuhan tanpa repot buka browser</p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={handleTriggerPwaInstall}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl h-8 px-3 shrink-0 shadow-sm gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5" /> Pasang
+                </Button>
+              </div>
+            )}
 
             {/* Greeting & Identity Section */}
             <div className="flex items-center justify-between gap-3 pt-1">
@@ -5185,6 +5227,39 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </p>
               </div>
 
+              {/* Status & Pemasangan Aplikasi PWA */}
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Smartphone className="w-4 h-4 text-emerald-600" />
+                    <p className="text-xs font-bold text-slate-800 dark:text-white">Aplikasi PWA Mandiri</p>
+                  </div>
+                  {isStandaloneApp ? (
+                    <Badge className="text-[10px] bg-emerald-600 text-white gap-1 px-2 py-0.5">
+                      <CheckCircle2 className="w-3 h-3" /> Terpasang di HP
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300 gap-1 px-2 py-0.5">
+                      Mode Browser
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  {isStandaloneApp
+                    ? 'Aplikasi HRM berjalan dalam mode Standalone di layar utama HP Anda dengan performa optimal.'
+                    : 'Pasang aplikasi ke Layar Utama HP agar Anda dapat absen langsung satu sentuhan tanpa perlu membuka browser.'}
+                </p>
+                {!isStandaloneApp && (
+                  <Button
+                    size="sm"
+                    onClick={handleTriggerPwaInstall}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs gap-1.5 h-8.5 shadow-xs font-semibold"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Pasang / Download Aplikasi PWA
+                  </Button>
+                )}
+              </div>
+
               {/* Perangkat Terdaftar Binding */}
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-1">
                 <div className="flex items-center justify-between">
@@ -6331,6 +6406,34 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             </div>
           )}
+
+          {/* Tombol aksi langsung untuk memicu prompt browser */}
+          <Button
+            size="sm"
+            onClick={async () => {
+              const promptEvent = (window as any).__pwaInstallPrompt;
+              if (promptEvent) {
+                try {
+                  await promptEvent.prompt();
+                  const choice = await promptEvent.userChoice;
+                  if (choice && choice.outcome === 'accepted') {
+                    toast.success('PWA berhasil dipasang ke Layar Utama!');
+                    (window as any).__pwaInstallPrompt = null;
+                    setIsStandaloneApp(true);
+                    setShowPwaInstallModal(false);
+                    return;
+                  }
+                } catch (e) {
+                  console.warn('[PWA] Prompt error:', e);
+                }
+              }
+              toast.info('Silakan ikuti langkah di atas: ketuk Menu Titik Tiga (⋮) di Chrome lalu pilih "Pasang aplikasi".');
+            }}
+            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold gap-1.5 h-9 shadow-md"
+          >
+            <Download className="w-4 h-4" />
+            MUNCULKAN DIALOG PASANG SEKARANG
+          </Button>
 
           <DialogFooter>
             <Button

@@ -5931,63 +5931,127 @@ app.post('/api/geofence/report-breach', async (req, res) => {
 });
 
 app.post('/api/geofence/resolve-breach', async (req, res) => {
-  const { violationId, resolvedBy, resolutionNotes, unlockAttendance } = req.body;
+  const { violationId, userId: reqUserId, attendanceId: reqAttId, resolvedBy, resolutionNotes, unlockAttendance } = req.body;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
     let validResolverId = null;
+    let resolverName = resolvedBy || 'Superadmin / HRD';
     if (resolvedBy && uuidRegex.test(resolvedBy)) {
       validResolverId = resolvedBy;
     } else if (resolvedBy) {
       const rRes = await client.query(
-        'SELECT id FROM hrm_profiles WHERE id::text = $1 OR LOWER(nip) = LOWER($1) OR LOWER(full_name) = LOWER($1) LIMIT 1',
+        'SELECT id, full_name FROM hrm_profiles WHERE id::text = $1 OR LOWER(nip) = LOWER($1) OR LOWER(full_name) = LOWER($1) LIMIT 1',
         [resolvedBy]
       );
-      if (rRes.rows.length > 0) validResolverId = rRes.rows[0].id;
+      if (rRes.rows.length > 0) {
+        validResolverId = rRes.rows[0].id;
+        resolverName = rRes.rows[0].full_name || resolverName;
+      }
     }
 
-    const query = `
-      UPDATE hrm_perimeter_violations SET
-        status = 'resolved',
-        resolution_notes = $1,
-        resolved_by = $2,
-        resolved_at = NOW(),
-        updated_at = NOW()
-      WHERE id::text = $3
-      RETURNING *;
-    `;
-    const result = await client.query(query, [resolutionNotes || 'Disetujui oleh atasan / HRD', validResolverId, violationId]);
-    if (result.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, error: 'Pelanggaran tidak ditemukan' });
+    let viol = null;
+    let targetUserId = reqUserId;
+    let targetAttId = reqAttId;
+    let targetDate = new Date().toISOString().split('T')[0];
+
+    // Coba temukan dan update record pelanggaran resmi di hrm_perimeter_violations
+    if (violationId && uuidRegex.test(violationId)) {
+      const query = `
+        UPDATE hrm_perimeter_violations SET
+          status = 'resolved',
+          resolution_notes = $1,
+          resolved_by = $2,
+          resolved_at = NOW(),
+          updated_at = NOW()
+        WHERE id::text = $3
+        RETURNING *;
+      `;
+      const result = await client.query(query, [resolutionNotes || 'Disetujui oleh atasan / HRD', validResolverId, violationId]);
+      if (result.rows.length > 0) {
+        viol = result.rows[0];
+        targetUserId = targetUserId || viol.user_id;
+        targetAttId = targetAttId || viol.attendance_id;
+        if (viol.violation_date) targetDate = viol.violation_date;
+      }
+    } else if (typeof violationId === 'string' && violationId.startsWith('violation-')) {
+      const potentialUid = violationId.replace('violation-', '');
+      if (uuidRegex.test(potentialUid)) {
+        targetUserId = targetUserId || potentialUid;
+      }
     }
 
-    const viol = result.rows[0];
-    if (unlockAttendance) {
-      if (viol.attendance_id) {
+    // Jika ada pelanggaran aktif untuk targetUserId hari ini, tandai resolved juga
+    if (targetUserId) {
+      await client.query(`
+        UPDATE hrm_perimeter_violations SET
+          status = 'resolved',
+          resolution_notes = $1,
+          resolved_by = $2,
+          resolved_at = NOW(),
+          updated_at = NOW()
+        WHERE user_id = $3 AND status = 'active';
+      `, [resolutionNotes || 'Dispensasi Perimeter oleh ' + resolverName, validResolverId, targetUserId]);
+    }
+
+    // Selalu buka kunci kehadiran jika diminta (atau default true)
+    if (unlockAttendance !== false) {
+      const noteAppend = ` [Dispensasi Perimeter oleh ${resolverName}: ${resolutionNotes || 'Disetujui Atasan'}]`;
+      if (targetAttId) {
         await client.query(`
           UPDATE hrm_attendances SET
             is_locked = false,
-            notes = COALESCE(notes, '') || ' [Dispensasi Perimeter oleh Atasan: ' || $1 || ']',
+            is_perimeter_breached = false,
+            is_remote_unlocked = true,
+            remote_unlocked_by = $1,
+            remote_unlocked_at = NOW(),
+            notes = COALESCE(notes, '') || $2,
             updated_at = NOW()
-          WHERE id = $2;
-        `, [resolutionNotes || 'Dispensasi HR', viol.attendance_id]);
-      } else {
+          WHERE id = $3;
+        `, [resolverName, noteAppend, targetAttId]);
+      } else if (targetUserId) {
         await client.query(`
           UPDATE hrm_attendances SET
             is_locked = false,
-            notes = COALESCE(notes, '') || ' [Dispensasi Perimeter oleh Atasan: ' || $1 || ']',
+            is_perimeter_breached = false,
+            is_remote_unlocked = true,
+            remote_unlocked_by = $1,
+            remote_unlocked_at = NOW(),
+            notes = COALESCE(notes, '') || $2,
             updated_at = NOW()
-          WHERE user_id = $2 AND attendance_date = $3;
-        `, [resolutionNotes || 'Dispensasi HR', viol.user_id, viol.violation_date]);
+          WHERE user_id = $3 AND attendance_date = $4;
+        `, [resolverName, noteAppend, targetUserId, targetDate]);
       }
     }
 
     await client.query('COMMIT');
-    console.log(`[Geofence] Breach ${violationId} resolved by user ${resolvedBy}`);
-    res.json({ success: true, violation: viol, data: viol });
+    console.log(`[Geofence] Breach ${violationId || targetUserId} resolved by ${resolverName}`);
+
+    // In-app notification ke karyawan
+    if (targetUserId) {
+      try {
+        await pool.query(
+          `INSERT INTO hrm_notifications (user_id, title, message, type, link, is_read, created_at)
+           VALUES ($1, $2, $3, 'info', '/dashboard', false, NOW())`,
+          [
+            targetUserId,
+            '🔓 Kunci Presensi Telah Dibuka',
+            `Presensi dan pembatasan perimeter Anda telah diizinkan dan dibuka oleh ${resolverName}. Anda sekarang dapat melanjutkan presensi.`
+          ]
+        );
+      } catch (notifErr) {
+        console.warn('[Resolve Breach Notif Warn]', notifErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Kunci presensi berhasil dibuka dan dispensasi dicatat',
+      violation: viol || { id: violationId, status: 'resolved' },
+      data: viol || { id: violationId, status: 'resolved' }
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Resolve breach error:', err);

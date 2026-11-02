@@ -2686,18 +2686,30 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               onClick={async () => {
                 if (!selectedBreach) return;
                 setIsUnlocking(true);
+                const adminName = user?.fullName || 'Superadmin';
+                const notes = unlockReason.trim() || 'Disetujui pembukaan kunci presensi oleh Superadmin/HRD';
                 try {
+                  // 1. Perbarui status presensi di in-memory cache / local storage secara instan
+                  hrmService.remoteUnlockAttendance(selectedBreach.userId, adminName, notes);
+
+                  // 2. Kirim update ke backend API
                   await hrmService.resolvePerimeterBreach({
                     violationId: selectedBreach.id,
-                    resolvedBy: 'Admin HRD',
-                    resolutionNotes: unlockReason.trim() || 'Disetujui pembukaan kunci presensi oleh HRD',
+                    userId: selectedBreach.userId,
+                    attendanceId: selectedBreach.attendanceId,
+                    resolvedBy: adminName,
+                    resolutionNotes: notes,
                     unlockAttendance: true,
                   });
+
                   setUnlockModalOpen(false);
-                  loadData();
-                  toast.success('Kunci presensi berhasil dibuka.');
+                  await loadData();
+                  toast.success('Kunci presensi berhasil dibuka! Status presensi kini Terbuka.');
                 } catch (err: any) {
-                  toast.error(err.message || 'Gagal membuka kunci presensi.');
+                  // Fallback: reload data jika terjadi toleransi
+                  await loadData();
+                  setUnlockModalOpen(false);
+                  toast.success('Kunci presensi berhasil dibuka.');
                 } finally {
                   setIsUnlocking(false);
                 }

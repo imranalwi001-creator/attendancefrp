@@ -147,6 +147,32 @@ export const PwaInstallButton: React.FC<PwaInstallButtonProps> = ({
           <div className="bg-primary/5 p-3 rounded-xl border border-primary/20 text-[11px] text-muted-foreground leading-relaxed">
             💡 <strong>Keuntungan PWA:</strong> Akses presensi lebih cepat, layar penuh tanpa bilah peramban, serta hemat kuota internet.
           </div>
+
+          <Button
+            size="sm"
+            onClick={async () => {
+              const installPrompt = (window as any).__pwaInstallPrompt;
+              if (installPrompt) {
+                try {
+                  await installPrompt.prompt();
+                  const choiceResult = await installPrompt.userChoice;
+                  if (choiceResult && choiceResult.outcome === 'accepted') {
+                    (window as any).__pwaInstallPrompt = null;
+                    setHasPrompt(false);
+                    setShowIosGuide(false);
+                    return;
+                  }
+                } catch (e) {
+                  console.warn('[PWA] Prompt error:', e);
+                }
+              }
+              alert('Silakan ketuk Menu Titik Tiga (⋮) di Chrome lalu pilih "Pasang aplikasi" atau "Tambahkan ke Layar Utama".');
+            }}
+            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold gap-1.5 h-9"
+          >
+            <DownloadCloud className="w-4 h-4" />
+            Munculkan Dialog Pasang Sekarang
+          </Button>
         </div>
 
         <DialogFooter>
