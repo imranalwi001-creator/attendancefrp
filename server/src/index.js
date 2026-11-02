@@ -388,7 +388,7 @@ function formatUserRow(r) {
   // 3. Jika belum memiliki shift, set null (bukan default palsu 07:30)
   let resolvedStart = null;
   let resolvedEnd = null;
-  if (r.shift_id && r.shift_start_time) {
+  if (r.shift_start_time) {
     resolvedStart = r.shift_start_time.substring(0, 5);
     resolvedEnd = r.shift_end_time ? r.shift_end_time.substring(0, 5) : '17:00';
   } else if (isSpecial) {
@@ -419,10 +419,12 @@ function formatUserRow(r) {
     employeeSequenceNo: r.employee_sequence_no || 0,
     hourlyOvertimeRate: r.hourly_overtime_rate ? parseFloat(r.hourly_overtime_rate) : 23381.79,
     baseSalary: r.base_salary ? parseFloat(r.base_salary) : 4045050,
-    shiftId: r.shift_id,
+    shiftId: r.today_shift_id || r.shift_id,
+    shiftCode: r.today_shift_code || null,
     shiftName: r.shift_name || '',
     shiftStartTime: resolvedStart,
     shiftEndTime: resolvedEnd,
+    isOffToday: Boolean(r.today_is_off),
     customStartTime: isSpecial && r.custom_start_time ? r.custom_start_time.substring(0, 5) : null,
     customEndTime: isSpecial && r.custom_end_time ? r.custom_end_time.substring(0, 5) : null,
     avatarUrl: (() => {
@@ -1138,14 +1140,28 @@ app.get('/api/users', async (req, res) => {
              d.radius_meters as division_radius_meters,
              d.latitude as division_latitude,
              d.longitude as division_longitude,
-             s.name as shift_name,
-             s.start_time as shift_start_time,
-             s.end_time as shift_end_time,
+             COALESCE(today_sched.today_shift_name, s.name) as shift_name,
+             COALESCE(today_sched.today_shift_start_time, s.start_time::text) as shift_start_time,
+             COALESCE(today_sched.today_shift_end_time, s.end_time::text) as shift_end_time,
+             today_sched.today_shift_id,
+             today_sched.today_shift_code,
+             today_sched.today_is_off,
              sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme
       FROM hrm_profiles p
       LEFT JOIN hrm_roles r ON p.role_id = r.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+      LEFT JOIN LATERAL (
+        SELECT es.shift_id as today_shift_id,
+               es.shift_name as today_shift_name,
+               es.start_time as today_shift_start_time,
+               es.end_time as today_shift_end_time,
+               es.is_off as today_is_off,
+               es.shift_code as today_shift_code
+        FROM hrm_employee_schedules es
+        WHERE es.user_id = p.id AND es.schedule_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
+        LIMIT 1
+      ) today_sched ON true
       LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
       ORDER BY p.employee_sequence_no ASC NULLS LAST, p.created_at ASC
     `);
@@ -1165,15 +1181,29 @@ app.get('/api/users/:id', async (req, res) => {
              d.radius_meters as division_radius_meters,
              d.latitude as division_latitude,
              d.longitude as division_longitude,
-             s.name as shift_name,
-             s.start_time as shift_start_time,
-             s.end_time as shift_end_time,
+             COALESCE(today_sched.today_shift_name, s.name) as shift_name,
+             COALESCE(today_sched.today_shift_start_time, s.start_time::text) as shift_start_time,
+             COALESCE(today_sched.today_shift_end_time, s.end_time::text) as shift_end_time,
+             today_sched.today_shift_id,
+             today_sched.today_shift_code,
+             today_sched.today_is_off,
              sp.hourly_overtime_rate, sp.base_salary, sp.severance_scheme,
              (SELECT a.photo_in FROM hrm_attendances a WHERE a.user_id = p.id AND a.photo_in IS NOT NULL ORDER BY a.attendance_date DESC, a.created_at DESC LIMIT 1) as latest_attendance_photo
       FROM hrm_profiles p
       LEFT JOIN hrm_roles r ON p.role_id = r.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+      LEFT JOIN LATERAL (
+        SELECT es.shift_id as today_shift_id,
+               es.shift_name as today_shift_name,
+               es.start_time as today_shift_start_time,
+               es.end_time as today_shift_end_time,
+               es.is_off as today_is_off,
+               es.shift_code as today_shift_code
+        FROM hrm_employee_schedules es
+        WHERE es.user_id = p.id AND es.schedule_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
+        LIMIT 1
+      ) today_sched ON true
       LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
       WHERE p.id::text = $1 OR p.nip = $1 OR LOWER(p.email) = LOWER($1)
       LIMIT 1
@@ -10915,7 +10945,7 @@ app.get('/api/employee-schedules/today/:userId', async (req, res) => {
         s.notes
       FROM hrm_employee_schedules s
       JOIN hrm_profiles p ON s.user_id = p.id
-      WHERE s.user_id = $1 AND s.schedule_date = $2
+      WHERE (s.user_id::text = $1 OR p.nip = $1 OR LOWER(p.email) = LOWER($1)) AND s.schedule_date = $2::date
       LIMIT 1
     `;
     const result = await pool.query(query, [userId, today]);

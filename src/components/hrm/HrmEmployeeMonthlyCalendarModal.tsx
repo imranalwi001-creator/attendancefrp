@@ -264,9 +264,9 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
   const effectiveShift = useMemo(() => {
     if (!user) return null;
     const today = new Date().toISOString().split('T')[0];
-    const sched = hrmService.getEmployeeTodaySchedule(user.id, today);
+    const sched = monthSchedules.get(today) || hrmService.getEmployeeTodaySchedule(user.id, today);
     return resolveEffectiveShift(user, allShifts, sched);
-  }, [user, allShifts]);
+  }, [user, allShifts, monthSchedules]);
 
   const shiftsList = useMemo(() => {
     return allShifts && allShifts.length > 0 ? allShifts : hrmService.getShifts();
@@ -281,6 +281,49 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
     },
     [user, monthSchedules, shiftsList, effectiveShift]
   );
+
+  // Jadwal dinamis header kalender berdasarkan tanggal terpilih atau hari ini (sinkron Matriks Roster)
+  const activeHeaderSchedule = useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const targetDate = selectedDateStr || todayStr;
+    const sched = monthSchedules.get(targetDate);
+    const shift = getShiftForDate(targetDate);
+    const hasRoster = monthSchedules.size > 0;
+
+    if (sched && (sched.isOff || sched.shiftCode === 'OFF')) {
+      return {
+        label: `Libur / OFF (${sched.shiftCode || 'OFF'})`,
+        timeRange: 'Libur Sesuai Matriks Roster',
+        isOff: true,
+        tolerance: 15,
+        targetDate,
+        hasRoster,
+      };
+    }
+
+    if (sched) {
+      const sStart = sched.startTime ? sched.startTime.substring(0, 5) : (shift?.startTime || '07:30');
+      const sEnd = sched.endTime ? sched.endTime.substring(0, 5) : (shift?.endTime || '15:30');
+      const sName = sched.shiftName || (sched.shiftCode === 'S' ? 'Shift II' : sched.shiftCode === 'P' ? 'Shift I' : sched.shiftCode === 'M' ? 'Shift III' : 'Shift');
+      return {
+        label: `${sName} (${sStart} - ${sEnd} WITA)`,
+        timeRange: `${sStart} - ${sEnd} WITA`,
+        isOff: false,
+        tolerance: user?.lateToleranceMinutes ?? shift?.lateToleranceMinutes ?? 15,
+        targetDate,
+        hasRoster,
+      };
+    }
+
+    return {
+      label: shift ? `${shift.name} (${shift.startTime} - ${shift.endTime} WITA)` : '07:30 - 15:30 WITA',
+      timeRange: shift ? `${shift.startTime} - ${shift.endTime} WITA` : '07:30 - 15:30 WITA',
+      isOff: false,
+      tolerance: user?.lateToleranceMinutes ?? shift?.lateToleranceMinutes ?? 15,
+      targetDate,
+      hasRoster,
+    };
+  }, [selectedDateStr, monthSchedules, getShiftForDate, user]);
 
   // Helper hitung keterlambatan otomatis berdasarkan Jam Masuk dan Shift aktif di tanggal terpilih
   const computeLateness = React.useCallback(
@@ -535,12 +578,23 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                       {user.nip}
                     </Badge>
                   </DialogTitle>
-                  <p className="text-xs text-muted-foreground">
-                    {user.divisionName || 'Operasional Lapangan'} • Shift:{' '}
-                    <span className="font-semibold text-foreground">
-                      {effectiveShift ? `${effectiveShift.startTime} - ${effectiveShift.endTime} WITA` : '08:00 - 16:30 WITA'}
-                    </span>{' '}
-                    (Tol: {user.lateToleranceMinutes ?? effectiveShift?.lateToleranceMinutes ?? 15}m)
+                  <p className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
+                    <span>{user.divisionName || 'Operasional Lapangan'}</span>
+                    <span>•</span>
+                    <span>
+                      Shift ({selectedDateFormatted}):{' '}
+                      <span className="font-semibold text-foreground">
+                        {activeHeaderSchedule.label}
+                      </span>
+                    </span>
+                    {activeHeaderSchedule.hasRoster && (
+                      <Badge variant="outline" className="text-[9px] py-0 px-1.5 bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30">
+                        Matriks Roster Sinkron
+                      </Badge>
+                    )}
+                    {!activeHeaderSchedule.isOff && (
+                      <span>(Tol: {activeHeaderSchedule.tolerance}m)</span>
+                    )}
                   </p>
                 </div>
               </div>

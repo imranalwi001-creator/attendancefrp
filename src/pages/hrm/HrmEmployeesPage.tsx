@@ -1555,7 +1555,7 @@ export const HrmEmployeesPage: React.FC = () => {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label className="text-xs font-semibold">Shift Kerja</Label>
+                    <Label className="text-xs font-semibold">Shift Kerja (Master Profil Dasar)</Label>
                     <Select value={shiftId} onValueChange={setShiftId}>
                       <SelectTrigger className="text-xs rounded-xl"><SelectValue placeholder="Pilih Shift" /></SelectTrigger>
                       <SelectContent>
