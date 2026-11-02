@@ -1929,29 +1929,33 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       isServerGeofenceValid = true;
       locationName = `${simDivision.location_name || 'Venue Simulasi Presentasi'} [DIV-SIM]`;
     } else if (latitude && longitude && userId) {
-      const fieldPosts = await pool.query(
-        `SELECT * FROM hrm_field_assigned_posts 
-         WHERE user_id = $1 AND is_active = true 
-           AND (is_relief IS NOT TRUE OR relief_until >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)`,
-        [userId]
-      );
-      if (fieldPosts.rows.length > 0) {
-        const postsWithDist = fieldPosts.rows.map(p => {
-          const d = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(p.latitude), parseFloat(p.longitude));
-          return { ...p, distance: d, isValid: d <= parseFloat(p.radius_meters) };
-        });
-        const matched = postsWithDist.find(p => p.isValid);
-        if (matched) {
-          serverDistance = Math.round(matched.distance);
-          isServerGeofenceValid = true;
-          locationName = `${matched.post_name} [${matched.post_code}]`;
-        } else {
-          const nearest = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
-          serverDistance = Math.round(nearest.distance);
-          isServerGeofenceValid = false;
-          locationName = `${nearest.post_name} [${nearest.post_code}]`;
+      const candidateLocations = [];
+
+      // A. Bank Pos Lapangan Karyawan (hrm_field_assigned_posts)
+      try {
+        const fieldPosts = await pool.query(
+          `SELECT post_name as name, post_code as code, latitude, longitude, radius_meters 
+           FROM hrm_field_assigned_posts 
+           WHERE user_id = $1 AND is_active = true 
+             AND (is_relief IS NOT TRUE OR relief_until >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)`,
+          [userId]
+        );
+        for (const fp of fieldPosts.rows) {
+          if (fp.latitude && fp.longitude) {
+            candidateLocations.push({
+              name: `${fp.name} [${fp.code || 'POS'}]`,
+              lat: parseFloat(fp.latitude),
+              lon: parseFloat(fp.longitude),
+              radius: parseFloat(fp.radius_meters || 100),
+            });
+          }
         }
-      } else {
+      } catch (fpErr) {
+        console.warn('[ClockIn] Field posts query warn:', fpErr.message);
+      }
+
+      // B. Divisi & Kantor Pusat Resmi Karyawan (hrm_divisions & hrm_office_locations)
+      try {
         const locRes = await pool.query(
           `SELECT 
              p.assigned_latitude, p.assigned_longitude, p.assigned_radius_meters, p.assigned_location_name,
@@ -1968,77 +1972,81 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
         if (locRes.rows.length > 0) {
           const loc = locRes.rows[0];
-
+          if (loc.div_lat && loc.div_lon) {
+            candidateLocations.push({
+              name: `Lokasi Divisi ${loc.div_name || 'Divisi'}`,
+              lat: parseFloat(loc.div_lat),
+              lon: parseFloat(loc.div_lon),
+              radius: parseFloat(loc.div_radius || 150),
+            });
+          }
+          if (loc.office_lat && loc.office_lon) {
+            candidateLocations.push({
+              name: loc.office_name || 'Kantor Pusat PT FRP',
+              lat: parseFloat(loc.office_lat),
+              lon: parseFloat(loc.office_lon),
+              radius: parseFloat(loc.office_radius || 100),
+            });
+          }
+          if (loc.assigned_latitude && loc.assigned_longitude) {
+            candidateLocations.push({
+              name: loc.assigned_location_name || 'Lokasi Khusus Karyawan',
+              lat: parseFloat(loc.assigned_latitude),
+              lon: parseFloat(loc.assigned_longitude),
+              radius: parseFloat(loc.assigned_radius_meters || 150),
+            });
+          }
           // Parsing allowed posts dari divisi atau user
           let allowedPostsList = [];
-          try {
-            if (loc.div_allowed_posts) {
-              const parsed = typeof loc.div_allowed_posts === 'string' ? JSON.parse(loc.div_allowed_posts) : loc.div_allowed_posts;
-              if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
-            }
-            if (loc.user_allowed_posts) {
-              const parsed = typeof loc.user_allowed_posts === 'string' ? JSON.parse(loc.user_allowed_posts) : loc.user_allowed_posts;
-              if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
-            }
-          } catch (e) {
-            console.warn('[ClockIn] Error parsing allowed posts JSON:', e.message);
+          if (loc.div_allowed_posts) {
+            const parsed = typeof loc.div_allowed_posts === 'string' ? JSON.parse(loc.div_allowed_posts) : loc.div_allowed_posts;
+            if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
           }
-
-          // Filter untuk clock-in: hanya post yang mengizinkan clock-in (allowClockIn !== false && !isClockOutOnly)
-          const validClockInPosts = allowedPostsList.filter(p => p.allowClockIn !== false && !p.isClockOutOnly);
-
-          if (validClockInPosts.length > 0) {
-            const postsWithDist = validClockInPosts.map(p => {
-              const dist = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(p.latitude), parseFloat(p.longitude));
-              const rad = parseFloat(p.radiusMeters || p.radius_meters || 250);
-              return { ...p, distance: dist, isValid: dist <= rad };
-            });
-
-            const matchedPost = postsWithDist.find(p => p.isValid);
-            if (matchedPost) {
-              serverDistance = Math.round(matchedPost.distance);
-              isServerGeofenceValid = true;
-              locationName = matchedPost.name || matchedPost.code || 'Pos Divisi';
-            } else {
-              // Cek koordinat default divisi / kantor
-              const defaultLat = loc.assigned_latitude || loc.div_lat || loc.office_lat || -6.2088;
-              const defaultLon = loc.assigned_longitude || loc.div_lon || loc.office_lon || 106.8456;
-              const defaultRad = parseFloat(loc.assigned_radius_meters || loc.div_radius || loc.office_radius || 150);
-              const defaultDist = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(defaultLat), parseFloat(defaultLon));
-
-              if (defaultDist <= defaultRad) {
-                serverDistance = Math.round(defaultDist);
-                isServerGeofenceValid = true;
-                locationName = loc.assigned_location_name || loc.div_name || loc.office_name || 'Kantor Pusat';
-              } else {
-                const nearestPost = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
-                if (nearestPost && nearestPost.distance < defaultDist) {
-                  serverDistance = Math.round(nearestPost.distance);
-                  locationName = nearestPost.name || nearestPost.code || 'Pos Divisi';
-                } else {
-                  serverDistance = Math.round(defaultDist);
-                  locationName = loc.assigned_location_name || loc.div_name || loc.office_name || 'Kantor Pusat';
-                }
-                isServerGeofenceValid = false;
-              }
-            }
-          } else {
-            const officeLat = loc.assigned_latitude || loc.div_lat || loc.office_lat || -6.2088;
-            const officeLon = loc.assigned_longitude || loc.div_lon || loc.office_lon || 106.8456;
-            const allowedRadius = parseFloat(loc.assigned_radius_meters || loc.div_radius || loc.office_radius || 150);
-
-            serverDistance = calculateHaversineMeters(
-              parseFloat(latitude),
-              parseFloat(longitude),
-              parseFloat(officeLat),
-              parseFloat(officeLon)
-            );
-            isServerGeofenceValid = serverDistance <= allowedRadius;
-            if (loc.assigned_location_name || loc.div_name || loc.office_name) {
-              locationName = loc.assigned_location_name || loc.div_name || loc.office_name;
+          if (loc.user_allowed_posts) {
+            const parsed = typeof loc.user_allowed_posts === 'string' ? JSON.parse(loc.user_allowed_posts) : loc.user_allowed_posts;
+            if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
+          }
+          for (const ap of allowedPostsList) {
+            if (ap.latitude && ap.longitude && ap.allowClockIn !== false && !ap.isClockOutOnly) {
+              candidateLocations.push({
+                name: ap.name || ap.code || 'Pos Divisi',
+                lat: parseFloat(ap.latitude),
+                lon: parseFloat(ap.longitude),
+                radius: parseFloat(ap.radiusMeters || ap.radius_meters || 150),
+              });
             }
           }
         }
+      } catch (locErr) {
+        console.warn('[ClockIn] Div/Office query warn:', locErr.message);
+      }
+
+      // C. Pos Default Kantor Pusat PT FRP (Biring Ere / Kalabbirang)
+      candidateLocations.push({
+        name: 'Kantor Pusat PT FRP',
+        lat: -4.79396318,
+        lon: 119.60433745,
+        radius: 200,
+      });
+
+      // Evaluasi jarak terhadap seluruh kandidat lokasi sah perusahaan
+      const curLat = parseFloat(latitude);
+      const curLon = parseFloat(longitude);
+      const evaluated = candidateLocations.map((c) => {
+        const dist = calculateHaversineMeters(curLat, curLon, c.lat, c.lon);
+        return { ...c, distance: dist, isValid: dist <= (c.radius + 25) }; // toleransi GPS 25m
+      });
+
+      const matched = evaluated.find((e) => e.isValid);
+      if (matched) {
+        serverDistance = Math.round(matched.distance);
+        isServerGeofenceValid = true;
+        locationName = matched.name;
+      } else if (evaluated.length > 0) {
+        const nearest = evaluated.sort((a, b) => a.distance - b.distance)[0];
+        serverDistance = Math.round(nearest.distance);
+        isServerGeofenceValid = false;
+        locationName = nearest.name;
       }
     }
 
@@ -4897,40 +4905,41 @@ app.post('/api/attendances/clock-out', async (req, res) => {
         : 0;
       isServerGeofenceValid = true;
     } else if (latitude && longitude && userId) {
-      const fieldPosts = await pool.query(
-        `SELECT * FROM hrm_field_assigned_posts 
-         WHERE user_id = $1 AND is_active = true 
-           AND (is_relief IS NOT TRUE OR relief_until >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)`,
-        [userId]
-      );
-      if (fieldPosts.rows.length > 0) {
-        const postsWithDist = fieldPosts.rows.map(p => {
-          const d = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(p.latitude), parseFloat(p.longitude));
-          return { ...p, distance: d, isValid: d <= parseFloat(p.radius_meters) };
-        });
-        const matched = postsWithDist.find(p => p.isValid);
-        if (matched) {
-          serverDistance = Math.round(matched.distance);
-          isServerGeofenceValid = true;
-        } else {
-          const nearest = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
-          serverDistance = Math.round(nearest.distance);
-          isServerGeofenceValid = false;
-        }
-      } else {
-        const ogsLat = -4.787904;
-        const ogsLon = 119.613399;
-        const distToOgs = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), ogsLat, ogsLon);
-        const isAtOgs = distToOgs <= 250;
+      const candidateLocations = [];
 
+      // A. Bank Pos Lapangan Karyawan (hrm_field_assigned_posts)
+      try {
+        const fieldPosts = await pool.query(
+          `SELECT post_name as name, post_code as code, latitude, longitude, radius_meters 
+           FROM hrm_field_assigned_posts 
+           WHERE user_id = $1 AND is_active = true 
+             AND (is_relief IS NOT TRUE OR relief_until >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)`,
+          [userId]
+        );
+        for (const fp of fieldPosts.rows) {
+          if (fp.latitude && fp.longitude) {
+            candidateLocations.push({
+              name: `${fp.name} [${fp.code || 'POS'}]`,
+              lat: parseFloat(fp.latitude),
+              lon: parseFloat(fp.longitude),
+              radius: parseFloat(fp.radius_meters || 100),
+            });
+          }
+        }
+      } catch (fpErr) {
+        console.warn('[ClockOut] Field posts query warn:', fpErr.message);
+      }
+
+      // B. Divisi & Kantor Pusat Resmi Karyawan (hrm_divisions & hrm_office_locations)
+      try {
         const locRes = await pool.query(
           `SELECT 
-             p.assigned_latitude, p.assigned_longitude, p.assigned_radius_meters,
+             p.assigned_latitude, p.assigned_longitude, p.assigned_radius_meters, p.assigned_location_name,
              p.allowed_posts as user_allowed_posts,
              p.allow_ogs_clock_out,
-             d.latitude as div_lat, d.longitude as div_lon, d.radius_meters as div_radius,
+             d.latitude as div_lat, d.longitude as div_lon, d.radius_meters as div_radius, d.name as div_name,
              d.allowed_posts as div_allowed_posts,
-             o.latitude as office_lat, o.longitude as office_lon, o.radius_meters as office_radius
+             o.latitude as office_lat, o.longitude as office_lon, o.radius_meters as office_radius, o.name as office_name
            FROM hrm_profiles p
            LEFT JOIN hrm_divisions d ON p.division_id = d.id
            LEFT JOIN hrm_office_locations o ON o.is_active = true
@@ -4940,76 +4949,90 @@ app.post('/api/attendances/clock-out', async (req, res) => {
 
         if (locRes.rows.length > 0) {
           const loc = locRes.rows[0];
-
-          let allowedPostsList = [];
-          try {
-            if (loc.div_allowed_posts) {
-              const parsed = typeof loc.div_allowed_posts === 'string' ? JSON.parse(loc.div_allowed_posts) : loc.div_allowed_posts;
-              if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
-            }
-            if (loc.user_allowed_posts) {
-              const parsed = typeof loc.user_allowed_posts === 'string' ? JSON.parse(loc.user_allowed_posts) : loc.user_allowed_posts;
-              if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
-            }
-          } catch (e) {
-            console.warn('[ClockOut] Error parsing allowed posts JSON:', e.message);
+          if (loc.div_lat && loc.div_lon) {
+            candidateLocations.push({
+              name: `Lokasi Divisi ${loc.div_name || 'Divisi'}`,
+              lat: parseFloat(loc.div_lat),
+              lon: parseFloat(loc.div_lon),
+              radius: parseFloat(loc.div_radius || 150),
+            });
+          }
+          if (loc.office_lat && loc.office_lon) {
+            candidateLocations.push({
+              name: loc.office_name || 'Kantor Pusat PT FRP',
+              lat: parseFloat(loc.office_lat),
+              lon: parseFloat(loc.office_lon),
+              radius: parseFloat(loc.office_radius || 100),
+            });
+          }
+          if (loc.assigned_latitude && loc.assigned_longitude) {
+            candidateLocations.push({
+              name: loc.assigned_location_name || 'Lokasi Khusus Karyawan',
+              lat: parseFloat(loc.assigned_latitude),
+              lon: parseFloat(loc.assigned_longitude),
+              radius: parseFloat(loc.assigned_radius_meters || 150),
+            });
           }
 
-          // Cek apakah Pos OGS diizinkan untuk ceklok pulang
-          const allowOgs = loc.allow_ogs_clock_out !== false;
-          const ogsPostConfig = allowedPostsList.find(p => p.code === 'PINTU OGS' || (p.name && p.name.toUpperCase().includes('OGS')));
-          const isOgsAllowedInPosts = ogsPostConfig ? (ogsPostConfig.allowClockOut !== false) : true;
+          // Cek Pos OGS khusus kepulangan
+          if (loc.allow_ogs_clock_out !== false) {
+            candidateLocations.push({
+              name: 'Pintu OGS Tonasa',
+              lat: -4.787904,
+              lon: 119.613399,
+              radius: 250,
+            });
+          }
 
-          if (isAtOgs && allowOgs && isOgsAllowedInPosts) {
-            // Pos OGS sah untuk ceklok pulang karyawan & divisi yang ditentukan
-            serverDistance = Math.round(distToOgs);
-            isServerGeofenceValid = true;
-          } else {
-            // Filter allowed posts yang mengizinkan clock-out
-            const validClockOutPosts = allowedPostsList.filter(p => p.allowClockOut !== false);
-
-            if (validClockOutPosts.length > 0) {
-              const postsWithDist = validClockOutPosts.map(p => {
-                const dist = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(p.latitude), parseFloat(p.longitude));
-                const rad = parseFloat(p.radiusMeters || p.radius_meters || 250);
-                return { ...p, distance: dist, isValid: dist <= rad };
+          // Allowed posts dari divisi atau user
+          let allowedPostsList = [];
+          if (loc.div_allowed_posts) {
+            const parsed = typeof loc.div_allowed_posts === 'string' ? JSON.parse(loc.div_allowed_posts) : loc.div_allowed_posts;
+            if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
+          }
+          if (loc.user_allowed_posts) {
+            const parsed = typeof loc.user_allowed_posts === 'string' ? JSON.parse(loc.user_allowed_posts) : loc.user_allowed_posts;
+            if (Array.isArray(parsed)) allowedPostsList.push(...parsed);
+          }
+          for (const ap of allowedPostsList) {
+            if (ap.latitude && ap.longitude && ap.allowClockOut !== false) {
+              candidateLocations.push({
+                name: ap.name || ap.code || 'Pos Divisi',
+                lat: parseFloat(ap.latitude),
+                lon: parseFloat(ap.longitude),
+                radius: parseFloat(ap.radiusMeters || ap.radius_meters || 150),
               });
-
-              const matchedPost = postsWithDist.find(p => p.isValid);
-              if (matchedPost) {
-                serverDistance = Math.round(matchedPost.distance);
-                isServerGeofenceValid = true;
-              } else {
-                // Cek koordinat default divisi / kantor
-                const defaultLat = loc.assigned_latitude || loc.div_lat || loc.office_lat || -6.2088;
-                const defaultLon = loc.assigned_longitude || loc.div_lon || loc.office_lon || 106.8456;
-                const defaultRad = parseFloat(loc.assigned_radius_meters || loc.div_radius || loc.office_radius || 150);
-                const defaultDist = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), parseFloat(defaultLat), parseFloat(defaultLon));
-
-                if (defaultDist <= defaultRad) {
-                  serverDistance = Math.round(defaultDist);
-                  isServerGeofenceValid = true;
-                } else {
-                  const nearestPost = postsWithDist.sort((a, b) => a.distance - b.distance)[0];
-                  serverDistance = Math.round(Math.min(nearestPost ? nearestPost.distance : defaultDist, defaultDist));
-                  isServerGeofenceValid = false;
-                }
-              }
-            } else {
-              const officeLat = loc.assigned_latitude || loc.div_lat || loc.office_lat || -6.2088;
-              const officeLon = loc.assigned_longitude || loc.div_lon || loc.office_lon || 106.8456;
-              const allowedRadius = parseFloat(loc.assigned_radius_meters || loc.div_radius || loc.office_radius || 150);
-
-              serverDistance = calculateHaversineMeters(
-                parseFloat(latitude),
-                parseFloat(longitude),
-                parseFloat(officeLat),
-                parseFloat(officeLon)
-              );
-              isServerGeofenceValid = serverDistance <= allowedRadius;
             }
           }
         }
+      } catch (locErr) {
+        console.warn('[ClockOut] Div/Office query warn:', locErr.message);
+      }
+
+      // C. Pos Default Kantor Pusat PT FRP (Biring Ere / Kalabbirang)
+      candidateLocations.push({
+        name: 'Kantor Pusat PT FRP',
+        lat: -4.79396318,
+        lon: 119.60433745,
+        radius: 200,
+      });
+
+      // Evaluasi jarak terhadap seluruh kandidat lokasi sah perusahaan
+      const curLat = parseFloat(latitude);
+      const curLon = parseFloat(longitude);
+      const evaluated = candidateLocations.map((c) => {
+        const dist = calculateHaversineMeters(curLat, curLon, c.lat, c.lon);
+        return { ...c, distance: dist, isValid: dist <= (c.radius + 25) }; // toleransi GPS 25m
+      });
+
+      const matched = evaluated.find((e) => e.isValid);
+      if (matched) {
+        serverDistance = Math.round(matched.distance);
+        isServerGeofenceValid = true;
+      } else if (evaluated.length > 0) {
+        const nearest = evaluated.sort((a, b) => a.distance - b.distance)[0];
+        serverDistance = Math.round(nearest.distance);
+        isServerGeofenceValid = false;
       }
     }
 
@@ -11714,6 +11737,17 @@ async function runAutoCloseCompliantAttendance() {
 
       const diffMins = effectiveNowMins - shiftEndTotalMins;
       const isPastDate = row.attendance_date < row.today_wita;
+
+      // GUARD MUTLAK: Dilarang keras auto-close presensi karyawan yang baru clock-in kurang dari 120 menit (2 jam)!
+      const [inH, inM] = (row.clock_in || '08:00:00').split(':').map(Number);
+      const clockInTotalMins = (Number.isFinite(inH) ? inH : 8) * 60 + (Number.isFinite(inM) ? inM : 0);
+      let clockInAgeMins = effectiveNowMins - clockInTotalMins;
+      if (clockInAgeMins < 0 && row.is_cross_day) clockInAgeMins += 1440;
+
+      if (!isPastDate && clockInAgeMins < 120) {
+        // Karyawan baru saja clock in (misal baru 20 menit), biarkan tetap aktif bekerja!
+        continue;
+      }
 
       // Kondisi Opsi 2 (Auto-Clock Out Otomatis):
       // 1. Sudah berganti hari (kemarin belum clock-out)
