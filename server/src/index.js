@@ -347,16 +347,26 @@ function isExemptFieldOfficer(user) {
   const rawNip = (user.nip || '').trim().toUpperCase();
   const cleanNip = rawNip.replace(/[\s.]/g, '');
   const id = (user.id || user.userId || '').toString().toLowerCase();
+  const name = (user.full_name || user.fullName || user.name || '').toLowerCase().trim();
+
+  // Rusli (Matching Bontoa & Wisma Makassar) bukan petugas pimpinan
+  if (name.includes('rusli') && !name.includes('samsi')) {
+    return false;
+  }
 
   const exemptEmails = ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'];
-  const exemptNips = ['FRP07065', 'FR07066', 'FRP07046', 'FR07065', 'FR07046'];
   const exemptIds = [
     'ebf10b16-ab2f-4b53-ab22-b3ffc00694db',
     '2ce41a19-0c65-45d3-913e-a68a02203fe2',
     '0a49f92e-5733-4b72-947c-7361f9490632'
   ];
 
-  return exemptEmails.includes(email) || exemptNips.includes(cleanNip) || exemptIds.includes(id);
+  if (exemptEmails.includes(email) || exemptIds.includes(id)) return true;
+  if (name.includes('aslam') || name.includes('samsi') || name.includes('unga') || name.includes('takdir')) {
+    return true;
+  }
+
+  return false;
 }
 
 // Helper: Memeriksa apakah karyawan merupakan personil resmi PT FRP (NIP berawalan FR)
@@ -5105,6 +5115,14 @@ app.post('/api/attendances/clock-out', async (req, res) => {
                 isCrossDay = Boolean(sh.is_cross_day);
               }
             }
+          }
+        }
+
+        // Khusus 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir): Jam pulang resmi 16:00 WITA
+        if (userProfile && (userProfile.custom_end_time || isExempt)) {
+          shiftEndTime = (userProfile.custom_end_time || '16:00').substring(0, 5);
+          if (userProfile.custom_start_time || isExempt) {
+            shiftStartTime = (userProfile.custom_start_time || '08:00').substring(0, 5);
           }
         }
 
@@ -11099,10 +11117,22 @@ app.get('/api/employee-schedules', async (req, res) => {
         TO_CHAR(s.schedule_date, 'YYYY-MM-DD') as "scheduleDate",
         s.shift_id as "shiftId",
         s.shift_code as "shiftCode",
-        s.shift_name as "shiftName",
-        s.start_time as "startTime",
-        s.end_time as "endTime",
-        s.duration_hours as "durationHours",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)'
+          ELSE s.shift_name
+        END as "shiftName",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_start_time
+          ELSE s.start_time
+        END as "startTime",
+        CASE
+          WHEN p.custom_end_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_end_time
+          ELSE s.end_time
+        END as "endTime",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 8.0
+          ELSE s.duration_hours
+        END as "durationHours",
         s.is_night_shift as "isNightShift",
         s.is_off as "isOff",
         s.notes,
@@ -11165,10 +11195,22 @@ app.get('/api/employee-schedules/today/:userId', async (req, res) => {
         TO_CHAR(s.schedule_date, 'YYYY-MM-DD') as "scheduleDate",
         s.shift_id as "shiftId",
         s.shift_code as "shiftCode",
-        s.shift_name as "shiftName",
-        s.start_time as "startTime",
-        s.end_time as "endTime",
-        s.duration_hours as "durationHours",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)'
+          ELSE s.shift_name
+        END as "shiftName",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_start_time
+          ELSE s.start_time
+        END as "startTime",
+        CASE
+          WHEN p.custom_end_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_end_time
+          ELSE s.end_time
+        END as "endTime",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 8.0
+          ELSE s.duration_hours
+        END as "durationHours",
         s.is_night_shift as "isNightShift",
         s.is_off as "isOff",
         s.notes
@@ -11199,6 +11241,19 @@ app.post('/api/employee-schedules/batch', async (req, res) => {
 
     for (const item of schedules) {
       if (!item.userId || !item.scheduleDate) continue;
+      const isSpecialLeadership = isExemptFieldOfficer({ id: item.userId, userId: item.userId });
+      let finalStartTime = item.startTime || (item.shiftCode === 'M' ? '22:30' : item.shiftCode === 'S' ? '15:30' : '07:30');
+      let finalEndTime = item.endTime || (item.shiftCode === 'DAY' ? '16:30' : item.shiftCode === 'M' ? '07:30' : item.shiftCode === 'S' ? '22:30' : '15:30');
+      let finalShiftName = item.shiftName || (item.shiftCode === 'OFF' ? 'Libur / Off' : item.shiftCode === 'DAY' ? 'Day Shift (07:30 - 16:30 WITA)' : `Shift ${item.shiftCode}`);
+      let finalDuration = item.durationHours ?? (item.shiftCode === 'OFF' ? 0 : item.shiftCode === 'DAY' ? 9 : item.shiftCode === 'M' ? 9 : item.shiftCode === 'S' ? 7 : 8);
+
+      if (isSpecialLeadership && (item.shiftCode === 'DAY' || (!item.isOff && item.shiftCode !== 'OFF'))) {
+        finalStartTime = '08:00';
+        finalEndTime = '16:00';
+        finalShiftName = 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)';
+        finalDuration = 8.0;
+      }
+
       await client.query(`
         INSERT INTO hrm_employee_schedules (
           user_id,
@@ -11231,10 +11286,10 @@ app.post('/api/employee-schedules/batch', async (req, res) => {
         item.scheduleDate,
         (item.shiftId && UUID_REGEX.test(item.shiftId)) ? item.shiftId : null,
         item.shiftCode || 'OFF',
-        item.shiftName || (item.shiftCode === 'OFF' ? 'Libur / Off' : item.shiftCode === 'DAY' ? 'Day Shift (07:30 - 16:30 WITA)' : `Shift ${item.shiftCode}`),
-        item.startTime || (item.shiftCode === 'M' ? '22:30' : item.shiftCode === 'S' ? '15:30' : '07:30'),
-        item.endTime || (item.shiftCode === 'DAY' ? '16:30' : item.shiftCode === 'M' ? '07:30' : item.shiftCode === 'S' ? '22:30' : '15:30'),
-        item.durationHours ?? (item.shiftCode === 'OFF' ? 0 : item.shiftCode === 'DAY' ? 9 : item.shiftCode === 'M' ? 9 : item.shiftCode === 'S' ? 7 : 8),
+        finalShiftName,
+        finalStartTime,
+        finalEndTime,
+        finalDuration,
         Boolean(item.isNightShift || item.shiftCode === 'M'),
         Boolean(item.isOff || item.shiftCode === 'OFF'),
         item.notes || 'Disusun via Smart Roster Scheduler'

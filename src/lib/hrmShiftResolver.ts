@@ -34,13 +34,26 @@ export function resolveEffectiveShift(
   dailySchedule?: EmployeeSchedule | null
 ): Shift {
   // 0. KHUSUS 3 PETUGAS LAPANGAN KHUSUS PIMPINAN (Samsi, Takdir, Aslam):
-  // Sesuai Instruksi Mutlak Pimpinan: Jam Masuk Baku 08:00 WITA dengan Toleransi 15 Menit (Batas Akhir Toleransi: 08:15 WITA)!
+  // Sesuai Instruksi Mutlak Pimpinan: Jam Masuk Baku 08:00 WITA dengan Toleransi 15 Menit (Batas Akhir Toleransi: 08:15 WITA) dan Jam Pulang 16:00 WITA!
   const isSpecialLeadership = isLeadershipSpecialFieldOfficer(user);
   if (isSpecialLeadership) {
+    if (dailySchedule && (dailySchedule.isOff || dailySchedule.shiftCode === 'OFF')) {
+      return {
+        id: 'shift-off',
+        code: 'OFF',
+        name: 'Libur Rotasi (OFF)',
+        startTime: '00:00',
+        endTime: '00:00',
+        lateToleranceMinutes: 0,
+        earliestClockInMinutes: 0,
+        isCrossDay: false,
+        colorTag: '#64748b',
+      };
+    }
     return {
       id: 'shift-field-special-leadership',
       code: 'FIELD-PIMPINAN',
-      name: 'Petugas Lapangan Khusus Pimpinan (08:00 - 16:00)',
+      name: 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)',
       startTime: '08:00',
       endTime: '16:00',
       lateToleranceMinutes: 15,

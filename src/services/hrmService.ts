@@ -1886,11 +1886,19 @@ export const hrmService = {
         let isOff = true;
 
         if (code === 'DAY') {
-          sName = 'Day Shift (07:30 - 16:30 WITA)';
-          sStart = '07:30';
-          sEnd = '16:30';
-          duration = 9;
-          isOff = false;
+          if (isLeadershipSpecialFieldOfficer(u)) {
+            sName = 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)';
+            sStart = '08:00';
+            sEnd = '16:00';
+            duration = 8;
+            isOff = false;
+          } else {
+            sName = 'Day Shift (07:30 - 16:30 WITA)';
+            sStart = '07:30';
+            sEnd = '16:30';
+            duration = 9;
+            isOff = false;
+          }
         } else if (code === 'P') {
           sName = 'Shift I (07:30 - 15:30 WITA)';
           sStart = '07:30';

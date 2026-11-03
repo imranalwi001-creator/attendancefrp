@@ -304,12 +304,16 @@ export const isLeadershipSpecialFieldOfficer = (userOrNipOrEmail: any): boolean 
     id = (userOrNipOrEmail.id || '').toLowerCase();
     name = (userOrNipOrEmail.fullName || userOrNipOrEmail.name || '').toLowerCase().trim();
   }
+  // Rusli bukan petugas khusus pimpinan
+  if (name.includes('rusli') && !name.includes('samsi')) {
+    return false;
+  }
   return (
     ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes(email) ||
-    ['FRP07065', 'FR07066', 'FRP07046', 'FR07065', 'FR07046'].includes(nip) ||
     ['ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632'].includes(id) ||
-    name.includes('aslam faisal') ||
+    name.includes('aslam') ||
     name.includes('unga samsi') ||
+    name.includes('samsi') ||
     name.includes('takdir')
   );
 };
