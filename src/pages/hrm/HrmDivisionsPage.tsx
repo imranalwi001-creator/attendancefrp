@@ -332,16 +332,52 @@ export const HrmDivisionsPage: React.FC = () => {
 
   const handleExportRosterCsv = () => {
     if (!rosterResult) return;
+    const allUsers = users.length > 0 ? users : hrmService.getUsers();
     const days = Array.from({ length: rosterResult.daysInMonth }, (_, i) => i + 1);
-    const headers = ['Nama Karyawan', ...days.map((d) => `Tgl ${d}`), 'Total Jam', 'Hari Kerja', 'Shift Malam'];
+    const dayNamesShort = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+    const cleanNipFn = (val: string) => (val || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    const headers = [
+      'NIP',
+      'Nama Karyawan',
+      'Divisi',
+      ...days.map((d) => {
+        const dt = new Date(rosterResult.year, rosterResult.month - 1, d);
+        return `Tgl_${d}_${dayNamesShort[dt.getDay()]}`;
+      }),
+      'Total Jam',
+      'Hari Kerja',
+      'Shift Malam',
+    ];
+
     const rows = rosterResult.rosters.map((r) => {
+      const userObj = allUsers.find(
+        (u) =>
+          u.id === r.employeeId ||
+          (r.userNip && cleanNipFn(u.nip) === cleanNipFn(r.userNip)) ||
+          (u.fullName || '').toLowerCase().trim() === (r.employeeName || '').toLowerCase().trim()
+      );
       const dayValues = days.map((d) => {
         const dateStr = `${rosterResult.year}-${String(rosterResult.month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
         return r.assignments[dateStr]?.shiftCode || 'OFF';
       });
-      return [r.employeeName, ...dayValues, r.totalWorkHours, r.totalWorkDays, r.totalNightShifts];
+      return [
+        `"${userObj?.nip || r.userNip || ''}"`,
+        `"${r.employeeName.replace(/"/g, '""')}"`,
+        `"${userObj?.divisionName || 'Operasional'}"`,
+        ...dayValues,
+        r.totalWorkHours,
+        r.totalWorkDays,
+        r.totalNightShifts,
+      ];
     });
-    const csvContent = [headers, ...rows].map((row) => row.join(',')).join('\n');
+
+    const csvContent = [
+      '# PETUNJUK KODE SHIFT: DAY = Day Shift (07:30-16:30 WITA) | P = Shift I (07:30-15:30 WITA) | S = Shift II (15:30-22:30 WITA) | M = Shift III (22:30-07:30 WITA) | OFF = Libur',
+      headers.join(','),
+      ...rows.map((row) => row.join(',')),
+    ].join('\n');
+
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -510,13 +546,41 @@ export const HrmDivisionsPage: React.FC = () => {
       const rawName = nameIdx !== -1 ? row[nameIdx] || '' : '';
       const rawNip = nipIdx !== -1 ? row[nipIdx] || '' : '';
 
-      // Match user
-      const matchedUser = allUsers.find((u) => {
-        if (rawNip && u.nip && u.nip.trim() === rawNip.trim()) return true;
-        if (rawName && u.fullName.toLowerCase().trim() === rawName.toLowerCase().trim()) return true;
-        if (rawName && (u.fullName.toLowerCase().includes(rawName.toLowerCase()) || rawName.toLowerCase().includes(u.fullName.toLowerCase()))) return true;
-        return false;
-      });
+      // Tiered exact matching logic (Anti-Collision: Memastikan Wahyu & Wahyudi tidak tertukar)
+      const cleanNipStr = (val: string) => (val || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const cNip = cleanNipStr(rawNip);
+      const cName = (rawName || '').toLowerCase().trim();
+      let matchedUser: any = null;
+
+      // 1. Strict NIP match (Abaikan titik, spasi, dash: "FR.07.078" === "FR07078", "FR.07.079" === "FR07079")
+      if (cNip) {
+        matchedUser = allUsers.find((u) => cleanNipStr(u.nip) === cNip);
+      }
+
+      // 2. Exact Full Name match (Case-insensitive trim)
+      if (!matchedUser && cName) {
+        matchedUser = allUsers.find((u) => (u.fullName || '').toLowerCase().trim() === cName);
+      }
+
+      // 3. Normalized alphanumeric name (contoh: "Muh. Adam" === "Muh Adam")
+      if (!matchedUser && cName) {
+        const norm = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const normRaw = norm(cName);
+        if (normRaw.length >= 3) {
+          matchedUser = allUsers.find((u) => norm(u.fullName) === normRaw);
+        }
+      }
+
+      // 4. Multi-word token match ONLY (Hanya jika nama memiliki minimal 2 kata terpisah, cegah partial substring kata tunggal seperti "Wahyu" terambil ke "Wahyudi")
+      if (!matchedUser && cName) {
+        const rawWords = cName.split(/\s+/).filter((w) => w.length > 2);
+        if (rawWords.length >= 2) {
+          matchedUser = allUsers.find((u) => {
+            const uWords = (u.fullName || '').toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+            return rawWords.every((rw) => uWords.includes(rw));
+          });
+        }
+      }
 
       if (!matchedUser) {
         errors.push(`Baris ${i + 1}: Karyawan "${rawName || rawNip}" tidak terdaftar di database sistem`);
@@ -615,6 +679,7 @@ export const HrmDivisionsPage: React.FC = () => {
       return {
         employeeId: r.employeeId,
         employeeName: r.employeeName,
+        userNip: r.nip,
         assignments,
         totalWorkHours,
         totalWorkDays,
