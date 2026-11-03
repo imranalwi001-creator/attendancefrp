@@ -76,6 +76,7 @@ import {
   Lock,
   BellRing,
 } from 'lucide-react';
+import { HrmSpecialOctoberPayrollReport } from '@/components/hrm/HrmSpecialOctoberPayrollReport';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmtRp = (n: number) =>
@@ -1043,7 +1044,7 @@ const TaxEngineSimulator: React.FC = () => {
 export const HrmPayrollPage: React.FC = () => {
   const { user } = useHrmAuth();
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<'periods' | 'slips' | 'profiles' | 'settings' | 'analytics' | 'tax-engine'>('periods');
+  const [activeTab, setActiveTab] = useState<'periods' | 'slips' | 'special-october' | 'profiles' | 'settings' | 'analytics' | 'tax-engine'>('periods');
 
   const [periods, setPeriods] = useState<PayrollPeriod[]>(() => hrmService.getPayrollPeriods());
   const [slips, setSlips] = useState<PayrollSlip[]>(() => hrmService.getPayrollSlips());
@@ -1268,6 +1269,7 @@ export const HrmPayrollPage: React.FC = () => {
   const tabs = [
     { id: 'periods', label: 'Periode Gaji', icon: CalendarRange, badge: periods.length },
     { id: 'slips', label: 'Slip Gaji', icon: FileText, badge: slips.length },
+    { id: 'special-october', label: 'Gaji Khusus Lapangan (Okt 2026)', icon: ShieldCheck, badge: '3 Petugas' },
     { id: 'profiles', label: 'Profil Gaji', icon: CreditCard, badge: `${profiles.length}/${allUsers.length}` },
     { id: 'settings', label: 'Pengaturan', icon: Settings },
     { id: 'tax-engine', label: 'PPh 21 TER (PP 58/2023)', icon: Calculator },
@@ -1369,6 +1371,35 @@ export const HrmPayrollPage: React.FC = () => {
           </Card>
         ))}
       </div>
+
+      {/* ── Quick Access Banner: Special October Report ── */}
+      {activeTab !== 'special-october' && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-indigo-500/5 border border-indigo-500/20 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-indigo-500 text-white shadow-xs shrink-0">
+              <ShieldCheck size={20} />
+            </div>
+            <div>
+              <div className="text-xs font-extrabold text-foreground flex items-center gap-2">
+                Laporan Perhitungan Gaji Khusus Petugas Lapangan • Oktober 2026
+                <span className="text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                  Mandat Pimpinan
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Hitungan Rp 140.000/hari, libur Sabtu-Minggu, denda Rp 1.000/mnt mulai 3 Okt, hak cuti &amp; sakit dibayar penuh (Muh Aslam Faisal, TAKDIR &amp; LA UNGA SAMSI).
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={() => setActiveTab('special-october')}
+            size="sm"
+            className="rounded-xl h-8 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shrink-0 gap-1.5 shadow-xs"
+          >
+            Buka Laporan Khusus <ChevronRight size={14} />
+          </Button>
+        </div>
+      )}
 
       {/* ── Segmented Navigation Tabs ── */}
       <div className="flex overflow-x-auto gap-1.5 bg-muted/50 p-1.5 rounded-2xl border border-border/70 scrollbar-none">
@@ -2332,6 +2363,11 @@ export const HrmPayrollPage: React.FC = () => {
       {/* TAB 6: PPH 21 TER (PP 58/2023) SIMULATOR                                 */}
       {/* ════════════════════════════════════════════════════════════════════════ */}
       {activeTab === 'tax-engine' && <TaxEngineSimulator />}
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* TAB KHUSUS: LAPORAN GAJI PETUGAS LAPANGAN OKTOBER 2026                 */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'special-october' && <HrmSpecialOctoberPayrollReport />}
 
       {/* ── Create Period Dialog ── */}
       <Dialog open={createPeriodOpen} onOpenChange={setCreatePeriodOpen}>

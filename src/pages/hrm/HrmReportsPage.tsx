@@ -32,7 +32,9 @@ import {
   ChevronRight,
   RotateCw,
   Users,
+  ShieldCheck,
 } from 'lucide-react';
+import { HrmSpecialOctoberPayrollReport } from '@/components/hrm/HrmSpecialOctoberPayrollReport';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -56,7 +58,7 @@ import * as XLSX from 'xlsx';
 
 export const HrmReportsPage: React.FC = () => {
   const { user } = useHrmAuth();
-  const [activeTab, setActiveTab] = useState<'attendance' | 'overtime' | 'liability'>('attendance');
+  const [activeTab, setActiveTab] = useState<'attendance' | 'overtime' | 'liability' | 'special-october'>('attendance');
   const [attendances, setAttendances] = useState<AttendanceRecord[]>([]);
   const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
@@ -1199,7 +1201,9 @@ export const HrmReportsPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight flex items-center gap-2">
-            {activeTab === 'attendance' ? (
+            {activeTab === 'special-october' ? (
+        <HrmSpecialOctoberPayrollReport />
+      ) : activeTab === 'attendance' ? (
               <FileSpreadsheet className="w-6 h-6 text-primary" />
             ) : activeTab === 'overtime' ? (
               <Coins className="w-6 h-6 text-primary" />
@@ -1248,6 +1252,19 @@ export const HrmReportsPage: React.FC = () => {
             >
               <Coins className="w-3.5 h-3.5 text-primary" />
               <span>Lembur & Anggaran</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('special-october')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                activeTab === 'special-october'
+                  ? 'bg-card text-foreground shadow-xs border border-border/80'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-indigo-500" />
+              <span>Gaji Khusus Lapangan (Okt 2026)</span>
             </button>
 
             <button

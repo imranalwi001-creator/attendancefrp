@@ -912,6 +912,233 @@ app.get('/api/shifts', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/shifts', async (req, res) => {
   const { name, startTime, endTime, breakStartTime, breakEndTime, breakDurationMinutes, lateToleranceMinutes, isDefault } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ success: false, error: 'Nama shift wajib diisi' });
@@ -1130,6 +1357,233 @@ app.post('/api/shifts/:id/default', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── 3. USERS MANAGEMENT ──────────────────────────────────────────────────────
 app.get('/api/users', async (req, res) => {
   try {
@@ -1167,6 +1621,233 @@ app.get('/api/users', async (req, res) => {
     `);
     res.json({ success: true, data: result.rows.map(formatUserRow) });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1218,6 +1899,233 @@ app.get('/api/users/:id', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Endpoint avatar foto profil karyawan on-demand dengan HTTP Cache (Fast Native C++ Stream)
 app.get('/api/users/:id/avatar', async (req, res) => {
   const { id } = req.params;
@@ -1251,6 +2159,233 @@ app.get('/api/users/:id/avatar', async (req, res) => {
     }
     return res.status(404).json({ success: false, error: 'Avatar belum diset' });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -2522,6 +3657,233 @@ app.get('/api/attendances/:id/photo', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── BIOMETRIC MASTER FACE ENROLLMENT & DEVICE RESET ──────────────────────────
 app.post('/api/biometric/enroll-master', async (req, res) => {
   const { userId, photo, imageBase64 } = req.body;
@@ -2554,6 +3916,233 @@ app.post('/api/biometric/enroll-master', async (req, res) => {
       det_score: aiData.det_score
     });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -4231,6 +5820,233 @@ app.get('/api/field-sentinel/patrol-checks', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 6. Pimpinan / Superadmin sends urgent spot-check instruction
 app.post('/api/field-sentinel/request-spot-check', async (req, res) => {
   const { userId, instructionNotes } = req.body;
@@ -4293,6 +6109,233 @@ _Sistem memantau koordinat GPS live dan menyematkan bukti forensik otomatis._`;
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Check if employee has pending spot check request
 app.get('/api/field-sentinel/spot-check-status/:userId', async (req, res) => {
   const { userId } = req.params;
@@ -4334,6 +6377,233 @@ app.post('/api/biometric/reset-device', async (req, res) => {
 
     res.json({ success: true, message: 'Kunci perangkat berhasil di-reset. Karyawan dapat login dan clock-in dari perangkat baru.' });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -4396,6 +6666,233 @@ app.get('/api/payroll/settings', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/payroll/settings', async (req, res) => {
   const settings = req.body;
   try {
@@ -4431,6 +6928,233 @@ app.post('/api/payroll/settings', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/payroll/periods', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -4443,6 +7167,233 @@ app.get('/api/payroll/periods', async (req, res) => {
     `);
     res.json({ success: true, data: result.rows });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -4486,6 +7437,233 @@ app.get('/api/payroll/slips', async (req, res) => {
     const result = await pool.query(query, params);
     res.json({ success: true, data: result.rows });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -4684,6 +7862,233 @@ app.put('/api/payroll/slips/:id/status', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── Kontrol Akses PWA Karyawan (Aturan PT FRP) ─────────────────────────
 app.put('/api/payroll/slips/:id/publish', async (req, res) => {
   const { id } = req.params;
@@ -4707,6 +8112,233 @@ app.put('/api/payroll/slips/:id/publish', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/payroll/slips/bulk-publish', async (req, res) => {
   const { periodId, published } = req.body;
   try {
@@ -4721,6 +8353,233 @@ app.post('/api/payroll/slips/bulk-publish', async (req, res) => {
     );
     res.json({ success: true, count: result.rowCount, message: `${result.rowCount} slip berhasil ${isPub ? 'diaktifkan ke' : 'dikunci dari'} PWA` });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -4750,6 +8609,462 @@ app.post('/api/payroll/request-slip', async (req, res) => {
       message: 'Permintaan slip gaji berhasil dikirim ke Superadmin'
     });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR LOWER(p.email) IN ('aslamfaisal10okt@gmail.com', 'mtakdir46@gmail.com', 'abangelsamsi@gmail.com')
+         OR (
+            LOWER(p.full_name) ILIKE '%aslam faisal%'
+            OR LOWER(p.full_name) = 'takdir'
+            OR LOWER(p.full_name) ILIKE '%unga samsi%'
+         )
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -5614,6 +9929,233 @@ app.get('/api/settings/break-policy', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/settings/break-policy', async (req, res) => {
   const { enabled, durationMinutes, allowOutside } = req.body;
   try {
@@ -5632,6 +10174,233 @@ app.post('/api/settings/break-policy', async (req, res) => {
     );
     res.json({ success: true, message: 'Pengaturan jam istirahat berhasil diperbarui' });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -5845,6 +10614,233 @@ app.get('/api/attendances', async (req, res) => {
     });
     res.json({ success: true, data });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -6153,6 +11149,233 @@ app.get('/api/geofence/violations', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── 4B. BIOMETRIC FACE ENROLLMENT & IDENTITY MANAGEMENT ───────────────────────
 app.post('/api/biometrics/enroll', async (req, res) => {
   const { userId, faceDescriptor, enrolledPhoto } = req.body;
@@ -6271,6 +11494,233 @@ app.get('/api/divisions', async (req, res) => {
     const result = await pool.query('SELECT * FROM hrm_divisions ORDER BY code ASC');
     res.json({ success: true, data: result.rows.map(formatDivisionRow) });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -6428,6 +11878,233 @@ app.get('/api/simulation/status', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/simulation/toggle', async (req, res) => {
   const { isActive } = req.body;
   try {
@@ -6528,6 +12205,233 @@ app.get('/api/office', async (req, res) => {
   }
 });
 
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.put('/api/office', async (req, res) => {
   const { name, address, latitude, longitude, radiusMeters, bssidWhitelist, wifiSsid } = req.body;
   try {
@@ -6562,6 +12466,233 @@ app.put('/api/office', async (req, res) => {
     }
     res.json({ success: true, data: formatOfficeRow(result.rows[0]) });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -6606,6 +12737,233 @@ app.put('/api/company', async (req, res) => {
     ]);
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
+  try {
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
+    ];
+
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
+      FROM hrm_profiles p
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
+
+    const empIds = employees.map(e => e.id);
+
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
+
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
+
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
+
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
+
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
+
+      const dailyDetails = [];
+
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).padStart(2, '0');
+        const dateStr = `2026-10-${dayStr}`;
+        const dateObj = new Date(`${dateStr}T12:00:00Z`);
+        const dayOfWeek = dateObj.getUTCDay(); // 0 is Sun, 6 is Sat
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+        const att = userAtts.find(a => a.attendance_date === dateStr);
+
+        let status = isWeekend ? 'libur' : 'mangkir';
+        let clockIn = null;
+        let clockOut = null;
+        let lateMinutes = 0;
+        let notes = '';
+        const isExemptDate = dateStr < LATE_EFFECTIVE_DATE;
+        let lateDeduction = 0;
+        let dailyPay = 0;
+
+        if (att) {
+          status = att.status;
+          clockIn = att.clock_in;
+          clockOut = att.clock_out;
+          lateMinutes = parseInt(att.late_minutes || 0, 10);
+          notes = att.notes || '';
+        }
+
+        if (isWeekend) {
+          status = 'libur';
+          dailyPay = 0;
+          lateDeduction = 0;
+        } else {
+          if (status === 'hadir') {
+            hadirCount++;
+            dailyPay = DAILY_RATE;
+          } else if (status === 'terlambat') {
+            terlambatCount++;
+            dailyPay = DAILY_RATE;
+            if (isExemptDate) {
+              exemptLateMinutes += lateMinutes;
+              lateDeduction = 0;
+            } else {
+              billableLateMinutes += lateMinutes;
+              lateDeduction = lateMinutes * LATE_RATE_PER_MINUTE;
+            }
+          } else if (status === 'cuti') {
+            cutiCount++;
+            dailyPay = DAILY_RATE; // Cuti tidak termasuk mangkir
+          } else if (status === 'sakit') {
+            sakitCount++;
+            dailyPay = DAILY_RATE; // Sakit tidak termasuk mangkir
+          } else {
+            mangkirCount++;
+            dailyPay = 0;
+          }
+        }
+
+        dailyDetails.push({
+          date: dateStr,
+          dayNumber: day,
+          dayOfWeek,
+          isWeekend,
+          status,
+          clockIn,
+          clockOut,
+          lateMinutes,
+          isExemptDate,
+          lateDeductionRate: isExemptDate || isWeekend ? 0 : LATE_RATE_PER_MINUTE,
+          dailyPay,
+          lateDeduction,
+          dailyNet: Math.max(0, dailyPay - lateDeduction),
+          notes
+        });
+      }
+
+      const paidDays = hadirCount + terlambatCount + cutiCount + sakitCount;
+      const grossSalary = paidDays * DAILY_RATE;
+      const totalLateDeduction = billableLateMinutes * LATE_RATE_PER_MINUTE;
+      const netSalary = Math.max(0, grossSalary - totalLateDeduction);
+
+      grandGross += grossSalary;
+      grandLateDeduction += totalLateDeduction;
+      grandNet += netSalary;
+      grandPaidDays += paidDays;
+
+      return {
+        employee: {
+          id: emp.id,
+          nip: emp.nip,
+          fullName: emp.full_name,
+          email: emp.email,
+          roleName: emp.role_name,
+          jobTitle: emp.job_title || 'Petugas Lapangan',
+          divisionName: emp.division_name || 'Operasional Lapangan',
+          bankName: emp.bank_name || 'Bank Mandiri',
+          bankAccount: emp.bank_account_number || '-',
+          bankAccountHolder: emp.bank_account_holder || emp.full_name
+        },
+        summary: {
+          totalDaysInMonth: 31,
+          totalWorkdays: 22,
+          weekendDays: 9,
+          hadirCount,
+          terlambatCount,
+          cutiCount,
+          sakitCount,
+          mangkirCount,
+          paidDays,
+          dailyRate: DAILY_RATE,
+          grossSalary,
+          exemptLateMinutes,
+          billableLateMinutes,
+          totalLateMinutes: exemptLateMinutes + billableLateMinutes,
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          totalLateDeduction,
+          netSalary
+        },
+        dailyDetails
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: 10,
+          year: 2026,
+          label: 'Oktober 2026',
+          startDate: '2026-10-01',
+          endDate: '2026-10-31',
+          totalCalendarDays: 31,
+          totalWorkdays: 22,
+          weekendDays: 9
+        },
+        rules: {
+          dailyRate: DAILY_RATE,
+          weekendPolicy: 'Libur Sabtu dan Minggu (9 Hari Libur)',
+          lateDeductionRate: LATE_RATE_PER_MINUTE,
+          lateEffectiveDate: LATE_EFFECTIVE_DATE,
+          lateExemptNote: 'Keterlambatan tanggal 1-2 Oktober 2026 dibebaskan dari potongan denda.',
+          leaveAndSickPolicy: 'Cuti dan Sakit sah TIDAK TERMASUK MANGKIR dan tetap dibayarkan penuh Rp 140.000/hari.'
+        },
+        grandTotal: {
+          totalOfficers: employees.length,
+          grandPaidDays,
+          grandGross,
+          grandLateDeduction,
+          grandNet
+        },
+        employees: reportData
+      }
+    });
+  } catch (err) {
+    console.error('[SpecialFieldReport] Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -6920,5137 +13278,76 @@ app.get('/api/leaves', async (req, res) => {
   }
 });
 
-// ─── SMART RELIEF VACANCY ENGINE (AI SMART MATCHING 4 TIERS) ────────────────
-async function getSmartReliefRecommendations({ applicantId, startDate, endDate, divisionId, shiftId }) {
-  const targetStart = startDate || new Date().toISOString().split('T')[0];
-  const targetEnd = endDate || targetStart;
-
-  let validApplicantId = applicantId;
-  let applicantName = 'Karyawan Pemohon';
-  let applicantDivId = divisionId;
-  let applicantShiftId = shiftId;
-  let applicantPosts = [];
-
-  if (applicantId) {
-    const aRes = await pool.query(
-      `SELECT p.id, p.full_name, p.division_id, p.shift_id, p.placement_location,
-              d.name as division_name
-       FROM hrm_profiles p
-       LEFT JOIN hrm_divisions d ON p.division_id = d.id
-       WHERE p.id::text = $1 OR LOWER(p.email) = LOWER($1) OR LOWER(p.nip) = LOWER($1) LIMIT 1`,
-      [applicantId]
-    );
-    if (aRes.rows.length > 0) {
-      const a = aRes.rows[0];
-      validApplicantId = a.id;
-      applicantName = a.full_name;
-      if (!applicantDivId) applicantDivId = a.division_id;
-      if (!applicantShiftId) applicantShiftId = a.shift_id;
-
-      const pRes = await pool.query(
-        `SELECT post_code, post_name, latitude, longitude, radius_meters
-         FROM hrm_field_assigned_posts 
-         WHERE user_id = $1 AND is_active = true`,
-        [a.id]
-      );
-      applicantPosts = pRes.rows;
-    }
-  }
-
-  // HARD CONSTRAINTS:
-  // 1. Exclude applicant themselves
-  // 2. BLOKIR TOTAL Karyawan yang sedang Cuti / Izin / Sakit pada rentang tanggal tersebut
-  const query = `
-    SELECT p.id, p.nip, p.full_name, p.phone, p.avatar_url, p.division_id, 
-           COALESCE(d.name, 'Operasional') as division_name,
-           p.placement_location, p.job_title,
-           s.name as default_shift_name, s.start_time as default_shift_start, s.end_time as default_shift_end,
-           es.shift_code, es.shift_name, es.is_off, es.start_time, es.end_time,
-           COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate,
-           COALESCE((SELECT SUM(o.duration_hours) FROM hrm_overtime_records o 
-                     WHERE o.user_id = p.id AND o.status = 'approved' 
-                     AND DATE_TRUNC('month', o.date) = DATE_TRUNC('month', $2::date)), 0) as ot_hours_month
-    FROM hrm_profiles p
-    LEFT JOIN hrm_divisions d ON p.division_id = d.id
-    LEFT JOIN hrm_shifts s ON p.shift_id = s.id
-    LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = $2::date
-    LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
-    WHERE p.id::text != $1 
-      AND p.is_active = true
-      AND NOT EXISTS (
-        SELECT 1 FROM hrm_leave_requests lr
-        WHERE lr.user_id = p.id
-          AND lr.status IN ('approved', 'pending')
-          AND (
-            (lr.start_date <= $3::date AND lr.end_date >= $2::date)
-          )
-      )
-    ORDER BY (p.division_id::text = $4) DESC, p.full_name ASC;
-  `;
-
-  const result = await pool.query(query, [
-    validApplicantId || '00000000-0000-0000-0000-000000000000',
-    targetStart,
-    targetEnd,
-    applicantDivId ? String(applicantDivId) : ''
-  ]);
-
-  const offDutyList = [];
-  const differentShiftList = [];
-  const extendedShiftList = [];
-  const shiftTransitionList = [];
-  const allRanked = [];
-
-  // Legacy groupings for backward compatibility
-  const sameDivOff = [];
-  const sameDivShift = [];
-  const globalAll = [];
-
-  for (const row of result.rows) {
-    const isSameDivision = applicantDivId && String(row.division_id) === String(applicantDivId);
-    const isOff = row.is_off === true || row.shift_code === 'OFF' || (!row.shift_code && !row.default_shift_name);
-    const currentShift = isOff ? 'Libur / Off Duty' : (row.shift_name || row.default_shift_name || 'Shift Reguler');
-    const otMonth = parseFloat(row.ot_hours_month || 0);
-
-    let cleanPhone = (row.phone || '').replace(/\D/g, '');
-    if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
-    if (cleanPhone && !cleanPhone.startsWith('62')) cleanPhone = '62' + cleanPhone;
-
-    let recommendationType = 'shift_transition';
-    let baseScore = 65;
-    let categoryTitle = 'Prioritas 4: Peralihan Shift';
-    let compensationLabel = 'Rotasi Tugas Reguler';
-
-    if (isOff) {
-      recommendationType = 'off_duty';
-      baseScore = 95;
-      categoryTitle = 'Prioritas 1: Sedang Libur / Off-Duty';
-      compensationLabel = 'Lembur Resmi Pengganti Pos (SPKL 1 Shift Penuh - 8 Jam)';
-    } else {
-      const sStart = row.start_time || row.default_shift_start || '07:30';
-      const sEnd = row.end_time || row.default_shift_end || '15:30';
-      const isAdjacent = (sStart.startsWith('15:') || sEnd.startsWith('15:') || sStart.startsWith('22:') || sEnd.startsWith('22:') || sEnd.startsWith('07:'));
-      if (isAdjacent) {
-        recommendationType = 'extended_shift';
-        baseScore = 75;
-        categoryTitle = 'Prioritas 3: Karyawan Lanjut Shift';
-        compensationLabel = 'Lembur Sambung Shift (SPKL Tambahan)';
-      } else {
-        recommendationType = 'different_shift';
-        baseScore = 85;
-        categoryTitle = 'Prioritas 2: Karyawan Beda Shift';
-        compensationLabel = 'Tukar Jadwal / Lembur Pengganti';
-      }
-    }
-
-    let finalScore = baseScore;
-    const reasons = [categoryTitle];
-
-    if (isSameDivision) {
-      finalScore += 4;
-      reasons.push(`Divisi Sama (${row.division_name})`);
-    } else {
-      reasons.push(`Lintas Divisi (${row.division_name})`);
-    }
-
-    if (otMonth === 0) {
-      finalScore += 3;
-      reasons.push('Pemerataan lembur: 0 jam bulan ini');
-    } else if (otMonth > 14) {
-      finalScore -= 8;
-      reasons.push(`Lembur tinggi (${otMonth} jam)`);
-    }
-
-    finalScore = Math.max(50, Math.min(99, Math.round(finalScore)));
-
-    const waText = `Halo Rekan *${row.full_name}*, kami dari Tim Pengawas PT FRP.\n\n` +
-      `Rekan kerja Anda *${applicantName}* mengajukan cuti/izin untuk tanggal *${targetStart}* s/d *${targetEnd}*.\n` +
-      `Sesuai aturan *Zero Vacancy*, pos dinas tidak boleh kosong.\n\n` +
-      `📋 *Status Anda:* ${categoryTitle}\n` +
-      `💰 *Kompensasi:* ${compensationLabel}\n\n` +
-      `Apakah Anda bersedia bertugas sebagai *Petugas Pengganti Pos* pada tanggal tersebut? (Tugas ini resmi dan dihitung lembur).\n` +
-      `Mohon konfirmasinya. Terima kasih.`;
-
-    const waConfirmUrl = cleanPhone ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(waText)}` : null;
-
-    const candidate = {
-      id: row.id,
-      name: row.full_name,
-      nip: row.nip || '-',
-      phone: row.phone || '',
-      avatarUrl: row.avatar_url,
-      divisionId: row.division_id,
-      divisionName: row.division_name || 'Operasional',
-      shiftName: currentShift,
-      isOff,
-      recommendationType,
-      categoryTitle,
-      compensationLabel,
-      score: finalScore,
-      reasons,
-      hourlyOvertimeRate: Number(row.hourly_overtime_rate || 23381.79),
-      otHoursMonth: otMonth,
-      waConfirmUrl,
-      applicantPosts
-    };
-
-    allRanked.push(candidate);
-    if (recommendationType === 'off_duty') offDutyList.push(candidate);
-    else if (recommendationType === 'different_shift') differentShiftList.push(candidate);
-    else if (recommendationType === 'extended_shift') extendedShiftList.push(candidate);
-    else shiftTransitionList.push(candidate);
-
-    // Legacy support
-    if (isSameDivision) {
-      if (isOff) {
-        sameDivOff.push({ ...candidate, category: 'same_div_off', reason: 'Divisi Sama & Sedang Libur/OFF (Kandidat Terbaik)' });
-      } else {
-        sameDivShift.push({ ...candidate, category: 'same_div_shift', reason: `Divisi Sama (${currentShift})` });
-      }
-    } else {
-      globalAll.push({ ...candidate, category: 'global_all', reason: `Lintas Divisi (${row.division_name || 'Operasional'})` });
-    }
-  }
-
-  allRanked.sort((a, b) => b.score - a.score);
-  offDutyList.sort((a, b) => b.score - a.score);
-  differentShiftList.sort((a, b) => b.score - a.score);
-  extendedShiftList.sort((a, b) => b.score - a.score);
-  shiftTransitionList.sort((a, b) => b.score - a.score);
-
-  return {
-    allRanked,
-    offDutyList,
-    differentShiftList,
-    extendedShiftList,
-    shiftTransitionList,
-    sameDivOff,
-    sameDivShift,
-    globalAll,
-    total: allRanked.length,
-    applicantPosts
-  };
-}
-
-// ─── HELPER: ASSIGN RELIEF SUBSTITUTE & AUTO-INHERIT GEOFENCE ────────────────
-async function assignReliefSubstituteHelper({
-  leaveId,
-  originalUserId,
-  reliefUserId,
-  startDate,
-  endDate,
-  notes,
-  adminId,
-  adminName
-}) {
-  const origRes = await pool.query(
-    `SELECT p.id, p.full_name, p.nip, p.phone, p.division_id, d.name as division_name, p.shift_id
-     FROM hrm_profiles p
-     LEFT JOIN hrm_divisions d ON p.division_id = d.id
-     WHERE p.id = $1`,
-    [originalUserId]
-  );
-  if (origRes.rows.length === 0) throw new Error('Karyawan yang digantikan tidak ditemukan');
-  const originalUser = origRes.rows[0];
-
-  const reliefRes = await pool.query(
-    `SELECT p.id, p.full_name, p.nip, p.phone, p.division_id, d.name as division_name,
-            COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate
-     FROM hrm_profiles p
-     LEFT JOIN hrm_divisions d ON p.division_id = d.id
-     LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
-     WHERE p.id = $1`,
-    [reliefUserId]
-  );
-  if (reliefRes.rows.length === 0) throw new Error('Karyawan pengganti tidak ditemukan');
-  const reliefUser = reliefRes.rows[0];
-
-  const originalPostsRes = await pool.query(
-    `SELECT * FROM hrm_field_assigned_posts WHERE user_id = $1 AND is_active = true`,
-    [originalUserId]
-  );
-  const originalPosts = originalPostsRes.rows;
-
-  const targetStart = startDate || (new Date().toISOString().split('T')[0]);
-  const targetEnd = endDate || targetStart;
-
-  // 1. Auto-inject bank multi-titik pos originalUser ke reliefUser (is_relief = true, relief_until = targetEnd)
-  const injectedPosts = [];
-  for (const post of originalPosts) {
-    const existingRes = await pool.query(
-      `SELECT id FROM hrm_field_assigned_posts 
-       WHERE user_id = $1 AND post_code = $2 AND is_relief = true AND relief_until = $3::date`,
-      [reliefUserId, post.post_code, targetEnd]
-    );
-
-    if (existingRes.rows.length === 0) {
-      const insRes = await pool.query(
-        `INSERT INTO hrm_field_assigned_posts (
-          user_id, post_code, post_name, latitude, longitude, radius_meters, description,
-          is_active, is_relief, relief_until, relief_original_user_id, relief_leave_request_id
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7,
-          true, true, $8::date, $9, $10
-        ) RETURNING *;`,
-        [
-          reliefUserId,
-          post.post_code,
-          `${post.post_name} [Ganti: ${originalUser.full_name}]`,
-          post.latitude,
-          post.longitude,
-          post.radius_meters || 150,
-          `Penugasan Pengganti Pos Resmi untuk ${originalUser.full_name} (${targetStart} s/d ${targetEnd})`,
-          targetEnd,
-          originalUserId,
-          leaveId || null
-        ]
-      );
-      injectedPosts.push(insRes.rows[0]);
-    }
-  }
-
-  // Jika karyawan yang digantikan tidak memiliki bank pos spesifik, wariskan lokasi pos divisi/kantornya
-  if (originalPosts.length === 0) {
-    const divLocRes = await pool.query(
-      `SELECT COALESCE(p.assigned_latitude, d.latitude, -4.793963) as lat,
-              COALESCE(p.assigned_longitude, d.longitude, 119.604337) as lon,
-              COALESCE(p.assigned_radius_meters, d.radius_meters, 150) as rad,
-              COALESCE(p.assigned_location_name, d.location_name, d.name, 'Pos Operasional FRP') as pos_name,
-              COALESCE(d.code, 'POS-OPERASIONAL') as p_code
-       FROM hrm_profiles p
-       LEFT JOIN hrm_divisions d ON p.division_id = d.id
-       WHERE p.id = $1 LIMIT 1`,
-      [originalUserId]
-    );
-    if (divLocRes.rows.length > 0) {
-      const dl = divLocRes.rows[0];
-      const existingRes = await pool.query(
-        `SELECT id FROM hrm_field_assigned_posts 
-         WHERE user_id = $1 AND post_code = $2 AND is_relief = true AND relief_until = $3::date`,
-        [reliefUserId, dl.p_code, targetEnd]
-      );
-      if (existingRes.rows.length === 0) {
-        const insRes = await pool.query(
-          `INSERT INTO hrm_field_assigned_posts (
-            user_id, post_code, post_name, latitude, longitude, radius_meters, description,
-            is_active, is_relief, relief_until, relief_original_user_id, relief_leave_request_id
-          ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7,
-            true, true, $8::date, $9, $10
-          ) RETURNING *;`,
-          [
-            reliefUserId,
-            dl.p_code,
-            `${dl.pos_name} [Ganti: ${originalUser.full_name}]`,
-            dl.lat,
-            dl.lon,
-            dl.rad || 150,
-            `Penugasan Pengganti Pos Resmi untuk ${originalUser.full_name} (${targetStart} s/d ${targetEnd})`,
-            targetEnd,
-            originalUserId,
-            leaveId || null
-          ]
-        );
-        injectedPosts.push(insRes.rows[0]);
-      }
-    }
-  }
-
-  // 2. Update hrm_leave_requests if leaveId provided
-  if (leaveId) {
-    await pool.query(
-      `UPDATE hrm_leave_requests SET
-         substitute_id = $1,
-         substitute_name = $2,
-         substitute_nip = $3,
-         relief_duty_assigned = true,
-         updated_at = NOW()
-       WHERE id = $4`,
-      [reliefUserId, reliefUser.full_name, reliefUser.nip, leaveId]
-    );
-  }
-
-  // 3. Catat di hrm_shift_substitutions (Zero Unmanned Post Table)
-  const hourlyRate = parseFloat(reliefUser.hourly_overtime_rate || 23381.79);
-  const overtimeAmount = Math.round(hourlyRate * 8.0);
-
-  const subRes = await pool.query(
-    `INSERT INTO hrm_shift_substitutions (
-      original_user_id, relief_user_id, shift_id, duty_date, reason_type,
-      reference_id, compensation_type, overtime_hours, overtime_rate, overtime_amount,
-      status, notes, approved_by
-    ) VALUES (
-      $1, $2, $3, $4::date, 'leave_relief',
-      $5, 'overtime', 8.0, $6, $7,
-      'approved', $8, $9
-    ) RETURNING *;`,
-    [
-      originalUserId,
-      reliefUserId,
-      originalUser.shift_id || '00000000-0000-0000-0000-000000000000',
-      targetStart,
-      leaveId || null,
-      hourlyRate,
-      overtimeAmount,
-      notes || `Tugas Pengganti Pos Resmi (${originalUser.full_name})`,
-      adminId || null
-    ]
-  );
-
-  // 4. Catat di hrm_overtime_records (SPKL Pengganti Pos Resmi)
-  const postNamesStr = originalPosts.map(p => p.post_name).join(', ') || 'Pos Dinas';
-  const otRes = await pool.query(
-    `INSERT INTO hrm_overtime_records (
-      user_id, date, start_time, end_time, duration_hours, requested_hours, approved_hours,
-      task_description, status, source, leave_request_id, approved_by, approved_by_name,
-      approval_notes, overtime_phase
-    ) VALUES (
-      $1, $2::date, '07:30', '15:30', 8.0, 8.0, 8.0,
-      $3, 'approved', 'shift_relief', $4, $5, $6,
-      'Disetujui otomatis sebagai Kompensasi Lembur Pengganti Pos (SPKL 8 Jam)', 'completed'
-    ) RETURNING *;`,
-    [
-      reliefUserId,
-      targetStart,
-      `Tugas Pengganti Pos Resmi untuk ${originalUser.full_name} di ${postNamesStr}`,
-      leaveId || null,
-      adminId || null,
-      adminName || 'Admin / Korlap'
-    ]
-  );
-
-  // 5. Kirim Notifikasi WhatsApp ke Karyawan Pengganti
-  const reliefWaMsg = `🛡️ *SURAT TUGAS PENGGANTI POS (ZERO VACANCY) TERBIT*\n\n` +
-    `Halo Rekan *${reliefUser.full_name}* (NIP: ${reliefUser.nip}),\n` +
-    `Anda telah resmi ditugaskan menggantikan rekan kerja Anda:\n` +
-    `👤 *Karyawan:* ${originalUser.full_name} (${originalUser.nip})\n` +
-    `🏢 *Divisi Asal:* ${originalUser.division_name}\n` +
-    `📍 *Pos Tugas:* ${postNamesStr}\n` +
-    `📅 *Periode Tugas:* ${targetStart} s/d ${targetEnd}\n` +
-    `💰 *Kompensasi:* Lembur Resmi Pengganti Pos (SPKL 1 Shift Penuh)\n\n` +
-    `✅ *Koordinat titik pos dinas telah diaktifkan otomatis di aplikasi PWA Anda.* Anda dapat langsung melakukan presensi masuk & pulang di pos tersebut tanpa alarm breach.\n\n` +
-    `_Sistem Sentinel HRM PT Fawwaz Reski Perwira_`;
-
-  if (reliefUser.phone) {
-    await sendWhatsAppAlert({ phone: reliefUser.phone, message: reliefWaMsg }).catch(() => {});
-  }
-
-  // Broadcast ke Pimpinan & Superadmin
-  const leaderWaMsg = `🛡️ *PENUGASAN PENGGANTI POS LAPANGAN RESMI*\n\n` +
-    `Pengganti: *${reliefUser.full_name}* (${reliefUser.nip})\n` +
-    `Menggantikan: *${originalUser.full_name}* (${originalUser.nip})\n` +
-    `Pos Tugas: ${postNamesStr}\n` +
-    `Periode: ${targetStart} s/d ${targetEnd}\n` +
-    `Status Area: Terisi & Aman (Zero Vacancy Terpenuhi)`;
-
-  alertLeadershipViaWhatsAppAndSystem({
-    title: 'Penugasan Pengganti Pos Resmi Terbit',
-    message: `${reliefUser.full_name} resmi menggantikan ${originalUser.full_name} di ${postNamesStr}`,
-    waMessage: leaderWaMsg
-  }).catch(() => {});
-
-  return {
-    success: true,
-    injectedPosts,
-    substitution: subRes.rows[0],
-    overtimeRecord: otRes.rows[0]
-  };
-}
-
-// Rekomendasi Cerdas Karyawan Pengganti (Dual Endpoint Support)
-app.get(['/api/leaves/substitute-candidates', '/api/hrm/relief/recommendations'], async (req, res) => {
-  const { applicantId, userId, originalUserId, startDate, endDate, divisionId, shiftId } = req.query;
+// ─── Laporan Khusus Perhitungan Gaji Petugas Lapangan (Oktober 2026) ────────
+// Khusus untuk 3 Karyawan Lapangan: Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI, S.K.M
+// Ketentuan:
+// - Rate: Rp 140.000 / hari
+// - Libur: Sabtu & Minggu (22 hari kerja di Oktober 2026)
+// - Potongan keterlambatan: Rp 1.000 / menit berlaku mulai 3 Oktober 2026 (1-2 Okt bebas denda)
+// - Cuti & Sakit: Dihitung sebagai hari kerja sah dibayar penuh (bukan mangkir)
+app.get('/api/payroll/special-field-report/october-2026', async (req, res) => {
   try {
-    const targetApplicantId = applicantId || userId || originalUserId;
-    const recommendations = await getSmartReliefRecommendations({
-      applicantId: targetApplicantId,
-      startDate,
-      endDate,
-      divisionId,
-      shiftId
-    });
-    res.json({
-      success: true,
-      data: recommendations
-    });
-  } catch (err) {
-    console.error('Fetch smart relief recommendations error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Endpoint Penetapan Pengganti Pos Resmi & Pewarisan Geofence Otomatis
-app.post('/api/hrm/relief/assign', async (req, res) => {
-  const { leaveId, originalUserId, reliefUserId, startDate, endDate, notes, adminId, adminName } = req.body;
-  if (!originalUserId || !reliefUserId) {
-    return res.status(400).json({ success: false, error: 'originalUserId dan reliefUserId wajib diisi' });
-  }
-  try {
-    const result = await assignReliefSubstituteHelper({
-      leaveId,
-      originalUserId,
-      reliefUserId,
-      startDate,
-      endDate,
-      notes,
-      adminId,
-      adminName
-    });
-    res.json(result);
-  } catch (err) {
-    console.error('Assign relief substitute error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Endpoint Konfirmasi WhatsApp Cepat & Reminder Resmi untuk Karyawan Pengganti (Sisi Korlap)
-app.post('/api/hrm/substitute/confirm-wa', async (req, res) => {
-  const { substituteId, applicantId, startDate, endDate, submissionType, reason, leaveId } = req.body;
-  if (!substituteId || !applicantId) {
-    return res.status(400).json({ success: false, error: 'substituteId dan applicantId wajib disertakan' });
-  }
-  try {
-    const subRes = await pool.query('SELECT id, full_name, nip, phone FROM hrm_profiles WHERE id = $1', [substituteId]);
-    if (subRes.rows.length === 0) return res.status(404).json({ success: false, error: 'Karyawan pengganti tidak ditemukan' });
-    const sub = subRes.rows[0];
-
-    const appRes = await pool.query(`
-      SELECT p.id, p.full_name, p.nip, d.name as division_name 
-      FROM hrm_profiles p 
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id 
-      WHERE p.id = $1
-    `, [applicantId]);
-    const applicant = appRes.rows[0] || { full_name: 'Karyawan', nip: '-', division_name: 'Operasional' };
-
-    const typeStr = (submissionType || 'Cuti / Izin').toUpperCase();
-    const datesStr = startDate && endDate ? (startDate === endDate ? startDate : `${startDate} s/d ${endDate}`) : 'Jadwal Terkait';
-
-    const reminderMsg =
-`🔔 *REMINDER TUGAS KARYAWAN PENGGANTI (PT FRP)*
-
-Halo Rekan *${sub.full_name}* (${sub.nip || '-'}),
-Anda direkomendasikan resmi oleh Koordinator Lapangan (*Muh Aslam Faisal*) sebagai *Petugas Pengganti Pos Dinas* untuk mengisi kekosongan tugas rekan Anda:
-
-👤 Menggantikan: *${applicant.full_name}* (${applicant.nip || '-'})
-🏢 Pos/Divisi: *${applicant.division_name || 'Operasional'}*
-📅 Jadwal Tugas: *${datesStr}*
-📝 Permohonan: *${typeStr}*
-💬 Alasan Kekosongan: "${reason || 'Izin Operasional'}"
-💰 Kompensasi: *Otomatis Dihitung Lembur (Relief Duty Pay)*
-
-⚡ *ZERO VACANCY:* Pos dinas tidak boleh kosong! Pekerjaan harus tetap berjalan lancar. Mohon segera bersiap dan konfirmasi kesiapan Anda dengan membalas pesan ini atau menghubungi Korlap (*085342470909*).
-
-Setelah disahkan, seluruh pos lokasi dinas rekan yang Anda gantikan otomatis aktif di akun Anda tanpa kendala radius.`;
-
-    let waSent = false;
-    if (sub.phone) {
-      await sendWhatsAppAlert({ phone: sub.phone, message: reminderMsg });
-      waSent = true;
-    }
-
-    // Broadcast Notifikasi In-App ke Karyawan Pengganti
-    await broadcastNotification({
-      recipientUserIds: [sub.id],
-      title: '🔔 Usulan Tugas Pengganti Pos (Zero Vacancy)',
-      message: `Korlap merekomendasikan Anda menggantikan ${applicant.full_name} pada ${datesStr}. Harap segera konfirmasi kesiapan Anda.`,
-      type: 'leave',
-      link: '/admin/approval',
-      metadata: { substituteId, applicantId, startDate, endDate, leaveId }
-    });
-
-    res.json({
-      success: true,
-      waSent,
-      message: waSent
-        ? `Notifikasi reminder resmi WhatsApp berhasil dikirim ke ${sub.full_name} (${sub.phone}).`
-        : `Karyawan pengganti (${sub.full_name}) belum memiliki nomor telepon di sistem, notifikasi in-app telah dikirimkan.`
-    });
-  } catch (err) {
-    console.error('[confirm-wa Error]:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Endpoint Verifikasi Lembur Darurat Pasca-Shift (1-Klik Korlap / Admin)
-app.post('/api/hrm/overtime/emergency-verify/:id', async (req, res) => {
-  const { id } = req.params;
-  const { action = 'approve', approverId, approverName, notes } = req.body;
-  try {
-    const otRes = await pool.query('SELECT * FROM hrm_overtime_records WHERE id = $1', [id]);
-    if (otRes.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Record lembur tidak ditemukan' });
-    }
-    const ot = otRes.rows[0];
-    const newStatus = action === 'reject' ? 'rejected' : 'approved';
-    const attStatus = action === 'reject' ? 'rejected' : 'verified';
-
-    await pool.query(`
-      UPDATE hrm_overtime_records SET
-        status = $1,
-        approved_by = $2,
-        approved_by_name = $3,
-        approval_notes = $4,
-        updated_at = NOW()
-      WHERE id = $5
-    `, [newStatus, approverId || null, approverName || 'Korlap / Admin', notes || null, id]);
-
-    await pool.query(`
-      UPDATE hrm_attendances SET
-        emergency_overtime_status = $1,
-        updated_at = NOW()
-      WHERE user_id = $2 AND attendance_date = $3
-    `, [attStatus, ot.user_id, ot.date]);
-
-    res.json({
-      success: true,
-      message: `Lembur darurat berhasil di-${newStatus === 'approved' ? 'verifikasi & disetujui' : 'tolak'}`
-    });
-  } catch (err) {
-    console.error('Verify emergency overtime error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-
-app.post('/api/leaves', async (req, res) => {
-  const { userId, leaveType, startDate, endDate, totalDays, reason, attachmentUrl, substituteId, substituteName, substituteNip, assignedByAdmin, isManualAdmin, status: requestedStatus, approvalNotes, adminId, adminName } = req.body;
-  if (!userId || !startDate || !endDate || !reason) {
-    return res.status(400).json({ success: false, error: 'Data pengajuan cuti tidak lengkap (userId, tanggal, alasan wajib diisi)' });
-  }
-
-  const isAdminDirect = Boolean(assignedByAdmin || isManualAdmin || requestedStatus === 'approved');
-  const targetStatus = isAdminDirect ? (requestedStatus || 'approved') : 'pending';
-
-  // Wajib Upload Foto Bukti Pendukung & Alasan (kecuali jika input manual superadmin)
-  if (!isAdminDirect && (!attachmentUrl || !attachmentUrl.trim())) {
-    return res.status(400).json({
-      success: false,
-      error: 'Semua pengajuan cuti, izin, dan izin darurat WAJIB melampirkan foto bukti pendukung (surat sakit/foto kondisi/bukti kegiatan) dan alasan jelas.',
-    });
-  }
-
-  const finalAttachment = attachmentUrl?.trim() || (isAdminDirect ? 'DISPENSASI_MANUAL_SUPERADMIN' : null);
-
-  try {
-    let validUserId = userId;
-    let userProfile = null;
-    if (UUID_REGEX.test(userId)) {
-      const uRes = await pool.query(`
-        SELECT p.*, d.name as division_name, r.name as role_name 
-        FROM hrm_profiles p 
-        LEFT JOIN hrm_divisions d ON p.division_id = d.id 
-        LEFT JOIN hrm_roles r ON p.role_id = r.id 
-        WHERE p.id = $1 LIMIT 1
-      `, [userId]);
-      userProfile = uRes.rows[0];
-    } else {
-      const uRes = await pool.query(`
-        SELECT p.*, d.name as division_name, r.name as role_name 
-        FROM hrm_profiles p 
-        LEFT JOIN hrm_divisions d ON p.division_id = d.id 
-        LEFT JOIN hrm_roles r ON p.role_id = r.id 
-        WHERE LOWER(p.email) = LOWER($1) OR LOWER(p.nip) = LOWER($1) LIMIT 1
-      `, [userId]);
-      userProfile = uRes.rows[0];
-      if (userProfile) validUserId = userProfile.id;
-    }
-
-    if (!userProfile) {
-      return res.status(404).json({ success: false, error: 'Karyawan tidak terdaftar dalam sistem' });
-    }
-
-    const requestedDays = totalDays ? parseInt(totalDays, 10) : 1;
-    const type = leaveType || 'cuti_tahunan';
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const startDt = new Date(startDate);
-    startDt.setHours(0, 0, 0, 0);
-    const diffDays = Math.round((startDt - today) / (1000 * 60 * 60 * 24));
-
-    let finalReason = reason.trim();
-    let isUrgentSubmission = false;
-
-    // Aturan Cuti Tahunan: Cek sisa kuota jika bukan bypass admin
-    if ((type === 'cuti_tahunan' || type === 'annual_leave') && !isAdminDirect) {
-      const annualQuota = userProfile.annual_leave_quota ?? 12;
-      const usedDays = userProfile.used_leave_days || 0;
-      const remainingQuota = Math.max(0, annualQuota - usedDays);
-      if (requestedDays > remainingQuota) {
-        return res.status(400).json({
-          success: false,
-          error: `Sisa hak cuti tahunan Anda tidak mencukupi. Kuota tersisa: ${remainingQuota} hari, permohonan: ${requestedDays} hari.`,
-        });
-      }
-
-      if (diffDays < 3) {
-        isUrgentSubmission = true;
-        const hLabel = diffDays > 0 ? `H-${diffDays}` : (diffDays === 0 ? 'HARI H' : 'DISPENSASI');
-        finalReason = `[PENGAJUAN MENDESAK ${hLabel}] ` + finalReason;
-      }
-    }
-
-    let validSubId = null;
-    if (substituteId && UUID_REGEX.test(substituteId)) {
-      validSubId = substituteId;
-    }
-
-    let validApproverId = null;
-    if (adminId && UUID_REGEX.test(adminId)) {
-      validApproverId = adminId;
-    }
-
-    const finalNotes = approvalNotes || (targetStatus === 'approved' ? 'Disetujui langsung oleh Super Administrator' : null);
-
-    const query = `
-      INSERT INTO hrm_leave_requests (
-        user_id, leave_type, start_date, end_date, total_days, reason, attachment_url,
-        substitute_id, substitute_name, substitute_nip, status, approved_by, approved_at, approval_notes
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [
-      validUserId,
-      type,
-      startDate,
-      endDate,
-      requestedDays,
-      finalReason,
-      finalAttachment,
-      validSubId,
-      substituteName || null,
-      substituteNip || null,
-      targetStatus,
-      targetStatus === 'approved' ? validApproverId : null,
-      targetStatus === 'approved' ? new Date() : null,
-      finalNotes,
-    ]);
-
-    // Update real-time kuota cuti / izin di profil jika langsung approved
-    if (targetStatus === 'approved') {
-      if (type === 'cuti_tahunan' || type === 'annual_leave') {
-        await pool.query(`
-          UPDATE hrm_profiles SET
-            used_leave_days = COALESCE(used_leave_days, 0) + $1,
-            updated_at = NOW()
-          WHERE id = $2;
-        `, [requestedDays, validUserId]);
-      } else if (type === 'izin' || type === 'permission') {
-        await pool.query(`
-          UPDATE hrm_profiles SET
-            used_permission_days = COALESCE(used_permission_days, 0) + $1,
-            updated_at = NOW()
-          WHERE id = $2;
-        `, [requestedDays, validUserId]);
-      }
-    }
-
-    const leaveRow = result.rows[0];
-    const typeLabel = type.replace(/_/g, ' ').toUpperCase();
-    const submitterRole = (userProfile.role_name || '').toLowerCase();
-    const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
-    const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
-
-    // Resolve substitute profile if specified
-    let substituteProfile = null;
-    if (substituteId || substituteNip) {
-      try {
-        const subRes = await pool.query(
-          "SELECT id, full_name, nip, phone FROM hrm_profiles WHERE (id::text = $1 OR nip = $2) AND is_active = true LIMIT 1",
-          [substituteId || '', substituteNip || '']
-        );
-        if (subRes.rows.length > 0) substituteProfile = subRes.rows[0];
-      } catch (_) {}
-    }
-
-    // 📢 NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Pengganti, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
-    await notifyAllPartiesViaWhatsApp({
-      submissionType: typeLabel,
-      details: `${startDate} s/d ${endDate} (${requestedDays} Hari)`,
-      applicant: {
-        id: userProfile.id,
-        fullName: userProfile.full_name,
-        nip: userProfile.nip,
-        phone: userProfile.phone,
-        divisionName: userProfile.division_name,
-      },
-      substitute: substituteProfile ? {
-        id: substituteProfile.id,
-        fullName: substituteProfile.full_name,
-        nip: substituteProfile.nip,
-        phone: substituteProfile.phone,
-      } : (substituteName ? { fullName: substituteName, nip: substituteNip } : null),
-      reasonOrTask: finalReason,
-      approvalLink: '/admin/approval?tab=leaves',
-    });
-
-    // In-App Notification Broadcast
-    await broadcastNotification({
-      recipientRoles: ['korlap', 'admin', 'k3', 'superadmin', 'pimpinan', 'dirut'],
-      title: `📋 Pengajuan ${typeLabel} Baru: ${userProfile.full_name}`,
-      message: `${userProfile.full_name} (${userProfile.division_name || 'Operasional'}) mengajukan ${typeLabel} ${requestedDays} hari (${startDate} s/d ${endDate}). Segera tetapkan petugas pengganti di menu Approval.`,
-      type: 'leave',
-      link: '/admin/approval?tab=leaves',
-      metadata: { leaveId: leaveRow.id, userId: validUserId, type, totalDays: requestedDays, isUrgent: isUrgentSubmission },
-      divisionId: userProfile.division_id || null,
-    });
-
-    res.json({
-      success: true,
-      data: leaveRow,
-      message: 'Pengajuan cuti/izin berhasil dikirim dan notifikasi otomatis diteruskan via WA & sistem ke seluruh pihak terkait.',
-    });
-  } catch (err) {
-    console.error('Leave submit error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Update Status Cuti / Izin / Izin Darurat (Approval oleh Korlap, Admin, K3, atau Pimpinan)
-app.put('/api/leaves/:id/status', async (req, res) => {
-  const { id } = req.params;
-  const { status, approverId, approverName, notes, substituteId, substituteName, substituteNip } = req.body;
-  if (!['approved', 'rejected'].includes(status)) {
-    return res.status(400).json({ success: false, error: 'Status tidak valid (hanya approved / rejected)' });
-  }
-
-  try {
-    const lRes = await pool.query(`
-      SELECT l.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name, p.phone as user_phone
-      FROM hrm_leave_requests l
-      JOIN hrm_profiles p ON l.user_id = p.id
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      WHERE l.id::text = $1 LIMIT 1
-    `, [id]);
-    if (lRes.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Pengajuan cuti tidak ditemukan' });
-    }
-    const leave = lRes.rows[0];
-
-    // Aturan Zero Vacancy: Jika disetujui, pengganti wajib ada!
-    if (status === 'approved' && !substituteName && !leave.substitute_name) {
-      return res.status(400).json({
-        success: false,
-        error: 'Sesuai aturan Zero Vacancy, pekerjaan tidak boleh kosong! Anda wajib menetapkan Karyawan Pengganti Pos sebelum menyetujui pengajuan cuti.',
-      });
-    }
-
-    let validApproverId = approverId;
-    if (approverId && !UUID_REGEX.test(approverId)) {
-      const aRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [approverId]);
-      if (aRes.rows.length > 0) validApproverId = aRes.rows[0].id;
-    }
-
-    let validSubId = substituteId || leave.substitute_id;
-    if (validSubId && !UUID_REGEX.test(validSubId)) {
-      const sRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [validSubId]);
-      if (sRes.rows.length > 0) validSubId = sRes.rows[0].id;
-    }
-
-    const finalSubName = substituteName || leave.substitute_name;
-    const finalSubNip = substituteNip || leave.substitute_nip;
-
-    const updateRes = await pool.query(`
-      UPDATE hrm_leave_requests SET
-        status = $1,
-        approved_by = $2,
-        approval_notes = $3,
-        substitute_id = $4,
-        substitute_name = $5,
-        substitute_nip = $6,
-        forwarded_to_pimpinan = true,
-        approved_at = NOW(),
-        updated_at = NOW()
-      WHERE id = $7
-      RETURNING *;
-    `, [status, validApproverId || null, notes || null, validSubId || null, finalSubName || null, finalSubNip || null, leave.id]);
-
-    // 1. Jika disetujui & cuti tahunan, kurangi sisa kuota cuti di profil karyawan secara real-time!
-    if (status === 'approved' && (leave.leave_type === 'cuti_tahunan' || leave.leave_type === 'annual_leave')) {
-      await pool.query(`
-        UPDATE hrm_profiles SET
-          used_leave_days = COALESCE(used_leave_days, 0) + $1,
-          updated_at = NOW()
-        WHERE id = $2;
-      `, [leave.total_days, leave.user_id]);
-    }
-
-    // 2. Jika disetujui & izin darurat, buka kunci kepulangan awal
-    if (status === 'approved' && (leave.leave_type === 'izin_darurat' || leave.leave_type === 'emergency_leave')) {
-      await pool.query(`
-        UPDATE hrm_attendances SET
-          is_early_leave = true,
-          early_leave_approved = true,
-          early_leave_reason = $1,
-          is_locked = false,
-          is_perimeter_breached = false,
-          updated_at = NOW()
-        WHERE user_id = $2 AND attendance_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date;
-      `, [leave.reason, leave.user_id]);
-    }
-
-    const typeLabel = (leave.leave_type || 'cuti').replace(/_/g, ' ').toUpperCase();
-    const statusText = status === 'approved' ? 'DISETUJUI' : 'DITOLAK';
-    const subNotice = finalSubName ? `\n🛡️ *Petugas Pengganti Pos:* *${finalSubName}* (${finalSubNip || '-'})` : '';
-
-    if (status === 'approved') {
-      // 3. AUTO-ASSIGN RELIEF SUBSTITUTE: Pewarisan Titik Pos Otomatis + SPKL Pengganti + Notifikasi WhatsApp
-      if (validSubId) {
-        try {
-          await assignReliefSubstituteHelper({
-            leaveId: leave.id,
-            originalUserId: leave.user_id,
-            reliefUserId: validSubId,
-            startDate: leave.start_date,
-            endDate: leave.end_date,
-            notes: notes || `Pengganti resmi cuti/izin ${typeLabel}`,
-            adminId: validApproverId,
-            adminName: approverName || 'Atasan / Korlap'
-          });
-        } catch (subErr) {
-          console.error('[assignReliefSubstituteHelper Error]:', subErr.message);
-        }
-      }
-
-      // 4. NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Pengganti, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
-      let subProfile = null;
-      if (validSubId) {
-        try {
-          const sRes = await pool.query("SELECT id, full_name, nip, phone FROM hrm_profiles WHERE id = $1 LIMIT 1", [validSubId]);
-          if (sRes.rows.length > 0) subProfile = sRes.rows[0];
-        } catch (_) {}
-      }
-
-      await notifyAllPartiesViaWhatsApp({
-        submissionType: typeLabel,
-        details: `${leave.start_date} s/d ${leave.end_date} (${leave.total_days} Hari)`,
-        applicant: {
-          id: leave.user_id,
-          fullName: leave.user_name,
-          nip: leave.user_nip,
-          phone: leave.user_phone,
-          divisionName: leave.division_name,
-        },
-        substitute: subProfile ? {
-          id: subProfile.id,
-          fullName: subProfile.full_name,
-          nip: subProfile.nip,
-          phone: subProfile.phone,
-        } : (finalSubName ? { fullName: finalSubName, nip: substituteNip } : null),
-        isDecision: true,
-        decisionStatus: status,
-        approverName: approverName || 'Atasan Lapangan',
-        approvalNotes: notes || '',
-        approvalLink: '/admin/approval?tab=leaves',
-      });
-    } else {
-      // Jika permohonan Ditolak, kirimkan juga notifikasi penolakan ke pemohon dan tembusan manajemen
-      await notifyAllPartiesViaWhatsApp({
-        submissionType: typeLabel,
-        details: `${leave.start_date} s/d ${leave.end_date} (${leave.total_days} Hari)`,
-        applicant: {
-          id: leave.user_id,
-          fullName: leave.user_name,
-          nip: leave.user_nip,
-          phone: leave.user_phone,
-          divisionName: leave.division_name,
-        },
-        isDecision: true,
-        decisionStatus: 'rejected',
-        approverName: approverName || 'Atasan Lapangan',
-        approvalNotes: notes || '',
-        approvalLink: '/admin/approval?tab=leaves',
-      });
-    }
-
-    // In-app Notification ke pemohon
-    await broadcastNotification({
-      targetUserId: leave.user_id,
-      title: `Pengajuan ${typeLabel} ${statusText}`,
-      message: `Permohonan Anda (${leave.start_date} s/d ${leave.end_date}) telah ${statusText.toLowerCase()} oleh ${approverName || 'Atasan'}.${finalSubName ? ' Petugas Pengganti: ' + finalSubName : ''}`,
-      type: status === 'approved' ? 'success' : 'warning',
-      metadata: { leaveId: leave.id, status, approverName, substituteName: finalSubName, substituteId: validSubId },
-    });
-
-    // In-app Notification ke pengganti
-    if (status === 'approved' && validSubId) {
-      await broadcastNotification({
-        targetUserId: validSubId,
-        title: '🛡️ Surat Tugas Pengganti Pos (Zero Vacancy)',
-        message: `Anda ditetapkan oleh ${approverName || 'Atasan'} sebagai Petugas Pengganti Pos untuk ${leave.user_name} pada periode ${leave.start_date} s/d ${leave.end_date}.`,
-        type: 'info',
-        metadata: { leaveId: leave.id, forUser: leave.user_name, startDate: leave.start_date, endDate: leave.end_date },
-      });
-    }
-
-    res.json({
-      success: true,
-      data: updateRes.rows[0],
-      message: `Permohonan berhasil di-${statusText.toLowerCase()} dan notifikasi WhatsApp & sistem terkirim serentak.`,
-    });
-  } catch (err) {
-    console.error('Leave status update error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── 9. OVERTIME REQUESTS (SURAT PERINTAH LEMBUR) ─────────────────────────────
-app.get('/api/overtime', async (req, res) => {
-  const { userId, status, divisionId } = req.query;
-  try {
-    let query = `
-      SELECT o.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name,
-             p.division_id as user_division_id,
-             ap.full_name as approver_name
-      FROM hrm_overtime_records o
-      JOIN hrm_profiles p ON o.user_id = p.id
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_profiles ap ON o.approved_by = ap.id
-    `;
-    const params = [];
-    const conditions = [];
-    // Rekapan hanya mencakup karyawan dengan NIP berawalan FR
-    if (!userId) {
-      conditions.push(`UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'`);
-    }
-
-    if (userId) {
-      params.push(userId);
-      conditions.push(`(o.user_id::text = $${params.length} OR LOWER(p.email) = LOWER($${params.length}) OR LOWER(p.nip) = LOWER($${params.length}))`);
-    }
-    if (status && status !== 'all') {
-      params.push(status);
-      conditions.push(`o.status = $${params.length}`);
-    }
-    if (divisionId) {
-      params.push(divisionId);
-      conditions.push(`p.division_id::text = $${params.length}`);
-    }
-    if (conditions.length > 0) {
-      query += ' WHERE ' + conditions.join(' AND ');
-    }
-    query += ' ORDER BY o.created_at DESC LIMIT 200';
-    const result = await pool.query(query, params);
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/overtime', async (req, res) => {
-  const {
-    userId,
-    date,
-    startTime,
-    endTime,
-    durationHours,
-    taskDescription,
-    taskPhotoUrl,
-    attachmentUrl,
-    compensationAmount,
-    supervisorName,
-    supervisorSignature,
-    scheduledEndTime,
-    assignedByAdmin,
-    isManualAdmin,
-    status: requestedStatus,
-    approvalNotes,
-    adminId,
-    adminName,
-  } = req.body;
-
-  if (!userId || !date || !startTime || !endTime) {
-    return res.status(400).json({ success: false, error: 'Data pengajuan lembur tidak lengkap (userId, tanggal, jam mulai & selesai wajib diisi)' });
-  }
-
-  // Wajib uraian tugas lembur
-  if (!taskDescription || !taskDescription.trim()) {
-    return res.status(400).json({ success: false, error: 'Uraian tugas/pekerjaan lembur wajib diisi sebelum mengajukan SPL.' });
-  }
-
-  const isAdminDirect = Boolean(assignedByAdmin || isManualAdmin || requestedStatus === 'approved');
-  const targetStatus = isAdminDirect ? (requestedStatus || 'approved') : 'pending';
-
-  const proofPhoto = taskPhotoUrl || attachmentUrl;
-  if (!isAdminDirect && (!proofPhoto || !proofPhoto.trim())) {
-    return res.status(400).json({ success: false, error: 'Pengajuan lembur WAJIB melampirkan foto bukti pekerjaan / lokasi tugas sebelum submit.' });
-  }
-
-  const finalProofPhoto = proofPhoto?.trim() || (isAdminDirect ? 'MANDAT_MANUAL_SUPERADMIN' : null);
-
-  try {
-    let validUserId = userId;
-    let userProfile = null;
-    if (UUID_REGEX.test(userId)) {
-      const uRes = await pool.query(`
-        SELECT p.*, d.name as division_name, r.name as role_name, COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate
-        FROM hrm_profiles p
-        LEFT JOIN hrm_divisions d ON p.division_id = d.id
-        LEFT JOIN hrm_roles r ON p.role_id = r.id
-        LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
-        WHERE p.id = $1 LIMIT 1`, [userId]);
-      userProfile = uRes.rows[0];
-    } else {
-      const uRes = await pool.query(`
-        SELECT p.*, d.name as division_name, r.name as role_name, COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate
-        FROM hrm_profiles p
-        LEFT JOIN hrm_divisions d ON p.division_id = d.id
-        LEFT JOIN hrm_roles r ON p.role_id = r.id
-        LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
-        WHERE LOWER(p.email) = LOWER($1) OR LOWER(p.nip) = LOWER($1) LIMIT 1`, [userId]);
-      userProfile = uRes.rows[0];
-      if (userProfile) validUserId = userProfile.id;
-    }
-
-    if (!userProfile) {
-      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan dalam sistem' });
-    }
-
-    // Aturan Direksi PT FRP: Hak lembur (SPKL) HANYA berlaku untuk 80 orang karyawan lapangan/operasional yang sah (Shipment & Rumah Tangga)
-    const isEligible = userProfile.overtime_eligible === true || 
-                       ['SHIPMENT', 'RUMAH TANGGA'].includes((userProfile.operational_group || '').toUpperCase());
-    if (!isEligible) {
-      return res.status(403).json({
-        success: false,
-        error: 'Sesuai SK Direksi PT. FAWWAZ RESKI PERWIRA, hak lembur (SPKL) hanya berlaku untuk 80 orang personil operasional lapangan & wisma yang sah.'
-      });
-    }
-
-    const officialRate = parseFloat(userProfile.hourly_overtime_rate) || 23381.79;
-    let hours = durationHours !== undefined ? parseFloat(durationHours) : 2.0;
-
-    // Batasan lembur wajib / perintah langsung maksimal 3 jam
-    const isWajibDarurat = (taskDescription || '').toLowerCase().includes('wajib') || 
-                           (taskDescription || '').toLowerCase().includes('darurat') ||
-                           (taskDescription || '').toLowerCase().includes('darurat_wajib');
-    if (isWajibDarurat && hours > 3) {
-      hours = 3.0;
-    }
-
-    // Cek apakah tanggal lembur adalah hari libur nasional atau istirahat mingguan
-    const otDateObj = new Date(date);
-    const dayOfWeek = otDateObj.getDay();
-    let isHolidayOrWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-    if (!isHolidayOrWeekend) {
-      const holCheck = await pool.query(`SELECT id FROM hrm_national_holidays WHERE holiday_date = $1 LIMIT 1`, [date]).catch(() => ({ rows: [] }));
-      if (holCheck.rows.length > 0) isHolidayOrWeekend = true;
-    }
-
-    // Formula Lembur Berjenjang Resmi Kepmenakertrans No. 102/2004 & PP 35/2021
-    let comp = 0;
-    if (!isHolidayOrWeekend) {
-      // Hari Kerja: Jam ke-1 = 1.5x, jam ke-2+ = 2.0x
-      if (hours <= 1) {
-        comp = Math.round(hours * 1.5 * officialRate);
-      } else {
-        comp = Math.round((1 * 1.5 * officialRate) + ((hours - 1) * 2.0 * officialRate));
-      }
-    } else {
-      // Hari Libur / Off Shift: Jam 1-7 = 2.0x, Jam 8 = 3.0x, Jam 9+ = 4.0x
-      if (hours <= 7) {
-        comp = Math.round(hours * 2.0 * officialRate);
-      } else if (hours <= 8) {
-        comp = Math.round((7 * 2.0 * officialRate) + ((hours - 7) * 3.0 * officialRate));
-      } else {
-        comp = Math.round((7 * 2.0 * officialRate) + (1 * 3.0 * officialRate) + ((hours - 8) * 4.0 * officialRate));
-      }
-    }
-
-    let validApproverId = null;
-    if (adminId && UUID_REGEX.test(adminId)) {
-      validApproverId = adminId;
-    }
-
-    const finalApproverName = targetStatus === 'approved' ? (adminName || 'Super Administrator') : null;
-    const finalApprovalNotes = targetStatus === 'approved' ? (approvalNotes || 'Ditugaskan dan disahkan langsung oleh Super Administrator') : null;
-    const finalPhase = targetStatus === 'approved' ? 'completed' : 'requested';
-
-    const query = `
-      INSERT INTO hrm_overtime_records (
-        user_id, date, start_time, end_time, scheduled_end_time, duration_hours, approved_hours, task_description, rate_applied, compensation_amount, status, supervisor_name, supervisor_signature, task_photo_url, overtime_phase, approved_by, approved_by_name, approval_notes
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [
-      validUserId,
-      date,
-      startTime,
-      endTime,
-      scheduledEndTime || endTime,
-      hours,
-      targetStatus === 'approved' ? hours : null,
-      taskDescription.trim(),
-      officialRate,
-      comp,
-      targetStatus,
-      supervisorName || null,
-      supervisorSignature || null,
-      finalProofPhoto,
-      finalPhase,
-      targetStatus === 'approved' ? validApproverId : null,
-      finalApproverName,
-      finalApprovalNotes,
-    ]);
-
-    const otRow = result.rows[0];
-
-    if (isAdminDirect && targetStatus === 'approved') {
-      if (userProfile.phone) {
-        const empWaMsg = `⏱️ *SURAT PERINTAH KERJA LEMBUR (SPKL) RESMI DITERBITKAN*\n\n` +
-          `Halo *${userProfile.full_name}*,\n` +
-          `Anda telah resmi ditugaskan lembur oleh *${finalApproverName}*:\n\n` +
-          `📅 Tanggal: *${date}* (${startTime} - ${endTime}, ${hours} Jam)\n` +
-          `📝 Tugas: "${taskDescription}"\n` +
-          `📌 Status: *DISETUJUI RESMI*\n` +
-          `💬 Catatan: "${finalApprovalNotes}"\n\n` +
-          `⚡ Surat perintah lembur ini telah tercatat resmi di database operasional HRM PT FRP.`;
-        sendWhatsAppAlert({ phone: userProfile.phone, message: empWaMsg }).catch(() => {});
-      }
-
-      await broadcastNotification({
-        recipientRoles: ['superadmin', 'admin', 'pimpinan'],
-        title: `⏱️ SPKL Lembur Manual Disahkan: ${userProfile.full_name}`,
-        message: `${userProfile.full_name} ditugaskan lembur ${hours} Jam pada ${date} oleh ${finalApproverName}.`,
-        type: 'overtime',
-        link: '/admin/lembur',
-        metadata: { overtimeId: otRow.id, userId: validUserId, date, hours },
-        divisionId: userProfile.division_id || null,
-      });
-
-      return res.json({
-        success: true,
-        data: otRow,
-        message: 'Surat Perintah Lembur berhasil diterbitkan dan langsung disetujui.',
-      });
-    }
-
-    const submitterRole = (userProfile.role_name || userProfile.role_code || '').toLowerCase();
-    const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
-    const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
-
-    // 📢 NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
-    await notifyAllPartiesViaWhatsApp({
-      submissionType: 'LEMBUR (SPL)',
-      details: `${date} (${startTime} - ${endTime}, ${hours} Jam) - Est. Rp ${comp.toLocaleString('id-ID')}`,
-      applicant: {
-        id: userProfile.id,
-        fullName: userProfile.full_name,
-        nip: userProfile.nip,
-        phone: userProfile.phone,
-        divisionName: userProfile.division_name,
-      },
-      reasonOrTask: taskDescription,
-      approvalLink: '/admin/approval?tab=overtime',
-    });
-
-    // Broadcast Notifikasi In-App
-    await broadcastNotification({
-      recipientRoles: ['korlap', 'admin', 'k3', 'superadmin', 'pimpinan', 'dirut'],
-      title: '⏱️ Pengajuan Surat Perintah Lembur (SPL)',
-      message: `${userProfile.full_name} (${userProfile.division_name || 'Operasional'}) mengajukan lembur pada ${date} (${startTime} - ${endTime}, ${hours} Jam): "${taskDescription}". Menunggu persetujuan.`,
-      type: 'overtime',
-      link: '/admin/approval?tab=overtime',
-      metadata: { overtimeId: otRow.id, userId: validUserId, date, hours, compensation: comp, supervisorName },
-      divisionId: userProfile.division_id || null,
-    });
-
-    res.json({
-      success: true,
-      data: otRow,
-      message: 'Surat Perintah Lembur berhasil diajukan dan diteruskan via WA & sistem ke seluruh pihak terkait.',
-    });
-  } catch (err) {
-    console.error('Overtime error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Update Status Lembur (Approval / Rejection oleh Korlap / Admin / K3 / Pimpinan)
-app.put('/api/overtime/:id/status', async (req, res) => {
-  const { id } = req.params;
-  const { status, approvedHours, approverId, approverName, notes } = req.body;
-  if (!['approved', 'rejected'].includes(status)) {
-    return res.status(400).json({ success: false, error: 'Status tidak valid (hanya approved / rejected)' });
-  }
-
-  try {
-    const oRes = await pool.query(`
-      SELECT o.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name, p.phone as user_phone
-      FROM hrm_overtime_records o
-      JOIN hrm_profiles p ON o.user_id = p.id
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      WHERE o.id = $1 LIMIT 1
-    `, [id]);
-    if (oRes.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Pengajuan lembur tidak ditemukan' });
-    }
-    const ot = oRes.rows[0];
-
-    let validApproverId = approverId;
-    if (approverId && !UUID_REGEX.test(approverId)) {
-      const aRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [approverId]);
-      if (aRes.rows.length > 0) validApproverId = aRes.rows[0].id;
-    }
-
-    const finalHours = approvedHours !== undefined ? Number(approvedHours) : Number(ot.duration_hours);
-    const officialRate = Number(ot.rate_applied || 23381.79);
-
-    const otDateObj = new Date(ot.date);
-    const dayOfWeek = otDateObj.getDay();
-    let isHolidayOrWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-    if (!isHolidayOrWeekend) {
-      const holCheck = await pool.query(`SELECT id FROM hrm_national_holidays WHERE holiday_date = $1 LIMIT 1`, [ot.date]).catch(() => ({ rows: [] }));
-      if (holCheck.rows.length > 0) isHolidayOrWeekend = true;
-    }
-
-    let compensation = 0;
-    if (!isHolidayOrWeekend) {
-      if (finalHours <= 1) {
-        compensation = Math.round(finalHours * 1.5 * officialRate);
-      } else {
-        compensation = Math.round((1 * 1.5 * officialRate) + ((finalHours - 1) * 2.0 * officialRate));
-      }
-    } else {
-      if (finalHours <= 7) {
-        compensation = Math.round(finalHours * 2.0 * officialRate);
-      } else if (finalHours <= 8) {
-        compensation = Math.round((7 * 2.0 * officialRate) + ((finalHours - 7) * 3.0 * officialRate));
-      } else {
-        compensation = Math.round((7 * 2.0 * officialRate) + (1 * 3.0 * officialRate) + ((finalHours - 8) * 4.0 * officialRate));
-      }
-    }
-    const nextPhase = status === 'approved' ? 'in_progress' : 'rejected';
-
-    const updateRes = await pool.query(`
-      UPDATE hrm_overtime_records SET
-        status = $1,
-        overtime_phase = $2,
-        duration_hours = $3,
-        compensation_amount = $4,
-        approved_by = $5,
-        forwarded_to_pimpinan = true,
-        approved_at = NOW(),
-        started_at = CASE WHEN $1 = 'approved' AND started_at IS NULL THEN NOW() ELSE started_at END,
-        updated_at = NOW()
-      WHERE id = $6
-      RETURNING *;
-    `, [status, nextPhase, finalHours, compensation, validApproverId || null, id]);
-
-    // 📢 NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
-    // Kebijakan PT FRP: Informasi nominal dirahasiakan dari teks pengumuman/karyawan
-    await notifyAllPartiesViaWhatsApp({
-      submissionType: 'LEMBUR (SPL)',
-      details: `${ot.date} (${ot.start_time} - ${ot.end_time}, ${finalHours} Jam)`,
-      applicant: {
-        id: ot.user_id,
-        fullName: ot.user_name,
-        nip: ot.user_nip,
-        phone: ot.user_phone,
-        divisionName: ot.division_name,
-      },
-      reasonOrTask: ot.task_description,
-      isDecision: true,
-      decisionStatus: status,
-      approverName: approverName || 'Atasan Lapangan',
-      approvalNotes: notes || '',
-      approvalLink: '/admin/approval?tab=overtime',
-    });
-
-    // Send notification to employee
-    const statusText = status === 'approved' ? 'DISETUJUI' : 'DITOLAK';
-    await broadcastNotification({
-      targetUserId: ot.user_id,
-      title: `Surat Perintah Lembur (SPL) ${statusText}`,
-      message: `Permohonan lembur Anda pada tanggal ${ot.date} (${finalHours} Jam kerja) telah ${statusText} oleh ${approverName || 'Atasan/HRD'}. Waktu lembur aktif.${notes ? ' Catatan: ' + notes : ''}`,
-      type: status === 'approved' ? 'success' : 'warning',
-      metadata: { overtimeId: id, status, compensation, approverName },
-    });
-
-    res.json({
-      success: true,
-      data: updateRes.rows[0],
-      message: `Pengajuan lembur berhasil di-${status} dan diteruskan ke Pimpinan.`,
-    });
-  } catch (err) {
-    console.error('Update overtime error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── ENDPOINTS REKAPAN KINERJA LAPANGAN (KORLAP, ADMIN, K3) ─────────────────
-app.get('/api/analytics/field-recap', async (req, res) => {
-  const { period = 'current_month', divisionId, startDate, endDate } = req.query;
-  try {
-    let startD, endD;
-    const now = new Date();
-    
-    if (period === 'last_month') {
-      const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const lastDayLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
-      startD = firstDayLastMonth.toISOString().split('T')[0];
-      endD = lastDayLastMonth.toISOString().split('T')[0];
-    } else if (period === 'year' || period === 'ytd' || period === 'tahunan') {
-      startD = `${now.getFullYear()}-01-01`;
-      endD = now.toISOString().split('T')[0];
-    } else if (startDate && endDate) {
-      startD = startDate;
-      endD = endDate;
-    } else {
-      // current_month
-      startD = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-      endD = now.toISOString().split('T')[0];
-    }
-
-    let divFilterSql = '';
-    const queryParams = [startD, endD];
-    if (divisionId && divisionId !== 'all') {
-      divFilterSql = ' AND (p.division_id = $3 OR LOWER(d.code) = LOWER($3) OR LOWER(d.name) = LOWER($3))';
-      queryParams.push(divisionId);
-    }
-
-    const sql = `
-      WITH att_stats AS (
-        SELECT 
-          user_id,
-          COUNT(DISTINCT CASE WHEN status IN ('hadir', 'terlambat') THEN attendance_date END) as total_hadir,
-          COUNT(DISTINCT CASE WHEN status = 'hadir' THEN attendance_date END) as tepat_waktu,
-          COUNT(DISTINCT CASE WHEN status = 'terlambat' THEN attendance_date END) as total_terlambat,
-          COALESCE(SUM(late_minutes), 0) as total_late_minutes,
-          COUNT(DISTINCT CASE WHEN status = 'alpa' THEN attendance_date END) as total_alpa
-        FROM hrm_attendances
-        WHERE attendance_date BETWEEN $1 AND $2
-        GROUP BY user_id
-      ),
-      leave_stats AS (
-        SELECT
-          user_id,
-          COALESCE(SUM(CASE WHEN status = 'approved' AND leave_type IN ('cuti_tahunan', 'annual_leave', 'maternity_leave') THEN total_days ELSE 0 END), 0) as total_cuti_days,
-          COALESCE(SUM(CASE WHEN status = 'approved' AND leave_type IN ('sick_leave', 'sakit') THEN total_days ELSE 0 END), 0) as total_sakit_days,
-          COALESCE(SUM(CASE WHEN status = 'approved' AND leave_type NOT IN ('cuti_tahunan', 'annual_leave', 'sick_leave', 'sakit') THEN total_days ELSE 0 END), 0) as total_izin_days
-        FROM hrm_leave_requests
-        WHERE start_date <= $2 AND end_date >= $1 AND status = 'approved'
-        GROUP BY user_id
-      ),
-      ot_stats AS (
-        SELECT
-          user_id,
-          COUNT(id) as total_spl_count,
-          COALESCE(SUM(duration_hours), 0) as total_ot_hours,
-          COALESCE(SUM(compensation_amount), 0) as total_ot_comp
-        FROM hrm_overtime_records
-        WHERE date BETWEEN $1 AND $2 AND status = 'approved'
-        GROUP BY user_id
-      )
-      SELECT 
-        p.id as user_id,
-        p.full_name,
-        p.nip,
-        COALESCE(d.name, 'Umum') as division_name,
-        d.id as division_id,
-        p.avatar_url,
-        r.name as role_name,
-        COALESCE(att.total_hadir, 0)::int as total_hadir,
-        COALESCE(att.tepat_waktu, 0)::int as tepat_waktu,
-        COALESCE(att.total_terlambat, 0)::int as total_terlambat,
-        COALESCE(att.total_late_minutes, 0)::int as total_late_minutes,
-        COALESCE(att.total_alpa, 0)::int as total_mangkir,
-        COALESCE(lv.total_cuti_days, 0)::int as total_cuti,
-        COALESCE(lv.total_sakit_days, 0)::int as total_sakit,
-        COALESCE(lv.total_izin_days, 0)::int as total_izin,
-        COALESCE(ot.total_spl_count, 0)::int as total_lembur_count,
-        COALESCE(ot.total_ot_hours, 0)::numeric as total_lembur_hours,
-        COALESCE(ot.total_ot_comp, 0)::numeric as total_lembur_comp
-      FROM hrm_profiles p
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_roles r ON p.role_id = r.id
-      LEFT JOIN att_stats att ON att.user_id = p.id
-      LEFT JOIN leave_stats lv ON lv.user_id = p.id
-      LEFT JOIN ot_stats ot ON ot.user_id = p.id
-      WHERE p.is_active = true ${divFilterSql}
-      ORDER BY p.full_name ASC;
-    `;
-
-    const result = await pool.query(sql, queryParams);
-    const rows = result.rows;
-
-    const summary = {
-      totalEmployees: rows.length,
-      totalHadir: rows.reduce((acc, r) => acc + Number(r.total_hadir), 0),
-      totalTepatWaktu: rows.reduce((acc, r) => acc + Number(r.tepat_waktu), 0),
-      totalTerlambat: rows.reduce((acc, r) => acc + Number(r.total_terlambat), 0),
-      totalMangkir: rows.reduce((acc, r) => acc + Number(r.total_mangkir), 0),
-      totalCuti: rows.reduce((acc, r) => acc + Number(r.total_cuti), 0),
-      totalSakit: rows.reduce((acc, r) => acc + Number(r.total_sakit), 0),
-      totalIzin: rows.reduce((acc, r) => acc + Number(r.total_izin), 0),
-      totalLemburHours: rows.reduce((acc, r) => acc + Number(r.total_lembur_hours), 0),
-      totalLemburComp: rows.reduce((acc, r) => acc + Number(r.total_lembur_comp), 0),
-      period,
-      startDate: startD,
-      endDate: endD,
-    };
-
-    res.json({ success: true, data: { summary, roster: rows } });
-  } catch (err) {
-    console.error('Field recap analytics error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── ENDPOINTS EXECUTIVE VISUAL RADAR (SUPERADMIN, DIRUT, PIMPINAN) ──────────
-app.get('/api/analytics/executive-radar', async (req, res) => {
-  const { year, month } = req.query;
-  try {
-    const targetYear = parseInt(year, 10) || new Date().getFullYear();
-    const targetMonth = parseInt(month, 10) || (new Date().getMonth() + 1);
-
-    // 1. Monthly 12-month Trend (Jan-Des tahun target)
-    const trendSql = `
-      SELECT 
-        TO_CHAR(d.m, 'YYYY-MM') as month_str,
-        TO_CHAR(d.m, 'Mon') as month_name,
-        COALESCE(COUNT(DISTINCT CASE WHEN a.status IN ('hadir', 'terlambat') THEN a.id END), 0)::int as hadir,
-        COALESCE(COUNT(DISTINCT CASE WHEN a.status = 'terlambat' THEN a.id END), 0)::int as terlambat,
-        COALESCE(COUNT(DISTINCT CASE WHEN a.status = 'alpa' THEN a.id END), 0)::int as mangkir,
-        COALESCE(SUM(CASE WHEN o.status = 'approved' THEN o.duration_hours ELSE 0 END), 0)::numeric as lembur_jam,
-        COALESCE(SUM(CASE WHEN l.status = 'approved' AND l.leave_type IN ('cuti_tahunan', 'annual_leave') THEN l.total_days ELSE 0 END), 0)::int as cuti,
-        COALESCE(SUM(CASE WHEN l.status = 'approved' AND l.leave_type IN ('sick_leave', 'sakit') THEN l.total_days ELSE 0 END), 0)::int as sakit
-      FROM GENERATE_SERIES(
-        DATE_TRUNC('year', MAKE_DATE($1, 1, 1)),
-        DATE_TRUNC('year', MAKE_DATE($1, 1, 1)) + INTERVAL '11 months',
-        INTERVAL '1 month'
-      ) d(m)
-      LEFT JOIN hrm_attendances a ON DATE_TRUNC('month', a.attendance_date) = d.m
-      LEFT JOIN hrm_overtime_records o ON DATE_TRUNC('month', o.date) = d.m AND o.status = 'approved'
-      LEFT JOIN hrm_leave_requests l ON DATE_TRUNC('month', l.start_date) = d.m AND l.status = 'approved'
-      GROUP BY d.m
-      ORDER BY d.m ASC;
-    `;
-    const trendRes = await pool.query(trendSql, [targetYear]);
-
-    // 2. Division Performance Matrix
-    const divMatrixSql = `
-      SELECT 
-        d.id as division_id,
-        d.name as division_name,
-        d.code as division_code,
-        COUNT(DISTINCT p.id)::int as total_members,
-        COUNT(DISTINCT CASE WHEN a.status IN ('hadir', 'terlambat') THEN a.id END)::int as total_hadir,
-        COUNT(DISTINCT CASE WHEN a.status = 'terlambat' THEN a.id END)::int as total_terlambat,
-        COUNT(DISTINCT CASE WHEN a.status = 'alpa' THEN a.id END)::int as total_mangkir,
-        COALESCE(SUM(CASE WHEN o.status = 'approved' THEN o.duration_hours ELSE 0 END), 0)::numeric as total_lembur_jam
-      FROM hrm_divisions d
-      JOIN hrm_profiles p ON p.division_id = d.id AND p.is_active = true
-      LEFT JOIN hrm_attendances a ON a.user_id = p.id AND EXTRACT(YEAR FROM a.attendance_date) = $1
-      LEFT JOIN hrm_overtime_records o ON o.user_id = p.id AND EXTRACT(YEAR FROM o.date) = $1 AND o.status = 'approved'
-      GROUP BY d.id, d.name, d.code
-      ORDER BY total_members DESC;
-    `;
-    const divMatrixRes = await pool.query(divMatrixSql, [targetYear]);
-
-    // 3. Day of Week Critical Pattern (Pola Hari Lapangan)
-    const dayPatternSql = `
-      SELECT 
-        TO_CHAR(attendance_date, 'Day') as day_name,
-        EXTRACT(DOW FROM attendance_date)::int as day_index,
-        COUNT(DISTINCT CASE WHEN status IN ('hadir', 'terlambat') THEN id END)::int as total_hadir,
-        COUNT(DISTINCT CASE WHEN status = 'terlambat' THEN id END)::int as total_terlambat,
-        COUNT(DISTINCT CASE WHEN status = 'alpa' THEN id END)::int as total_mangkir
-      FROM hrm_attendances
-      WHERE EXTRACT(YEAR FROM attendance_date) = $1
-      GROUP BY day_name, day_index
-      ORDER BY day_index ASC;
-    `;
-    const dayPatternRes = await pool.query(dayPatternSql, [targetYear]);
-
-    // 4. Overall Health Metric & KPI Cards
-    const totalEmployeesRes = await pool.query("SELECT COUNT(*)::int as count FROM hrm_profiles p LEFT JOIN hrm_roles r ON p.role_id = r.id WHERE p.is_active = true AND COALESCE(r.name, '') NOT IN ('pimpinan', 'dirut', 'superadmin');");
-    const totalEmployees = totalEmployeesRes.rows[0]?.count || 0;
-
-    const todayStr = new Date().toISOString().split('T')[0];
-    const todayAttRes = await pool.query(`
-      SELECT 
-        COUNT(DISTINCT CASE WHEN status IN ('hadir', 'terlambat') THEN user_id END)::int as hadir,
-        COUNT(DISTINCT CASE WHEN status = 'hadir' THEN user_id END)::int as tepat_waktu,
-        COUNT(DISTINCT CASE WHEN status = 'terlambat' THEN user_id END)::int as terlambat
-      FROM hrm_attendances
-      WHERE attendance_date = $1;
-    `, [todayStr]);
-
-    const todayHadir = todayAttRes.rows[0]?.hadir || 0;
-    const todayTepat = todayAttRes.rows[0]?.tepat_waktu || 0;
-    const todayLate = todayAttRes.rows[0]?.terlambat || 0;
-    const todayAttendanceRate = totalEmployees > 0 ? Math.round((todayHadir / totalEmployees) * 100) : 0;
-    const todayPunctualityRate = todayHadir > 0 ? Math.round((todayTepat / todayHadir) * 100) : 100;
-
-    res.json({
-      success: true,
-      data: {
-        targetYear,
-        targetMonth,
-        kpis: {
-          totalEmployees,
-          todayHadir,
-          todayTepat,
-          todayLate,
-          todayAttendanceRate,
-          todayPunctualityRate,
-        },
-        monthlyTrends: trendRes.rows,
-        divisionMatrix: divMatrixRes.rows,
-        dayPatterns: dayPatternRes.rows,
-      }
-    });
-  } catch (err) {
-    console.error('Executive radar analytics error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── ENDPOINTS JAM ISTIRAHAT & TELAT ISTIRAHAT ──────────────────────────────
-app.post('/api/attendances/break/start', async (req, res) => {
-  const { userId, date, startTime } = req.body;
-  try {
-    const d = date || new Date().toISOString().split('T')[0];
-    await pool.query(`
-      UPDATE hrm_attendances SET
-        is_on_break = true,
-        break_start_time = COALESCE($1, NOW()),
-        updated_at = NOW()
-      WHERE (user_id::text = $2 OR LOWER(user_id::text) = LOWER($2)) 
-        AND attendance_date = $3::date
-    `, [startTime || new Date(), userId, d]);
-    res.json({ success: true, message: 'Jam istirahat resmi 60 menit dimulai' });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/attendances/break/end', async (req, res) => {
-  const { userId, date, endTime, durationMinutes } = req.body;
-  try {
-    const d = date || new Date().toISOString().split('T')[0];
-    const dur = parseInt(durationMinutes || 0, 10);
-    const lateMins = Math.max(0, dur - 60);
-    await pool.query(`
-      UPDATE hrm_attendances SET
-        is_on_break = false,
-        break_end_time = COALESCE($1, NOW()),
-        break_duration_minutes = COALESCE(break_duration_minutes, 0) + $2,
-        break_late_minutes = $3,
-        updated_at = NOW()
-      WHERE (user_id::text = $4 OR LOWER(user_id::text) = LOWER($4)) 
-        AND attendance_date = $5::date
-    `, [endTime || new Date(), dur, lateMins, userId, d]);
-    res.json({ success: true, breakLateMinutes: lateMins, message: 'Jam istirahat selesai' });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── REKAP KESELURUHAN REAL-TIME (CUTI, LEMBUR, IZIN, IZIN DARURAT) ─────────
-app.get('/api/recap/all-requests', async (req, res) => {
-  const { month, year, status } = req.query;
-  try {
-    const leavesRes = await pool.query(`
-      SELECT l.id, l.user_id, l.leave_type as request_type, l.start_date, l.end_date,
-             l.total_days, l.reason, l.attachment_url, l.status, l.created_at, l.approved_at,
-             l.substitute_name, l.approval_notes,
-             p.full_name as user_name, p.nip as user_nip, d.name as division_name,
-             ap.full_name as approver_name
-      FROM hrm_leave_requests l
-      JOIN hrm_profiles p ON l.user_id = p.id
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_profiles ap ON l.approved_by = ap.id
-      ORDER BY l.created_at DESC LIMIT 300
-    `);
-
-    const otRes = await pool.query(`
-      SELECT o.id, o.user_id, 'lembur' as request_type, o.date as start_date, o.date as end_date,
-             o.duration_hours, o.task_description as reason, COALESCE(o.task_photo_url, (o.completion_photos->>0)) as attachment_url,
-             o.status, o.created_at, o.approved_at, o.compensation_amount, o.approval_notes,
-             p.full_name as user_name, p.nip as user_nip, d.name as division_name,
-             ap.full_name as approver_name
-      FROM hrm_overtime_records o
-      JOIN hrm_profiles p ON o.user_id = p.id
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_profiles ap ON o.approved_by = ap.id
-      ORDER BY o.created_at DESC LIMIT 300
-    `);
-
-    const combined = [...leavesRes.rows, ...otRes.rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    res.json({ success: true, data: combined });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Selesaikan Pekerjaan Lembur (Early / Regular Finish dengan Upload Bukti Foto & Keterangan)
-app.post('/api/overtime/:id/complete', async (req, res) => {
-  const { id } = req.params;
-  const { completionNotes, completionPhotos, actualEndTime } = req.body;
-  try {
-    const photosJson = JSON.stringify(Array.isArray(completionPhotos) ? completionPhotos : []);
-    const updateRes = await pool.query(`
-      UPDATE hrm_overtime_records SET
-        overtime_phase = 'completed',
-        completion_notes = $1,
-        completion_photos = $2,
-        actual_end_time = $3,
-        updated_at = NOW()
-      WHERE id = $4
-      RETURNING *;
-    `, [
-      completionNotes || 'Pekerjaan lembur selesai tuntas',
-      photosJson,
-      actualEndTime || new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-      id,
-    ]);
-
-    if (updateRes.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Pengajuan lembur tidak ditemukan' });
-    }
-
-    const row = updateRes.rows[0];
-    res.json({
-      success: true,
-      data: row,
-      message: 'Pekerjaan lembur berhasil diselesaikan. Bukti hasil kerja tersimpan dan tombol checkout telah dibuka.',
-    });
-  } catch (err) {
-    console.error('Complete overtime error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── 10. SMART SUBSTITUTE ENGINE & DANRU-KORLAP WORKFLOW ────────────────────
-
-// Helper: Smart Substitute Candidate Recommendation Algorithm
-async function generateSmartSubstituteRecommendations(requesterId, swapDate, originalShift) {
-  try {
-    const reqRes = await pool.query(`
-      SELECT p.id, p.full_name, p.nip, p.division_id, d.name as division_name, p.shift_id,
-             p.placement_location, p.job_title
-      FROM hrm_profiles p
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      WHERE p.id = $1
-    `, [requesterId]);
-
-    if (reqRes.rows.length === 0) return [];
-    const requester = reqRes.rows[0];
-
-    const employeesRes = await pool.query(`
-      SELECT p.id, p.full_name, p.nip, p.avatar_url, p.division_id, 
-             p.placement_location, p.job_title,
-             COALESCE(d.name, 'Operasional') as division_name,
-             s.name as regular_shift_name,
-             r.name as role_code, r.label as role_label,
-             COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate,
-             -- Dynamic Real-time Leave Metrics
-             COALESCE((SELECT SUM(l.total_days) FROM hrm_leave_requests l 
-                       WHERE l.user_id = p.id AND l.leave_type = 'cuti_tahunan' AND l.status = 'approved'), 0) as cuti_days,
-             COALESCE((SELECT COUNT(*) FROM hrm_leave_requests l 
-                       WHERE l.user_id = p.id AND l.leave_type = 'izin' AND l.status = 'approved'), 0) as izin_count,
-             COALESCE((SELECT COUNT(*) FROM hrm_leave_requests l 
-                       WHERE l.user_id = p.id AND l.leave_type = 'sakit' AND l.status = 'approved'), 0) as sakit_count,
-             -- Dynamic Real-time Overtime Metrics
-             COALESCE((SELECT SUM(o.duration_hours) FROM hrm_overtime_records o 
-                       WHERE o.user_id = p.id AND o.status = 'approved'), 0) as ot_hours_total,
-             COALESCE((SELECT SUM(o.duration_hours) FROM hrm_overtime_records o 
-                       WHERE o.user_id = p.id AND o.status = 'approved' 
-                       AND DATE_TRUNC('month', o.date) = DATE_TRUNC('month', $2::date)), 0) as ot_hours_month,
-             COALESCE((SELECT COUNT(*) FROM hrm_overtime_records o 
-                       WHERE o.user_id = p.id AND o.status = 'approved'), 0) as ot_count,
-             -- Dynamic Real-time Shift Relief / Swap Metrics
-             COALESCE((SELECT COUNT(*) FROM hrm_shift_swaps sw 
-                       WHERE sw.substitute_id = p.id AND sw.status = 'approved'), 0)
-               + COALESCE((SELECT COUNT(*) FROM hrm_shift_substitutions sub 
-                           WHERE sub.relief_user_id = p.id AND sub.status = 'approved'), 0) as swap_substitute_count,
-             COALESCE((SELECT COUNT(*) FROM hrm_shift_swaps sw 
-                       WHERE sw.requester_id = p.id AND sw.status = 'approved'), 0) as swap_requester_count,
-             -- Availability on Target Date
-             (SELECT COUNT(*) FROM hrm_attendances a
-              WHERE a.user_id = p.id AND a.attendance_date = $2::date) as date_attendance_count,
-             (SELECT COUNT(*) FROM hrm_shift_swaps sw
-              WHERE sw.substitute_id = p.id AND sw.swap_date = $2::date AND sw.status = 'approved') as date_swap_count,
-             -- Leave Quota Info
-             COALESCE(p.annual_leave_quota, 14) as annual_leave_quota,
-             COALESCE(p.used_leave_days, 0) as used_leave_days
-      FROM hrm_profiles p
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
-      LEFT JOIN hrm_roles r ON p.role_id = r.id
-      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
-      WHERE p.id != $1 AND p.is_active = true
-      ORDER BY (p.placement_location = $4) DESC, (p.division_id = $3) DESC, p.full_name ASC
-    `, [requesterId, swapDate, requester.division_id, requester.placement_location || '']);
-
-    const candidates = employeesRes.rows.map((emp) => {
-      let score = 50;
-      const reasons = [];
-
-      // 1. Lokasi Penempatan (Sangat Krusial untuk Pos Timbangan / Segel / Wisma)
-      const isSameLocation = emp.placement_location && requester.placement_location && 
-        emp.placement_location.toLowerCase() === requester.placement_location.toLowerCase();
-      if (isSameLocation) {
-        score += 25;
-        reasons.push(`Pos sama: ${emp.placement_location}`);
-      } else if (emp.placement_location) {
-        score += 5;
-        reasons.push(`Pos: ${emp.placement_location}`);
-      }
-
-      // 2. Divisi / Departemen
-      const isSameDivision = emp.division_id && requester.division_id && emp.division_id === requester.division_id;
-      if (isSameDivision) {
-        score += 20;
-        reasons.push(`Departemen sama (${emp.division_name})`);
-      } else {
-        score += 5;
-        reasons.push(`Lintas dept (${emp.division_name})`);
-      }
-
-      // 3. Status Kehadiran / Jadwal pada Hari H
-      const hasAttendanceOnDate = parseInt(emp.date_attendance_count || 0) > 0;
-      const hasSwapOnDate = parseInt(emp.date_swap_count || 0) > 0;
-
-      if (!hasAttendanceOnDate && !hasSwapOnDate) {
-        score += 25;
-        reasons.push('Hari Libur / Tidak Bertugas di tanggal ini (Bisa Masuk)');
-      } else {
-        score -= 30;
-        reasons.push('Terjadwal pada tanggal ini (Potensi jadwal ganda)');
-      }
-
-      // 4. Keadilan Alokasi Lembur (Fairness Index & PP 35/2021)
-      const otMonth = parseFloat(emp.ot_hours_month || 0);
-      let fairnessBadge = 'Pemerataan Lembur Terjaga';
-      let restIntervalStatus = 'SAFE';
-
-      if (otMonth === 0) {
-        score += 15;
-        fairnessBadge = 'Prioritas Utama (0 Jam Lembur)';
-        reasons.push('Lembur bulan ini masih 0 jam (Pemerataan Prioritas)');
-      } else if (otMonth <= 8) {
-        score += 10;
-        fairnessBadge = 'Beban Wajar';
-        reasons.push(`Lembur bulan ini: ${otMonth} jam`);
-      } else if (otMonth <= 14) {
-        score -= 5;
-        fairnessBadge = 'Beban Sedang';
-        reasons.push(`Lembur bulan ini: ${otMonth} jam`);
-      } else {
-        score -= 20;
-        fairnessBadge = 'Beban Tinggi / Mendekati Batas PP 35';
-        restIntervalStatus = 'WARNING';
-        reasons.push(`Lembur tinggi (${otMonth} jam bulan ini)`);
-      }
-
-      score = Math.max(15, Math.min(99, score));
-
-      let badge = 'Alternatif Cadangan';
-      let badgeColor = '#64748B';
-      if (score >= 85) {
-        badge = 'Sangat Direkomendasikan';
-        badgeColor = '#059669';
-      } else if (score >= 70) {
-        badge = 'Memenuhi Syarat';
-        badgeColor = '#2563EB';
-      }
-
-      const metrics = {
-        cuti_days: Number(emp.cuti_days || 0),
-        izin_count: Number(emp.izin_count || 0),
-        sakit_count: Number(emp.sakit_count || 0),
-        ot_hours_total: Number(emp.ot_hours_total || 0),
-        ot_hours_month: Number(emp.ot_hours_month || 0),
-        ot_count: Number(emp.ot_count || 0),
-        swap_substitute_count: Number(emp.swap_substitute_count || 0),
-        swap_requester_count: Number(emp.swap_requester_count || 0),
-        annual_leave_quota: Number(emp.annual_leave_quota || 14),
-        used_leave_days: Number(emp.used_leave_days || 0),
-        remaining_leave_days: Number(emp.annual_leave_quota || 14) - Number(emp.used_leave_days || 0),
-      };
-
-      return {
-        id: emp.id,
-        name: emp.full_name,
-        nip: emp.nip,
-        division: emp.division_name,
-        division_name: emp.division_name,
-        placement_location: emp.placement_location || '-',
-        job_title: emp.job_title || 'Operasional',
-        hourly_overtime_rate: Number(emp.hourly_overtime_rate || 23381.79),
-        avatarUrl: emp.avatar_url,
-        regularShift: emp.regular_shift_name || 'Reguler',
-        score,
-        badge,
-        badgeColor,
-        badge_color: badgeColor,
-        isSameDivision,
-        isSameLocation,
-        isAvailable: !hasAttendanceOnDate && !hasSwapOnDate,
-        reasons: reasons,
-        reasonSummary: reasons.join(' • '),
-        metrics: metrics,
-        fairness_badge: fairnessBadge,
-        rest_interval_status: restIntervalStatus,
-      };
-    });
-
-    candidates.sort((a, b) => b.score - a.score);
-    return candidates.slice(0, 10);
-  } catch (err) {
-    console.error('Smart recommendation error:', err);
-    return [];
-  }
-}
-
-// 1. Get Smart Candidates Preview
-app.get('/api/shift-swaps/smart-candidates', async (req, res) => {
-  const { requesterId, swapDate, originalShift } = req.query;
-  if (!requesterId || !swapDate) {
-    return res.status(400).json({ success: false, error: 'requesterId dan swapDate wajib diisi' });
-  }
-
-  try {
-    let validReqId = requesterId;
-    if (!UUID_REGEX.test(requesterId)) {
-      const u = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [requesterId]);
-      if (u.rows.length > 0) validReqId = u.rows[0].id;
-    }
-
-    const candidates = await generateSmartSubstituteRecommendations(validReqId, swapDate, originalShift || 'Reguler');
-    res.json({ success: true, data: candidates });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 2. Get Shift Swaps List
-app.get(['/api/shift-swaps', '/api/shift-swaps/all'], async (req, res) => {
-  const { userId, role, status, divisionId } = req.query;
-  try {
-    let query = `
-      SELECT s.*, 
-             rp.full_name as requester_name, rp.nip as requester_nip, rd.name as requester_division, rp.avatar_url as requester_avatar,
-             sp.full_name as substitute_name, sp.nip as substitute_nip, sd.name as substitute_division, sp.avatar_url as substitute_avatar,
-             dp.full_name as danru_name,
-             dsp.full_name as danru_recommended_name,
-             kp.full_name as korlap_name,
-             ap.full_name as approver_name
-      FROM hrm_shift_swaps s
-      LEFT JOIN hrm_profiles rp ON s.requester_id = rp.id
-      LEFT JOIN hrm_divisions rd ON rp.division_id = rd.id
-      LEFT JOIN hrm_profiles sp ON s.substitute_id = sp.id
-      LEFT JOIN hrm_divisions sd ON sp.division_id = sd.id
-      LEFT JOIN hrm_profiles dp ON s.danru_id = dp.id
-      LEFT JOIN hrm_profiles dsp ON s.danru_substitute_id = dsp.id
-      LEFT JOIN hrm_profiles kp ON s.korlap_id = kp.id
-      LEFT JOIN hrm_profiles ap ON s.approved_by = ap.id
-    `;
-    const conditions = [];
-    const params = [];
-
-    if (userId && !['superadmin', 'admin', 'hrd', 'pimpinan', 'korlap', 'kepala_regu', 'pengawas', 'keuangan'].includes((role || '').toLowerCase())) {
-      params.push(userId);
-      conditions.push(`(s.requester_id::text = $${params.length} OR s.substitute_id::text = $${params.length} 
-                 OR LOWER(rp.email) = LOWER($${params.length}) OR LOWER(sp.email) = LOWER($${params.length})
-                 OR LOWER(rp.nip) = LOWER($${params.length}) OR LOWER(sp.nip) = LOWER($${params.length}))`);
-    }
-
-    if (status) {
-      if (status === 'pending') {
-        conditions.push(`s.status IN ('pending', 'pending_danru', 'pending_korlap')`);
-      } else {
-        params.push(status);
-        conditions.push(`s.status = $${params.length}`);
-      }
-    }
-
-    if (divisionId) {
-      params.push(divisionId);
-      conditions.push(`(rp.division_id::text = $${params.length} OR rd.id::text = $${params.length})`);
-    }
-
-    if (conditions.length > 0) {
-      query += ` WHERE ${conditions.join(' AND ')}`;
-    }
-
-    query += ' ORDER BY s.created_at DESC LIMIT 150';
-    const result = await pool.query(query, params);
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 3. Create Shift Swap Request (Karyawan tidak memilih pengganti sendiri)
-app.post('/api/shift-swaps', async (req, res) => {
-  const { requesterId, swapDate, originalShift, targetShift, reason } = req.body;
-  if (!requesterId || !swapDate) {
-    return res.status(400).json({ success: false, error: 'Data pengajuan tukar shift tidak lengkap' });
-  }
-
-  try {
-    let validReqId = requesterId;
-    if (!UUID_REGEX.test(requesterId)) {
-      const u1 = await pool.query('SELECT id, full_name, division_id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [requesterId]);
-      if (u1.rows.length > 0) validReqId = u1.rows[0].id;
-    }
-
-    const reqProfileRes = await pool.query(`
-      SELECT p.id, p.full_name, p.nip, p.phone, p.division_id, d.name as division_name, r.name as role_name
-      FROM hrm_profiles p
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_roles r ON p.role_id = r.id
-      WHERE p.id = $1
-    `, [validReqId]);
-    const reqProfile = reqProfileRes.rows[0];
-    const requesterRole = (reqProfile?.role_name || '').toLowerCase();
-
-    // Tentukan status awal & alur approval berdasarkan role pemohon:
-    // - Kepala Regu mengajukan -> langsung ke Korlap (status: pending_korlap)
-    // - Korlap mengajukan -> langsung ke Pimpinan/Admin/Keuangan (status: pending)
-    // - Karyawan mengajukan -> ke Kepala Regu (checker) lalu Korlap (status: pending_danru)
-    let initialStatus = 'pending_danru';
-    let danruStatus = 'pending';
-    let korlapStatus = 'pending';
-
-    if (requesterRole === 'kepala_regu' || requesterRole === 'kepalaregu') {
-      initialStatus = 'pending_korlap';
-      danruStatus = 'auto_passed';
-    } else if (requesterRole === 'korlap') {
-      initialStatus = 'pending';
-      danruStatus = 'auto_passed';
-      korlapStatus = 'auto_passed';
-    }
-
-    // Sistem Pintar: generate rekomendasi kandidat secara otomatis
-    const smartCandidates = await generateSmartSubstituteRecommendations(
-      validReqId,
-      swapDate,
-      originalShift || 'Reguler'
-    );
-
-    const ins = await pool.query(`
-      INSERT INTO hrm_shift_swaps (
-        requester_id, substitute_id, swap_date, original_shift, target_shift, reason, 
-        peer_status, supervisor_status, status, danru_status, korlap_status, system_recommendations
-      ) VALUES ($1, NULL, $2, $3, $4, $5, 'pending', 'pending', $6, $7, $8, $9)
-      RETURNING *;
-    `, [
-      validReqId,
-      swapDate,
-      originalShift || 'Reguler',
-      targetShift || 'Shift Pengganti',
-      reason || 'Permohonan pengisian kekosongan pos dinas',
-      initialStatus,
-      danruStatus,
-      korlapStatus,
-      JSON.stringify(smartCandidates),
-    ]);
-
-    const swapRow = ins.rows[0];
-
-    // Ambil top candidate dari sistem rekomendasi pintar jika ada
-    const topCand = smartCandidates && smartCandidates.length > 0 ? smartCandidates[0] : null;
-
-    // 📢 NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Rekomendasi Pengganti, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
-    await notifyAllPartiesViaWhatsApp({
-      submissionType: 'TUKAR SHIFT / PENGGANTI POS',
-      details: `${swapDate} (Shift: ${originalShift || 'Reguler'} ➔ ${targetShift || 'Shift Pengganti'})`,
-      applicant: {
-        id: reqProfile?.id,
-        fullName: reqProfile?.full_name,
-        nip: reqProfile?.nip,
-        phone: reqProfile?.phone,
-        divisionName: reqProfile?.division_name,
-      },
-      substitute: topCand ? {
-        id: topCand.id,
-        fullName: topCand.name,
-        nip: topCand.nip,
-        phone: topCand.phone,
-      } : null,
-      reasonOrTask: reason || 'Permohonan pengisian kekosongan pos dinas',
-      approvalLink: '/admin/approval?tab=tukar',
-    });
-
-    // Broadcast Notifikasi Terstruktur Berdasarkan Hirarki Pengajuan
-    if (requesterRole === 'kepala_regu' || requesterRole === 'kepalaregu') {
-      await broadcastNotification({
-        recipientRoles: ['korlap', 'pimpinan', 'keuangan', 'superadmin', 'admin'],
-        title: '🔁 Pengajuan Tukar Shift dari Kepala Regu',
-        message: `Kepala Regu ${reqProfile?.full_name} (${reqProfile?.division_name || 'Operasional'}) mengajukan permohonan dinas pada ${swapDate}. Diteruskan langsung ke Korlap untuk penetapan personil.`,
-        type: 'swap',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: swapRow.id, requesterId: validReqId, stage: 'korlap_review', swapDate },
-      });
-    } else if (requesterRole === 'korlap') {
-      await broadcastNotification({
-        recipientRoles: ['pimpinan', 'keuangan', 'superadmin', 'admin'],
-        title: '🔁 Pengajuan Tukar Shift dari Korlap',
-        message: `Korlap ${reqProfile?.full_name} mengajukan permohonan dinas pada ${swapDate}. Menunggu keputusan Pimpinan, Admin & Keuangan.`,
-        type: 'swap',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: swapRow.id, requesterId: validReqId, stage: 'pimpinan_review', swapDate },
-      });
-    } else {
-      await broadcastNotification({
-        recipientRoles: ['kepala_regu'],
-        title: '🔁 Permohonan Tukar Shift Menunggu Telaah Danru',
-        message: `${reqProfile?.full_name || 'Karyawan'} (${reqProfile?.division_name || 'Operasional'}) mengajukan tukar dinas pada ${swapDate}. Membutuhkan telaah awal Danru.`,
-        type: 'swap',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: swapRow.id, requesterId: validReqId, stage: 'danru_review', swapDate },
-        divisionId: reqProfile?.division_id || null,
-      });
-
-      await broadcastNotification({
-        recipientRoles: ['korlap', 'pimpinan', 'keuangan', 'superadmin', 'admin'],
-        title: '🔁 Pengajuan Tukar Shift Masuk Antrean Danru',
-        message: `${reqProfile?.full_name} (${reqProfile?.division_name || 'Operasional'}) mengajukan tukar dinas pada ${swapDate}. Menunggu telaah Danru -> penetapan Korlap.`,
-        type: 'swap',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: swapRow.id, requesterId: validReqId, swapDate },
-      });
-    }
-
-    // Notifikasi konfirmasi ke Pemohon
-    await broadcastNotification({
-      targetUserId: validReqId,
-      title: 'Pengajuan Pengganti Pos Terkirim',
-      message: `Permohonan dinas Anda untuk tanggal ${swapDate} berhasil dikirim ke Kepala Regu & Korlap untuk penetapan personil pengganti.`,
-      type: 'success',
-      link: '/pengajuan?tab=tukar',
-      metadata: { swapId: swapRow.id },
-    });
-
-    res.json({
-      success: true,
-      data: { ...swapRow, system_recommendations: smartCandidates },
-      message: 'Permohonan berhasil dikirim dan notifikasi otomatis diteruskan via WA & sistem ke seluruh pihak terkait.',
-    });
-  } catch (err) {
-    console.error('Shift swap submit error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 4. Rekomendasi Kepala Regu (Danru)
-app.put(['/api/shift-swaps/:id/danru-recommend', '/api/shift-swaps/:id/danru-approve'], async (req, res) => {
-  const { id } = req.params;
-  const { danruId, danruName, recommendedSubstituteId, danruNotes, notes, action = 'recommended' } = req.body;
-  const finalDanruNotes = danruNotes || notes || null;
-
-  try {
-    const sRes = await pool.query('SELECT * FROM hrm_shift_swaps WHERE id = $1 LIMIT 1', [id]);
-    if (sRes.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Permohonan tukar shift tidak ditemukan' });
-    }
-    const swap = sRes.rows[0];
-
-    let validDanruId = danruId;
-    if (danruId && !UUID_REGEX.test(danruId)) {
-      const d = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [danruId]);
-      if (d.rows.length > 0) validDanruId = d.rows[0].id;
-    }
-
-    let validSubId = recommendedSubstituteId;
-    if (recommendedSubstituteId && !UUID_REGEX.test(recommendedSubstituteId)) {
-      const s = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) OR LOWER(full_name) LIKE LOWER($2) LIMIT 1', [recommendedSubstituteId, `%${recommendedSubstituteId}%`]);
-      if (s.rows.length > 0) validSubId = s.rows[0].id;
-    }
-
-    const nextStatus = action === 'rejected' ? 'rejected_danru' : 'pending_korlap';
-
-    const up = await pool.query(`
-      UPDATE hrm_shift_swaps SET
-        danru_id = $1,
-        danru_substitute_id = $2,
-        danru_notes = $3,
-        danru_status = $4,
-        danru_at = NOW(),
-        status = $5,
-        updated_at = NOW()
-      WHERE id = $6
-      RETURNING *;
-    `, [validDanruId || null, validSubId || null, finalDanruNotes, action, nextStatus, id]);
-
-    const reqProfile = (await pool.query('SELECT full_name FROM hrm_profiles WHERE id = $1', [swap.requester_id])).rows[0];
-    const recProfile = validSubId ? (await pool.query('SELECT full_name FROM hrm_profiles WHERE id = $1', [validSubId])).rows[0] : null;
-
-    if (action === 'recommended') {
-      // Notifikasi ke Korlap untuk penetapan resmi
-      await broadcastNotification({
-        recipientRoles: ['korlap'],
-        title: 'Rekomendasi Danru Masuk - Butuh Penetapan Korlap',
-        message: `Danru (${danruName || 'Kepala Regu'}) merekomendasikan personil ${recProfile?.full_name || 'kandidat pilihan'} untuk pengajuan ${reqProfile?.full_name} (${swap.swap_date}). Mohon penetapan resmi Anda.`,
-        type: 'info',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: id, recommendedSubstituteId: validSubId, stage: 'korlap_decision' },
-      });
-
-      // Notifikasi update ke Pemohon
-      await broadcastNotification({
-        targetUserId: swap.requester_id,
-        title: 'Rekomendasi Danru Selesai',
-        message: `Kepala Regu telah menelaah pengajuan Anda dan merekomendasikan personil: ${recProfile?.full_name || '-'}. Berkas kini diteruskan ke Korlap untuk penetapan akhir.`,
-        type: 'info',
-        link: '/pengajuan?tab=tukar',
-        metadata: { swapId: id },
-      });
-
-      // Notifikasi status update ke Admin, Keuangan, Pimpinan
-      await broadcastNotification({
-        recipientRoles: ['admin', 'keuangan', 'pimpinan', 'superadmin'],
-        title: 'Update Alur Dinas: Menunggu Penetapan Korlap',
-        message: `Danru merekomendasikan ${recProfile?.full_name || 'pengganti'} untuk pos dinas ${reqProfile?.full_name} pada ${swap.swap_date}. Menunggu persetujuan Korlap.`,
-        type: 'info',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: id },
-      });
-    } else {
-      // Ditolak oleh Danru
-      await broadcastNotification({
-        targetUserId: swap.requester_id,
-        title: 'Pengajuan Ditolak oleh Danru',
-        message: `Permohonan dinas Anda untuk tanggal ${swap.swap_date} tidak dapat direkomendasikan oleh Kepala Regu.${danruNotes ? ' Catatan: ' + danruNotes : ''}`,
-        type: 'warning',
-        link: '/pengajuan?tab=tukar',
-        metadata: { swapId: id },
-      });
-    }
-
-    res.json({
-      success: true,
-      data: up.rows[0],
-      message: action === 'recommended'
-        ? 'Rekomendasi personil berhasil diteruskan ke Korlap untuk penetapan akhir.'
-        : 'Permohonan dinas ditolak oleh Danru.',
-    });
-  } catch (err) {
-    console.error('Danru recommend error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 5. Penetapan & Persetujuan Koordinator Lapangan (Korlap - Satu-Satunya yang Berhak Setujui)
-app.put(['/api/shift-swaps/:id/approval', '/api/shift-swaps/:id/korlap-approve'], async (req, res) => {
-  const { id } = req.params;
-  const status = req.body.status || req.body.action; // 'approved' | 'rejected'
-  const approverId = req.body.approverId || req.body.korlapId;
-  const approverName = req.body.approverName || req.body.korlapName;
-  const assignedSubstituteId = req.body.assignedSubstituteId || req.body.substituteId;
-  const notes = req.body.notes || req.body.korlapNotes;
-
-  if (!['approved', 'rejected'].includes(status)) {
-    return res.status(400).json({ success: false, error: 'Status penetapan tidak valid (hanya approved / rejected)' });
-  }
-
-  try {
-    const sRes = await pool.query('SELECT * FROM hrm_shift_swaps WHERE id = $1 LIMIT 1', [id]);
-    if (sRes.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Permohonan tukar shift tidak ditemukan' });
-    }
-    const swap = sRes.rows[0];
-
-    let validApproverId = approverId;
-    if (approverId && !UUID_REGEX.test(approverId)) {
-      const a = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [approverId]);
-      if (a.rows.length > 0) validApproverId = a.rows[0].id;
-    }
-
-    // Resolve final substitute ID
-    let finalSubId = assignedSubstituteId || swap.danru_substitute_id || swap.substitute_id;
-    if (finalSubId && !UUID_REGEX.test(finalSubId)) {
-      const s = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) OR LOWER(full_name) LIKE LOWER($2) LIMIT 1', [finalSubId, `%${finalSubId}%`]);
-      if (s.rows.length > 0) finalSubId = s.rows[0].id;
-    }
-
-    // Auto-resolve substitute from system_recommendations if approving
-    if (status === 'approved' && !finalSubId) {
-      if (swap.system_recommendations) {
-        try {
-          const recs = Array.isArray(swap.system_recommendations)
-            ? swap.system_recommendations
-            : JSON.parse(swap.system_recommendations || '[]');
-          if (recs.length > 0 && recs[0].id) {
-            finalSubId = recs[0].id;
-          }
-        } catch (_) {}
-      }
-      if (!finalSubId && swap.requester_id) {
-        const fallbackSub = await pool.query(`
-          SELECT id FROM hrm_profiles
-          WHERE division_id = (SELECT division_id FROM hrm_profiles WHERE id = $1)
-            AND id != $1 AND is_active = true
-          LIMIT 1
-        `, [swap.requester_id]);
-        if (fallbackSub.rows.length > 0) finalSubId = fallbackSub.rows[0].id;
-      }
-    }
-
-    const up = await pool.query(`
-      UPDATE hrm_shift_swaps SET
-        substitute_id = $1,
-        korlap_id = $2,
-        korlap_status = $3,
-        korlap_notes = $4,
-        korlap_at = NOW(),
-        status = $5,
-        supervisor_status = $5,
-        peer_status = 'accepted',
-        approved_by = $2,
-        approval_notes = $4,
-        updated_at = NOW()
-      WHERE id = $6
-      RETURNING *;
-    `, [finalSubId || null, validApproverId || null, status, notes || null, status, id]);
-
-    const reqProfile = (await pool.query('SELECT id, full_name, nip, phone FROM hrm_profiles WHERE id = $1', [swap.requester_id])).rows[0];
-    const subProfile = finalSubId ? (await pool.query('SELECT id, full_name, nip, phone FROM hrm_profiles WHERE id = $1', [finalSubId])).rows[0] : null;
-
-    // 📢 NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Pengganti, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
-    await notifyAllPartiesViaWhatsApp({
-      submissionType: 'TUKAR SHIFT / PENGGANTI POS',
-      details: `${swap.swap_date} (${swap.original_shift} ➔ ${swap.target_shift})`,
-      applicant: {
-        id: swap.requester_id,
-        fullName: reqProfile?.full_name,
-        nip: reqProfile?.nip,
-        phone: reqProfile?.phone,
-      },
-      substitute: subProfile ? {
-        id: subProfile.id,
-        fullName: subProfile.full_name,
-        nip: subProfile.nip,
-        phone: subProfile.phone,
-      } : null,
-      reasonOrTask: swap.reason || 'Permohonan pengisian kekosongan pos dinas',
-      isDecision: true,
-      decisionStatus: status,
-      approverName: approverName || 'Koordinator Lapangan (Korlap)',
-      approvalNotes: notes || '',
-      approvalLink: '/admin/approval?tab=tukar',
-    });
-
-    if (status === 'approved') {
-      // 1. Notifikasi Karyawan Pemohon (Beserta info pengganti resmi)
-      await broadcastNotification({
-        targetUserId: swap.requester_id,
-        title: 'Pengajuan Pengganti Dinas DISETUJUI Korlap',
-        message: `Permohonan dinas Anda untuk tanggal ${swap.swap_date} (${swap.original_shift}) telah DISETUJUI oleh Korlap. Pos dinas Anda resmi diisi oleh personil pengganti: ${subProfile?.full_name || 'Rekan Pengganti'}.${notes ? ' Catatan: ' + notes : ''}`,
-        type: 'success',
-        link: '/pengajuan?tab=tukar',
-        metadata: { swapId: id, status: 'approved', substituteName: subProfile?.full_name, swapDate: swap.swap_date },
-      });
-
-      // 2. Notifikasi Otomatis ke Karyawan Pengganti (Penugasan Resmi Mengisi Kekosongan)
-      if (finalSubId) {
-        await broadcastNotification({
-          targetUserId: finalSubId,
-          title: 'Penugasan: Mengisi Kekosongan Pos Dinas',
-          message: `Pemberitahuan Penugasan Resmi: Korlap (${approverName || 'Koordinator Lapangan'}) telah menugaskan Anda untuk mengisi kekosongan pos dinas (${swap.target_shift}) menggantikan ${reqProfile?.full_name} pada tanggal ${swap.swap_date}. Harap hadir tepat waktu sesuai jadwal.`,
-          type: 'info',
-          link: '/pengajuan?tab=tukar',
-          metadata: { swapId: id, action: 'substitute_assignment', requesterName: reqProfile?.full_name, swapDate: swap.swap_date },
-        });
-      }
-
-      // 3. Notifikasi ke Kepala Regu (Danru)
-      await broadcastNotification({
-        recipientRoles: ['kepala_regu', 'pengawas'],
-        title: 'Penetapan Pengganti Selesai oleh Korlap',
-        message: `Korlap telah menyetujui pengajuan ${reqProfile?.full_name} (${swap.swap_date}) dan menetapkan personil pengganti: ${subProfile?.full_name}.`,
-        type: 'success',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: id, substituteId: finalSubId },
-      });
-
-      // 4. Notifikasi ke Admin / HRD (Penyesuaian Jadwal & Roster)
-      await broadcastNotification({
-        recipientRoles: ['admin', 'hrd'],
-        title: 'Roster Dinas Diperbarui: Pengganti Disahkan Korlap',
-        message: `Korlap telah mengesahkan ${subProfile?.full_name} sebagai pengganti resmi ${reqProfile?.full_name} pada ${swap.swap_date} (${swap.target_shift}). Roster dinas dan presensi telah disesuaikan.`,
-        type: 'info',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: id },
-      });
-
-      // 5. Notifikasi ke Keuangan (Pencatatan Insentif / Premi Pengganti Payroll)
-      await broadcastNotification({
-        recipientRoles: ['keuangan'],
-        title: 'Pencatatan Payroll: Penugasan Dinas Pengganti Disahkan',
-        message: `Penugasan dinas pengganti oleh ${subProfile?.full_name} untuk ${reqProfile?.full_name} (${swap.swap_date}) telah disahkan Korlap. Masuk dalam catatan perhitungan kompensasi/premi shift.`,
-        type: 'info',
-        link: '/admin/payroll',
-        metadata: { swapId: id, requesterId: swap.requester_id, substituteId: finalSubId },
-      });
-
-      // 6. Notifikasi ke Pimpinan & Superadmin (Laporan Operasional)
-      await broadcastNotification({
-        recipientRoles: ['pimpinan', 'superadmin'],
-        title: 'Laporan Operasional: Penetapan Pengganti Dinas Disahkan',
-        message: `Korlap (${approverName || 'Koordinator Lapangan'}) telah menyelesaikan penetapan pos dinas untuk ${reqProfile?.full_name} dengan menugaskan ${subProfile?.full_name} pada tanggal ${swap.swap_date}.`,
-        type: 'info',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: id },
-      });
-    } else {
-      // Ditolak oleh Korlap
-      const rejectMsg = `Permohonan dinas untuk tanggal ${swap.swap_date} (${swap.original_shift}) DITOLAK oleh Korlap (${approverName || 'Koordinator Lapangan'}).${notes ? ' Alasan: ' + notes : ''}`;
-
-      await broadcastNotification({
-        targetUserId: swap.requester_id,
-        title: 'Pengajuan Dinas Ditolak Korlap',
-        message: rejectMsg,
-        type: 'warning',
-        link: '/pengajuan?tab=tukar',
-        metadata: { swapId: id, status: 'rejected' },
-      });
-
-      await broadcastNotification({
-        recipientRoles: ['kepala_regu', 'pengawas', 'admin', 'pimpinan'],
-        title: 'Pengajuan Dinas Ditolak Korlap',
-        message: `Pengajuan dinas ${reqProfile?.full_name} (${swap.swap_date}) ditolak oleh Korlap.`,
-        type: 'warning',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: id },
-      });
-    }
-
-    res.json({
-      success: true,
-      data: up.rows[0],
-      message: status === 'approved'
-        ? 'Penetapan pengganti pos dinas berhasil disetujui & notifikasi otomatis dikirimkan ke seluruh pihak terkait.'
-        : 'Permohonan dinas berhasil ditolak oleh Korlap.',
-    });
-  } catch (err) {
-    console.error('Korlap approval error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── 11. NOTIFICATIONS API (TERPUSAT DESKTOP & MOBILE) ───────────────────────
-app.get('/api/notifications', async (req, res) => {
-  const { userId, role } = req.query;
-  try {
-    let query = `
-      SELECT n.*, 
-             p.full_name as user_name,
-             p.avatar_url as user_avatar
-      FROM hrm_notifications n
-      LEFT JOIN hrm_profiles p ON n.user_id = p.id
-    `;
-    const conditions = [];
-    const params = [];
-
-    if (userId) {
-      let validUserId = userId;
-      if (!UUID_REGEX.test(userId)) {
-        const uRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
-        if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
-      }
-      params.push(validUserId);
-      conditions.push(`n.user_id = $${params.length}`);
-    }
-
-    if (role) {
-      const normRole = role.toLowerCase();
-      let matchedRoles = [normRole, 'all_admin', 'all'];
-      if (normRole === 'superadmin') {
-        matchedRoles.push('admin', 'hrd', 'pimpinan', 'korlap', 'kepala_regu', 'pengawas');
-      } else if (normRole === 'pimpinan') {
-        matchedRoles.push('admin', 'korlap', 'kepala_regu');
-      } else if (normRole === 'korlap') {
-        matchedRoles.push('kepala_regu', 'pengawas');
-      } else if (normRole === 'kepala_regu') {
-        matchedRoles.push('pengawas');
-      } else if (normRole === 'admin' || normRole === 'hrd') {
-        matchedRoles.push('admin', 'hrd');
-      }
-      params.push(matchedRoles);
-      conditions.push(`LOWER(n.recipient_role) = ANY($${params.length})`);
-    }
-
-    if (conditions.length > 0) {
-      query += ' WHERE ' + conditions.join(' OR ');
-    }
-    query += ' ORDER BY n.created_at DESC LIMIT 60';
-
-    const result = await pool.query(query, params);
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.patch('/api/notifications/:id/read', async (req, res) => {
-  const { id } = req.params;
-  try {
-    await pool.query('UPDATE hrm_notifications SET is_read = true WHERE id = $1', [id]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-const handleReadAllNotifications = async (req, res) => {
-  const { userId, role } = req.body;
-  try {
-    if (userId) {
-      let validUserId = userId;
-      if (!UUID_REGEX.test(userId)) {
-        const uRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
-        if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
-      }
-      await pool.query('UPDATE hrm_notifications SET is_read = true WHERE user_id = $1', [validUserId]);
-    }
-    if (role) {
-      await pool.query('UPDATE hrm_notifications SET is_read = true WHERE LOWER(recipient_role) = LOWER($1)', [role]);
-    }
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-};
-
-app.post('/api/notifications/read-all', handleReadAllNotifications);
-app.patch('/api/notifications/read-all', handleReadAllNotifications);
-
-// ─── 12. SALARY SLIP & PAYROLL MANAGEMENT (DATABASE STATUTORIS REAL) ─────────
-
-function calculatePph21Ter(grossIncome) {
-  if (grossIncome <= 5400000) return 0;
-  if (grossIncome <= 5650000) return Math.round(grossIncome * 0.0025);
-  if (grossIncome <= 5950000) return Math.round(grossIncome * 0.005);
-  if (grossIncome <= 6300000) return Math.round(grossIncome * 0.0075);
-  if (grossIncome <= 6750000) return Math.round(grossIncome * 0.01);
-  if (grossIncome <= 7500000) return Math.round(grossIncome * 0.0125);
-  if (grossIncome <= 8550000) return Math.round(grossIncome * 0.015);
-  if (grossIncome <= 9650000) return Math.round(grossIncome * 0.0175);
-  if (grossIncome <= 10050000) return Math.round(grossIncome * 0.02);
-  if (grossIncome <= 10350000) return Math.round(grossIncome * 0.0225);
-  if (grossIncome <= 10700000) return Math.round(grossIncome * 0.025);
-  if (grossIncome <= 11050000) return Math.round(grossIncome * 0.03);
-  if (grossIncome <= 11600000) return Math.round(grossIncome * 0.035);
-  if (grossIncome <= 12500000) return Math.round(grossIncome * 0.04);
-  if (grossIncome <= 13750000) return Math.round(grossIncome * 0.05);
-  if (grossIncome <= 15100000) return Math.round(grossIncome * 0.06);
-  if (grossIncome <= 16950000) return Math.round(grossIncome * 0.07);
-  if (grossIncome <= 19750000) return Math.round(grossIncome * 0.08);
-  if (grossIncome <= 24150000) return Math.round(grossIncome * 0.09);
-  return Math.round(grossIncome * 0.10);
-}
-
-function toTerbilang(angka) {
-  const bilangan = ['', 'Satu', 'Dua', 'Tiga', 'Empat', 'Lima', 'Enam', 'Tujuh', 'Delapan', 'Sembilan', 'Sepuluh', 'Sebelas'];
-  const n = Math.floor(Math.abs(Number(angka) || 0));
-  if (n < 12) return bilangan[n];
-  if (n < 20) return toTerbilang(n - 10) + ' Belas';
-  if (n < 100) return toTerbilang(Math.floor(n / 10)) + ' Puluh ' + toTerbilang(n % 10);
-  if (n < 200) return 'Seratus ' + toTerbilang(n - 100);
-  if (n < 1000) return toTerbilang(Math.floor(n / 100)) + ' Ratus ' + toTerbilang(n % 100);
-  if (n < 2000) return 'Seribu ' + toTerbilang(n - 1000);
-  if (n < 1000000) return toTerbilang(Math.floor(n / 1000)) + ' Ribu ' + toTerbilang(n % 1000);
-  if (n < 1000000000) return toTerbilang(Math.floor(n / 1000000)) + ' Juta ' + toTerbilang(n % 1000000);
-  return toTerbilang(Math.floor(n / 1000000000)) + ' Miliar ' + toTerbilang(n % 1000000000);
-}
-
-// REST Endpoints for Salary Profiles
-app.get('/api/payroll/profiles', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT sp.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name
-      FROM hrm_payroll_salary_profiles sp
-      JOIN hrm_profiles p ON sp.user_id = p.id
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      ORDER BY p.full_name ASC;
-    `);
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/payroll/profiles', async (req, res) => {
-  const { userId, baseSalary, positionAllowance, mealAllowance, transportAllowance, bankName, bankAccount, bankAccountName } = req.body;
-  if (!userId) {
-    return res.status(400).json({ success: false, error: 'userId wajib diisi' });
-  }
-  try {
-    const result = await pool.query(`
-      INSERT INTO hrm_payroll_salary_profiles (
-        user_id, base_salary, position_allowance, meal_allowance, transport_allowance,
-        bank_name, bank_account_number, bank_account_holder, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-      ON CONFLICT (user_id) DO UPDATE SET
-        base_salary = EXCLUDED.base_salary,
-        position_allowance = EXCLUDED.position_allowance,
-        meal_allowance = EXCLUDED.meal_allowance,
-        transport_allowance = EXCLUDED.transport_allowance,
-        bank_name = EXCLUDED.bank_name,
-        bank_account_number = EXCLUDED.bank_account_number,
-        bank_account_holder = EXCLUDED.bank_account_holder,
-        updated_at = NOW()
-      RETURNING *;
-    `, [
-      userId,
-      baseSalary ? parseInt(baseSalary, 10) : 0,
-      positionAllowance ? parseInt(positionAllowance, 10) : 0,
-      mealAllowance ? parseInt(mealAllowance, 10) : 0,
-      transportAllowance ? parseInt(transportAllowance, 10) : 0,
-      bankName || 'Bank Mandiri',
-      bankAccount || '-',
-      bankAccountName || '-',
-    ]);
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.get('/api/payroll/periods', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM hrm_payroll_periods ORDER BY year DESC, month DESC LIMIT 24');
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Electronic Official Salary Slip (Returns JSON for Mobile & Desktop)
-app.get('/api/payroll/slip/:userId', async (req, res) => {
-  const { userId } = req.params;
-  const { periodId } = req.query;
-
-  try {
-    let query = `
-      SELECT 
-        s.*,
-        p.full_name as employee_name,
-        p.nip as employee_nip,
-        p.email as employee_email,
-        r.name as role_name,
-        d.name as division_name,
-        p.placement_location,
-        COALESCE(sp.employee_sequence_no, p.employee_sequence_no, 0) as employee_sequence_no,
-        COALESCE(sp.severance_scheme, 'tabungan') as severance_scheme,
-        COALESCE(sp.saved_severance_balance, 0) as saved_severance_balance,
-        COALESCE(sp.hourly_overtime_rate, 24173.06) as hourly_overtime_rate,
-        COALESCE(sp.bank_name, 'Bank Central Asia (BCA)') as bank_name,
-        COALESCE(sp.bank_account_number, '-') as bank_account_number,
-        COALESCE(sp.bank_account_holder, p.full_name) as bank_account_holder
-      FROM hrm_payroll_slips s
-      JOIN hrm_profiles p ON s.user_id = p.id
-      LEFT JOIN hrm_roles r ON p.role_id = r.id
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
-      WHERE (s.user_id::text = $1 OR LOWER(p.email) = LOWER($1) OR p.nip = $1)
-    `;
-    const params = [userId];
-    if (periodId) {
-      params.push(periodId);
-      query += ` AND s.period_id = $2`;
-    }
-    query += ` ORDER BY s.created_at DESC LIMIT 1`;
-
-    let result = await pool.query(query, params);
-    if (result.rows.length === 0) {
-      return res.json({
-        success: false,
-        isLocked: true,
-        message: 'Slip gaji resmi belum diterbitkan oleh Admin untuk periode ini.'
-      });
-    }
-
-    const row = result.rows[0];
-
-    // 🔒 KEBIJAKAN BAKU PT FRP: Slip gaji HANYA terbit jika Admin yang menerbitkan (published_to_employee = true)
-    if (!row.published_to_employee) {
-      return res.json({
-        success: false,
-        isLocked: true,
-        hasRequested: Boolean(row.requested_by_employee),
-        periodLabel: row.period_label,
-        message: 'Slip gaji resmi belum diterbitkan oleh Admin untuk periode ini.'
-      });
-    }
-
-    // Dynamic month calculation
-    const INDO_MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-    let activeMonth = INDO_MONTHS[new Date().getMonth()];
-    if (row.period_label) {
-      for (const m of INDO_MONTHS) {
-        if (row.period_label.toLowerCase().includes(m.toLowerCase())) {
-          activeMonth = m;
-          break;
-        }
-      }
-    }
-    const dynamicPesangonLabel = `Pesangon ${activeMonth}`;
-
-    // Dual Severance Scheme:
-    // No. 1 - 33: DITABUNGKAN (Accrued, not added to monthly cash THP)
-    // No. 34 - 80: DIBAYARKAN BERSAMAAN DENGAN GAJI (Added to gross earnings and THP)
-    const seqNo = Number(row.employee_sequence_no || 0);
-    const isTabunganPesangon = row.severance_scheme === 'tabungan' || (seqNo > 0 && seqNo <= 33);
-    const rawPesangon = Number(row.pesangon_amount || 0);
-    const pesangonVal = isTabunganPesangon ? 0 : rawPesangon;
-    const savedPesangonVal = isTabunganPesangon ? rawPesangon : 0;
-
-    const upahVal = Number(row.base_salary || 4045050);
-    const lemburVal = Number(row.total_overtime_pay || 0);
-    const grossVal = upahVal + lemburVal + pesangonVal;
-
-    // BPJS: If standard Rp 4.045.050, BPJS 3% = 121.351, 1% = 40.450, total = 161.802
-    // If standard Rp 4.181.940, BPJS 3% = 125.458, 1% = 41.819, total = 167.277
-    const bpjsTkVal = upahVal === 4045050 ? 121351 : Math.round(upahVal * 0.03);
-    const bpjsKesVal = upahVal === 4045050 ? 40450 : Math.round(upahVal * 0.01);
-    const alpaVal = Number(row.absence_deduction || 0);
-    const totDeductVal = (upahVal === 4045050 ? 161802 : (bpjsTkVal + bpjsKesVal)) + alpaVal;
-    const netVal = grossVal - totDeductVal;
-
-    res.json({
-      success: true,
-      slip: {
-        id: row.id,
-        period: row.period_label || `${activeMonth} 2026`,
-        printedDate: row.printed_date ? new Date(row.printed_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }),
-        status: (row.status || 'paid').toUpperCase(),
-        employee: {
-          id: row.user_id,
-          name: row.employee_name,
-          nip: row.employee_nip || '-',
-          sequenceNo: seqNo,
-          severanceScheme: isTabunganPesangon ? 'tabungan' : 'cash_with_salary',
-          savedSeveranceBalance: Number(row.saved_severance_balance || 0),
-          placementLocation: row.placement_location || '-',
-          division: row.division_name || 'Dept. of Distribution Management',
-          role: row.role_name || 'Karyawan',
-          bankName: row.bank_name || 'Bank Central Asia (BCA)',
-          bankAccount: row.bank_account_number || '-'
-        },
-        upah: upahVal,
-        lembur: lemburVal,
-        pesangonLabel: dynamicPesangonLabel,
-        pesangonAmount: pesangonVal,
-        savedPesangonAmount: savedPesangonVal,
-        isSeveranceSaved: isTabunganPesangon,
-        grossEarnings: grossVal,
-        earnings: [
-          { label: 'Upah', amount: upahVal },
-          { label: 'Lembur', amount: lemburVal },
-          { label: dynamicPesangonLabel, amount: pesangonVal }
-        ],
-        bpjsTkLabel: 'BPJS Ketenagakerjaan 3%',
-        bpjsTkAmount: bpjsTkVal,
-        bpjsKesLabel: 'BPJS Kesehatan 1%',
-        bpjsKesAmount: bpjsKesVal,
-        alpaDays: Number(row.alpa_days || 0),
-        alpaRate: Number(row.alpa_rate || 155000),
-        alpaAmount: alpaVal,
-        totalDeductions: totDeductVal,
-        deductions: [
-          { label: 'BPJS Ketenagakerjaan 3%', amount: bpjsTkVal },
-          { label: 'BPJS Kesehatan 1%', amount: bpjsKesVal },
-          { label: `Presensi / Alpa (${row.alpa_days || 0} Hari)`, amount: alpaVal }
-        ],
-        netSalary: netVal,
-        notes: row.notes || 'Slip gaji resmi PT. FAWWAZ RESKI PERWIRA'
-      }
-    });
-  } catch (err) {
-    console.error('Slip error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Printable HTML Slip Gaji (Format Resmi Boxed PT. Fawwaz Reski Perwira)
-app.get('/api/payroll/slip/:userId/print', async (req, res) => {
-  const { userId } = req.params;
-  const { periodId } = req.query;
-
-  try {
-    let query = `
-      SELECT 
-        s.*,
-        p.full_name as employee_name,
-        p.nip as employee_nip,
-        p.email as employee_email,
-        r.name as role_name,
-        d.name as division_name,
-        COALESCE(sp.bank_name, 'Bank Central Asia (BCA)') as bank_name,
-        COALESCE(sp.bank_account_number, '-') as bank_account_number
-      FROM hrm_payroll_slips s
-      JOIN hrm_profiles p ON s.user_id = p.id
-      LEFT JOIN hrm_roles r ON p.role_id = r.id
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
-      WHERE (s.user_id::text = $1 OR LOWER(p.email) = LOWER($1) OR p.nip = $1)
-    `;
-    const params = [userId];
-    if (periodId) {
-      params.push(periodId);
-      query += ` AND s.period_id = $2`;
-    }
-    query += ` ORDER BY s.created_at DESC LIMIT 1`;
-
-    let result = await pool.query(query, params);
-    if (result.rows.length === 0 || !result.rows[0].published_to_employee) {
-      return res.status(403).send(`
-        <div style="font-family: Arial, sans-serif; text-align: center; padding: 60px 20px; color: #475569;">
-          <h2 style="color: #0f172a; margin-bottom: 8px;">🔒 Dokumen Slip Gaji Belum Diterbitkan</h2>
-          <p style="font-size: 14px; max-width: 480px; margin: 0 auto; line-height: 1.6;">
-            Sesuai kebijakan PT. FAWWAZ RESKI PERWIRA, dokumen slip gaji hanya dapat diakses dan dicetak setelah diterbitkan secara resmi oleh Admin.
-          </p>
-        </div>
-      `);
-    }
-
-    const row = result.rows[0];
-
-    const fmt = (num) => {
-      const n = Number(num || 0);
-      return n.toLocaleString('en-US');
-    };
-
-    const upah = Number(row.base_salary || 4045050);
-    const lembur = Number(row.total_overtime_pay || 0);
-
-    const activeMonthPrint = (function() {
-      const INDO_MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-      if (row.period_label) {
-        for (const m of INDO_MONTHS) {
-          if (row.period_label.toLowerCase().includes(m.toLowerCase())) return m;
-        }
-      }
-      return INDO_MONTHS[new Date().getMonth()];
-    })();
-    const pesangonLabel = `Pesangon ${activeMonthPrint}`;
-
-    const seqNoPrint = Number(row.employee_sequence_no || 0);
-    const isTabunganPesangonPrint = row.severance_scheme === 'tabungan' || (seqNoPrint > 0 && seqNoPrint <= 33);
-    const rawPesangonPrint = Number(row.pesangon_amount || 0);
-    const pesangonAmount = isTabunganPesangonPrint ? 0 : rawPesangonPrint;
-    const grossEarnings = upah + lembur + pesangonAmount;
-
-    const bpjsTk = upah === 4045050 ? 121351 : Math.round(upah * 0.03);
-    const bpjsKes = upah === 4045050 ? 40450 : Math.round(upah * 0.01);
-    const alpaDays = Number(row.alpa_days || 0);
-    const alpaRate = Number(row.alpa_rate || 155000);
-    const alpaAmount = Number(row.absence_deduction || 0);
-    const totalDeductions = (upah === 4045050 ? 161802 : (bpjsTk + bpjsKes)) + alpaAmount;
-    const netSalary = grossEarnings - totalDeductions;
-
-    const printedDateStr = row.printed_date
-      ? new Date(row.printed_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' })
-      : new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
-
-    // Read Logo as base64 for instant offline rendering
-    let logoDataUrl = '';
-    const logoFile = path.join(__dirname, 'assets/logo.png');
-    if (fs.existsSync(logoFile)) {
-      const buf = fs.readFileSync(logoFile);
-      logoDataUrl = `data:image/png;base64,${buf.toString('base64')}`;
-    }
-
-    const html = `<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8">
-  <title>Slip Gaji - ${row.employee_name} (${row.period_label || 'September 2026'})</title>
-  <style>
-    @page {
-      size: A4 portrait;
-      margin: 15mm 20mm;
-    }
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
-      color: #000;
-    }
-    body {
-      background: #f1f5f9;
-      padding: 24px 16px;
-    }
-    .print-actions {
-      max-width: 820px;
-      margin: 0 auto 16px auto;
-      display: flex;
-      justify-content: flex-end;
-      gap: 12px;
-    }
-    .btn-print {
-      background: #059669;
-      color: #fff;
-      border: none;
-      padding: 8px 18px;
-      font-size: 13px;
-      font-weight: 700;
-      border-radius: 6px;
-      cursor: pointer;
-    }
-    .slip-wrapper {
-      max-width: 820px;
-      margin: 0 auto;
-      background: #fff;
-      padding: 28px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-    }
-    
-    /* 1. Header Box */
-    .header-box {
-      border: 2px solid #000;
-      margin-bottom: 8px;
-    }
-    .header-top {
-      display: flex;
-      border-bottom: 2px solid #000;
-    }
-    .header-company {
-      flex: 1.1;
-      display: flex;
-      align-items: center;
-      padding: 8px 14px;
-      border-right: 2px solid #000;
-      gap: 12px;
-    }
-    .company-logo {
-      width: 48px;
-      height: 48px;
-      object-fit: contain;
-    }
-    .company-name {
-      text-align: center;
-      flex: 1;
-      line-height: 1.25;
-    }
-    .company-name-underline {
-      font-size: 17px;
-      font-weight: 800;
-      text-decoration: underline;
-      text-underline-offset: 3px;
-      letter-spacing: 0.5px;
-    }
-    .company-name-bold {
-      font-size: 17px;
-      font-weight: 800;
-      letter-spacing: 1px;
-    }
-    .header-title {
-      flex: 1.2;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      padding: 8px 14px;
-      text-align: center;
-    }
-    .slip-main-title {
-      font-size: 17px;
-      font-weight: 800;
-      letter-spacing: 0.5px;
-    }
-    .slip-period {
-      font-size: 14px;
-      font-weight: 700;
-      margin-top: 6px;
-    }
-    .header-meta {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-end;
-      padding: 8px 14px;
-      font-size: 13px;
-      line-height: 1.6;
-    }
-    .meta-col-left {
-      display: flex;
-      flex-direction: column;
-    }
-    .meta-item {
-      display: flex;
-    }
-    .meta-lbl {
-      width: 60px;
-      font-weight: 700;
-    }
-    .meta-sep {
-      width: 14px;
-      font-weight: 700;
-    }
-    .meta-val {
-      font-weight: 700;
-    }
-    .meta-col-right {
-      display: flex;
-      align-items: flex-end;
-      font-size: 12px;
-      font-weight: 600;
-    }
-
-    /* 2. Columns: PENDAPATAN & POTONGAN */
-    .columns-row {
-      display: flex;
-      gap: 10px;
-      align-items: stretch;
-    }
-    .col-box {
-      flex: 1;
-      border: 2px solid #000;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-    }
-    .col-header {
-      text-align: center;
-      font-size: 13.5px;
-      font-weight: 800;
-      padding: 6px 8px;
-      border-bottom: 2px solid #000;
-      letter-spacing: 0.5px;
-    }
-    .col-body {
-      padding: 8px 10px;
-      flex: 1;
-      min-height: 100px;
-    }
-    .col-row {
-      display: flex;
-      justify-content: space-between;
-      font-size: 13px;
-      line-height: 1.75;
-    }
-    .col-label {
-      flex: 1;
-    }
-    .col-sep {
-      width: 14px;
-      text-align: center;
-    }
-    .col-val {
-      min-width: 110px;
-      text-align: right;
-      font-weight: 600;
-    }
-    .col-footer {
-      border-top: 2px solid #000;
-      padding: 6px 10px;
-      display: flex;
-      justify-content: space-between;
-      font-size: 13px;
-      font-weight: 800;
-    }
-    .footer-label {
-      flex: 1;
-    }
-    .footer-sep {
-      width: 14px;
-      text-align: center;
-    }
-    .footer-val {
-      min-width: 110px;
-      text-align: right;
-    }
-
-    /* 3. Bottom: Jumlah Gaji */
-    .total-thp-wrapper {
-      display: flex;
-      justify-content: flex-end;
-      margin-top: 8px;
-    }
-    .total-thp-box {
-      width: calc(50% - 5px);
-      border: 2px solid #000;
-      padding: 6px 12px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 14px;
-      font-weight: 800;
-    }
-    .thp-label {
-      font-weight: 800;
-    }
-    .thp-sep {
-      width: 14px;
-      text-align: center;
-      font-weight: 800;
-    }
-    .thp-val {
-      min-width: 120px;
-      text-align: right;
-      font-weight: 900;
-      font-size: 15px;
-    }
-
-    @media print {
-      body {
-        background: #fff;
-        padding: 0;
-      }
-      .print-actions {
-        display: none !important;
-      }
-      .slip-wrapper {
-        box-shadow: none;
-        padding: 0;
-        max-width: 100%;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="print-actions">
-    <button class="btn-print" onclick="window.print()">🖨️ Cetak / Simpan PDF</button>
-  </div>
-
-  <div class="slip-wrapper">
-    <!-- Header Box -->
-    <div class="header-box">
-      <div class="header-top">
-        <div class="header-company">
-          ${logoDataUrl ? `<img src="${logoDataUrl}" class="company-logo" alt="Logo FRP">` : ''}
-          <div class="company-name">
-            <div class="company-name-underline">PT. FAWWAZ RESKI</div>
-            <div class="company-name-bold">PERWIRA</div>
-          </div>
-        </div>
-        <div class="header-title">
-          <div class="slip-main-title">SLIP GAJI KARYAWAN</div>
-          <div class="slip-period">PERIODE : ${String(row.period_label || 'September 2026').toUpperCase()}</div>
-        </div>
-      </div>
-      <div class="header-meta">
-        <div class="meta-col-left">
-          <div class="meta-item">
-            <span class="meta-lbl">NAMA</span>
-            <span class="meta-sep">:</span>
-            <span class="meta-val">${row.employee_name || '-'}</span>
-          </div>
-          <div class="meta-item">
-            <span class="meta-lbl">ID</span>
-            <span class="meta-sep">:</span>
-            <span class="meta-val">${row.employee_nip || '-'}</span>
-          </div>
-        </div>
-        <div class="meta-col-right">
-          <span>Dicetak Tanggal : &nbsp;${printedDateStr}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- 2 Columns Box -->
-    <div class="columns-row">
-      <!-- PENDAPATAN -->
-      <div class="col-box">
-        <div class="col-header">PENDAPATAN :</div>
-        <div class="col-body">
-          <div class="col-row">
-            <span class="col-label">Upah</span>
-            <span class="col-sep">:</span>
-            <span class="col-val">Rp ${fmt(upah)}</span>
-          </div>
-          <div class="col-row">
-            <span class="col-label">Lembur</span>
-            <span class="col-sep">:</span>
-            <span class="col-val">${lembur > 0 ? 'Rp ' + fmt(lembur) : ''}</span>
-          </div>
-          <div class="col-row">
-            <span class="col-label">${pesangonLabel}</span>
-            <span class="col-sep">:</span>
-            <span class="col-val">${pesangonAmount > 0 ? 'Rp ' + fmt(pesangonAmount) : ''}</span>
-          </div>
-        </div>
-        <div class="col-footer">
-          <span class="footer-label">Total Pendapatan</span>
-          <span class="footer-sep">:</span>
-          <span class="footer-val">Rp ${fmt(grossEarnings)}</span>
-        </div>
-      </div>
-
-      <!-- POTONGAN -->
-      <div class="col-box">
-        <div class="col-header">POTONGAN :</div>
-        <div class="col-body">
-          <div class="col-row">
-            <span class="col-label">BPJS Ketenagakerjaan 3%</span>
-            <span class="col-sep">:</span>
-            <span class="col-val">Rp ${fmt(bpjsTk)}</span>
-          </div>
-          <div class="col-row">
-            <span class="col-label">BPJS Kesehatan 1%</span>
-            <span class="col-sep">:</span>
-            <span class="col-val">Rp ${fmt(bpjsKes)}</span>
-          </div>
-          <div class="col-row">
-            <span class="col-label" style="display:flex; align-items:center; gap:6px;">
-              <span>Presensi / Alpa</span>
-              <span style="font-weight:bold;">:</span>
-              <span style="font-weight:normal;">${alpaDays > 0 ? `${alpaDays} Hari @` : 'Hari @'}</span>
-            </span>
-            <span class="col-sep">:</span>
-            <span class="col-val">${alpaAmount > 0 ? 'Rp ' + fmt(alpaAmount) : 'Rp &nbsp; &nbsp; &nbsp; -'}</span>
-          </div>
-          <div class="col-row">
-            <span class="col-label"></span>
-            <span class="col-sep">:</span>
-            <span class="col-val"></span>
-          </div>
-        </div>
-        <div class="col-footer">
-          <span class="footer-label">Total Potongan</span>
-          <span class="footer-sep">:</span>
-          <span class="footer-val">Rp ${fmt(totalDeductions)}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Jumlah Gaji Box -->
-    <div class="total-thp-wrapper">
-      <div class="total-thp-box">
-        <span class="thp-label">Jumlah Gaji</span>
-        <span class="thp-sep">:</span>
-        <span class="thp-val">Rp ${fmt(netSalary)}</span>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    window.onload = function() {
-      if (window.location.search.includes('autoprint=1')) {
-        setTimeout(function() { window.print(); }, 400);
-      }
-    };
-  </script>
-</body>
-</html>`;
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(html);
-  } catch (err) {
-    console.error('Print slip error:', err);
-    res.status(500).send('<h3>Gagal membuat slip gaji: ' + err.message + '</h3>');
-  }
-});
-
-// ─── 11. BIOMETRIC FACE STATUS & HANDOFF ────────────────────────────────
-
-app.get('/api/biometrics/status/:userId', async (req, res) => {
-  const { userId } = req.params;
-  try {
-    const result = await pool.query(
-      'SELECT id, nip, full_name, is_face_enrolled, face_enrolled_photo, face_enrolled_at FROM hrm_profiles WHERE id::text = $1 OR nip = $1 OR LOWER(email) = LOWER($1) LIMIT 1',
-      [userId]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
-    }
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── 14. ENTERPRISE NOTIFICATION SYSTEM (POSTGRESQL MULTI-ROLE & PUSH SYNC) ──
-
-app.get('/api/notifications', async (req, res) => {
-  const { userId, role } = req.query;
-  try {
-    let query;
-    let params = [];
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    let validUserId = null;
-
-    if (userId && uuidRegex.test(userId)) {
-      validUserId = userId;
-    } else if (userId) {
-      const uRes = await pool.query(
-        'SELECT id FROM hrm_profiles WHERE nip = $1 OR LOWER(email) = LOWER($1) LIMIT 1',
-        [userId]
-      );
-      if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
-    }
-
-    const cleanRole = (role || '').toLowerCase().replace(/[\s_-]/g, '');
-
-    if (validUserId && cleanRole) {
-      query = `
-        SELECT * FROM hrm_notifications
-        WHERE user_id = $1
-           OR recipient_role = $2
-           OR recipient_role = 'all'
-           OR ($2 IN ('admin', 'hrd') AND recipient_role IN ('admin', 'hrd', 'all_admin'))
-           OR ($2 = 'superadmin' AND recipient_role IN ('superadmin', 'admin', 'hrd', 'all_admin', 'pimpinan'))
-           OR ($2 = 'pimpinan' AND recipient_role IN ('pimpinan', 'all_pimpinan', 'all_admin'))
-        ORDER BY created_at DESC
-        LIMIT 60;
-      `;
-      params = [validUserId, cleanRole];
-    } else if (validUserId) {
-      query = `
-        SELECT * FROM hrm_notifications
-        WHERE user_id = $1 OR recipient_role = 'all'
-        ORDER BY created_at DESC
-        LIMIT 60;
-      `;
-      params = [validUserId];
-    } else if (cleanRole) {
-      query = `
-        SELECT * FROM hrm_notifications
-        WHERE recipient_role = $1
-           OR recipient_role = 'all'
-           OR ($1 IN ('admin', 'hrd') AND recipient_role IN ('admin', 'hrd', 'all_admin'))
-           OR ($1 = 'superadmin' AND recipient_role IN ('superadmin', 'admin', 'hrd', 'all_admin', 'pimpinan'))
-           OR ($1 = 'pimpinan' AND recipient_role IN ('pimpinan', 'all_pimpinan', 'all_admin'))
-        ORDER BY created_at DESC
-        LIMIT 60;
-      `;
-      params = [cleanRole];
-    } else {
-      query = `SELECT * FROM hrm_notifications ORDER BY created_at DESC LIMIT 60;`;
-    }
-
-    const result = await pool.query(query, params);
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    console.error('Fetch notifications error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.patch('/api/notifications/:id/read', async (req, res) => {
-  const { id } = req.params;
-  try {
-    const result = await pool.query(
-      'UPDATE hrm_notifications SET is_read = true WHERE id::text = $1 RETURNING *',
-      [id]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Notifikasi tidak ditemukan' });
-    }
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    console.error('Mark notification read error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/notifications/read-all', async (req, res) => {
-  const { userId, role } = req.body;
-  try {
-    const cleanRole = (role || '').toLowerCase().replace(/[\s_-]/g, '');
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    let validUserId = null;
-
-    if (userId && uuidRegex.test(userId)) {
-      validUserId = userId;
-    } else if (userId) {
-      const uRes = await pool.query(
-        'SELECT id FROM hrm_profiles WHERE nip = $1 OR LOWER(email) = LOWER($1) LIMIT 1',
-        [userId]
-      );
-      if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
-    }
-
-    if (validUserId && cleanRole) {
-      await pool.query(`
-        UPDATE hrm_notifications
-        SET is_read = true
-        WHERE user_id = $1
-           OR recipient_role = $2
-           OR recipient_role = 'all'
-           OR ($2 IN ('admin', 'hrd') AND recipient_role IN ('admin', 'hrd', 'all_admin'))
-           OR ($2 = 'superadmin' AND recipient_role IN ('superadmin', 'admin', 'hrd', 'all_admin', 'pimpinan'))
-           OR ($2 = 'pimpinan' AND recipient_role IN ('pimpinan', 'all_pimpinan', 'all_admin'));
-      `, [validUserId, cleanRole]);
-    } else if (validUserId) {
-      await pool.query('UPDATE hrm_notifications SET is_read = true WHERE user_id = $1', [validUserId]);
-    } else if (cleanRole) {
-      await pool.query(`
-        UPDATE hrm_notifications
-        SET is_read = true
-        WHERE recipient_role = $1
-           OR recipient_role = 'all'
-           OR ($1 IN ('admin', 'hrd') AND recipient_role IN ('admin', 'hrd', 'all_admin'))
-           OR ($1 = 'superadmin' AND recipient_role IN ('superadmin', 'admin', 'hrd', 'all_admin', 'pimpinan'))
-           OR ($1 = 'pimpinan' AND recipient_role IN ('pimpinan', 'all_pimpinan', 'all_admin'));
-      `, [cleanRole]);
-    } else {
-      await pool.query('UPDATE hrm_notifications SET is_read = true');
-    }
-
-    res.json({ success: true, message: 'Semua notifikasi berhasil ditandai sudah dibaca' });
-  } catch (err) {
-    console.error('Mark all read error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/notifications', async (req, res) => {
-  const { userId, title, message, type, link, recipientRole, metadata } = req.body;
-  try {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    let validUserId = null;
-
-    if (userId && uuidRegex.test(userId)) {
-      validUserId = userId;
-    } else if (userId && userId !== 'all' && userId !== 'all_admin') {
-      const uRes = await pool.query(
-        'SELECT id FROM hrm_profiles WHERE nip = $1 OR LOWER(email) = LOWER($1) LIMIT 1',
-        [userId]
-      );
-      if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
-    }
-
-    const query = `
-      INSERT INTO hrm_notifications (
-        user_id, title, message, type, link, recipient_role, metadata, is_read, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, false, NOW())
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [
-      validUserId,
-      title || 'Pemberitahuan Sistem',
-      message || '',
-      type || 'info',
-      link || null,
-      recipientRole || null,
-      JSON.stringify(metadata || {}),
-    ]);
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    console.error('Create notification error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── ANALYTICS ENDPOINTS (Pimpinan / Keuangan / Superadmin / Korlap) ────────
-
-// GET /api/analytics/summary — KPI cards + weekly chart data + division breakdown
-app.get('/api/analytics/summary', async (req, res) => {
-  try {
-    const now = new Date();
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-    const today = now.toISOString().split('T')[0];
-
-    // KPI aggregations (parallel)
-    const [empRes, hadirRes, pendingRes, avgRes, weeklyRes, divisionRes, submissionsRes] = await Promise.all([
-      // Total active employees
-      pool.query(`SELECT COUNT(*) as total FROM hrm_profiles WHERE is_active = true`),
-      // Hadir today (biometric verified)
-      pool.query(`SELECT COUNT(DISTINCT user_id) as total FROM hrm_attendances WHERE attendance_date = $1 AND status IN ('hadir','terlambat')`, [today]),
-      // Pending approvals (cuti + lembur)
-      pool.query(`
-        SELECT
-          (SELECT COUNT(*) FROM hrm_leave_requests WHERE status = 'pending') +
-          (SELECT COUNT(*) FROM hrm_overtime_records WHERE status = 'pending') as total
-      `),
-      // Average monthly attendance %
-      pool.query(`
-        SELECT ROUND(
-          COALESCE(
-            (COUNT(DISTINCT a.user_id) FILTER (WHERE a.attendance_date >= $1)::float /
-            NULLIF((SELECT COUNT(*) FROM hrm_profiles WHERE is_active = true), 0)) * 100, 0
-          )::numeric, 1
-        ) as avg_pct
-        FROM hrm_attendances a
-        WHERE a.attendance_date >= $1
-      `, [monthStart]),
-      // Weekly attendance (last 7 days, Sun=0 → Mon last week start)
-      pool.query(`
-        SELECT
-          EXTRACT(DOW FROM attendance_date)::int as dow,
-          attendance_date,
-          COUNT(DISTINCT user_id) as hadir
-        FROM hrm_attendances
-        WHERE attendance_date >= ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '6 days')
-        GROUP BY attendance_date, EXTRACT(DOW FROM attendance_date)
-        ORDER BY attendance_date
-      `),
-      // Division breakdown
-      pool.query(`
-        SELECT d.name, COUNT(p.id) as count
-        FROM hrm_profiles p
-        LEFT JOIN hrm_divisions d ON p.division_id = d.id
-        WHERE p.is_active = true
-        GROUP BY d.name
-        ORDER BY count DESC
-        LIMIT 8
-      `),
-      // Submissions status count (this month)
-      pool.query(`
-        SELECT
-          SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
-          SUM(CASE WHEN status = 'pending'  THEN 1 ELSE 0 END) as pending,
-          SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected
-        FROM (
-          SELECT status FROM hrm_leave_requests WHERE created_at >= $1
-          UNION ALL
-          SELECT status FROM hrm_overtime_records WHERE created_at >= $1
-        ) combined
-      `, [monthStart]),
-    ]);
-
-    // Build weekly array [Mon..Sun] — last 7 days
-    const weeklyMap = {};
-    weeklyRes.rows.forEach(r => { weeklyMap[r.attendance_date] = parseInt(r.hadir, 10); });
-    const weeklyAttendance = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().split('T')[0];
-      weeklyAttendance.push(weeklyMap[key] || 0);
-    }
-
-    const sub = submissionsRes.rows[0] || {};
-
-    res.json({
-      success: true,
-      data: {
-        totalEmployees:       parseInt(empRes.rows[0]?.total || 0, 10),
-        hadirToday:           parseInt(hadirRes.rows[0]?.total || 0, 10),
-        pendingApprovals:     parseInt(pendingRes.rows[0]?.total || 0, 10),
-        avgAttendancePct:     parseFloat(avgRes.rows[0]?.avg_pct || 0),
-        weeklyAttendance,
-        divisionBreakdown:    divisionRes.rows.map(r => ({ name: r.name || 'Umum', count: parseInt(r.count, 10) })),
-        approvedSubmissions:  parseInt(sub.approved || 0, 10),
-        pendingSubmissions:   parseInt(sub.pending  || 0, 10),
-        rejectedSubmissions:  parseInt(sub.rejected || 0, 10),
-      },
-    });
-  } catch (err) {
-    console.error('[Analytics Summary] Error:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// GET /api/analytics/employees — individual employee metrics for progress chart
-app.get('/api/analytics/employees', async (req, res) => {
-  const { divisionId } = req.query;
-  try {
-    const monthStart = new Date();
-    monthStart.setDate(1);
-    monthStart.setHours(0, 0, 0, 0);
-
-    let whereClause = 'WHERE p.is_active = true';
-    const params = [monthStart.toISOString().split('T')[0]];
-    if (divisionId) {
-      params.push(divisionId);
-      whereClause += ` AND p.division_id = $${params.length}`;
-    }
-
-    const result = await pool.query(`
-      SELECT
-        p.id,
-        p.full_name,
-        p.nip,
-        p.avatar_url,
-        d.name as division_name,
-        r.label as role_label,
-        -- Hadir this month
-        COALESCE((
-          SELECT COUNT(*)
-          FROM hrm_attendances a
-          WHERE a.user_id = p.id
-            AND a.attendance_date >= $1
-            AND a.status IN ('hadir', 'terlambat')
-        ), 0) as hadir_count,
-        -- Terlambat count
-        COALESCE((
-          SELECT COUNT(*)
-          FROM hrm_attendances a
-          WHERE a.user_id = p.id
-            AND a.attendance_date >= $1
-            AND a.status = 'terlambat'
-        ), 0) as terlambat_count,
-        -- Lembur hours approved
-        COALESCE((
-          SELECT SUM(duration_hours)
-          FROM hrm_overtime_records o
-          WHERE o.user_id = p.id
-            AND o.status = 'approved'
-            AND DATE_TRUNC('month', o.date) = DATE_TRUNC('month', $1::date)
-        ), 0) as lembur_hours,
-        -- Cuti used this year
-        COALESCE(p.used_leave_days, 0) as used_leave_days,
-        COALESCE(p.annual_leave_quota, 12) as annual_leave_quota,
-        -- Working days in month (approximate)
-        22 as target_days
-      FROM hrm_profiles p
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_roles r ON p.role_id = r.id
-      ${whereClause}
-      ORDER BY p.full_name
-      LIMIT 80
-    `, params);
-
-    // Compute attendance_pct server-side
-    const employees = result.rows.map(r => ({
-      ...r,
-      hadir_count:    parseInt(r.hadir_count, 10),
-      terlambat_count:parseInt(r.terlambat_count, 10),
-      lembur_hours:   parseFloat(r.lembur_hours),
-      used_leave_days:parseInt(r.used_leave_days, 10),
-      target_days:    22,
-      attendance_pct: Math.round((parseInt(r.hadir_count, 10) / 22) * 100),
-    }));
-
-    res.json({ success: true, data: employees });
-  } catch (err) {
-    console.error('[Analytics Employees] Error:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── KEPALA REGU ASSIGNMENT MANAGEMENT ────────────────────────────────────────
-
-// GET /api/kepala-regu/list — list all kepala_regu users with their assigned employees
-app.get('/api/kepala-regu/list', async (req, res) => {
-  try {
-    const krRes = await pool.query(`
-      SELECT p.id, p.full_name, p.nip, p.avatar_url, d.name as division_name, d.id as division_id,
-        COALESCE(json_agg(
-          json_build_object('id', emp.id, 'fullName', emp.full_name, 'nip', emp.nip, 'divisionName', ed.name)
-        ) FILTER (WHERE emp.id IS NOT NULL), '[]') as assigned_employees
-      FROM hrm_profiles p
-      LEFT JOIN hrm_roles r ON p.role_id = r.id
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_profiles emp ON emp.kepala_regu_id = p.id
-      LEFT JOIN hrm_divisions ed ON emp.division_id = ed.id
-      WHERE (LOWER(r.name) = 'kepala_regu' OR LOWER(r.name) = 'kepalaregu') AND p.is_active = true
-      GROUP BY p.id, p.full_name, p.nip, p.avatar_url, d.name, d.id
-      ORDER BY p.full_name
-    `);
-    res.json({ success: true, data: krRes.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// GET /api/kepala-regu/employees — list all employees with their kepala_regu assignment
-app.get('/api/kepala-regu/employees', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT p.id, p.full_name, p.nip, p.avatar_url,
-             d.name as division_name, d.id as division_id,
-             kr.id as kepala_regu_id, kr.full_name as kepala_regu_name
-      FROM hrm_profiles p
-      LEFT JOIN hrm_divisions d ON p.division_id = d.id
-      LEFT JOIN hrm_profiles kr ON p.kepala_regu_id = kr.id
-      LEFT JOIN hrm_roles r ON p.role_id = r.id
-      WHERE p.is_active = true
-        AND (LOWER(r.name) = 'karyawan' OR r.id IS NULL)
-      ORDER BY d.name, p.full_name
-    `);
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// PUT /api/kepala-regu/assign — assign / update employee's kepala_regu
-app.put('/api/kepala-regu/assign', async (req, res) => {
-  const { employeeId, kepalaReguId } = req.body;
-  if (!employeeId) return res.status(400).json({ success: false, error: 'employeeId wajib diisi' });
-  try {
-    await pool.query(
-      'UPDATE hrm_profiles SET kepala_regu_id = $1, updated_at = NOW() WHERE id = $2',
-      [kepalaReguId || null, employeeId]
-    );
-    res.json({ success: true, message: 'Penugasan Kepala Regu berhasil diperbarui' });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// PUT /api/kepala-regu/bulk-assign — bulk assign division employees to a kepala_regu
-app.put('/api/kepala-regu/bulk-assign', async (req, res) => {
-  const { kepalaReguId, divisionId } = req.body;
-  if (!kepalaReguId || !divisionId) return res.status(400).json({ success: false, error: 'kepalaReguId dan divisionId wajib diisi' });
-  try {
-    await pool.query(
-      `UPDATE hrm_profiles SET kepala_regu_id = $1, updated_at = NOW()
-       WHERE division_id = $2`,
-      [kepalaReguId, divisionId]
-    );
-    res.json({ success: true, message: 'Semua karyawan divisi berhasil ditetapkan ke Kepala Regu' });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── SHIFT SWAP: ALL SUBMISSIONS (for Approval Panel) ─────────────────────────
-
-// GET /api/shift-swaps/all — get all shift swaps for approval (korlap/kepala_regu)
-app.get('/api/shift-swaps/all', async (req, res) => {
-  const { status, role, userId, divisionId } = req.query;
-  try {
-    let params = [];
-    let whereClauses = [];
-
-    if (status && status !== 'all') {
-      params.push(status);
-      whereClauses.push(`s.status = $${params.length}`);
-    }
-
-    // For kepala_regu — only show swaps from their division
-    if (divisionId) {
-      params.push(divisionId);
-      whereClauses.push(`rp.division_id = $${params.length}`);
-    }
-
-    const whereStr = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
-
-    const result = await pool.query(`
-      SELECT s.*,
-        rp.full_name as requester_name, rp.nip as requester_nip,
-        rd.name as requester_division, rd.id as requester_division_id,
-        sp.full_name as substitute_name, sp.nip as substitute_nip,
-        dp.full_name as danru_name,
-        dsp.full_name as danru_substitute_name,
-        kp.full_name as korlap_name,
-        ap.full_name as approver_name
-      FROM hrm_shift_swaps s
-      LEFT JOIN hrm_profiles rp ON s.requester_id = rp.id
-      LEFT JOIN hrm_divisions rd ON rp.division_id = rd.id
-      LEFT JOIN hrm_profiles sp ON s.substitute_id = sp.id
-      LEFT JOIN hrm_profiles dp ON s.danru_id = dp.id
-      LEFT JOIN hrm_profiles dsp ON s.danru_substitute_id = dsp.id
-      LEFT JOIN hrm_profiles kp ON s.korlap_id = kp.id
-      LEFT JOIN hrm_profiles ap ON s.approved_by = ap.id
-      ${whereStr}
-      ORDER BY s.created_at DESC
-      LIMIT 200
-    `, params);
-
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    console.error('[ShiftSwap All] Error:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// PUT /api/shift-swaps/:id/korlap-approve — Korlap final decision on shift swap
-app.put('/api/shift-swaps/:id/korlap-approve', async (req, res) => {
-  const { id } = req.params;
-  const { korlapId, korlapName, action, substituteId, notes } = req.body;
-  if (!['approved', 'rejected'].includes(action)) {
-    return res.status(400).json({ success: false, error: 'action harus approved atau rejected' });
-  }
-  try {
-    const sRes = await pool.query('SELECT * FROM hrm_shift_swaps WHERE id = $1 LIMIT 1', [id]);
-    if (sRes.rows.length === 0) return res.status(404).json({ success: false, error: 'Data tidak ditemukan' });
-    const swap = sRes.rows[0];
-
-    const finalStatus = action === 'approved' ? 'approved' : 'rejected';
-    await pool.query(`
-      UPDATE hrm_shift_swaps SET
-        status = $1,
-        korlap_status = $2,
-        korlap_id = $3,
-        korlap_notes = $4,
-        substitute_id = COALESCE($5, substitute_id),
-        approved_by = $3,
-        approval_notes = $4,
-        updated_at = NOW()
-      WHERE id = $6
-    `, [finalStatus, action, korlapId || null, notes || null, substituteId || null, id]);
-
-    // Notify requester
-    const statusText = action === 'approved' ? 'DISETUJUI' : 'DITOLAK';
-    await broadcastNotification({
-      targetUserId: swap.requester_id,
-      title: `Pengajuan Tukar Shift ${statusText}`,
-      message: `Permohonan pengisian pos dinas Anda untuk tanggal ${swap.swap_date} telah ${statusText} oleh Korlap ${korlapName || ''}.${notes ? ' Catatan: ' + notes : ''}`,
-      type: action === 'approved' ? 'success' : 'warning',
-      metadata: { swapId: id, action },
-    });
-
-    res.json({ success: true, message: `Permohonan berhasil ${statusText} oleh Korlap` });
-  } catch (err) {
-    console.error('[ShiftSwap Korlap] Error:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// PUT /api/shift-swaps/:id/danru-approve — Kepala Regu (Danru) checker action
-app.put('/api/shift-swaps/:id/danru-approve', async (req, res) => {
-  const { id } = req.params;
-  const { danruId, danruName, action, recommendedSubstituteId, notes } = req.body;
-  try {
-    const sRes = await pool.query('SELECT * FROM hrm_shift_swaps WHERE id = $1 LIMIT 1', [id]);
-    if (sRes.rows.length === 0) return res.status(404).json({ success: false, error: 'Data tidak ditemukan' });
-    const swap = sRes.rows[0];
-
-    await pool.query(`
-      UPDATE hrm_shift_swaps SET
-        danru_status = $1,
-        danru_id = $2,
-        danru_notes = $3,
-        danru_substitute_id = COALESCE($4, danru_substitute_id),
-        status = CASE WHEN $1 = 'rejected' THEN 'rejected' ELSE 'pending_korlap' END,
-        updated_at = NOW()
-      WHERE id = $5
-    `, [action, danruId || null, notes || null, recommendedSubstituteId || null, id]);
-
-    // Notify Korlap for final decision if danru recommends
-    if (action !== 'rejected') {
-      await broadcastNotification({
-        recipientRoles: ['korlap', 'admin', 'superadmin'],
-        title: '🔁 Tukar Shift Siap Diputuskan Korlap',
-        message: `Kepala Regu ${danruName || ''} telah menelaah permohonan dinas tanggal ${swap.swap_date} dan meneruskan ke Korlap untuk keputusan akhir.`,
-        type: 'info',
-        link: '/admin/approval?tab=tukar',
-        metadata: { swapId: id, danruId, swapDate: swap.swap_date },
-      });
-    } else {
-      // Notify requester of rejection by danru
-      await broadcastNotification({
-        targetUserId: swap.requester_id,
-        title: 'Pengajuan Tukar Shift DITOLAK',
-        message: `Permohonan dinas Anda untuk tanggal ${swap.swap_date} ditolak oleh Kepala Regu.${notes ? ' Catatan: ' + notes : ''}`,
-        type: 'warning',
-        metadata: { swapId: id },
-      });
-    }
-
-    res.json({ success: true, message: action === 'rejected' ? 'Pengajuan ditolak oleh Danru' : 'Pengajuan diteruskan ke Korlap' });
-  } catch (err) {
-    console.error('[ShiftSwap Danru] Error:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── EMPLOYEE SELF-PROGRESS API ────────────────────────────────────────────────
-
-// GET /api/analytics/self — Self-progress for individual employee
-app.get('/api/analytics/self', async (req, res) => {
-  const { userId } = req.query;
-  if (!userId) return res.status(400).json({ success: false, error: 'userId wajib' });
-
-  try {
-    let validUserId = userId;
-    if (!UUID_REGEX.test(userId)) {
-      const uRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
-      if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
-    }
-
-    const monthStart = new Date();
-    monthStart.setDate(1);
-    const monthStartStr = monthStart.toISOString().split('T')[0];
-    const yearStart = `${new Date().getFullYear()}-01-01`;
-    const today = new Date().toISOString().split('T')[0];
-
-    const [profileRes, attendanceRes, otRes, leaveRes, weeklyRes] = await Promise.all([
-      pool.query('SELECT p.*, d.name as division_name FROM hrm_profiles p LEFT JOIN hrm_divisions d ON p.division_id = d.id WHERE p.id = $1', [validUserId]),
-      pool.query(`
-        SELECT
-          COUNT(*) FILTER (WHERE status IN ('hadir','terlambat')) as hadir_count,
-          COUNT(*) FILTER (WHERE status = 'terlambat') as terlambat_count,
-          COUNT(*) FILTER (WHERE status = 'alpha') as alpha_count,
-          ROUND(COALESCE(AVG(work_duration_minutes) / 60.0, 0)::numeric, 2) as avg_hours_per_day
-        FROM hrm_attendances WHERE user_id = $1 AND attendance_date >= $2
-      `, [validUserId, monthStartStr]),
-      pool.query(`
-        SELECT
-          COUNT(*) FILTER (WHERE status = 'approved') as approved_count,
-          COALESCE(SUM(duration_hours) FILTER (WHERE status = 'approved'), 0) as total_hours,
-          0 as total_compensation
-        FROM hrm_overtime_records WHERE user_id = $1 AND DATE_TRUNC('month', date) = DATE_TRUNC('month', ($2::date - INTERVAL '1 month'))
-      `, [validUserId, monthStartStr]),
-      pool.query(`
-        SELECT
-          COUNT(*) FILTER (WHERE status = 'approved' AND leave_type = 'cuti_tahunan') as cuti_used,
-          COUNT(*) FILTER (WHERE status = 'pending') as pending_count
-        FROM hrm_leave_requests WHERE user_id = $1 AND created_at >= $2
-      `, [validUserId, yearStart]),
-      // Last 14 days attendance
-      pool.query(`
-        SELECT attendance_date, status
-        FROM hrm_attendances
-        WHERE user_id = $1 AND attendance_date >= ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '13 days')
-        ORDER BY attendance_date DESC
-        LIMIT 14
-      `, [validUserId]),
-    ]);
-
-    const profile = profileRes.rows[0];
-    const att = attendanceRes.rows[0];
-    const ot = otRes.rows[0];
-    const leave = leaveRes.rows[0];
-    const quota = parseInt(profile?.annual_leave_quota || 12, 10);
-    const used = parseInt(profile?.used_leave_days || 0, 10);
-
-    const weeklyData = weeklyRes.rows.reduce((acc, r) => {
-      let dateStr = '';
-      if (r.attendance_date instanceof Date) {
-        // Use local or ISO YYYY-MM-DD
-        const year = r.attendance_date.getFullYear();
-        const month = String(r.attendance_date.getMonth() + 1).padStart(2, '0');
-        const day = String(r.attendance_date.getDate()).padStart(2, '0');
-        dateStr = `${year}-${month}-${day}`;
-      } else if (typeof r.attendance_date === 'string') {
-        dateStr = r.attendance_date.split('T')[0];
-      } else {
-        dateStr = String(r.attendance_date);
-      }
-      acc[dateStr] = r.status;
-      return acc;
-    }, {});
-
-    const last14Days = [];
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().split('T')[0];
-      last14Days.push({ date: key, status: weeklyData[key] || 'libur' });
-    }
-
-    res.json({
-      success: true,
-      data: {
-        employee: {
-          fullName: profile?.full_name,
-          nip: profile?.nip,
-          divisionName: profile?.division_name,
-          avatarUrl: profile?.avatar_url,
-        },
-        attendance: {
-          hadirCount: parseInt(att?.hadir_count || 0, 10),
-          terlambatCount: parseInt(att?.terlambat_count || 0, 10),
-          alphaCount: parseInt(att?.alpha_count || 0, 10),
-          targetDays: 22,
-          attendancePct: Math.round((parseInt(att?.hadir_count || 0, 10) / 22) * 100),
-          avgHoursPerDay: parseFloat(att?.avg_hours_per_day || 0),
-        },
-        overtime: {
-          approvedCount: parseInt(ot?.approved_count || 0, 10),
-          totalHours: parseFloat(ot?.total_hours || 0),
-          totalCompensation: parseFloat(ot?.total_compensation || 0),
-        },
-        leave: {
-          annualQuota: quota,
-          usedDays: used,
-          remainingDays: Math.max(0, quota - used),
-          pendingRequests: parseInt(leave?.pending_count || 0, 10),
-        },
-        last14Days,
-      },
-    });
-  } catch (err) {
-    console.error('[Analytics Self] Error:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Update /api/analytics/summary to support divisionId scoping for kepala_regu
-// Update /api/analytics/employees to support kepalaReguId for Kepala Regu scope
-// (These override the previous implementations to add division scope)
-
-// ─── EMPLOYEE SHIFT SCHEDULES API ─────────────────────────────────────────
-
-// GET /api/employee-schedules - Retrieve scheduled shifts with optional filters
-app.get('/api/employee-schedules', async (req, res) => {
-  const { month, year, divisionId, userId, date } = req.query;
-  try {
-    let query = `
-      SELECT 
-        s.id,
-        s.user_id as "userId",
-        p.full_name as "userName",
-        p.nip as "userNip",
-        p.employee_sequence_no as "employeeSequenceNo",
-        p.division_id as "divisionId",
-        p.division_name as "divisionName",
-        TO_CHAR(s.schedule_date, 'YYYY-MM-DD') as "scheduleDate",
-        s.shift_id as "shiftId",
-        s.shift_code as "shiftCode",
-        s.shift_name as "shiftName",
-        s.start_time as "startTime",
-        s.end_time as "endTime",
-        s.duration_hours as "durationHours",
-        s.is_night_shift as "isNightShift",
-        s.is_off as "isOff",
-        s.notes,
-        s.created_at as "createdAt",
-        s.updated_at as "updatedAt"
-      FROM hrm_employee_schedules s
-      JOIN hrm_profiles p ON s.user_id = p.id
-      WHERE 1=1
-        AND UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'
-    `;
-    const params = [];
-
-    if (userId) {
-      params.push(userId);
-      query += ` AND (s.user_id::text = $${params.length} OR p.nip = $${params.length} OR LOWER(p.email) = LOWER($${params.length}))`;
-    }
-    if (divisionId && divisionId !== 'all') {
-      params.push(divisionId);
-      query += ` AND p.division_id = $${params.length}`;
-    }
-    if (date) {
-      params.push(date);
-      query += ` AND s.schedule_date = $${params.length}`;
-    }
-    if (month) {
-      if (typeof month === 'string' && month.includes('-')) {
-        const [mYear, mMonth] = month.split('-').map(Number);
-        params.push(mMonth);
-        query += ` AND EXTRACT(MONTH FROM s.schedule_date) = $${params.length}`;
-        params.push(mYear);
-        query += ` AND EXTRACT(YEAR FROM s.schedule_date) = $${params.length}`;
-      } else if (year) {
-        params.push(Number(month));
-        query += ` AND EXTRACT(MONTH FROM s.schedule_date) = $${params.length}`;
-        params.push(Number(year));
-        query += ` AND EXTRACT(YEAR FROM s.schedule_date) = $${params.length}`;
-      }
-    }
-
-    query += ` ORDER BY s.schedule_date ASC, CASE WHEN p.nip LIKE 'FR%' THEN 0 ELSE 1 END, NULLIF(REGEXP_REPLACE(p.nip, '[^0-9]', '', 'g'), '')::INT ASC NULLS LAST, p.nip ASC, p.full_name ASC`;
-    const result = await pool.query(query, params);
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    console.error('[Employee Schedules] Error fetching:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// GET /api/employee-schedules/today/:userId - Retrieve today's schedule for specific user
-app.get('/api/employee-schedules/today/:userId', async (req, res) => {
-  const { userId } = req.params;
-  const today = req.query.date || new Date().toISOString().split('T')[0];
-  try {
-    const query = `
-      SELECT 
-        s.id,
-        s.user_id as "userId",
-        p.full_name as "userName",
-        p.nip as "userNip",
-        TO_CHAR(s.schedule_date, 'YYYY-MM-DD') as "scheduleDate",
-        s.shift_id as "shiftId",
-        s.shift_code as "shiftCode",
-        s.shift_name as "shiftName",
-        s.start_time as "startTime",
-        s.end_time as "endTime",
-        s.duration_hours as "durationHours",
-        s.is_night_shift as "isNightShift",
-        s.is_off as "isOff",
-        s.notes
-      FROM hrm_employee_schedules s
-      JOIN hrm_profiles p ON s.user_id = p.id
-      WHERE (s.user_id::text = $1 OR p.nip = $1 OR LOWER(p.email) = LOWER($1)) AND s.schedule_date = $2::date
-      LIMIT 1
-    `;
-    const result = await pool.query(query, [userId, today]);
-    res.json({ success: true, data: result.rows[0] || null });
-  } catch (err) {
-    console.error('[Employee Schedules Today] Error:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// POST /api/employee-schedules/batch - Upsert multiple employee schedules
-app.post('/api/employee-schedules/batch', async (req, res) => {
-  const { schedules } = req.body;
-  if (!Array.isArray(schedules) || schedules.length === 0) {
-    return res.status(400).json({ success: false, error: 'Daftar jadwal wajib disertakan' });
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    let upsertedCount = 0;
-
-    for (const item of schedules) {
-      if (!item.userId || !item.scheduleDate) continue;
-      await client.query(`
-        INSERT INTO hrm_employee_schedules (
-          user_id,
-          schedule_date,
-          shift_id,
-          shift_code,
-          shift_name,
-          start_time,
-          end_time,
-          duration_hours,
-          is_night_shift,
-          is_off,
-          notes,
-          updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-        ON CONFLICT (user_id, schedule_date) 
-        DO UPDATE SET
-          shift_id = EXCLUDED.shift_id,
-          shift_code = EXCLUDED.shift_code,
-          shift_name = EXCLUDED.shift_name,
-          start_time = EXCLUDED.start_time,
-          end_time = EXCLUDED.end_time,
-          duration_hours = EXCLUDED.duration_hours,
-          is_night_shift = EXCLUDED.is_night_shift,
-          is_off = EXCLUDED.is_off,
-          notes = EXCLUDED.notes,
-          updated_at = NOW()
-      `, [
-        item.userId,
-        item.scheduleDate,
-        (item.shiftId && UUID_REGEX.test(item.shiftId)) ? item.shiftId : null,
-        item.shiftCode || 'OFF',
-        item.shiftName || (item.shiftCode === 'OFF' ? 'Libur / Off' : item.shiftCode === 'DAY' ? 'Day Shift (07:30 - 16:30 WITA)' : `Shift ${item.shiftCode}`),
-        item.startTime || (item.shiftCode === 'M' ? '22:30' : item.shiftCode === 'S' ? '15:30' : '07:30'),
-        item.endTime || (item.shiftCode === 'DAY' ? '16:30' : item.shiftCode === 'M' ? '07:30' : item.shiftCode === 'S' ? '22:30' : '15:30'),
-        item.durationHours ?? (item.shiftCode === 'OFF' ? 0 : item.shiftCode === 'DAY' ? 9 : item.shiftCode === 'M' ? 9 : item.shiftCode === 'S' ? 7 : 8),
-        Boolean(item.isNightShift || item.shiftCode === 'M'),
-        Boolean(item.isOff || item.shiftCode === 'OFF'),
-        item.notes || 'Disusun via Smart Roster Scheduler'
-      ]);
-      upsertedCount++;
-    }
-
-    await client.query('COMMIT');
-    res.json({
-      success: true,
-      count: upsertedCount,
-      message: `Berhasil menyimpan ${upsertedCount} jadwal shift ke database perusahaan`,
-    });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('[Employee Schedules Batch] Error:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  } finally {
-    client.release();
-  }
-});
-
-// ─── EPHEMERAL PHOTO RETENTION ENFORCER ──────────────────────────────────────
-// Kebijakan: Foto absensi masuk, pulang, dan foto patroli selfie tidak tersimpan permanen menumpuk.
-// Hanya 1 foto terbaru aktif per karyawan yang dipertahankan di database.
-async function enforceEphemeralPhotoRetention() {
-  try {
-    // 1. Bersihkan photo_in lama (hanya sisakan 1 photo_in terbaru per user)
-    const resIn = await pool.query(`
-      UPDATE hrm_attendances a
-      SET photo_in = NULL
-      WHERE photo_in IS NOT NULL
-        AND id NOT IN (
-          SELECT DISTINCT ON (user_id) id
-          FROM hrm_attendances
-          WHERE photo_in IS NOT NULL
-          ORDER BY user_id, attendance_date DESC, created_at DESC
-        );
-    `);
-
-    // 2. Bersihkan photo_out lama (hanya sisakan 1 photo_out terbaru per user)
-    const resOut = await pool.query(`
-      UPDATE hrm_attendances a
-      SET photo_out = NULL
-      WHERE photo_out IS NOT NULL
-        AND id NOT IN (
-          SELECT DISTINCT ON (user_id) id
-          FROM hrm_attendances
-          WHERE photo_out IS NOT NULL
-          ORDER BY user_id, attendance_date DESC, created_at DESC
-        );
-    `);
-
-    // 3. Bersihkan foto selfie titik lokasi pos lama (hanya sisakan 1 foto selfie terbaru per user)
-    const resPatrol = await pool.query(`
-      UPDATE hrm_field_patrol_checks p
-      SET watermarked_photo_url = NULL
-      WHERE watermarked_photo_url IS NOT NULL
-        AND id NOT IN (
-          SELECT DISTINCT ON (user_id) id
-          FROM hrm_field_patrol_checks
-          WHERE watermarked_photo_url IS NOT NULL
-          ORDER BY user_id, created_at DESC
-        );
-    `);
-
-    console.log(`[Ephemeral Photo Retention] Cleanup completed: ${resIn.rowCount || 0} old check-ins, ${resOut.rowCount || 0} old check-outs, ${resPatrol.rowCount || 0} old patrol photos purged.`);
-  } catch (err) {
-    console.error('[Ephemeral Photo Retention] Error during photo purge:', err.message);
-  }
-}
-
-// ─── ATTENDANCE MANUAL CORRECTION & CREATION API ────────────────────────────
-app.delete('/api/attendances/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const delRes = await pool.query('DELETE FROM hrm_attendances WHERE id = $1 RETURNING *', [id]);
-    if (delRes.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
-    }
-    const targetUserId = delRes.rows[0].user_id;
-    if (targetUserId) {
-      await pool.query(`
-        UPDATE hrm_profiles
-        SET used_leave_days = (
-          SELECT COUNT(DISTINCT attendance_date)
-          FROM hrm_attendances
-          WHERE user_id = $1 AND status = 'cuti'
-        )
-        WHERE id = $1;
-      `, [targetUserId]);
-    }
-    res.json({ success: true, message: 'Data presensi berhasil dihapus', data: delRes.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.put('/api/attendances/:id/manual-correct', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, clockIn, clockOut, notes, lateMinutes } = req.body;
-
-    if (status === 'off' || status === 'libur') {
-      const offQuery = `
-        UPDATE hrm_attendances
-        SET status = 'off',
-            clock_in = NULL,
-            clock_out = NULL,
-            photo_in = NULL,
-            photo_out = NULL,
-            notes = COALESCE($1, 'Jadwal Libur / OFF'),
-            late_minutes = 0,
-            is_verified = true,
-            is_locked = false,
-            is_perimeter_breached = false,
-            updated_at = NOW()
-        WHERE id = $2
-        RETURNING *;
-      `;
-      const offResult = await pool.query(offQuery, [notes || 'Jadwal Libur / OFF', id]);
-      if (offResult.rows.length === 0) {
-        return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
-      }
-      return res.json({ success: true, data: offResult.rows[0], message: 'Presensi berhasil diubah menjadi Libur / OFF' });
-    }
-
-    const cleanStatus = status || null;
-    const cleanClockIn = clockIn !== undefined ? clockIn : null;
-    const cleanNotes = notes !== undefined ? notes : null;
-    const cleanLate = lateMinutes !== undefined ? Number(lateMinutes) : null;
-
-    let clockInSql = 'clock_in = COALESCE($2, clock_in)';
-    if (clockIn === null || clockIn === '') {
-      clockInSql = 'clock_in = NULL';
-    }
-
-    let clockOutSql = 'clock_out = clock_out';
-    const params = [cleanStatus, cleanClockIn, cleanNotes, cleanLate, id];
-
-    if (clockOut !== undefined) {
-      if (clockOut === null || clockOut === '') {
-        clockOutSql = 'clock_out = NULL, photo_out = NULL, lat_out = NULL, long_out = NULL';
-      } else {
-        params.push(clockOut);
-        clockOutSql = `clock_out = $${params.length}`;
-      }
-    }
-
-    const query = `
-      UPDATE hrm_attendances
-      SET status = COALESCE($1, status),
-          ${clockInSql},
-          ${clockOutSql},
-          notes = COALESCE($3, notes),
-          late_minutes = COALESCE($4, late_minutes),
-          is_verified = true,
-          is_locked = false,
-          is_perimeter_breached = false,
-          updated_at = NOW()
-      WHERE id = $5
-      RETURNING *;
-    `;
-    const result = await pool.query(query, params);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
-    }
-
-    // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime
-    const targetUserId = result.rows[0].user_id;
-    if (targetUserId) {
-      await pool.query(`
-        UPDATE hrm_profiles
-        SET used_leave_days = (
-          SELECT COUNT(DISTINCT attendance_date)
-          FROM hrm_attendances
-          WHERE user_id = $1 AND status = 'cuti'
-        )
-        WHERE id = $1;
-      `, [targetUserId]);
-    }
-
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    console.error('Manual attendance correct error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/attendances/manual-entry', async (req, res) => {
-  try {
-    const { userId, attendanceDate, status, clockIn, clockOut, notes, lateMinutes } = req.body;
-    if (!userId || !attendanceDate) {
-      return res.status(400).json({ success: false, error: 'userId dan attendanceDate wajib diisi' });
-    }
-    const query = `
-      INSERT INTO hrm_attendances (user_id, attendance_date, status, clock_in, clock_out, notes, late_minutes, is_verified, is_locked, is_perimeter_breached, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, true, false, false, NOW(), NOW())
-      ON CONFLICT (user_id, attendance_date) DO UPDATE
-      SET status = EXCLUDED.status,
-          clock_in = EXCLUDED.clock_in,
-          clock_out = EXCLUDED.clock_out,
-          notes = EXCLUDED.notes,
-          late_minutes = EXCLUDED.late_minutes,
-          is_verified = true,
-          is_locked = false,
-          is_perimeter_breached = false,
-          updated_at = NOW()
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [
-      userId,
-      attendanceDate,
-      status || 'hadir',
-      clockIn || '07:30:00',
-      clockOut ? clockOut : null,
-      notes || 'Presensi manual divalidasi oleh Superadmin',
-      lateMinutes || 0,
-    ]);
-
-    // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime
-    if (userId) {
-      await pool.query(`
-        UPDATE hrm_profiles
-        SET used_leave_days = (
-          SELECT COUNT(DISTINCT attendance_date)
-          FROM hrm_attendances
-          WHERE user_id = $1 AND status = 'cuti'
-        )
-        WHERE id = $1;
-      `, [userId]);
-    }
-
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    console.error('Manual attendance entry error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── DISCIPLINARY & SURAT PERINGATAN (SP 1, 2, 3) API ───────────────────────
-app.get('/api/disciplinary', async (req, res) => {
-  try {
-    const query = `
-      SELECT d.*, 
-             p.full_name as user_name, 
-             p.nip as user_nip, 
-             div.name as division_name,
-             p.avatar_url as user_avatar
-      FROM hrm_disciplinary_records d
-      LEFT JOIN hrm_profiles p ON d.user_id = p.id
-      LEFT JOIN hrm_divisions div ON p.division_id = div.id
-      ORDER BY d.violation_date DESC, d.created_at DESC;
-    `;
-    const result = await pool.query(query);
-    res.json({
-      success: true,
-      data: result.rows.map((d) => ({
-        id: d.id,
-        userId: d.user_id,
-        userName: d.user_name || 'Karyawan',
-        userNip: d.user_nip || '',
-        divisionName: d.division_name || '-',
-        spType: d.sp_type,
-        letterNumber: d.letter_number || '',
-        violationDate: d.violation_date ? new Date(d.violation_date).toISOString().split('T')[0] : '',
-        violationType: d.violation_type || 'Kedisiplinan',
-        description: d.description || '',
-        sanction: d.sanction || '',
-        issuedBy: d.issued_by,
-        issuedByName: d.issued_by_name || 'Super Administrator',
-        validUntil: d.valid_until ? new Date(d.valid_until).toISOString().split('T')[0] : '',
-        status: d.status || 'active',
-        notes: d.notes || '',
-        createdAt: d.created_at,
-        updatedAt: d.updated_at,
-      })),
-    });
-  } catch (err) {
-    console.error('Get disciplinary error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/disciplinary', async (req, res) => {
-  try {
-    const {
-      userId,
-      spType,
-      letterNumber,
-      violationDate,
-      violationType,
-      description,
-      sanction,
-      issuedBy,
-      issuedByName,
-      validUntil,
-      status,
-      notes,
-    } = req.body;
-
-    if (!userId || !spType || !description) {
-      return res.status(400).json({ success: false, error: 'userId, spType, dan description wajib diisi' });
-    }
-
-    const query = `
-      INSERT INTO hrm_disciplinary_records (
-        user_id, sp_type, letter_number, violation_date, violation_type, 
-        description, sanction, issued_by, issued_by_name, valid_until, 
-        status, notes, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [
-      userId,
-      spType,
-      letterNumber || `SP-${Date.now().toString().slice(-4)}/FRP/${new Date().getFullYear()}`,
-      violationDate || new Date().toISOString().split('T')[0],
-      violationType || 'Kedisiplinan',
-      description,
-      sanction || 'Peringatan tertulis',
-      issuedBy || null,
-      issuedByName || 'Super Administrator',
-      validUntil || null,
-      status || 'active',
-      notes || '',
-    ]);
-
-    // Send in-app notification to employee
-    try {
-      await pool.query(
-        `
-        INSERT INTO hrm_notifications (user_id, title, message, type, link, metadata, created_at)
-        VALUES ($1, $2, $3, 'disciplinary', '/riwayat', $4, NOW())
-      `,
-        [
-          userId,
-          `Pemberitahuan Sanksi Kedisiplinan (${spType.toUpperCase()})`,
-          `Anda menerima ${spType.toUpperCase()} terkait: ${description}`,
-          JSON.stringify({ spType, violationDate, letterNumber }),
-        ]
-      );
-    } catch (notifErr) {
-      console.error('Error sending SP notification:', notifErr.message);
-    }
-
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    console.error('Create disciplinary error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.put('/api/disciplinary/:id/status', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, notes } = req.body;
-    const query = `
-      UPDATE hrm_disciplinary_records
-      SET status = $1,
-          notes = COALESCE($2, notes),
-          updated_at = NOW()
-      WHERE id = $3
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [status, notes, id]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Data pelanggaran tidak ditemukan' });
-    }
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    console.error('Update disciplinary status error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.delete('/api/disciplinary/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    await pool.query('DELETE FROM hrm_disciplinary_records WHERE id = $1', [id]);
-    res.json({ success: true, message: 'Data pelanggaran berhasil dihapus' });
-  } catch (err) {
-    console.error('Delete disciplinary error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── KPI & PERFORMANCE APPRAISAL API ─────────────────────────────────────────
-app.get('/api/kpi', async (req, res) => {
-  try {
-    const { month } = req.query;
-    let query = `
-      SELECT k.*, 
-             p.full_name as user_name, 
-             p.nip as user_nip, 
-             div.name as division_name,
-             p.avatar_url as user_avatar
-      FROM hrm_employee_kpi k
-      LEFT JOIN hrm_profiles p ON k.user_id = p.id
-      LEFT JOIN hrm_divisions div ON p.division_id = div.id
-    `;
-    const params = [];
-    if (month) {
-      query += ` WHERE k.period_month = $1`;
-      params.push(month);
-    }
-    query += ` ORDER BY k.period_month DESC, k.final_score DESC;`;
-    const result = await pool.query(query, params);
-    res.json({
-      success: true,
-      data: result.rows.map((k) => ({
-        id: k.id,
-        userId: k.user_id,
-        userName: k.user_name || 'Karyawan',
-        userNip: k.user_nip || '',
-        divisionName: k.division_name || '-',
-        periodMonth: k.period_month,
-        attendanceScore: k.attendance_score !== null && k.attendance_score !== undefined ? Number(k.attendance_score) : 0,
-        operationalScore: k.operational_score !== null && k.operational_score !== undefined ? Number(k.operational_score) : 0,
-        competencyScore: k.competency_score !== null && k.competency_score !== undefined ? Number(k.competency_score) : 0,
-        finalScore: k.final_score !== null && k.final_score !== undefined ? Number(k.final_score) : 0,
-        grade: k.grade || 'D',
-        evaluatorId: k.evaluator_id,
-        evaluatorName: k.evaluator_name || 'Super Administrator',
-        feedback: k.feedback || '',
-        status: k.status || 'final',
-        createdAt: k.created_at,
-        updatedAt: k.updated_at,
-      })),
-    });
-  } catch (err) {
-    console.error('Get KPI error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/kpi', async (req, res) => {
-  try {
-    const {
-      userId,
-      periodMonth,
-      attendanceScore,
-      operationalScore,
-      competencyScore,
-      finalScore,
-      grade,
-      evaluatorId,
-      evaluatorName,
-      feedback,
-      status,
-    } = req.body;
-
-    if (!userId || !periodMonth) {
-      return res.status(400).json({ success: false, error: 'userId dan periodMonth wajib diisi' });
-    }
-
-    const query = `
-      INSERT INTO hrm_employee_kpi (
-        user_id, period_month, attendance_score, operational_score, 
-        competency_score, final_score, grade, evaluator_id, evaluator_name, 
-        feedback, status, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
-      ON CONFLICT (user_id, period_month) DO UPDATE
-      SET attendance_score = EXCLUDED.attendance_score,
-          operational_score = EXCLUDED.operational_score,
-          competency_score = EXCLUDED.competency_score,
-          final_score = EXCLUDED.final_score,
-          grade = EXCLUDED.grade,
-          evaluator_id = EXCLUDED.evaluator_id,
-          evaluator_name = EXCLUDED.evaluator_name,
-          feedback = EXCLUDED.feedback,
-          status = EXCLUDED.status,
-          updated_at = NOW()
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [
-      userId,
-      periodMonth,
-      attendanceScore ?? 100,
-      operationalScore ?? 85,
-      competencyScore ?? 85,
-      finalScore ?? 88,
-      grade ?? 'A',
-      evaluatorId || null,
-      evaluatorName || 'Super Administrator',
-      feedback || 'Performa kerja memuaskan dan memenuhi standar operasional.',
-      status || 'final',
-    ]);
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    console.error('Save KPI error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.delete('/api/kpi/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    await pool.query('DELETE FROM hrm_employee_kpi WHERE id = $1', [id]);
-    res.json({ success: true, message: 'Data evaluasi KPI berhasil dihapus' });
-  } catch (err) {
-    console.error('Delete KPI error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Worker: Sinkronisasi 512-dimensi InsightFace Embedding untuk seluruh karyawan terdaftar
-async function syncAllUserBiometricEmbeddings() {
-  try {
-    const res = await pool.query(
-      "SELECT id, full_name, email, face_enrolled_photo FROM hrm_profiles WHERE (face_embedding IS NULL OR array_length(face_embedding, 1) = 0) AND face_enrolled_photo IS NOT NULL AND length(face_enrolled_photo) > 100"
-    );
-    if (res.rows.length === 0) {
-      console.log('[InsightFace AI] Seluruh profil karyawan terdaftar telah memiliki vektor biometrik 512-dimensi.');
-      return;
-    }
-    console.log(`[InsightFace AI] Menemukan ${res.rows.length} profil karyawan yang belum memiliki vektor 512-dimensi. Memproses via hrm-face-ai (port 5001)...`);
-    for (const row of res.rows) {
-      try {
-        const aiRes = await fetch(`${FACE_AI_URL}/extract-embedding-json`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image_base64: row.face_enrolled_photo })
-        });
-        if (aiRes.ok) {
-          const data = await aiRes.json();
-          if (data.success && Array.isArray(data.embedding) && data.embedding.length === 512) {
-            await pool.query('UPDATE hrm_profiles SET face_embedding = $1 WHERE id = $2', [data.embedding, row.id]);
-            console.log(`[InsightFace AI] Sukses mengekstrak & menyimpan 512D vektor biometrik untuk ${row.full_name} (${row.email})`);
-          }
-        }
-      } catch (err) {
-        console.warn(`[InsightFace AI] Gagal mengekstrak vektor untuk ${row.email}:`, err.message);
-      }
-    }
-  } catch (err) {
-    console.warn('[InsightFace AI] Worker error:', err.message);
-  }
-}
-
-// ─── 17. SUBMIT LAPORAN KELUAR AREA & AUTO-FILL JAM PULANG STANDAR ───
-app.post('/api/attendances/submit-breach-report', async (req, res) => {
-  const { userId, notes, latitude, longitude } = req.body;
-  if (!userId || !notes || !notes.trim()) {
-    return res.status(400).json({ success: false, error: 'User ID dan alasan pelaporan wajib diisi.' });
-  }
-
-  try {
-    // 1. Ambil data profil karyawan
-    const profRes = await pool.query(
-      `SELECT p.*, s.name as shift_name, s.start_time, s.end_time, s.is_cross_day, d.name as division_name,
-              kr.phone as korlap_phone, kr.full_name as korlap_name
-       FROM hrm_profiles p
-       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
-       LEFT JOIN hrm_divisions d ON p.division_id = d.id
-       LEFT JOIN hrm_profiles kr ON p.kepala_regu_id = kr.id
-       WHERE p.id = $1 LIMIT 1;`,
-      [userId]
-    );
-
-    if (profRes.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan.' });
-    }
-    const prof = profRes.rows[0];
-
-    // 2. Ambil presensi hari ini
-    const todayRes = await pool.query(
-      `SELECT * FROM hrm_attendances
-       WHERE user_id = $1 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
-       ORDER BY created_at DESC LIMIT 1;`,
-      [userId]
-    );
-
-    if (todayRes.rows.length === 0 || !todayRes.rows[0].clock_in) {
-      return res.status(400).json({ success: false, error: 'Anda belum melakukan presensi masuk hari ini.' });
-    }
-
-    const todayAtt = todayRes.rows[0];
-
-    // 3. Tentukan jam pulang standar shift
-    const defaultEndTime = prof.custom_end_time || (prof.end_time ? prof.end_time.substring(0, 5) : '16:30');
-    const clockOutTimeStr = defaultEndTime.length === 5 ? `${defaultEndTime}:00` : defaultEndTime;
-
-    // Hitung estimasi durasi kerja
-    const [inH, inM] = (todayAtt.clock_in || '08:00:00').split(':').map(Number);
-    const [outH, outM] = clockOutTimeStr.split(':').map(Number);
-    let workDur = (outH * 60 + outM) - (inH * 60 + inM);
-    if (prof.is_cross_day && workDur < 0) workDur += 24 * 60;
-    workDur = Math.max(0, workDur);
-
-    const reportNoteFull = `[PELAPORAN KELUAR AREA: ${notes.trim()}]`;
-    const updatedNotes = todayAtt.notes ? `${todayAtt.notes} | ${reportNoteFull}` : reportNoteFull;
-
-    // 4. Update presensi di database: isi clock_out, buka kunci, simpan alasan
-    await pool.query(
-      `UPDATE hrm_attendances SET
-         clock_out = $1,
-         lat_out = COALESCE($2, lat_out),
-         long_out = COALESCE($3, long_out),
-         work_duration_minutes = $4,
-         status = 'present',
-         is_locked = false,
-         notes = $5,
-         breach_report_notes = $6,
-         breach_reported_at = NOW(),
-         auto_closed_type = 'BREACH_SELF_REPORTED',
-         updated_at = NOW()
-       WHERE id = $7;`,
-      [
-        clockOutTimeStr,
-        latitude != null ? parseFloat(latitude) : null,
-        longitude != null ? parseFloat(longitude) : null,
-        workDur,
-        updatedNotes,
-        notes.trim(),
-        todayAtt.id
-      ]
-    );
-
-    // Buka status out of bounds pada profil
-    await pool.query(
-      `UPDATE hrm_profiles SET
-         is_out_of_bounds = false,
-         out_of_bounds_distance = 0,
-         updated_at = NOW()
-       WHERE id = $1;`,
-      [userId]
-    );
-
-    // 5. Format waktu WITA untuk WhatsApp
-    const nowWita = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19) + ' WITA';
-
-    // 6. Cek apakah termasuk 3 Petugas Lapangan Khusus
-    const specialNips = ['FRP 07065', 'FR.07.066', 'FRP.07.046'];
     const specialIds = [
       'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
-      '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
-      '0a49f92e-5733-4b72-947c-7361f9490632'  // TAKDIR
+      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2'  // LA UNGA SAMSI
     ];
-    const isSpecialOfficer = specialIds.includes(prof.id) || specialNips.includes(prof.nip?.trim());
 
-    if (isSpecialOfficer) {
-      // Dispatch WhatsApp ke Dirut, Pimpinan, dan Superadmin (Tembusan)
-      const waSpecialMsg =
-`📝 *LAPORAN KELUAR AREA & KONFIRMASI KEPULANGAN*
-*PT. FAWWAZ RESKI PERWIRA*
-
-👤 Petugas Khusus: *${prof.full_name}*
-🆔 NIP: *${prof.nip || '-'}*
-🏢 Divisi: *${prof.division_name || 'Petugas Lapangan'}*
-🕒 Jam Pulang Standar: *${defaultEndTime} WITA* (Tercatat Otomatis)
-⏰ Waktu Pelaporan: ${nowWita}
-
-📄 *Alasan / Klarifikasi Petugas:*
-_"${notes.trim()}"_
-
-✅ Status presensi kepulangan telah tercatat di sistem dan kunci presensi telah dibuka.
-Tembusan: Direktur Utama, Pimpinan & Superadmin.`;
-
-      // 1. Dirut: 082291998026
-      await sendWhatsAppAlert({ phone: '082291998026', message: waSpecialMsg }).catch(e => console.error('[WA Dirut Breach Report Error]:', e.message));
-      // 2. Pimpinan: 082192755755
-      await sendWhatsAppAlert({ phone: '082192755755', message: waSpecialMsg }).catch(e => console.error('[WA Pimpinan Breach Report Error]:', e.message));
-      // 3. Superadmin: 081355904897
-      await sendWhatsAppAlert({ phone: '081355904897', message: waSpecialMsg }).catch(e => console.error('[WA Superadmin Breach Report Error]:', e.message));
-
-    } else {
-      // Dispatch WhatsApp untuk Karyawan Reguler ke Korlap, K3, dan Admin
-      const waRegularMsg =
-`📝 *LAPORAN KELUAR AREA & KONFIRMASI KEPULANGAN*
-*PT. FAWWAZ RESKI PERWIRA*
-
-👤 Karyawan: *${prof.full_name}*
-🆔 NIP: *${prof.nip || '-'}*
-🏢 Divisi: *${prof.division_name || '-'}*
-🕒 Jam Pulang Standar: *${defaultEndTime} WITA* (Tercatat Otomatis)
-⏰ Waktu Pelaporan: ${nowWita}
-
-📄 *Alasan / Keterangan:*
-_"${notes.trim()}"_
-
-✅ Jam kepulangan standar telah tercatat di sistem presensi.
-Tembusan: Korlap, K3 & Admin HRD.`;
-
-      // Admin HRD: 081355904897
-      await sendWhatsAppAlert({ phone: '081355904897', message: waRegularMsg }).catch(e => console.error('[WA Admin Breach Report Error]:', e.message));
-
-      // Jika ada nomor Korlap
-      if (prof.korlap_phone) {
-        await sendWhatsAppAlert({ phone: prof.korlap_phone, message: waRegularMsg }).catch(e => console.error('[WA Korlap Breach Report Error]:', e.message));
-      }
-
-      // Cari nomor K3 di database jika ada
-      const k3Res = await pool.query(
-        `SELECT p.phone FROM hrm_profiles p
-         JOIN hrm_roles r ON p.role_id = r.id
-         WHERE (r.name ILIKE '%k3%' OR r.label ILIKE '%k3%' OR p.job_title ILIKE '%k3%') AND p.phone IS NOT NULL AND p.phone != ''
-         LIMIT 3;`
-      ).catch(() => ({ rows: [] }));
-
-      for (const k3Row of k3Res.rows) {
-        if (k3Row.phone && k3Row.phone !== '081355904897' && k3Row.phone !== prof.korlap_phone) {
-          await sendWhatsAppAlert({ phone: k3Row.phone, message: waRegularMsg }).catch(e => console.error('[WA K3 Breach Report Error]:', e.message));
-        }
-      }
-    }
-
-    res.json({
-      success: true,
-      message: `Laporan berhasil dikirim. Jam pulang standar (${defaultEndTime} WITA) telah otomatis tercatat di sistem.`,
-      clockOut: clockOutTimeStr,
-      workDurationMinutes: workDur
-    });
-  } catch (err) {
-    console.error('[submit-breach-report Error]:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ─── 18. AUTO-CLOSE SERVICE: AUTO-CLOCK OUT OTOMATIS (OPSI 2) ───
-// Menutup presensi pulang secara otomatis di jam akhir shift bagi karyawan yang:
-// a) Sudah lewat jam shift >= 2 jam (diffMins >= 120), ATAU
-// b) Terdeteksi di luar area kerja (is_out_of_bounds) setelah jam shift usai, ATAU
-// c) Presensi hari kemarin yang belum ditutup (isPastDate)
-async function runAutoCloseCompliantAttendance() {
-  try {
-    const candidates = await pool.query(`
-      SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.notes,
-             COALESCE(es.end_time::text, p.custom_end_time::text, s.end_time::text, '16:30') as shift_end_time,
-             COALESCE(es.start_time::text, p.custom_start_time::text, s.start_time::text, '07:30') as shift_start_time,
-             COALESCE(s.is_cross_day, false) as is_cross_day,
-             p.full_name, p.nip, p.phone, p.is_out_of_bounds,
-             (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date as today_wita
-      FROM hrm_attendances a
-      JOIN hrm_profiles p ON a.user_id = p.id
-      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
-      LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = a.attendance_date
-      WHERE a.attendance_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
-        AND a.clock_in IS NOT NULL
-        AND a.clock_out IS NULL;
-    `);
-
-    if (candidates.rows.length === 0) return;
-
-    const nowWitaDate = new Date(Date.now() + 8 * 60 * 60 * 1000);
-    const nowH = nowWitaDate.getUTCHours();
-    const nowM = nowWitaDate.getUTCMinutes();
-    const nowTotalMins = nowH * 60 + nowM;
-
-    for (const row of candidates.rows) {
-      const shiftEndStr = (row.shift_end_time || '16:30').substring(0, 5);
-      const [endH, endM] = shiftEndStr.split(':').map(Number);
-      const shiftEndTotalMins = endH * 60 + endM;
-
-      let effectiveNowMins = nowTotalMins;
-      if (row.is_cross_day && effectiveNowMins < 720 && shiftEndTotalMins >= 720) {
-        effectiveNowMins += 1440;
-      }
-
-      const diffMins = effectiveNowMins - shiftEndTotalMins;
-      const isPastDate = row.attendance_date < row.today_wita;
-
-      // GUARD MUTLAK: Dilarang keras auto-close presensi karyawan yang baru clock-in kurang dari 120 menit (2 jam)!
-      const [inH, inM] = (row.clock_in || '08:00:00').split(':').map(Number);
-      const clockInTotalMins = (Number.isFinite(inH) ? inH : 8) * 60 + (Number.isFinite(inM) ? inM : 0);
-      let clockInAgeMins = effectiveNowMins - clockInTotalMins;
-      if (clockInAgeMins < 0 && row.is_cross_day) clockInAgeMins += 1440;
-
-      if (!isPastDate && clockInAgeMins < 120) {
-        // Karyawan baru saja clock in (misal baru 20 menit), biarkan tetap aktif bekerja!
-        continue;
-      }
-
-      // Kondisi Opsi 2 (Auto-Clock Out Otomatis):
-      // 1. Sudah berganti hari (kemarin belum clock-out)
-      // 2. Karyawan sudah keluar radius area kerja setelah jam shift berakhir
-      // 3. Jam shift sudah berakhir lebih dari 2 jam (120 menit)
-      const shouldAutoClose = isPastDate || 
-                              (row.is_out_of_bounds && diffMins >= 0) || 
-                              (diffMins >= 120);
-
-      if (shouldAutoClose) {
-        const [inH, inM] = (row.clock_in || '08:00:00').split(':').map(Number);
-        let workDur = shiftEndTotalMins - (inH * 60 + inM);
-        if (row.is_cross_day && workDur < 0) workDur += 24 * 60;
-        workDur = Math.max(0, workDur);
-
-        const autoCloseNote = `[AUTO-CLOSED: JAM SHIFT USAI (${shiftEndStr} WITA) & TINGGALKAN AREA]`;
-        const updatedNotes = row.notes ? `${row.notes} | ${autoCloseNote}` : autoCloseNote;
-        const clockOutTime = shiftEndStr.length === 5 ? `${shiftEndStr}:00` : shiftEndStr;
-
-        await pool.query(`
-          UPDATE hrm_attendances SET
-            clock_out = $1,
-            work_duration_minutes = $2,
-            status = CASE WHEN status = 'terlambat' OR late_minutes > 0 THEN 'terlambat' ELSE 'hadir' END,
-            is_locked = false,
-            is_perimeter_breached = false,
-            auto_closed_type = 'AUTO_CLOCKOUT_OPTION_2',
-            notes = $3,
-            updated_at = NOW()
-          WHERE id = $4;
-        `, [clockOutTime, workDur, updatedNotes, row.id]);
-
-        console.log(`[Auto-Close Option 2] Sukses menutup presensi ${row.full_name} (${row.nip}) jam ${clockOutTime}`);
-
-        // Kirim WhatsApp pemberitahuan santun
-        if (row.phone) {
-          const dateLabel = row.attendance_date.toISOString ? row.attendance_date.toISOString().split('T')[0] : row.attendance_date;
-          const waAutoMsg = `✅ *NOTIFIKASI ABSEN PULANG OTOMATIS (HRM FRP)*\n\nHalo *${row.full_name}*,\nSistem mendeteksi Anda telah menyelesaikan jam kerja shift (${shiftEndStr} WITA) dan telah meninggalkan lokasi penugasan.\n\nPresensi pulang Anda untuk tanggal *${dateLabel}* telah **otomatis ditutup resmi pada pk ${shiftEndStr} WITA**. Jam kerja dan hak kehadiran Anda aman.\n\nSelamat beristirahat!\n_Sistem Absensi Cerdas PT Fawwaz Reski Perwira_`;
-          sendWhatsAppAlert({ phone: row.phone, message: waAutoMsg }).catch(() => null);
-        }
-      }
-    }
-  } catch (err) {
-    console.error('[runAutoCloseCompliantAttendance Error]:', err.message);
-  }
-}
-
-// ─── 11. AUTO-MARKING MANGKIR (ALFA / TANPA KETERANGAN) ────────────────────
-async function runAutoMarkMangkirAttendance(targetDateStr = null) {
-  try {
-    // Tanggal dan waktu WITA (Asia/Makassar) yang presisi & tahan format 24 jam
-    const nowWitaDate = targetDateStr || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' });
-    const todayWitaDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' });
-
-    // Format jam WITA dengan format en-GB yang aman (menghasilkan 00 s/d 23, BUKAN 24)
-    const timeParts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Asia/Makassar',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).formatToParts(new Date());
-
-    let witaH = 0;
-    let witaM = 0;
-    for (const p of timeParts) {
-      if (p.type === 'hour') witaH = parseInt(p.value, 10) % 24;
-      if (p.type === 'minute') witaM = parseInt(p.value, 10);
-    }
-    const nowWitaMinutes = witaH * 60 + witaM;
-    const nowWitaTime = `${String(witaH).padStart(2, '0')}:${String(witaM).padStart(2, '0')}`;
-
-    console.log(`[Auto-Mangkir Engine] Memeriksa status ketidakhadiran untuk tanggal ${nowWitaDate} (pk ${nowWitaTime} WITA)...`);
-
-    // 0. Periksa apakah tanggal adalah Hari Libur Nasional
-    const holidayCheck = await pool.query(
-      'SELECT id, holiday_name FROM hrm_national_holidays WHERE holiday_date = $1 LIMIT 1',
-      [nowWitaDate]
-    );
-    if (holidayCheck.rows.length > 0) {
-      console.log(`[Auto-Mangkir Engine] ${nowWitaDate} adalah Hari Libur Nasional (${holidayCheck.rows[0].holiday_name}). Melewati auto-mangkir.`);
-      return 0;
-    }
-
-    const dateObj = new Date(nowWitaDate + 'T12:00:00+08:00');
-    const dayOfWeek = dateObj.getDay(); // 0 = Minggu, 6 = Sabtu
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-    // 1. Ambil seluruh karyawan aktif yang SUDAH TERDAFTAR BIOMETRIK WAJAH & BUKAN AKUN SIMULASI
-    const usersRes = await pool.query(`
-      SELECT p.id, p.full_name, p.nip, p.email, p.phone, p.shift_id, p.is_face_enrolled,
-             (p.face_embedding IS NOT NULL OR p.face_descriptor IS NOT NULL) as has_face,
-             s.name as shift_name, s.start_time as shift_start, s.end_time as shift_end, s.is_cross_day
+    const empsQuery = `
+      SELECT p.id, p.nip, p.full_name, p.email, p.role_name, p.job_title, p.division_name,
+             sp.bank_name, sp.bank_account_number, sp.bank_account_holder
       FROM hrm_profiles p
-      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
-      WHERE p.is_active = true 
-        AND UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'
-        AND p.is_face_enrolled = true
-        AND (p.face_embedding IS NOT NULL OR p.face_descriptor IS NOT NULL)
-    `);
+      LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id
+      WHERE p.id = ANY($1::uuid[])
+         OR p.nip IN ('FRP 07065', 'FR07066', 'FRP.07.046', 'FR07065', 'FR.07.066')
+         OR LOWER(p.full_name) ILIKE '%aslam faisal%'
+         OR LOWER(p.full_name) ILIKE '%takdir%'
+         OR LOWER(p.full_name) ILIKE '%samsi%'
+      ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) ILIKE '%aslam%' THEN 1
+          WHEN LOWER(p.full_name) ILIKE '%takdir%' THEN 2
+          ELSE 3
+        END
+    `;
+    const empsRes = await pool.query(empsQuery, [specialIds]);
+    const employees = empsRes.rows;
 
-    let markedCount = 0;
+    const empIds = employees.map(e => e.id);
 
-    for (const emp of usersRes.rows) {
-      // Safeguard ganda: Hanya personil resmi NIP FR dan sudah enroll wajah yang dievaluasi
-      if (!isOfficialFrEmployee(emp) || !emp.is_face_enrolled || !emp.has_face) {
-        continue;
-      }
+    const attsQuery = `
+      SELECT a.id, a.user_id, a.attendance_date, a.status, a.clock_in, a.clock_out,
+             a.late_minutes, a.early_leaving_minutes, a.notes, a.shift_name
+      FROM hrm_attendances a
+      WHERE a.user_id = ANY($1::uuid[])
+        AND a.attendance_date >= '2026-10-01' AND a.attendance_date <= '2026-10-31'
+      ORDER BY a.attendance_date ASC
+    `;
+    const attsRes = await pool.query(attsQuery, [empIds]);
+    const attendances = attsRes.rows;
 
-      // 1.5 Cek jadwal roster / shift kerja karyawan pada tanggal ini
-      const scheduleCheck = await pool.query(`
-        SELECT id, shift_id, shift_code, shift_name, start_time, end_time, is_off, is_night_shift 
-        FROM hrm_employee_schedules 
-        WHERE user_id = $1 AND schedule_date = $2 LIMIT 1
-      `, [emp.id, nowWitaDate]);
+    const DAILY_RATE = 140000;
+    const LATE_RATE_PER_MINUTE = 1000;
+    const LATE_EFFECTIVE_DATE = '2026-10-03';
 
-      const hasSchedule = scheduleCheck.rows.length > 0;
-      const sched = hasSchedule ? scheduleCheck.rows[0] : null;
-      const isScheduleOff = sched && sched.is_off === true;
+    let grandGross = 0;
+    let grandLateDeduction = 0;
+    let grandNet = 0;
+    let grandPaidDays = 0;
 
-      // Jika karyawan memiliki jadwal OFF atau pada akhir pekan (Sabtu/Minggu) tidak dijadwalkan masuk, lewati (karyawan OFF)
-      if (isScheduleOff || (isWeekend && (!hasSchedule || sched?.is_off))) {
-        continue;
-      }
+    const reportData = employees.map(emp => {
+      const userAtts = attendances.filter(a => a.user_id === emp.id);
 
-      // 2. Periksa apakah sudah ada presensi pada tanggal tersebut
-      const attCheck = await pool.query(`
-        SELECT id, status, clock_in FROM hrm_attendances 
-        WHERE user_id = $1 AND attendance_date = $2 LIMIT 1
-      `, [emp.id, nowWitaDate]);
+      let hadirCount = 0;
+      let terlambatCount = 0;
+      let cutiCount = 0;
+      let sakitCount = 0;
+      let mangkirCount = 0;
+      let exemptLateMinutes = 0;
+      let billableLateMinutes = 0;
 
-      if (attCheck.rows.length > 0) {
-        // Karyawan sudah memiliki record presensi (hadir, terlambat, atau sudah ditandai)
-        continue;
-      }
+      const dailyDetails = [];
 
-      // 3. Periksa apakah karyawan memiliki pengajuan Cuti / Izin / Sakit yang disetujui (Approved)
-      const leaveCheck = await pool.query(`
-        SELECT id, leave_type FROM hrm_leave_requests
-        WHERE user_id = $1 
-          AND $2 >= start_date AND $2 <= end_date
-          AND status = 'approved'
-        LIMIT 1
-      `, [emp.id, nowWitaDate]);
-
-      if (leaveCheck.rows.length > 0) {
-        // Tidak mangkir karena ada izin/cuti resmi
-        continue;
-      }
-
-      // 4. Periksa apakah jam shift kerja sudah benar-benar usai
-      const effectiveShiftId = sched?.shift_id || emp.shift_id;
-      const effectiveShiftName = sched?.shift_name || emp.shift_name || 'Shift Reguler';
-      const effectiveShiftStart = (sched?.start_time || emp.shift_start || '07:30').slice(0, 5);
-      const effectiveShiftEnd = (sched?.end_time || emp.shift_end || '16:30').slice(0, 5);
-      const isCrossDay = Boolean(sched?.is_night_shift || emp.is_cross_day || sched?.shift_code === 'M');
-
-      const [startH, startM] = effectiveShiftStart.split(':').map(Number);
-      const [endH, endM] = effectiveShiftEnd.split(':').map(Number);
-      const startMinutes = (startH || 0) * 60 + (startM || 0);
-      const endMinutes = (endH || 0) * 60 + (endM || 0);
-
-      // Karyawan HANYA bisa ditandai Mangkir jika:
-      // a. Tanggal target adalah hari lampau (sebelum hari ini), ATAU
-      // b. Tanggal target adalah HARI INI dan jam sekarang SUDAH MELEWATI jam berakhir shift
-      const isTargetPastDate = nowWitaDate < todayWitaDate;
-      const isTargetToday = nowWitaDate === todayWitaDate;
-
-      if (!isTargetPastDate && !isTargetToday) {
-        // Tanggal masa depan (belum terjadi)
-        continue;
-      }
-
-      if (isTargetToday) {
-        // DINI HARI / PAGI SEBELUM SHIFT DIMULAI: Sama sekali TIDAK BOLEH ditandai mangkir!
-        if (nowWitaMinutes < startMinutes) {
-          continue;
-        }
-
-        if (!isCrossDay) {
-          // Shift reguler (misal 07:30 - 15:30 atau 15:30 - 22:30):
-          // Jika waktu saat ini masih sebelum jam selesai shift, JANGAN tandai mangkir!
-          if (nowWitaMinutes < endMinutes) {
-            continue;
-          }
-        } else {
-          // Shift lintas hari (malam, misal 22:30 - 07:30):
-          // Jam berakhir adalah keesokan harinya pk 07:30 pagi WITA.
-          // Jadi pada hari berjalan H, shift malam baru selesai besok pagi (H+1).
-          continue;
-        }
-      }
-
-      // 5. Buat record resmi Mangkir (status = 'alfa') di hrm_attendances
-      const notesMsg = `[MANGKIR OTOMATIS: Tidak hadir tanpa keterangan hingga jam shift (${effectiveShiftEnd} WITA) berakhir]`;
-      await pool.query(`
-        INSERT INTO hrm_attendances (
-          user_id, attendance_date, status, late_minutes, early_leaving_minutes,
-          work_duration_minutes, is_locked, notes, shift_id, shift_name, created_at, updated_at
-        ) VALUES (
-          $1, $2, 'alfa', 0, 0,
-          0, false, $3, $4, $5, NOW(), NOW()
-        )
-        ON CONFLICT DO NOTHING
-      `, [emp.id, nowWitaDate, notesMsg, effectiveShiftId, effectiveShiftName]);
-
-      markedCount++;
-      console.log(`[Auto-Mangkir Engine] Berhasil mencatat Mangkir untuk ${emp.full_name} (${emp.nip})`);
-    }
-
-    console.log(`[Auto-Mangkir Engine] Selesai. Total karyawan dicatat Mangkir/Alfa: ${markedCount} orang.`);
-    return markedCount;
-  } catch (err) {
-    console.error('[runAutoMarkMangkirAttendance Error]:', err.message);
-    return 0;
-  }
-}
-
-// Endpoint manual trigger sinkronisasi mangkir oleh Superadmin
-app.post('/api/attendances/sync-mangkir', async (req, res) => {
-  try {
-    const { targetDate } = req.body;
-    const count = await runAutoMarkMangkirAttendance(targetDate || null);
-    res.json({
-      success: true,
-      markedCount: count,
-      message: `Audit mangkir selesai. Sebanyak ${count} karyawan tanpa keterangan telah dicatat berstatus Alfa.`
-    });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// Endpoint manual reconcile auto clock-out
-app.post('/api/attendances/auto-close-reconcile', async (req, res) => {
-  try {
-    await runAutoCloseCompliantAttendance();
-    res.json({ success: true, message: 'Rekonsiliasi auto-clock out berhasil diproses.' });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// Start Server
-async function start() {
-  try {
-    await initDb();
-    await seedInitialUsers();
-    await enforceEphemeralPhotoRetention();
-    await syncAllUserBiometricEmbeddings();
-
-    // Jalankan pembersihan foto berkala setiap 6 jam
-    setInterval(enforceEphemeralPhotoRetention, 6 * 60 * 60 * 1000);
-
-    // Jalankan auto-close presensi tertib setiap 15 menit
-    setInterval(runAutoCloseCompliantAttendance, 15 * 60 * 1000);
-    // Jalankan satu kali saat startup
-    runAutoCloseCompliantAttendance().catch(() => {});
-
-    // Jalankan auto-marking mangkir setiap 30 menit
-    setInterval(() => runAutoMarkMangkirAttendance().catch(() => {}), 30 * 60 * 1000);
-    // Jalankan satu kali saat startup
-    runAutoMarkMangkirAttendance().catch(() => {});
-
-    const server = app.listen(PORT, '0.0.0.0', () => {
-      console.log(`[HRM-Backend] Server running on port ${PORT}`);
-    });
-    server.keepAliveTimeout = 65000;
-    server.headersTimeout = 66000;
-    server.requestTimeout = 120000;
-  } catch (err) {
-    console.error('[HRM-Backend] Startup fatal error:', err);
-    process.exit(1);
-  }
-}
-
-start();
+      for (let day = 1; day <= 31; day++) {
+        const dayStr = String(day).p
+... [truncated for diff preview]
