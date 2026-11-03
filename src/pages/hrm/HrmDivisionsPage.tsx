@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { hrmService } from '@/services/hrmService';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
+import { api } from '@/services/apiClient';
 import { Division, UserProfile, DivisionAssignedPost, FIELD_SENTINEL_6_POST_PRESETS } from '@/types/hrm';
 import {
   Building2,
@@ -330,12 +331,125 @@ export const HrmDivisionsPage: React.FC = () => {
     setIsSavedInDb(false);
   };
 
+  // Helper fungsi anti-bentrok (anti-collision) identifikasi karyawan untuk Import & Export Roster
+  const findMatchingUser = (
+    userList: UserProfile[],
+    rawNip?: string,
+    rawName?: string,
+    targetEmployeeId?: string
+  ): UserProfile | null => {
+    if (targetEmployeeId && targetEmployeeId.trim()) {
+      const byId = userList.find((u) => u.id === targetEmployeeId);
+      if (byId) return byId;
+    }
+
+    const cleanNipStr = (val?: string) => (val || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const norm = (s?: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    const cNip = cleanNipStr(rawNip);
+    const cName = (rawName || '').toLowerCase().trim();
+
+    // 0. Petugas Lapangan Khusus Pimpinan (AGENTS.md)
+    if (cName.includes('samsi') || cName.includes('unga')) {
+      const samsi = userList.find(
+        (u) =>
+          u.id === '2ce41a19-0c65-45d3-913e-a68a02203fe2' ||
+          norm(u.fullName).includes('samsi') ||
+          (u.nip && cleanNipStr(u.nip) === 'FR07066' && norm(u.fullName).includes('unga'))
+      );
+      if (samsi) return samsi;
+    }
+    if (cName.includes('aslam')) {
+      const aslam = userList.find(
+        (u) => u.id === 'ebf10b16-ab2f-4b53-ab22-b3ffc00694db' || norm(u.fullName).includes('aslam')
+      );
+      if (aslam) return aslam;
+    }
+    if (cName.includes('takdir')) {
+      const takdir = userList.find(
+        (u) => u.id === '0a49f92e-5733-4b72-947c-7361f9490632' || norm(u.fullName).includes('takdir')
+      );
+      if (takdir) return takdir;
+    }
+
+    const isNameSimilar = (name1?: string, name2?: string) => {
+      const n1 = norm(name1);
+      const n2 = norm(name2);
+      if (!n1 || !n2) return false;
+      if (n1 === n2) return true;
+      if (n1.includes(n2) || n2.includes(n1)) {
+        if (Math.abs(n1.length - n2.length) <= 3 && Math.min(n1.length, n2.length) >= 4) return true;
+      }
+      const words1 = (name1 || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w) => w.length > 2);
+      const words2 = (name2 || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w) => w.length > 2);
+      if (words1.length >= 2 && words2.length >= 2) {
+        const common = words1.filter((w) => words2.includes(w));
+        if (common.length >= 2) return true;
+      }
+      return false;
+    };
+
+    // 1. Dual Match: Clean NIP AND Name match (Standar Emas Anti-Bentrok)
+    if (cNip && cName) {
+      const candidates = userList.filter((u) => cleanNipStr(u.nip) === cNip);
+      if (candidates.length > 0) {
+        const exactName = candidates.find((u) => isNameSimilar(u.fullName, rawName));
+        if (exactName) return exactName;
+      }
+    }
+
+    // 2. Exact Raw NIP match (mempertahankan titik dan spasi)
+    if (rawNip && rawNip.trim()) {
+      const exactRaw = userList.filter((u) => (u.nip || '').trim().toUpperCase() === rawNip.trim().toUpperCase());
+      if (exactRaw.length === 1 && (!cName || isNameSimilar(exactRaw[0].fullName, rawName))) {
+        return exactRaw[0];
+      }
+    }
+
+    // 3. Exact Full Name match (disambiguasi dengan NIP jika terdapat nama kembar seperti dua "Rusli")
+    if (cName) {
+      const nameCandidates = userList.filter((u) => norm(u.fullName) === norm(rawName));
+      if (nameCandidates.length === 1) {
+        return nameCandidates[0];
+      } else if (nameCandidates.length > 1) {
+        if (cNip) {
+          const byNip = nameCandidates.find((u) => cleanNipStr(u.nip) === cNip);
+          if (byNip) return byNip;
+        }
+        return nameCandidates[0];
+      }
+    }
+
+    // 4. Clean NIP Match (hanya jika nama pada baris tidak bertentangan secara frontal)
+    if (cNip) {
+      const nipCandidates = userList.filter((u) => cleanNipStr(u.nip) === cNip);
+      if (nipCandidates.length === 1) {
+        if (!cName || isNameSimilar(nipCandidates[0].fullName, rawName) || (rawName && rawName.length < 3)) {
+          return nipCandidates[0];
+        }
+      }
+    }
+
+    // 5. Multi-word token match (cegah greedy single-word collision seperti Wahyu vs Wahyudi)
+    if (cName) {
+      const rawWords = cName.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w) => w.length > 2);
+      if (rawWords.length >= 2) {
+        const found = userList.find((u) => {
+          const uWords = (u.fullName || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w) => w.length > 2);
+          return rawWords.every((rw) => uWords.includes(rw));
+        });
+        if (found) return found;
+      }
+    }
+
+    return null;
+  };
+
   const handleExportRosterCsv = () => {
     if (!rosterResult) return;
     const allUsers = users.length > 0 ? users : hrmService.getUsers();
     const days = Array.from({ length: rosterResult.daysInMonth }, (_, i) => i + 1);
     const dayNamesShort = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
-    const cleanNipFn = (val: string) => (val || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
     const headers = [
       'NIP',
@@ -351,19 +465,14 @@ export const HrmDivisionsPage: React.FC = () => {
     ];
 
     const rows = rosterResult.rosters.map((r) => {
-      const userObj = allUsers.find(
-        (u) =>
-          u.id === r.employeeId ||
-          (r.userNip && cleanNipFn(u.nip) === cleanNipFn(r.userNip)) ||
-          (u.fullName || '').toLowerCase().trim() === (r.employeeName || '').toLowerCase().trim()
-      );
+      const userObj = findMatchingUser(allUsers, r.userNip, r.employeeName, r.employeeId);
       const dayValues = days.map((d) => {
         const dateStr = `${rosterResult.year}-${String(rosterResult.month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
         return r.assignments[dateStr]?.shiftCode || 'OFF';
       });
       return [
         `"${userObj?.nip || r.userNip || ''}"`,
-        `"${r.employeeName.replace(/"/g, '""')}"`,
+        `"${(userObj?.fullName || r.employeeName).replace(/"/g, '""')}"`,
         `"${userObj?.divisionName || 'Operasional'}"`,
         ...dayValues,
         r.totalWorkHours,
@@ -546,41 +655,8 @@ export const HrmDivisionsPage: React.FC = () => {
       const rawName = nameIdx !== -1 ? row[nameIdx] || '' : '';
       const rawNip = nipIdx !== -1 ? row[nipIdx] || '' : '';
 
-      // Tiered exact matching logic (Anti-Collision: Memastikan Wahyu & Wahyudi tidak tertukar)
-      const cleanNipStr = (val: string) => (val || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-      const cNip = cleanNipStr(rawNip);
-      const cName = (rawName || '').toLowerCase().trim();
-      let matchedUser: any = null;
-
-      // 1. Strict NIP match (Abaikan titik, spasi, dash: "FR.07.078" === "FR07078", "FR.07.079" === "FR07079")
-      if (cNip) {
-        matchedUser = allUsers.find((u) => cleanNipStr(u.nip) === cNip);
-      }
-
-      // 2. Exact Full Name match (Case-insensitive trim)
-      if (!matchedUser && cName) {
-        matchedUser = allUsers.find((u) => (u.fullName || '').toLowerCase().trim() === cName);
-      }
-
-      // 3. Normalized alphanumeric name (contoh: "Muh. Adam" === "Muh Adam")
-      if (!matchedUser && cName) {
-        const norm = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const normRaw = norm(cName);
-        if (normRaw.length >= 3) {
-          matchedUser = allUsers.find((u) => norm(u.fullName) === normRaw);
-        }
-      }
-
-      // 4. Multi-word token match ONLY (Hanya jika nama memiliki minimal 2 kata terpisah, cegah partial substring kata tunggal seperti "Wahyu" terambil ke "Wahyudi")
-      if (!matchedUser && cName) {
-        const rawWords = cName.split(/\s+/).filter((w) => w.length > 2);
-        if (rawWords.length >= 2) {
-          matchedUser = allUsers.find((u) => {
-            const uWords = (u.fullName || '').toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-            return rawWords.every((rw) => uWords.includes(rw));
-          });
-        }
-      }
+      // Anti-Collision & Precision Matching Karyawan (LA UNGA SAMSI vs Rusli, Wahyu vs Wahyudi, Aslam vs Honnes)
+      const matchedUser = findMatchingUser(allUsers, rawNip, rawName);
 
       if (!matchedUser) {
         errors.push(`Baris ${i + 1}: Karyawan "${rawName || rawNip}" tidak terdaftar di database sistem`);
@@ -723,11 +799,20 @@ export const HrmDivisionsPage: React.FC = () => {
     setImportModalOpen(false);
   };
 
-  const loadData = () => {
+  const loadData = async () => {
     const divs = hrmService.getDivisions();
     setDivisions(divs);
 
-    const allUsers = hrmService.getUsers();
+    let allUsers = hrmService.getUsers();
+    try {
+      const res = await api.get<{ success: boolean; data: UserProfile[] }>('/users');
+      if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+        allUsers = res.data;
+        hrmService.setInMemoryUsers(res.data);
+      }
+    } catch {
+      // fallback to local users
+    }
     setUsers(allUsers);
 
     const map: Record<string, UserProfile[]> = {};
