@@ -4,7 +4,6 @@ import {
   ShieldCheck,
   CheckCircle2,
   XCircle,
-  FileCheck2,
   Coins,
   CalendarCheck2,
   Users,
@@ -15,12 +14,16 @@ import {
   Clock,
   Sparkles,
   RefreshCw,
+  UserCheck,
+  PhoneCall,
+  UserPlus,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { hrmService } from '@/services/hrmService';
-import { LeaveRequest, OvertimeRecord, UserProfile } from '@/types/hrm';
+import { api } from '@/services/apiClient';
+import { LeaveRequest, OvertimeRecord, UserProfile, isOfficialFrEmployee } from '@/types/hrm';
 import { toast } from 'sonner';
 
 interface HrmFieldAuthorityMobileModalProps {
@@ -41,8 +44,14 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
   const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
   const [teamRoster, setTeamRoster] = useState<any[]>([]);
   const [loadingRecap, setLoadingRecap] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [processingId, setProcessingId] = useState<string | null>(null);
+
+  // Smart Relief Candidates per Leave Request
+  const [candidatesMap, setCandidatesMap] = useState<Record<string, any[]>>({});
+  const [selectedSubMap, setSelectedSubMap] = useState<Record<string, any>>({});
+  const [loadingCandidates, setLoadingCandidates] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (isOpen) {
@@ -51,14 +60,77 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
     }
   }, [isOpen, initialTab]);
 
+  // Load Realtime Data directly from PostgreSQL API
   const loadData = async () => {
+    setIsLoading(true);
     try {
-      const allLeaves = hrmService.getLeaves();
-      const allOvertimes = hrmService.getOvertimeRecords();
-      setLeaves(allLeaves);
-      setOvertimes(allOvertimes);
+      // 1. Fetch Realtime Leaves from Backend API
+      const resLeaves = await api.get<{ success: boolean; data: any[] }>('/leaves');
+      if (resLeaves && resLeaves.success && Array.isArray(resLeaves.data)) {
+        const mappedLeaves: LeaveRequest[] = resLeaves.data
+          .filter((l: any) => isOfficialFrEmployee(l.user_nip || l.userNip || ''))
+          .map((l: any) => ({
+            id: l.id,
+            userId: l.user_id || l.userId,
+            userName: l.user_name || l.userName || 'Karyawan',
+            userNip: l.user_nip || l.userNip || '-',
+            divisionName: l.division_name || l.divisionName || 'Operasional Lapangan',
+            divisionId: l.user_division_id || l.division_id || l.divisionId,
+            leaveType: l.leave_type || l.leaveType || 'annual_leave',
+            startDate: typeof l.start_date === 'string' ? l.start_date.substring(0, 10) : l.startDate,
+            endDate: typeof l.end_date === 'string' ? l.end_date.substring(0, 10) : l.endDate,
+            totalDays: Number(l.total_days || l.totalDays || 1),
+            reason: l.reason,
+            status: l.status,
+            substituteId: l.substitute_id || l.substituteId,
+            substituteName: l.substitute_name || l.substituteName,
+            substituteNip: l.substitute_nip || l.substituteNip,
+            attachmentUrl: l.attachment_url || l.attachmentUrl,
+            approvalNotes: l.approval_notes || l.approvalNotes,
+            approvedBy: l.approved_by || l.approvedBy,
+            createdAt: l.created_at || l.createdAt,
+          }));
+        setLeaves(mappedLeaves);
 
-      // Muat rekap jika tab rekap aktif
+        // Auto-fetch substitute recommendations for all pending leave requests
+        mappedLeaves
+          .filter((l) => l.status === 'pending')
+          .forEach((l) => {
+            fetchCandidatesForLeave(l);
+          });
+      } else {
+        // Fallback to local storage if offline
+        const localLeaves = hrmService.getLeaves();
+        setLeaves(localLeaves);
+      }
+
+      // 2. Fetch Realtime Overtimes from Backend API
+      const resOvertimes = await api.get<{ success: boolean; data: any[] }>('/overtime');
+      if (resOvertimes && resOvertimes.success && Array.isArray(resOvertimes.data)) {
+        const mappedOvertimes: OvertimeRecord[] = resOvertimes.data
+          .filter((o: any) => isOfficialFrEmployee(o.user_nip || o.userNip || ''))
+          .map((o: any) => ({
+            id: o.id,
+            userId: o.user_id || o.userId,
+            userName: o.user_name || o.userName || 'Karyawan',
+            userNip: o.user_nip || o.userNip || '-',
+            divisionName: o.division_name || o.divisionName || 'Operasional Lapangan',
+            date: typeof o.date === 'string' ? o.date.substring(0, 10) : o.date,
+            startTime: o.start_time || o.startTime,
+            endTime: o.end_time || o.endTime,
+            durationHours: Number(o.duration_hours || o.durationHours || 0),
+            taskDescription: o.task_description || o.taskDescription,
+            status: o.status,
+            approvalNotes: o.approval_notes || o.approvalNotes,
+            createdAt: o.created_at || o.createdAt,
+          }));
+        setOvertimes(mappedOvertimes);
+      } else {
+        const localOvertimes = hrmService.getOvertimeRecords();
+        setOvertimes(localOvertimes);
+      }
+
+      // 3. Fetch Team Recap
       setLoadingRecap(true);
       const recapRes = await hrmService.getFieldRecap({ period: 'current_month' });
       if (recapRes && recapRes.success && recapRes.data?.roster) {
@@ -67,7 +139,38 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
     } catch (err) {
       console.warn('[FieldAuthorityModal Load]', err);
     } finally {
+      setIsLoading(false);
       setLoadingRecap(false);
+    }
+  };
+
+  // Fetch Smart Relief Recommendation for a specific leave
+  const fetchCandidatesForLeave = async (leave: LeaveRequest) => {
+    if (candidatesMap[leave.id] || loadingCandidates[leave.id]) return;
+    setLoadingCandidates((prev) => ({ ...prev, [leave.id]: true }));
+    try {
+      const qs = new URLSearchParams({
+        applicantId: leave.userId,
+        startDate: leave.startDate,
+        endDate: leave.endDate,
+      });
+      if (leave.divisionId) qs.set('divisionId', leave.divisionId);
+
+      const res = await api.get<any>(`/leaves/substitute-candidates?${qs.toString()}`);
+      if (res && res.success && res.data) {
+        const list = res.data.allRanked || res.data.sameDivOff || [];
+        setCandidatesMap((prev) => ({ ...prev, [leave.id]: list }));
+
+        // Default: pilih kandidat prioritas 1 (Sedang Libur/OFF) secara otomatis jika belum ada pengganti
+        if (!selectedSubMap[leave.id] && list.length > 0) {
+          const defaultCand = list.find((c: any) => c.isOff) || list[0];
+          setSelectedSubMap((prev) => ({ ...prev, [leave.id]: defaultCand }));
+        }
+      }
+    } catch (err) {
+      console.warn('[FieldAuthorityModal] Fetch candidates error:', err);
+    } finally {
+      setLoadingCandidates((prev) => ({ ...prev, [leave.id]: false }));
     }
   };
 
@@ -105,18 +208,45 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
     });
   }, [overtimes, searchQuery]);
 
-  // Handle Approve / Reject Leave
-  const handleLeaveDecision = async (leaveId: string, status: 'approved' | 'rejected') => {
-    setProcessingId(leaveId);
+  // Handle Approve / Reject Leave with Zero Vacancy Relief Duty Enforcement
+  const handleLeaveDecision = async (leave: LeaveRequest, status: 'approved' | 'rejected') => {
+    const chosenSubstitute = selectedSubMap[leave.id];
+
+    // Aturan Zero Vacancy: jika menyetujui, wajib ada personil pengganti!
+    if (status === 'approved' && !chosenSubstitute && !leave.substituteName) {
+      toast.error('Aturan Zero Vacancy: Pos tidak boleh kosong! Harap pilih Rekan Pengganti Pos sebelum menyetujui.', {
+        duration: 4000,
+      });
+      return;
+    }
+
+    setProcessingId(leave.id);
     try {
-      const res = await hrmService.updateLeaveStatus(
-        leaveId,
+      const approverName = currentUser?.fullName || 'Muh Aslam Faisal (Korlap)';
+      const approverId = currentUser?.id || 'ebf10b16-ab2f-4b53-ab22-b3ffc00694db'; // Default Aslam UUID if context missing
+
+      const subId = chosenSubstitute?.id || leave.substituteId;
+      const subName = chosenSubstitute?.name || chosenSubstitute?.fullName || leave.substituteName;
+      const subNip = chosenSubstitute?.nip || leave.substituteNip;
+
+      const res = await api.put<{ success: boolean; error?: string }>(`/leaves/${leave.id}/status`, {
         status,
-        currentUser?.fullName || 'Petugas Pengawas',
-        status === 'approved' ? 'Disetujui oleh Otoritas Lapangan' : 'Ditolak oleh Otoritas Lapangan'
-      );
+        approverId,
+        approverName,
+        notes: status === 'approved'
+          ? `Disetujui sah oleh Otoritas Lapangan (${approverName}). Petugas pengganti: ${subName || '-'}`
+          : `Ditolak oleh Otoritas Lapangan (${approverName})`,
+        substituteId: subId,
+        substituteName: subName,
+        substituteNip: subNip,
+      });
+
       if (res && res.success) {
-        toast.success(`Permohonan cuti/izin berhasil ${status === 'approved' ? 'DISETUJUI' : 'DITOLAK'}!`);
+        toast.success(
+          status === 'approved'
+            ? `✅ Permohonan cuti ${leave.userName} DISETUJUI! Pengganti resmi: ${subName}. Pos dinas aman & notifikasi WA terkirim.`
+            : `Permohonan cuti ${leave.userName} berhasil DITOLAK.`
+        );
         loadData();
       } else {
         toast.error(res?.error || 'Gagal memproses status permohonan.');
@@ -134,13 +264,17 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
     try {
       const ot = overtimes.find((o) => o.id === otId);
       const hours = ot?.durationHours || 2;
-      const res = await hrmService.updateOvertimeStatus(
-        otId,
+      const approverName = currentUser?.fullName || 'Muh Aslam Faisal (Korlap)';
+      const approverId = currentUser?.id || 'ebf10b16-ab2f-4b53-ab22-b3ffc00694db';
+
+      const res = await api.put<{ success: boolean; error?: string }>(`/overtime/${otId}/status`, {
         status,
-        currentUser?.fullName || 'Petugas Pengawas',
-        hours,
-        status === 'approved' ? 'Disetujui sah oleh Otoritas Lapangan' : 'Ditolak'
-      );
+        approverId,
+        approverName,
+        approvedHours: hours,
+        notes: status === 'approved' ? `Disetujui sah oleh Otoritas Lapangan (${approverName})` : 'Ditolak',
+      });
+
       if (res && res.success) {
         toast.success(`Pengajuan lembur (SPL) berhasil ${status === 'approved' ? 'DISETUJUI' : 'DITOLAK'}!`);
         loadData();
@@ -178,14 +312,25 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-all active:scale-95 shrink-0"
-            title="Tutup"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={loadData}
+              disabled={isLoading}
+              className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-all active:scale-95 shrink-0"
+              title="Segarkan Data Realtime"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-emerald-400' : ''}`} />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-all active:scale-95 shrink-0"
+              title="Tutup"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Tab Navigation */}
@@ -202,7 +347,7 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
             <CalendarCheck2 className="w-3.5 h-3.5" />
             <span>Cuti / Izin</span>
             {pendingLeaves.length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-rose-500 text-white">
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
                 {pendingLeaves.length}
               </span>
             )}
@@ -258,10 +403,10 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
           
           {/* TAB 1: CUTI & IZIN */}
           {activeTab === 'leaves' && (
-            <div className="space-y-2.5">
+            <div className="space-y-3">
               <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold px-1">
                 <span>Daftar Permohonan ({filteredLeaves.length})</span>
-                <span className="text-emerald-400">{pendingLeaves.length} Menunggu Persetujuan</span>
+                <span className="text-emerald-400 font-bold">{pendingLeaves.length} Menunggu Persetujuan</span>
               </div>
 
               {filteredLeaves.length === 0 ? (
@@ -273,26 +418,33 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                 filteredLeaves.map((leave) => {
                   const isPending = leave.status === 'pending';
                   const isApproved = leave.status === 'approved';
+                  const candidates = candidatesMap[leave.id] || [];
+                  const selectedCandidate = selectedSubMap[leave.id];
+                  const isLoadingCands = loadingCandidates[leave.id];
+
                   return (
                     <div
                       key={leave.id}
-                      className="p-3 bg-slate-950/60 border border-slate-800 rounded-2xl space-y-2.5 shadow-xs"
+                      className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-2xl space-y-3 shadow-md transition-all hover:border-slate-700"
                     >
+                      {/* Top Header of Card */}
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <p className="font-bold text-xs text-white flex items-center gap-1.5">
+                          <p className="font-bold text-xs sm:text-sm text-white flex items-center gap-1.5">
                             <span>{leave.userName || 'Karyawan'}</span>
-                            <span className="text-[10px] font-mono text-slate-400">({leave.userNip || '-'})</span>
+                            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+                              {leave.userNip || '-'}
+                            </span>
                           </p>
-                          <p className="text-[10px] text-slate-400 mt-0.5">
-                            {leave.divisionName || 'Operasional Lapangan'} • {leave.startDate} s/d {leave.endDate} ({leave.totalDays || 1} Hari)
+                          <p className="text-[10.5px] text-slate-400 mt-0.5">
+                            <span className="font-semibold text-slate-300">{leave.divisionName || 'Operasional Lapangan'}</span> • {leave.startDate} s/d {leave.endDate} ({leave.totalDays || 1} Hari)
                           </p>
                         </div>
                         <Badge
                           variant="outline"
-                          className={`text-[9.5px] font-bold uppercase tracking-wider ${
+                          className={`text-[9.5px] font-extrabold uppercase tracking-wider ${
                             isPending
-                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
                               : isApproved
                               ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                               : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
@@ -302,10 +454,104 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                         </Badge>
                       </div>
 
-                      <div className="p-2 bg-slate-900/80 rounded-xl text-[11px] text-slate-300 border border-slate-800/70">
+                      {/* Alasan Cuti */}
+                      <div className="p-2.5 bg-slate-900/90 rounded-xl text-[11px] text-slate-300 border border-slate-800/80">
                         <span className="text-slate-400 font-semibold block text-[10px] mb-0.5">Alasan Permohonan:</span>
-                        {leave.reason || 'Tidak ada keterangan tambahan.'}
+                        <p className="font-medium text-slate-200">{leave.reason || 'Tidak ada keterangan tambahan.'}</p>
                       </div>
+
+                      {/* Jika sudah disetujui dan ada pengganti */}
+                      {isApproved && (leave.substituteName || selectedCandidate?.name) && (
+                        <div className="p-2 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-[10.5px] text-emerald-300 flex items-center gap-1.5">
+                          <UserCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Petugas Pengganti Pos Resmi: <strong>{leave.substituteName || selectedCandidate?.name}</strong></span>
+                        </div>
+                      )}
+
+                      {/* ─── FITUR CERDAS: REKOMENDASI PENGGANTI POS (ZERO VACANCY ENFORCEMENT) ─── */}
+                      {isPending && (
+                        <div className="p-2.5 bg-slate-900/95 rounded-xl border border-emerald-500/30 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                              <Sparkles className="w-3 h-3 text-emerald-400" />
+                              <span>REKOMENDASI PENGGANTI POS (HUKUM ZERO VACANCY)</span>
+                            </span>
+                            {isLoadingCands && (
+                              <span className="text-[9.5px] text-slate-400 animate-pulse flex items-center gap-1">
+                                <RefreshCw className="w-2.5 h-2.5 animate-spin text-emerald-400" /> Mencari...
+                              </span>
+                            )}
+                          </div>
+
+                          {candidates.length > 0 ? (
+                            <div className="space-y-1.5">
+                              <label className="text-[9.5px] text-slate-400 block font-medium">
+                                Pilih rekan kerja untuk mengisi pos tugas agar tidak kosong:
+                              </label>
+                              <select
+                                value={selectedCandidate?.id || ''}
+                                onChange={(e) => {
+                                  const found = candidates.find((c) => c.id === e.target.value);
+                                  if (found) {
+                                    setSelectedSubMap((prev) => ({ ...prev, [leave.id]: found }));
+                                  }
+                                }}
+                                className="w-full bg-slate-950 border border-slate-700 text-slate-100 rounded-lg p-2 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                              >
+                                {candidates.map((cand) => (
+                                  <option key={cand.id} value={cand.id}>
+                                    ⭐ {cand.name} ({cand.nip}) — {cand.categoryTitle || (cand.isOff ? 'Sedang Libur/OFF' : cand.shiftName)} (Skor: {cand.score}%)
+                                  </option>
+                                ))}
+                              </select>
+
+                              {/* Selected Candidate Info & WhatsApp Action */}
+                              {selectedCandidate && (
+                                <div className="p-2 bg-emerald-950/40 border border-emerald-500/30 rounded-lg flex items-center justify-between gap-2 mt-1">
+                                  <div className="min-w-0">
+                                    <p className="text-[11px] font-bold text-white truncate">
+                                      {selectedCandidate.name} ({selectedCandidate.nip})
+                                    </p>
+                                    <p className="text-[9.5px] text-emerald-300 truncate">
+                                      {selectedCandidate.categoryTitle || 'Kandidat Terbaik (OFF)'} • Pos dinas aman terisi
+                                    </p>
+                                  </div>
+                                  {selectedCandidate.phone && (
+                                    <a
+                                      href={
+                                        selectedCandidate.waConfirmUrl ||
+                                        `https://wa.me/${selectedCandidate.phone.replace(/^0/, '62')}?text=${encodeURIComponent(
+                                          `Halo Rekan *${selectedCandidate.name}*, kami dari Tim Korlap PT FRP.\n\n` +
+                                            `Rekan kerja Anda *${leave.userName}* mengajukan cuti tgl *${leave.startDate}* s/d *${leave.endDate}*.\n` +
+                                            `Sesuai aturan *Zero Vacancy*, pos dinas tidak boleh kosong.\n\n` +
+                                            `Apakah Anda bersedia bertugas sebagai *Petugas Pengganti Pos Resmi* pada tanggal tersebut? Tugas ini resmi dihitung lembur penuh (SPKL).\n` +
+                                            `Mohon konfirmasinya. Terima kasih.`
+                                        )}`
+                                      }
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="px-2 py-1 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 rounded-md text-[10px] font-bold flex items-center gap-1 shrink-0 transition-colors"
+                                      title="Tanya kesiapan via WhatsApp"
+                                    >
+                                      <PhoneCall className="w-2.5 h-2.5" />
+                                      <span>Tanya WA</span>
+                                    </a>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ) : isLoadingCands ? (
+                            <p className="text-[10px] text-slate-400 py-1">
+                              Sedang mencocokkan jadwal rekan kerja yang sedang libur/OFF...
+                            </p>
+                          ) : (
+                            <div className="text-[10px] text-amber-300/90 py-1 flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3 text-amber-400 shrink-0" />
+                              <span>Belum terdeteksi rekan 1 divisi yang OFF. Menampilkan opsi rotasi tugas.</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Action Buttons */}
                       {isPending && (
@@ -313,18 +559,18 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                           <Button
                             size="sm"
                             disabled={processingId === leave.id}
-                            onClick={() => handleLeaveDecision(leave.id, 'approved')}
-                            className="flex-1 h-8 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs"
+                            onClick={() => handleLeaveDecision(leave, 'approved')}
+                            className="flex-1 h-9 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-1"
                           >
-                            <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                            <span>Setujui</span>
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Setujui &amp; Tetapkan Pengganti</span>
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
                             disabled={processingId === leave.id}
-                            onClick={() => handleLeaveDecision(leave.id, 'rejected')}
-                            className="flex-1 h-8 border-rose-500/40 hover:bg-rose-500/20 text-rose-300 font-bold text-xs rounded-xl"
+                            onClick={() => handleLeaveDecision(leave, 'rejected')}
+                            className="h-9 px-3 border-rose-500/40 hover:bg-rose-500/20 text-rose-300 font-bold text-xs rounded-xl"
                           >
                             <XCircle className="w-3.5 h-3.5 mr-1 text-rose-400" />
                             <span>Tolak</span>
@@ -343,7 +589,7 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
             <div className="space-y-2.5">
               <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold px-1">
                 <span>Daftar Pengajuan Lembur ({filteredOvertimes.length})</span>
-                <span className="text-amber-400">{pendingOvertimes.length} Menunggu Persetujuan</span>
+                <span className="text-amber-400 font-bold">{pendingOvertimes.length} Menunggu Persetujuan</span>
               </div>
 
               {filteredOvertimes.length === 0 ? (
