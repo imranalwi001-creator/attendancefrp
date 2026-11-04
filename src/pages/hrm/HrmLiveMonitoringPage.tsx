@@ -1966,9 +1966,18 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                 Izin Resmi
                               </Badge>
                             ) : absentSubtype === 'mangkir' ? (
-                              <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 text-[11px] rounded-full px-2.5 py-0.5 font-bold shadow-xs">
-                                Mangkir / Alpa
-                              </Badge>
+                              <div className="flex flex-col items-center gap-0.5">
+                                <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 text-[11px] rounded-full px-2.5 py-0.5 font-bold shadow-xs">
+                                  Mangkir / Alpa
+                                </Badge>
+                                {att?.notes?.includes('Hak Cuti') ? (
+                                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold" title={att.notes}>Potong Cuti</span>
+                                ) : att?.notes?.includes('Lembur') ? (
+                                  <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold" title={att.notes}>Potong Lembur</span>
+                                ) : att?.notes?.includes('Gaji Pokok') ? (
+                                  <span className="text-[10px] text-rose-600 dark:text-rose-400 font-semibold" title={att.notes}>Potong Gaji</span>
+                                ) : null}
+                              </div>
                             ) : absentSubtype === 'pending_shift' ? (
                               <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-400 text-[11px] rounded-full px-2.5 py-0.5">
                                 Shift Pk {shift?.startTime ? shift.startTime.slice(0, 5) : '-'}
@@ -2289,9 +2298,18 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                       Izin Resmi
                     </Badge>
                   ) : absentSubtype === 'mangkir' ? (
-                    <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 text-[10px] rounded-full font-bold shadow-xs">
-                      Mangkir / Alpa
-                    </Badge>
+                    <div className="flex flex-col items-end gap-0.5">
+                      <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 text-[10px] rounded-full font-bold shadow-xs">
+                        Mangkir / Alpa
+                      </Badge>
+                      {att?.notes?.includes('Hak Cuti') ? (
+                        <span className="text-[9px] text-emerald-600 font-semibold" title={att.notes}>Potong Cuti</span>
+                      ) : att?.notes?.includes('Lembur') ? (
+                        <span className="text-[9px] text-amber-600 font-semibold" title={att.notes}>Potong Lembur</span>
+                      ) : att?.notes?.includes('Gaji Pokok') ? (
+                        <span className="text-[9px] text-rose-600 font-semibold" title={att.notes}>Potong Gaji</span>
+                      ) : null}
+                    </div>
                   ) : absentSubtype === 'pending_shift' ? (
                     <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200 text-[10px] rounded-full">
                       Shift Pk {shift?.startTime ? shift.startTime.slice(0, 5) : '-'}

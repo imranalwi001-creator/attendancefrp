@@ -12292,18 +12292,94 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
         }
       }
 
-      // 5. Buat record resmi Mangkir (status = 'alfa') di hrm_attendances
-      const notesMsg = `[MANGKIR OTOMATIS: Tidak hadir tanpa keterangan hingga jam shift (${effectiveShiftEnd} WITA) berakhir]`;
+      // 5. ATURAN PENETAPAN KOMPENSASI MANGKIR & KINERJA (PT. FAWWAZ RESKI PERWIRA):
+      // - Prioritas 1: Jika masih ada cuti, cuti dipotong otomatis 1 hari. Masuk kategori Mangkir untuk Penilaian Kinerja, tetapi TANPA POTONGAN UANG.
+      // - Prioritas 2: Jika cuti habis, dipotong 100% ke uang lembur (SPKL) jika ada lembur bulan tersebut. Masuk Penilaian Kinerja sebagai Mangkir.
+      // - Prioritas 3: Jika cuti habis & tidak ada lembur, dipotong otomatis ke gaji pokok. Masuk Penilaian Kinerja sebagai Mangkir.
+      const profRes = await pool.query(
+        'SELECT annual_leave_quota, used_leave_days, base_salary FROM hrm_profiles WHERE id = $1',
+        [emp.id]
+      );
+      const profile = profRes.rows[0] || {};
+      const annualQuota = parseInt(profile.annual_leave_quota ?? 12, 10);
+      const usedLeave = parseInt(profile.used_leave_days ?? 0, 10);
+      const remainingLeave = Math.max(0, annualQuota - usedLeave);
+      const baseSalary = Number(profile.base_salary || 4045050);
+      const dailyRate = Math.round(baseSalary / 25); // Standar operasional 25 hari kerja
+
+      let penaltyType = 'gaji_pokok';
+      let penaltyAmount = dailyRate;
+      let notesMsg = '';
+      const targetMonthStr = nowWitaDate.slice(0, 7); // 'YYYY-MM'
+
+      if (remainingLeave > 0) {
+        // TIER 1: Masih ada cuti -> Potong cuti otomatis, TANPA POTONGAN FINANSIAL, dilaporkan ke Kinerja sebagai Mangkir
+        penaltyType = 'cuti';
+        penaltyAmount = 0;
+        await pool.query(
+          'UPDATE hrm_profiles SET used_leave_days = used_leave_days + 1, updated_at = NOW() WHERE id = $1',
+          [emp.id]
+        );
+        const newRemaining = remainingLeave - 1;
+        notesMsg = `[MANGKIR VALID: Hak Cuti dipotong 1 hari (Sisa Cuti: ${newRemaining} hari). Tanpa potongan uang. Tercatat dalam Penilaian Kinerja]`;
+      } else {
+        // Cuti sudah habis -> Cek akumulasi uang lembur (SPKL) yang disetujui pada bulan berjalan
+        const otCheck = await pool.query(`
+          SELECT id, compensation_amount, duration_hours 
+          FROM hrm_overtime_records 
+          WHERE user_id = $1 
+            AND TO_CHAR(date, 'YYYY-MM') = $2 
+            AND status = 'approved'
+            AND COALESCE(compensation_amount, 0) > 0
+          ORDER BY date ASC
+        `, [emp.id, targetMonthStr]);
+
+        const totalOtAvailable = otCheck.rows.reduce((sum, r) => sum + Number(r.compensation_amount || 0), 0);
+
+        if (totalOtAvailable > 0) {
+          // TIER 2: Cuti habis tetapi ADA LEMBUR -> Dipotong 100% ke lembur senilai 1 hari upah mangkir
+          penaltyType = 'lembur';
+          penaltyAmount = Math.min(dailyRate, totalOtAvailable);
+
+          let remainingToDeduct = penaltyAmount;
+          for (const otRow of otCheck.rows) {
+            if (remainingToDeduct <= 0) break;
+            const currentComp = Number(otRow.compensation_amount || 0);
+            const deduct = Math.min(currentComp, remainingToDeduct);
+            await pool.query(`
+              UPDATE hrm_overtime_records 
+              SET compensation_amount = compensation_amount - $1,
+                  mangkir_deduction_amount = COALESCE(mangkir_deduction_amount, 0) + $1,
+                  updated_at = NOW()
+              WHERE id = $2
+            `, [deduct, otRow.id]);
+            remainingToDeduct -= deduct;
+          }
+
+          notesMsg = `[MANGKIR VALID: Cuti habis. Dipotong 100% dari Kompensasi Lembur senilai Rp ${penaltyAmount.toLocaleString('id-ID')}. Tercatat dalam Penilaian Kinerja]`;
+        } else {
+          // TIER 3: Cuti habis & TIDAK ADA LEMBUR -> Dipotong otomatis ke Gaji Pokok
+          penaltyType = 'gaji_pokok';
+          penaltyAmount = dailyRate;
+          notesMsg = `[MANGKIR VALID: Cuti habis & Tidak ada lembur. Dipotong otomatis ke Gaji Pokok senilai Rp ${penaltyAmount.toLocaleString('id-ID')}. Tercatat dalam Penilaian Kinerja]`;
+        }
+      }
+
+      // 6. Buat record resmi Mangkir (status = 'alfa') di hrm_attendances
       await pool.query(`
         INSERT INTO hrm_attendances (
           user_id, attendance_date, status, late_minutes, early_leaving_minutes,
-          work_duration_minutes, is_locked, notes, shift_id, shift_name, created_at, updated_at
+          work_duration_minutes, is_locked, notes, shift_id, shift_name,
+          mangkir_penalty_type, mangkir_penalty_amount, mangkir_kpi_flagged,
+          created_at, updated_at
         ) VALUES (
           $1, $2, 'alfa', 0, 0,
-          0, false, $3, $4, $5, NOW(), NOW()
+          0, false, $3, $4, $5,
+          $6, $7, true,
+          NOW(), NOW()
         )
         ON CONFLICT DO NOTHING
-      `, [emp.id, nowWitaDate, notesMsg, effectiveShiftId, effectiveShiftName]);
+      `, [emp.id, nowWitaDate, notesMsg, effectiveShiftId, effectiveShiftName, penaltyType, penaltyAmount]);
 
       markedCount++;
       console.log(`[Auto-Mangkir Engine] Berhasil mencatat Mangkir untuk ${emp.full_name} (${emp.nip})`);
