@@ -1077,10 +1077,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
           // VALIDASI TANGGAL KETAT: Hanya proses jika tanggal presensi benar-benar tanggal hari ini
           if (!remoteAttDate || remoteAttDate === todayStr) {
-            const preservedClockIn = todayAtt?.clockIn || normRemote.clockIn;
-            const preservedClockInFull = todayAtt?.clock_in || normRemote.clock_in || preservedClockIn;
-            const preservedClockOut = normRemote.clockOut || (normRemote.clock_out ? String(normRemote.clock_out).substring(0, 5) : undefined) || (todayAtt?.clockOut);
-            const preservedClockOutFull = normRemote.clock_out || todayAtt?.clock_out || preservedClockOut;
+            // PostgreSQL Server adalah Single Source of Truth (SSOT).
+            // Jika Superadmin mengoreksi jam masuk/pulang di dashboard, PWA langsung mengikuti nilai server!
+            const remoteClockIn = normRemote.clockIn ? String(normRemote.clockIn).substring(0, 5) : undefined;
+            const remoteClockInFull = normRemote.clock_in || normRemote.clockIn;
+            const effectiveClockIn = remoteClockIn || todayAtt?.clockIn;
+            const effectiveClockInFull = remoteClockInFull || todayAtt?.clock_in || effectiveClockIn;
+
+            const remoteClockOut = normRemote.clockOut 
+              ? String(normRemote.clockOut).substring(0, 5) 
+              : (normRemote.clock_out ? String(normRemote.clock_out).substring(0, 5) : undefined);
+            const remoteClockOutFull = normRemote.clock_out || normRemote.clockOut;
+            const effectiveClockOut = remoteClockOut || todayAtt?.clockOut;
+            const effectiveClockOutFull = remoteClockOutFull || todayAtt?.clock_out || effectiveClockOut;
             const preservedPhotoOut = normRemote.photoOut || normRemote.clockOutPhoto || todayAtt?.photoOut;
 
             todayAtt = {
@@ -1088,10 +1097,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               ...normRemote,
               attendanceDate: todayStr,
               date: todayStr,
-              clockIn: preservedClockIn,
-              clock_in: preservedClockInFull,
-              clockOut: preservedClockOut,
-              clock_out: preservedClockOutFull,
+              clockIn: effectiveClockIn,
+              clock_in: effectiveClockInFull,
+              clockOut: effectiveClockOut,
+              clock_out: effectiveClockOutFull,
               photoOut: preservedPhotoOut,
               clockOutPhoto: preservedPhotoOut,
             };

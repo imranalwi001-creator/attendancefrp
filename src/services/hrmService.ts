@@ -998,23 +998,17 @@ export const hrmService = {
                       (m.date === today || m.attendanceDate === today)
                     );
                     if (idx !== -1) {
-                      // MONOTONIC CLOCK RETENTION:
-                      // Jangan pernah biarkan clock-in atau clock-out yang sah terhapus oleh nilai undefined!
-                      const effectiveClockIn = normConf.clockIn || mappedAtts[idx].clockIn;
-                      const effectiveClockInFull = normConf.clock_in || mappedAtts[idx].clock_in;
-                      const effectiveClockOut = mappedAtts[idx].clockOut || normConf.clockOut || (mappedAtts[idx].clock_out ? String(mappedAtts[idx].clock_out).substring(0, 5) : undefined) || (normConf.clock_out ? String(normConf.clock_out).substring(0, 5) : undefined);
-                      const effectiveClockOutFull = mappedAtts[idx].clock_out || normConf.clock_out || effectiveClockOut;
-                      const effectivePhotoOut = mappedAtts[idx].photoOut || normConf.photoOut || mappedAtts[idx].clockOutPhoto || normConf.clockOutPhoto;
-
-                      // Filter field bernilai undefined/null agar tidak merusak field yang sudah ada di mappedAtts[idx]
-                      const cleanNormConf: any = {};
-                      for (const [k, v] of Object.entries(normConf)) {
-                        if (v !== undefined && v !== null) cleanNormConf[k] = v;
-                      }
+                      // PostgreSQL Server adalah otoritas tertinggi (SSOT):
+                      // Data server (mappedAtts[idx]) diutamakan di atas local cache yang mungkin stale/belum dikoreksi!
+                      const effectiveClockIn = mappedAtts[idx].clockIn || normConf.clockIn;
+                      const effectiveClockInFull = mappedAtts[idx].clock_in || normConf.clock_in || effectiveClockIn;
+                      const effectiveClockOut = mappedAtts[idx].clockOut || (mappedAtts[idx].clock_out ? String(mappedAtts[idx].clock_out).substring(0, 5) : undefined) || normConf.clockOut;
+                      const effectiveClockOutFull = mappedAtts[idx].clock_out || mappedAtts[idx].clockOut || normConf.clock_out || effectiveClockOut;
+                      const effectivePhotoOut = mappedAtts[idx].photoOut || mappedAtts[idx].clockOutPhoto || normConf.photoOut;
 
                       mappedAtts[idx] = {
+                        ...normConf,
                         ...mappedAtts[idx],
-                        ...cleanNormConf,
                         clockIn: effectiveClockIn,
                         clock_in: effectiveClockInFull,
                         clockOut: effectiveClockOut,
