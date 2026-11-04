@@ -81,7 +81,23 @@ export function resolveEffectiveShift(
     };
   }
 
-  // 1. Jadwal Roster Harian (Jika Ada dan Bukan Libur)
+  // 1. Jadwal Roster Harian: Jika jadwal hari ini adalah OFF (Libur / Hari Bebas Tugas)
+  if (dailySchedule && (dailySchedule.isOff || dailySchedule.shiftCode === 'OFF' || dailySchedule.shiftName?.toLowerCase().includes('libur'))) {
+    return {
+      id: dailySchedule.shiftId || 'shift-off',
+      code: 'OFF',
+      name: dailySchedule.shiftName || 'Libur / Off',
+      startTime: '00:00',
+      endTime: '00:00',
+      lateToleranceMinutes: 0,
+      earliestClockInMinutes: 0,
+      isCrossDay: false,
+      isOff: true,
+      colorTag: '#64748b',
+    };
+  }
+
+  // 2. Jadwal Roster Harian (Jika Ada dan Bukan Libur)
   if (dailySchedule && !dailySchedule.isOff && dailySchedule.startTime && dailySchedule.endTime) {
     const isNight = Boolean(dailySchedule.isNightShift || (dailySchedule.endTime < dailySchedule.startTime));
     return {
@@ -93,6 +109,7 @@ export function resolveEffectiveShift(
       lateToleranceMinutes: 15,
       earliestClockInMinutes: 120, // 2 Jam (120 menit) Datang Lebih Cepat Boleh Absen Masuk!
       isCrossDay: isNight,
+      isOff: false,
       colorTag: dailySchedule.shiftCode === 'DAY' ? '#10b981' : dailySchedule.shiftCode === 'P' ? '#3b82f6' : dailySchedule.shiftCode === 'S' ? '#f59e0b' : '#8b5cf6',
     };
   }

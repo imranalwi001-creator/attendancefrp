@@ -3,7 +3,7 @@ import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { toast } from 'sonner';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer, isOfficialFrEmployee, isLeadershipSpecialFieldOfficer, isSimulationAccount, LeaveRequest } from '@/types/hrm';
+import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer, isOfficialFrEmployee, isLeadershipSpecialFieldOfficer, isSimulationAccount, LeaveRequest, EmployeeSchedule } from '@/types/hrm';
 import { resolveEffectiveShift, calculateAttendanceLateness } from '@/lib/hrmShiftResolver';
 import {
   UserCheck,
@@ -81,6 +81,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
   const [perimeterViolations, setPerimeterViolations] = useState<PerimeterViolation[]>([]);
   const [approvedLeaves, setApprovedLeaves] = useState<LeaveRequest[]>([]);
+  const [todaySchedules, setTodaySchedules] = useState<EmployeeSchedule[]>([]);
 
   const [activeTab, setActiveTab] = useState<'all' | 'present' | 'late' | 'absent' | 'mangkir' | 'anomalies' | 'breaches' | 'field_radar'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -327,6 +328,15 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       .catch(() => {
         setApprovedLeaves(hrmService.getLeaves().filter((l) => l.status === 'approved'));
       });
+    fetch(`/api/employee-schedules?date=${today}`)
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) {
+          setTodaySchedules(res.data);
+          hrmService.saveEmployeeSchedules(res.data);
+        }
+      })
+      .catch(() => {});
   };
 
   const fetchLiveAttendancesFast = async () => {
@@ -345,6 +355,15 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           });
         }
       }
+      fetch(`/api/employee-schedules?date=${today}`)
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.success && Array.isArray(res.data)) {
+            setTodaySchedules(res.data);
+            hrmService.saveEmployeeSchedules(res.data);
+          }
+        })
+        .catch(() => {});
     } catch (e) {
       console.warn('[LiveMonitoring] Fast fetch note:', e);
     }
@@ -561,7 +580,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
       // Evaluasi jadwal kerja dan jam shift untuk mendeteksi status kehadiran secara akurat
       const todayStr = getTodayDateStr();
-      const uShift = resolveEffectiveShift(u, allShifts, hrmService.getEmployeeTodaySchedule(u.id, todayStr));
+      const sched = todaySchedules.find((s) => s.userId === u.id || s.userNip === u.nip || (s as any).employeeNip === u.nip) || hrmService.getEmployeeTodaySchedule(u.id, todayStr);
+      const uShift = resolveEffectiveShift(u, allShifts, sched);
       const nowWita = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Makassar', hour12: false, hour: '2-digit', minute: '2-digit' });
       
       const witaDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Makassar' }));
@@ -570,6 +590,15 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       const isSpecialLeadership = isLeadershipSpecialFieldOfficer(u);
       const isFaceEnrolled = Boolean(u.isFaceEnrolled || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl);
       const isSimAccount = isSimulationAccount(u);
+
+      const isScheduleOff = Boolean(
+        sched?.isOff === true ||
+        sched?.shiftCode === 'OFF' ||
+        uShift?.isOff === true ||
+        uShift?.code === 'OFF' ||
+        sched?.shiftName?.toLowerCase().includes('libur') ||
+        uShift?.name?.toLowerCase().includes('libur')
+      );
 
       // Cek pengajuan cuti / izin resmi yang disetujui hari ini
       const todayLeave = approvedLeaves.find((l) => {
@@ -590,6 +619,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           } else {
             absentSubtype = 'izin';
           }
+        } else if (isScheduleOff) {
+          // Karyawan dengan jadwal roster OFF (hari kerja maupun akhir pekan) resmi LIBUR / OFF
+          absentSubtype = 'off';
         } else if (isSpecialLeadership && isWeekend) {
           // 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) resmi LIBUR di akhir pekan (Sabtu & Minggu)
           absentSubtype = 'off';
@@ -599,7 +631,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         } else if (!isFaceEnrolled || isSimAccount) {
           // Karyawan belum registrasi wajah atau akun simulasi tidak dikenakan sanksi mangkir
           absentSubtype = 'unregistered';
-        } else if (uShift && uShift.startTime && uShift.endTime) {
+        } else if (uShift && uShift.startTime && uShift.endTime && uShift.startTime !== '00:00' && uShift.code !== 'OFF' && !uShift.isOff) {
           const shiftEnd = uShift.endTime.slice(0, 5);
           const shiftStart = uShift.startTime.slice(0, 5);
           if (nowWita < shiftStart) {
@@ -634,7 +666,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
       const isAlfaRecord = att && (att.status === 'alfa' || att.status === 'alpa' || att.status === 'alpha');
       if (isAlfaRecord) {
-        if (isWeekend && (isSpecialLeadership || !u.isShiftWorker)) {
+        if (isScheduleOff || (isWeekend && (isSpecialLeadership || !u.isShiftWorker))) {
           absentSubtype = 'off';
         } else if (!isFaceEnrolled || isSimAccount) {
           absentSubtype = 'unregistered';

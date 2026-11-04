@@ -375,6 +375,7 @@ export interface Shift {
   lateToleranceMinutes: number; // e.g. 15
   earliestClockInMinutes?: number; // e.g. 60 mins before start
   isCrossDay?: boolean;         // Shift malam lintas hari (misal 22:00 - 06:00)
+  isOff?: boolean;              // Shift Libur / Hari Bebas Tugas
   workingDays?: number[];       // [1, 2, 3, 4, 5] (1=Senin s/d 7=Minggu)
   colorTag?: string;            // e.g. '#0d9488', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444'
   description?: string;
