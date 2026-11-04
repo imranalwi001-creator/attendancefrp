@@ -2560,6 +2560,9 @@ app.post('/api/biometric/enroll-master', async (req, res) => {
       [aiData.embedding, targetPhoto, userId]
     );
 
+    // Kirim notifikasi otomatis WhatsApp selamat datang & akun terverifikasi
+    sendFaceEnrollmentWelcomeWhatsApp(userId).catch(e => console.warn('[Auto WA Enroll Error]:', e.message));
+
     res.json({
       success: true,
       message: 'Template biometrik wajah master 512-dimensi berhasil didaftarkan!',
@@ -2622,6 +2625,72 @@ async function sendWhatsAppAlert({ phone, message }) {
     }
   } catch (err) {
     console.error('[sendWhatsAppAlert Error]:', err.message);
+  }
+}
+
+// ─── NOTIFIKASI OTOMATIS WHATSAPP REGISTRASI BIOMETRIK WAJAH & AKUN ──────────
+async function sendFaceEnrollmentWelcomeWhatsApp(userIdOrProfile) {
+  try {
+    let profile = null;
+    if (typeof userIdOrProfile === 'object' && userIdOrProfile !== null && userIdOrProfile.nip) {
+      profile = userIdOrProfile;
+    } else {
+      const q = await pool.query(`
+        SELECT p.id, p.full_name, p.nip, p.phone, d.name as division_name, s.name as shift_name
+        FROM hrm_profiles p
+        LEFT JOIN hrm_divisions d ON p.division_id = d.id
+        LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+        WHERE p.id::text = $1 OR p.nip = $1
+        LIMIT 1
+      `, [userIdOrProfile]);
+      profile = q.rows[0];
+    }
+
+    if (!profile) return;
+    const rawPhone = (profile.phone || '').trim();
+    if (!rawPhone || rawPhone.replace(/\D/g, '').length < 9) {
+      console.log(`[Face Enrollment Welcome WA Skipped]: No valid phone number for ${profile.full_name} (${profile.nip})`);
+      return;
+    }
+
+    const empName = profile.full_name || 'Karyawan';
+    const empNip = profile.nip || '-';
+    const divName = profile.division_name || profile.divisionName || 'Operasional Lapangan';
+    const shiftName = profile.shift_name || profile.shiftName || 'Shift Terjadwal';
+
+    const waWelcomeMsg =
+`Halo Bpk/Ibu *${empName}* (NIP: *${empNip}*),
+
+Selamat! Pendaftaran wajah master biometrik dan akun presensi Anda di sistem HRM *PT. FAWWAZ RESKI PERWIRA* telah *BERHASIL DIVERIFIKASI*.
+
+📋 *Rincian Akun Terdaftar:*
+• NIP: ${empNip}
+• Divisi: ${divName}
+• Shift Kerja: ${shiftName}
+• Status Biometrik: Aktif & Terverifikasi (AI Face Recognition)
+
+🔒 *Panduan Presensi Mobile (PWA):*
+1. Buka aplikasi PWA: https://fawwazreskiperwira.com
+2. Masuk menggunakan akun Anda.
+3. Lakukan presensi masuk (Clock-In) dan pulang (Clock-Out) tepat waktu di radius titik pos tugas yang telah ditentukan.
+4. Pastikan GPS ponsel aktif dengan akurasi yang baik.
+
+Selamat bertugas dan utamakan keselamatan kerja.
+
+_Pesan otomatis resmi dari Sistem HRM Terpadu PT. FAWWAZ RESKI PERWIRA._`;
+
+    await sendWhatsAppAlert({ phone: rawPhone, message: waWelcomeMsg });
+    console.log(`[Face Enrollment Welcome WA Sent] to ${empName} (${rawPhone})`);
+
+    // In-app notification
+    if (profile.id) {
+      await pool.query(`
+        INSERT INTO hrm_notifications (id, user_id, title, message, type, is_read, created_at)
+        VALUES (gen_random_uuid(), $1, $2, $3, 'system', false, NOW())
+      `, [profile.id, 'Registrasi Wajah Berhasil', `Wajah biometrik Anda (NIP: ${empNip}) telah berhasil didaftarkan dan terverifikasi di sistem.`]).catch(() => {});
+    }
+  } catch (err) {
+    console.error('[sendFaceEnrollmentWelcomeWhatsApp Error]:', err.message);
   }
 }
 
@@ -6454,6 +6523,10 @@ app.post('/api/biometrics/enroll', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
     }
     console.log(`[Biometrics] Master face enrolled successfully for user ${userId} with InsightFace 512D AI`);
+    
+    // Kirim notifikasi otomatis WhatsApp selamat datang & akun terverifikasi
+    sendFaceEnrollmentWelcomeWhatsApp(result.rows[0]).catch(e => console.warn('[Auto WA Enroll Error]:', e.message));
+
     res.json({ success: true, data: formatUserRow(result.rows[0]), message: 'Wajah master biometrik berhasil didaftarkan (InsightFace 512D)' });
   } catch (err) {
     console.error('Enroll biometrics error:', err);
@@ -12635,6 +12708,76 @@ app.post('/api/whatsapp/broadcast-80', async (req, res) => {
     },
     results,
   });
+});
+
+// POST /api/whatsapp/send-personal - Kirim pesan WhatsApp manual dari Superadmin ke karyawan tertentu
+app.post('/api/whatsapp/send-personal', async (req, res) => {
+  try {
+    const { userId, phone, message, subject } = req.body;
+    if (!userId && !phone) {
+      return res.status(400).json({ success: false, error: 'User ID atau Nomor Telepon wajib disertakan' });
+    }
+    if (!message || !message.trim()) {
+      return res.status(400).json({ success: false, error: 'Isi pesan WhatsApp tidak boleh kosong' });
+    }
+
+    let targetUser = null;
+    if (userId) {
+      const uRes = await pool.query(
+        'SELECT id, full_name, nip, phone, division_id FROM hrm_profiles WHERE id::text = $1 OR nip = $1 LIMIT 1',
+        [userId]
+      );
+      targetUser = uRes.rows[0];
+    }
+
+    const rawPhone = (phone || targetUser?.phone || '').trim();
+    const cleanPhone = rawPhone.replace(/\D/g, '');
+    if (!cleanPhone || cleanPhone.length < 9) {
+      return res.status(400).json({ success: false, error: 'Nomor WhatsApp tidak valid atau belum terdaftar untuk karyawan ini' });
+    }
+
+    // Jika nomor diupdate dan ada userId, simpan juga ke profile
+    if (userId && phone && phone.trim() !== (targetUser?.phone || '').trim()) {
+      await pool.query('UPDATE hrm_profiles SET phone = $1, updated_at = NOW() WHERE id = $2', [phone.trim(), targetUser?.id || userId]).catch(() => {});
+    }
+
+    // Format tanggal & waktu WITA
+    const now = new Date(Date.now() + 8 * 3600000); // WITA
+    const monthsIndo = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    const daysIndo = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const formattedDate = `${daysIndo[now.getUTCDay()]}, ${now.getUTCDate()} ${monthsIndo[now.getUTCMonth()]} ${now.getUTCFullYear()}`;
+    const formattedTime = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')} WITA`;
+
+    let personalized = message
+      .replace(/{nama}/gi, targetUser?.full_name || 'Rekan Karyawan')
+      .replace(/{name}/gi, targetUser?.full_name || 'Rekan Karyawan')
+      .replace(/{nip}/gi, targetUser?.nip || '-')
+      .replace(/{tanggal}/gi, formattedDate)
+      .replace(/{waktu}/gi, formattedTime);
+
+    // Kirim via gateway WhatsApp
+    await sendWhatsAppAlert({ phone: cleanPhone, message: personalized });
+
+    // Catat notifikasi in-app
+    if (targetUser?.id) {
+      await pool.query(`
+        INSERT INTO hrm_notifications (id, user_id, title, message, type, is_read, created_at)
+        VALUES (gen_random_uuid(), $1, $2, $3, 'system', false, NOW())
+      `, [targetUser.id, subject || 'Pemberitahuan Resmi Superadmin', personalized]).catch(() => {});
+    }
+
+    res.json({
+      success: true,
+      message: `Pesan WhatsApp berhasil dikirim ke ${targetUser?.full_name || targetPhone}`,
+      sentTo: cleanPhone
+    });
+  } catch (err) {
+    console.error('[send-personal WA Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Start Server

@@ -44,6 +44,8 @@ import {
   CalendarCheck,
   CalendarDays,
   Edit3,
+  MessageSquare,
+  MessageCircle,
 } from 'lucide-react';
 import { HrmFaceEnrollmentModal } from '@/components/hrm/HrmFaceEnrollmentModal';
 import { HrmAssignFieldLocationModal } from '@/components/hrm/HrmAssignFieldLocationModal';
@@ -51,6 +53,7 @@ import { HrmEmployeePolicyModal } from '@/components/hrm/HrmEmployeePolicyModal'
 import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
 import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
 import { HrmEmployeeLeaveCorrectionModal } from '@/components/hrm/HrmEmployeeLeaveCorrectionModal';
+import { HrmPersonalWhatsAppModal } from '@/components/hrm/HrmPersonalWhatsAppModal';
 import {
   preprocessKtpImage,
   parseAndValidateNik,
@@ -117,6 +120,15 @@ export const HrmEmployeesPage: React.FC = () => {
   // Koreksi Saldo Cuti Realtime Database Modal State
   const [leaveCorrectionModalOpen, setLeaveCorrectionModalOpen] = useState(false);
   const [leaveCorrectionUser, setLeaveCorrectionUser] = useState<UserProfile | null>(null);
+
+  // Personal WhatsApp Message Modal State
+  const [personalWaModalOpen, setPersonalWaModalOpen] = useState(false);
+  const [personalWaUser, setPersonalWaUser] = useState<UserProfile | null>(null);
+
+  const handleOpenWhatsAppPersonal = (u: UserProfile) => {
+    setPersonalWaUser(u);
+    setPersonalWaModalOpen(true);
+  };
 
   // Bulk Import State
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
@@ -1271,6 +1283,15 @@ export const HrmEmployeesPage: React.FC = () => {
                             title={`Reset Kata Sandi ${u.fullName} (Superadmin)`}
                           >
                             <KeyRound className="w-4 h-4 text-amber-600" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleOpenWhatsAppPersonal(u)}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10 rounded-lg transition-colors"
+                            title={`Kirim Pesan WhatsApp Langsung ke ${u.fullName}`}
+                          >
+                            <MessageSquare className="w-4 h-4 text-emerald-600" />
                           </Button>
                           <Button
                             variant="ghost"
@@ -2605,6 +2626,23 @@ export const HrmEmployeesPage: React.FC = () => {
             );
           }
           await loadData();
+        }}
+      />
+
+      {/* Modal Kirim WhatsApp Personal ke Karyawan Terpilih */}
+      <HrmPersonalWhatsAppModal
+        open={personalWaModalOpen}
+        onClose={() => {
+          setPersonalWaModalOpen(false);
+          setPersonalWaUser(null);
+        }}
+        user={personalWaUser}
+        onPhoneUpdated={(newPhone) => {
+          if (personalWaUser) {
+            setUsers((prev) =>
+              prev.map((u) => (u.id === personalWaUser.id ? { ...u, phone: newPhone } : u))
+            );
+          }
         }}
       />
     </div>
