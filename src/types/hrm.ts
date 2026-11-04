@@ -130,7 +130,7 @@ export const FIELD_SENTINEL_6_POST_PRESETS: DivisionAssignedPost[] = [
     name: 'FRP (Kantor Umum)',
     latitude: -4.794135,
     longitude: 119.604382,
-    radiusMeters: 250,
+    radiusMeters: 50,
     description: 'Kantor umum FRP',
     allowClockIn: true,
     allowClockOut: true,
@@ -343,6 +343,28 @@ export const isOfficialFrEmployee = (userOrNipOrEmail: any): boolean => {
 export const isSimulationAccount = (userOrNipOrEmail: any): boolean => {
   if (!userOrNipOrEmail) return false;
   return !isOfficialFrEmployee(userOrNipOrEmail);
+};
+
+export const isFieldOperationalWorker = (user: any): boolean => {
+  if (!user) return false;
+  // Khusus 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) dipantau terpisah dengan Bank Pos Lapangan mereka
+  if (isLeadershipSpecialFieldOfficer(user)) return false;
+  
+  const divName = (user.divisionName || user.division_name || user.division || '').toUpperCase();
+  const divCode = (user.divisionCode || user.division_code || '').toUpperCase();
+  const opGroup = (user.operationalGroup || user.operational_group || '').toUpperCase();
+
+  // Karyawan regu lapangan (Segel, Timbangan, Matching, Shipment)
+  return (
+    divName.includes('SEGEL') ||
+    divName.includes('TIMBANGAN') ||
+    divName.includes('MATCHING') ||
+    divCode.includes('SG') ||
+    divCode.includes('TB') ||
+    divCode.includes('MB') ||
+    divCode.includes('MP') ||
+    opGroup === 'SHIPMENT'
+  );
 };
 
 

@@ -1709,9 +1709,13 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     let validUserId = userId;
     let userProfile = null;
     const userRes = await pool.query(
-      `SELECT id, full_name, email, nip, division_id, shift_id, custom_start_time, custom_end_time, late_tolerance_minutes, device_id, device_model, is_device_bound, face_embedding, allowed_posts, allow_ogs_clock_out 
-       FROM hrm_profiles 
-       WHERE id::text = $1 OR nip = $1 OR LOWER(email) = LOWER($1) 
+      `SELECT p.id, p.full_name, p.email, p.nip, p.division_id, p.shift_id, p.operational_group,
+              p.custom_start_time, p.custom_end_time, p.late_tolerance_minutes, p.device_id, p.device_model, 
+              p.is_device_bound, p.face_embedding, p.allowed_posts, p.allow_ogs_clock_out,
+              d.name as division_name, d.code as division_code
+       FROM hrm_profiles p
+       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+       WHERE p.id::text = $1 OR p.nip = $1 OR LOWER(p.email) = LOWER($1) 
        LIMIT 1`,
       [userId]
     );
@@ -2025,20 +2029,30 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
         if (locRes.rows.length > 0) {
           const loc = locRes.rows[0];
+          const divNameUpper = (loc.div_name || userProfile?.division_name || '').toUpperCase();
+          const opGroupUpper = (userProfile?.operational_group || '').toUpperCase();
+          const isFieldWorker = (
+            divNameUpper.includes('SEGEL') ||
+            divNameUpper.includes('TIMBANGAN') ||
+            divNameUpper.includes('MATCHING') ||
+            opGroupUpper === 'SHIPMENT'
+          ) && !isExempt;
+
           if (loc.div_lat && loc.div_lon) {
             candidateLocations.push({
-              name: `Lokasi Divisi ${loc.div_name || 'Divisi'}`,
+              name: `Pos Divisi ${loc.div_name || 'Divisi'}`,
               lat: parseFloat(loc.div_lat),
               lon: parseFloat(loc.div_lon),
               radius: parseFloat(loc.div_radius || 150),
             });
           }
-          if (loc.office_lat && loc.office_lon) {
+          // Pos kantor umum HANYA berlaku jika BUKAN personil regu lapangan!
+          if (!isFieldWorker && loc.office_lat && loc.office_lon) {
             candidateLocations.push({
               name: loc.office_name || 'Kantor Pusat PT FRP',
               lat: parseFloat(loc.office_lat),
               lon: parseFloat(loc.office_lon),
-              radius: parseFloat(loc.office_radius || 100),
+              radius: parseFloat(loc.office_radius || 50),
             });
           }
           if (loc.assigned_latitude && loc.assigned_longitude) {
@@ -2075,12 +2089,24 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       }
 
       // C. Pos Default Kantor Pusat PT FRP (Biring Ere / Kalabbirang)
-      candidateLocations.push({
-        name: 'Kantor Pusat PT FRP',
-        lat: -4.79396318,
-        lon: 119.60433745,
-        radius: 200,
-      });
+      // Opsi A (Strict Post Lock): DILARANG dimasukkan untuk personil regu lapangan (Segel, Timbangan, Matching, dll.)!
+      const userDivName = (userProfile?.division_name || '').toUpperCase();
+      const userOpGroup = (userProfile?.operational_group || '').toUpperCase();
+      const isFieldWorkerStrict = (
+        userDivName.includes('SEGEL') ||
+        userDivName.includes('TIMBANGAN') ||
+        userDivName.includes('MATCHING') ||
+        userOpGroup === 'SHIPMENT'
+      ) && !isExempt;
+
+      if (!isFieldWorkerStrict) {
+        candidateLocations.push({
+          name: 'Kantor Pusat PT FRP',
+          lat: -4.79396318,
+          lon: 119.60433745,
+          radius: 50,
+        });
+      }
 
       // Evaluasi jarak terhadap seluruh kandidat lokasi sah perusahaan
       const curLat = parseFloat(latitude);
@@ -2100,6 +2126,16 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         serverDistance = Math.round(nearest.distance);
         isServerGeofenceValid = false;
         locationName = nearest.name;
+      }
+
+      // ─── STRICT POST LOCK GUARD (OPSI A): TOLAK CLOCK-IN JIKA PERSONIL LAPANGAN DI LUAR POS TUGAS ───
+      if (isFieldWorkerStrict && !isServerGeofenceValid) {
+        const designatedPost = (candidateLocations[0] && candidateLocations[0].name) || userProfile?.division_name || 'Pos Segel 4/5';
+        return res.status(400).json({
+          success: false,
+          error: `Presensi ditolak! Anda ditugaskan di Pos ${designatedPost}. Silakan lakukan presensi di titik lokasi pos tugas Anda.`,
+          code: 'GEOFENCE_STRICT_FIELD_VIOLATION'
+        });
       }
     }
 

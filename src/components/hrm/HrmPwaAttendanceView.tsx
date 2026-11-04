@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr, normalizeAttendanceRecord, normalizeDateString } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, EmployeeSchedule, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
+import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, EmployeeSchedule, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isFieldOperationalWorker } from '@/types/hrm';
 import {
   Clock,
   MapPin,
@@ -1456,15 +1456,21 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       }
     }
 
-    // Masukkan preset resmi PT FRP sebagai kandidat alternatif (hanya dicocokkan jika berada di dalam radius)
-    for (const preset of FIELD_SENTINEL_6_POST_PRESETS) {
-      if (!candidateOffices.some((c) => Math.abs(c.lat - preset.latitude) < 0.0001 && Math.abs(c.lng - preset.longitude) < 0.0001)) {
-        candidateOffices.push({
-          name: preset.name,
-          lat: preset.latitude,
-          lng: preset.longitude,
-          radius: preset.radiusMeters || 250,
-        });
+    // Opsi A (Strict Post Lock): Personil regu lapangan (Segel, Timbangan, Matching, dll.)
+    // DIKUNCI MUTLAK hanya boleh absen di titik pos divisi / bank pos mereka sendiri.
+    // DILARANG keras menjadikan Kantor Umum FRP sebagai fallback lokasi presensi mereka!
+    const isFieldWorker = isFieldOperationalWorker(user);
+    if (!isFieldWorker) {
+      // Masukkan preset resmi PT FRP sebagai kandidat alternatif HANYA untuk staf kantor umum / manajemen non-lapangan
+      for (const preset of FIELD_SENTINEL_6_POST_PRESETS) {
+        if (!candidateOffices.some((c) => Math.abs(c.lat - preset.latitude) < 0.0001 && Math.abs(c.lng - preset.longitude) < 0.0001)) {
+          candidateOffices.push({
+            name: preset.name,
+            lat: preset.latitude,
+            lng: preset.longitude,
+            radius: preset.radiusMeters || 50,
+          });
+        }
       }
     }
 
@@ -2255,16 +2261,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
 
     // 3. Cek jika berada di salah satu dari 6 Preset Resmi PT FRP
-    for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
-      const dist = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
-      if (dist <= post.radiusMeters + 25) {
-        return {
-          code: post.code,
-          name: post.name,
-          distance: Math.round(dist),
-          isWithinRadius: true,
-          radiusMeters: post.radiusMeters,
-        };
+    // Opsi A: Preset Kantor Umum TIDAK berlaku untuk personil lapangan (Segel, Timbangan, Matching, dll.)
+    const isFieldWorker = isFieldOperationalWorker(user);
+    if (!isFieldWorker) {
+      for (const post of FIELD_SENTINEL_6_POST_PRESETS) {
+        const dist = geofenceService.calculateDistance(coords, { latitude: post.latitude, longitude: post.longitude });
+        if (dist <= post.radiusMeters + 25) {
+          return {
+            code: post.code,
+            name: post.name,
+            distance: Math.round(dist),
+            isWithinRadius: true,
+            radiusMeters: post.radiusMeters,
+          };
+        }
       }
     }
 
@@ -3203,7 +3213,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     if (isEmployeeOffToday) {
       return 'JADWAL HARI INI: LIBUR (OFF DUTY)';
     }
-    if (!isInsideCoordinates) return 'DI LUAR RADIUS TITIK POS';
+    if (!isInsideCoordinates) {
+      if (isFieldOperationalWorker(user)) {
+        const posTugas = targetOffice?.name || user?.divisionName || 'Pos Tugas Anda';
+        return `Presensi ditolak! Anda wajib berada di titik Pos ${posTugas}.`;
+      }
+      return 'DI LUAR RADIUS TITIK POS';
+    }
 
     if (isCurrentlyOnDuty) {
       return `SEDANG BERTUGAS (Masuk ${todayAttendance?.clockIn?.substring(0, 5)} WITA)`;

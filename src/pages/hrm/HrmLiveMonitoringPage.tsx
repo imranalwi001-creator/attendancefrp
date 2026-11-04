@@ -391,10 +391,15 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     window.addEventListener('hrm_field_ping_received', handlePing);
     window.addEventListener('hrm_patrol_check_submitted', handlePing);
 
-    // Fast polling every 2.5 detik untuk respon instan saat ada karyawan ceklok
+    // Fast polling every 2.5 detik untuk respon instan saat ada karyawan ceklok & sinkron user enrollment
+    let pollCycle = 0;
     const fastInterval = setInterval(() => {
       fetchLiveAttendancesFast();
       loadFieldAgents();
+      pollCycle++;
+      if (pollCycle % 3 === 0) {
+        fetchLiveUsersFast();
+      }
     }, 2500);
 
     // Master background sync setiap 30 detik
