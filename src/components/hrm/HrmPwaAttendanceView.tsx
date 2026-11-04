@@ -3220,7 +3220,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
     if (!isInsideCoordinates) {
       if (isFieldOperationalWorker(user)) {
-        const posTugas = targetOffice?.name || user?.divisionName || 'Pos Tugas Anda';
+        const posTugas = assignedOffice?.name || assignedPostName || user?.divisionName || 'Pos Tugas Anda';
         return `Presensi ditolak! Anda wajib berada di titik Pos ${posTugas}.`;
       }
       return 'DI LUAR RADIUS TITIK POS';
