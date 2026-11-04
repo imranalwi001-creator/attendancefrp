@@ -11300,6 +11300,31 @@ app.post('/api/employee-schedules/batch', async (req, res) => {
       upsertedCount++;
     }
 
+    // Otomatis sinkronisasi data presensi hrm_attendances yang sudah ada pada tanggal jadwal tersebut
+    await client.query(`
+      UPDATE hrm_attendances a
+      SET shift_name = s.shift_name,
+          shift_id = COALESCE(
+            s.shift_id,
+            (SELECT id FROM hrm_shifts sh WHERE sh.code = s.shift_code LIMIT 1),
+            (SELECT id FROM hrm_shifts sh WHERE sh.name = s.shift_name LIMIT 1)
+          ),
+          notes = CASE 
+            WHEN a.notes LIKE '%[MANGKIR OTOMATIS%' 
+            THEN '[MANGKIR OTOMATIS: Tidak hadir tanpa keterangan hingga jam shift (' || s.end_time || ' WITA) berakhir]'
+            ELSE a.notes
+          END,
+          clock_out = CASE 
+            WHEN a.status = 'alfa' AND a.clock_in IS NULL 
+            THEN s.end_time::time
+            ELSE a.clock_out
+          END
+      FROM hrm_employee_schedules s
+      WHERE a.user_id = s.user_id
+        AND a.attendance_date = s.schedule_date
+        AND (a.shift_name IS DISTINCT FROM s.shift_name OR a.shift_name != s.shift_name);
+    `);
+
     await client.query('COMMIT');
     res.json({
       success: true,
@@ -11394,7 +11419,7 @@ app.delete('/api/attendances/:id', async (req, res) => {
 app.put('/api/attendances/:id/manual-correct', async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, clockIn, clockOut, notes, lateMinutes } = req.body;
+    const { status, clockIn, clockOut, notes, lateMinutes, shiftId, shiftName } = req.body;
 
     if (status === 'off' || status === 'libur') {
       const offQuery = `
@@ -11442,6 +11467,16 @@ app.put('/api/attendances/:id/manual-correct', async (req, res) => {
       }
     }
 
+    let extraShiftSql = '';
+    if (shiftName) {
+      params.push(shiftName);
+      extraShiftSql += `, shift_name = $${params.length}`;
+    }
+    if (shiftId && UUID_REGEX.test(shiftId)) {
+      params.push(shiftId);
+      extraShiftSql += `, shift_id = $${params.length}`;
+    }
+
     const query = `
       UPDATE hrm_attendances
       SET status = COALESCE($1, status),
@@ -11451,7 +11486,7 @@ app.put('/api/attendances/:id/manual-correct', async (req, res) => {
           late_minutes = COALESCE($4, late_minutes),
           is_verified = true,
           is_locked = false,
-          is_perimeter_breached = false,
+          is_perimeter_breached = false${extraShiftSql},
           updated_at = NOW()
       WHERE id = $5
       RETURNING *;

@@ -6426,7 +6426,7 @@ export const hrmService = {
   // ─── MANUAL ATTENDANCE CORRECTION & ENTRY ─────────────────────────────────
   correctAttendance: async (
     id: string,
-    updates: { status?: AttendanceStatus; clockIn?: string; clockOut?: string; notes?: string; lateMinutes?: number }
+    updates: { status?: AttendanceStatus; clockIn?: string; clockOut?: string; notes?: string; lateMinutes?: number; shiftId?: string; shiftName?: string }
   ): Promise<{ success: boolean; data?: AttendanceRecord; error?: string }> => {
     try {
       const res = await api.put<{ success: boolean; data: any; message?: string }>(`/attendances/${id}/manual-correct`, updates);

@@ -1022,10 +1022,23 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                   size="sm"
                   variant="outline"
                   onClick={() => {
+                    const isLeadership = isLeadershipSpecialFieldOfficer(user);
+                    const targetShift = getShiftForDate(selectedDateStr);
+                    const targetSched = monthSchedules.get(selectedDateStr);
+                    const defaultStart = isLeadership 
+                      ? '08:00' 
+                      : (targetSched?.startTime?.substring(0, 5) || targetShift?.startTime?.substring(0, 5) || '07:30');
+                    const defaultEnd = isLeadership 
+                      ? '16:00' 
+                      : (targetSched?.endTime?.substring(0, 5) || targetShift?.endTime?.substring(0, 5) || '15:30');
+
                     if (selectedRecord) {
-                      const cIn = selectedRecord.clockIn ? selectedRecord.clockIn.substring(0, 5) : '07:30';
+                      const cIn = selectedRecord.clockIn ? selectedRecord.clockIn.substring(0, 5) : defaultStart;
                       setEditClockIn(cIn);
-                      setEditClockOut(selectedRecord.clockOut ? selectedRecord.clockOut.substring(0, 5) : '');
+                      const cOut = selectedRecord.clockOut 
+                        ? (selectedRecord.status === 'alfa' && !selectedRecord.clockIn ? defaultEnd : selectedRecord.clockOut.substring(0, 5))
+                        : (selectedRecord.status === 'alfa' ? defaultEnd : '');
+                      setEditClockOut(cOut);
                       setEditNotes(selectedRecord.notes || '');
 
                       const recStatus = (selectedRecord.status as AttendanceStatus) || 'hadir';
@@ -1038,10 +1051,6 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                         setEditLateMinutes(Number(selectedRecord.lateMinutes || 0));
                       }
                     } else {
-                      const isLeadership = isLeadershipSpecialFieldOfficer(user);
-                      const targetShift = getShiftForDate(selectedDateStr);
-                      const defaultStart = isLeadership ? '08:00' : (targetShift?.startTime?.substring(0, 5) || '07:30');
-                      const defaultEnd = isLeadership ? '16:00' : (targetShift?.endTime?.substring(0, 5) || '16:30');
                       setEditStatus('hadir');
                       setEditClockIn(defaultStart);
                       setEditClockOut(defaultEnd);
@@ -1270,12 +1279,32 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
 
           <div className="space-y-4 py-2 text-xs">
             {/* Info Karyawan & Tanggal */}
-            <div className="p-3 bg-muted/40 rounded-xl border border-border/80 space-y-1">
-              <p className="font-bold text-sm text-foreground">{user.fullName}</p>
-              <p className="text-[11px] text-muted-foreground">
-                NIP: <span className="font-mono font-semibold">{user.nip}</span> • Tanggal:{' '}
-                <span className="font-mono font-semibold text-primary">{selectedDateStr}</span>
-              </p>
+            <div className="p-3 bg-muted/40 rounded-xl border border-border/80 space-y-1.5">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="font-bold text-sm text-foreground">{user.fullName}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    NIP: <span className="font-mono font-semibold">{user.nip}</span> • Tanggal:{' '}
+                    <span className="font-mono font-semibold text-primary">{selectedDateStr}</span>
+                  </p>
+                </div>
+                {activeHeaderSchedule && (
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] font-bold px-2 py-0.5 whitespace-nowrap ${
+                      activeHeaderSchedule.isOff
+                        ? 'bg-rose-500/10 text-rose-600 border-rose-500/30'
+                        : activeHeaderSchedule.label.includes('Shift II') || activeHeaderSchedule.label.includes('S')
+                        ? 'bg-amber-500/10 text-amber-600 border-amber-500/30'
+                        : activeHeaderSchedule.label.includes('Shift III') || activeHeaderSchedule.label.includes('M')
+                        ? 'bg-purple-500/10 text-purple-600 border-purple-500/30'
+                        : 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30'
+                    }`}
+                  >
+                    {activeHeaderSchedule.label}
+                  </Badge>
+                )}
+              </div>
             </div>
 
             {/* Status Presensi */}
@@ -1377,6 +1406,11 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                 setIsSubmittingCorrect(true);
                 try {
                   const cleanStatus = (editStatus === 'alpha' ? 'alfa' : editStatus) as AttendanceStatus;
+                  const targetShift = getShiftForDate(selectedDateStr);
+                  const targetSched = monthSchedules.get(selectedDateStr);
+                  const targetShiftName = targetSched?.shiftName || targetShift?.name;
+                  const targetShiftId = targetSched?.shiftId || targetShift?.id;
+
                   if (selectedRecord && selectedRecord.id) {
                     const res = await hrmService.correctAttendance(selectedRecord.id, {
                       status: cleanStatus,
@@ -1384,6 +1418,8 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                       clockOut: cleanStatus === 'hadir' || cleanStatus === 'terlambat' ? (editClockOut ? `${editClockOut}:00` : null) : null,
                       notes: editNotes.trim() || cleanStatus,
                       lateMinutes: cleanStatus === 'terlambat' ? Number(editLateMinutes) : 0,
+                      shiftId: targetShiftId,
+                      shiftName: targetShiftName,
                     });
                     if (res.success) {
                       toast.success(`Presensi ${user.fullName} (${selectedDateFormatted}) berhasil dikoreksi dan disinkronkan ke PostgreSQL!`);
