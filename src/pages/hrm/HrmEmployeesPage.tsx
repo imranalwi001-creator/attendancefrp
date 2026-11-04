@@ -43,6 +43,7 @@ import {
   Clock,
   CalendarCheck,
   CalendarDays,
+  Eye,
   Edit3,
   MessageSquare,
   MessageCircle,
@@ -75,7 +76,7 @@ import * as XLSX from 'xlsx';
 
 export const HrmEmployeesPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user: currentUser } = useHrmAuth();
+  const { user: currentUser, impersonateUser } = useHrmAuth();
   const isSuperAdmin = (currentUser?.roleName || '').toLowerCase() === 'superadmin';
 
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -1159,6 +1160,21 @@ export const HrmEmployeesPage: React.FC = () => {
                       </td>
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          {/* Mode Pantau PWA Karyawan (Ghost Mode) */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              impersonateUser(u);
+                              toast.success(`Mode Pantau Aktif: Mengamati akun PWA ${u.fullName} (${u.nip})`);
+                              navigate('/presensi');
+                            }}
+                            className="h-8 w-8 p-0 text-cyan-600 dark:text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20 rounded-lg transition-colors"
+                            title={`Pantau Tampilan PWA Akun Ini (Ghost Mode) - ${u.fullName}`}
+                          >
+                            <Eye className="w-4 h-4 text-cyan-500" />
+                          </Button>
+
                           {/* Titik Tugas Dinamis (Field Sentinel) Button */}
                           <Button
                             variant="ghost"

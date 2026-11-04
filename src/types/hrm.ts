@@ -472,6 +472,7 @@ export interface UserProfile {
   welcomeWaSentAt?: string;
 
   // ─── Extended Personal Data ──────────────────────────────
+  isImpersonated?: boolean;      // Flag Mode Pantau Superadmin (Ghost Impersonation)
   nickname?: string;             // Nama panggilan
   gender?: 'L' | 'P';           // Laki-laki / Perempuan
   birthPlace?: string;

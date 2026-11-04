@@ -24,6 +24,8 @@ import {
   Briefcase,
   CalendarClock,
   CalendarDays,
+  Smartphone,
+  Eye,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,6 +34,7 @@ import { Progress } from '@/components/ui/progress';
 import { Link, useSearchParams } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { HrmPimpinanDashboard } from './HrmPimpinanDashboard';
+import { HrmGhostSwitcherModal } from '@/components/hrm/HrmGhostSwitcherModal';
 import {
   AreaChart,
   Area,
@@ -50,6 +53,7 @@ import {
 
 export const HrmSuperadminDashboard: React.FC = () => {
   const { user } = useHrmAuth();
+  const [ghostModalOpen, setGhostModalOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'admin' | 'executive'>('admin');
   const [userCount, setUserCount] = useState(0);
   const [roleCount, setRoleCount] = useState(0);
@@ -145,6 +149,13 @@ export const HrmSuperadminDashboard: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={() => setGhostModalOpen(true)}
+              className="bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white font-medium text-xs shadow-sm rounded-xl gap-1.5 h-9"
+              title="Buka Mode Pantau PWA Karyawan (Superadmin Ghost Mode)"
+            >
+              <Smartphone className="w-3.5 h-3.5" /> Pantau PWA Karyawan
+            </Button>
             <Button
               onClick={() => setViewMode('executive')}
               className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-sm rounded-xl gap-1.5 h-9"
@@ -547,6 +558,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
           </table>
         </div>
       </Card>
+      <HrmGhostSwitcherModal open={ghostModalOpen} onOpenChange={setGhostModalOpen} />
     </div>
   );
 };

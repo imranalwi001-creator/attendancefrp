@@ -13,14 +13,21 @@ interface HrmAuthContextType {
   logout: () => void;
   switchUser: (userId: string) => void;
   refreshUser: () => void;
+  originalSuperadmin: UserProfile | null;
+  isImpersonating: boolean;
+  impersonateUser: (targetUser: UserProfile) => void;
+  stopImpersonating: () => void;
 }
 
 const HrmAuthContext = createContext<HrmAuthContextType | undefined>(undefined);
 
 const CURRENT_USER_SESSION_KEY = 'hrm_active_session_user';
+const ORIGINAL_SUPERADMIN_KEY = 'hrm_original_superadmin';
 
 export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [originalSuperadmin, setOriginalSuperadmin] = useState<UserProfile | null>(null);
+  const [isImpersonating, setIsImpersonating] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -55,6 +62,18 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
       // Lepaskan status loading segera agar UI tidak freeze di 'Memuat data sesi HRM...'
       setIsLoading(false);
+
+      // 1A. Pulihkan Mode Pantau (Ghost Impersonation) jika sedang aktif
+      const origSaved = sessionStorage.getItem(ORIGINAL_SUPERADMIN_KEY);
+      if (origSaved) {
+        try {
+          const parsedOrig = JSON.parse(origSaved);
+          if (parsedOrig && (parsedOrig.id || parsedOrig.nip)) {
+            setOriginalSuperadmin(parsedOrig);
+            setIsImpersonating(true);
+          }
+        } catch (_) {}
+      }
 
       // 1B. Fast-Sync Profil Pengguna Langsung dari PostgreSQL (< 50ms)
       // Memastikan perubahan shift atau status dari Superadmin langsung aktif tanpa menunggu /sync/bootstrap yang berat
@@ -257,8 +276,54 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const logout = () => {
-    setUser(null);
+    sessionStorage.removeItem(ORIGINAL_SUPERADMIN_KEY);
+    sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
     localStorage.removeItem(CURRENT_USER_SESSION_KEY);
+    setOriginalSuperadmin(null);
+    setIsImpersonating(false);
+    setUser(null);
+  };
+
+  const impersonateUser = (targetUser: UserProfile) => {
+    const admin = originalSuperadmin || user;
+    if (!admin) return;
+
+    setOriginalSuperadmin(admin);
+    setIsImpersonating(true);
+    sessionStorage.setItem(ORIGINAL_SUPERADMIN_KEY, JSON.stringify(admin));
+
+    const enriched: UserProfile = {
+      ...targetUser,
+      isImpersonated: true,
+    };
+
+    setUser(enriched);
+    sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(enriched));
+    localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(enriched));
+    window.dispatchEvent(new Event('hrm_ghost_impersonated'));
+  };
+
+  const stopImpersonating = () => {
+    let admin = originalSuperadmin;
+    if (!admin) {
+      const origSaved = sessionStorage.getItem(ORIGINAL_SUPERADMIN_KEY);
+      if (origSaved) {
+        try {
+          admin = JSON.parse(origSaved);
+        } catch (_) {}
+      }
+    }
+
+    sessionStorage.removeItem(ORIGINAL_SUPERADMIN_KEY);
+    setIsImpersonating(false);
+    setOriginalSuperadmin(null);
+
+    if (admin) {
+      setUser(admin);
+      sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(admin));
+      localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(admin));
+    }
+    window.dispatchEvent(new Event('hrm_ghost_stopped'));
   };
 
   const switchUser = (userId: string) => {
@@ -317,6 +382,10 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
         logout,
         switchUser,
         refreshUser,
+        originalSuperadmin,
+        isImpersonating,
+        impersonateUser,
+        stopImpersonating,
       }}
     >
       {children}

@@ -71,6 +71,7 @@ import { emergencyAlertService } from '@/services/emergencyAlertAudioService';
 import { HrmFieldAuthorityMobileModal } from '@/components/hrm/HrmFieldAuthorityMobileModal';
 import { HrmPwaPersonalCalendarView } from '@/components/hrm/HrmPwaPersonalCalendarView';
 import { HrmPwaSplashScreen } from '@/components/pwa/HrmPwaSplashScreen';
+import { HrmGhostBanner } from '@/components/hrm/HrmGhostBanner';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -2066,6 +2067,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     type: 'clock_in' | 'clock_out' | 'emergency_on_call' | 'emergency_on_call_out',
     options?: { isEmergencyOverride?: boolean }
   ) => {
+    if (user?.isImpersonated) {
+      toast.info(`Mode Pantau Aktif: Anda sedang mengamati akun ${user.fullName}. Pengambilan foto presensi dinonaktifkan untuk menjaga keamanan data & audit karyawan.`, { duration: 4500 });
+      return;
+    }
     // Pastikan getaran darurat dihentikan seketika saat kamera dibuka
     isAlarmSilencedRef.current = true;
     emergencyAlertService.stopEmergencyAlert();
@@ -3328,6 +3333,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   // Aksi Cerdas Gabungan Masuk & Pulang di Tombol Tengah Menu Bawah
   const handleCenterAttendanceClick = () => {
+    if (user?.isImpersonated) {
+      toast.info(`Mode Pantau Aktif: Anda sedang mengamati akun ${user.fullName}. Presensi nyata dinonaktifkan untuk menjaga keamanan data & audit presensi karyawan.`, {
+        duration: 4500,
+      });
+      return;
+    }
     if (isCurrentlyOnDuty) {
       if (!isClockOutAllowed) {
         if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
@@ -3727,6 +3738,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   // ─────────────────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-[#062225] text-foreground flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
+      {/* ─── SUPERADMIN GHOST MODE FLOATING BANNER ─── */}
+      <HrmGhostBanner />
+
       {/* ─── PWA SPLASH SCREEN ANIMASI PERSIS LAMPIRAN 4 ─── */}
       <HrmPwaSplashScreen forceShow={showSplashPreview} onFinish={() => setShowSplashPreview(false)} />
 

@@ -48,6 +48,8 @@ import {
 import { PwaInstallButton } from '@/components/pwa/PwaInstallButton';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
 import { systemNotificationService } from '@/services/systemNotificationService';
+import { HrmGhostBanner } from './HrmGhostBanner';
+import { HrmGhostSwitcherModal } from './HrmGhostSwitcherModal';
 
 interface NavItem {
   label: string;
@@ -112,9 +114,15 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   // Hapus layout shell web (header ganda, bottom nav ganda, install banner) saat membuka presensi atau dashboard di mobile browser.
   const isAttendanceOrEmployeeView = location.pathname === '/presensi' || (location.pathname === '/dashboard' && !['superadmin', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)));
   if ((isPwaStandalone || isMobile) && isAttendanceOrEmployeeView) {
-    return <div className="min-h-screen bg-[#062225] text-foreground">{children}</div>;
+    return (
+      <div className="min-h-screen bg-[#062225] text-foreground">
+        <HrmGhostBanner />
+        {children}
+      </div>
+    );
   }
 
+  const [ghostModalOpen, setGhostModalOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
     return localStorage.getItem('hrm_sidebar_collapsed') === 'true';
@@ -547,7 +555,9 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   );
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row transition-colors duration-200 w-full max-w-[100vw] overflow-x-hidden">
+    <div className="min-h-screen bg-background text-foreground flex flex-col w-full max-w-[100vw] overflow-x-hidden">
+      <HrmGhostBanner />
+      <div className="flex-1 flex flex-col md:flex-row w-full">
       {/* DESKTOP SIDEBAR - LMS DIGISS ORIGINAL THEME WITH COMPACT & HOVER EXPANSION */}
       <aside
         onMouseEnter={() => isSidebarCollapsed && setIsSidebarHovered(true)}
@@ -680,6 +690,18 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
           </div>
         </div>
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          {['superadmin', 'admin', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setGhostModalOpen(true)}
+              className="h-8 px-2 bg-cyan-500/15 border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/25 text-xs font-bold rounded-xl gap-1 shrink-0"
+              title="Mode Pantau PWA Karyawan (Ghost Mode)"
+            >
+              <Eye className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden xs:inline">Pantau</span>
+            </Button>
+          )}
           <ThemeToggle variant="dropdown" />
           <PwaInstallButton variant="header" />
           {renderNotificationBell()}
@@ -790,6 +812,18 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
           </div>
 
           <div className="flex items-center gap-3">
+            {['superadmin', 'admin', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)) && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setGhostModalOpen(true)}
+                className="h-9 px-3 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-500 dark:text-cyan-400 border-cyan-500/40 text-xs font-bold rounded-xl gap-1.5 transition-colors shadow-xs"
+                title="Superadmin Ghost Mode: Pantau PWA Akun Karyawan"
+              >
+                <Eye className="w-4 h-4 text-cyan-400" />
+                <span>Mode Pantau PWA</span>
+              </Button>
+            )}
             <ThemeToggle variant="dropdown" />
             <PwaInstallButton variant="header" />
             {renderNotificationBell()}
@@ -1021,6 +1055,10 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
 
       {/* Floating Mobile PWA Install Banner */}
       <PwaInstallButton variant="mobile-banner" />
+
+      {/* Superadmin Ghost Mode Employee Switcher Modal */}
+      <HrmGhostSwitcherModal open={ghostModalOpen} onOpenChange={setGhostModalOpen} />
+      </div>
     </div>
   );
 };

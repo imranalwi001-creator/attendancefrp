@@ -7,7 +7,7 @@ import { HrmPimpinanDashboard } from './HrmPimpinanDashboard';
 import { HrmKeuanganDashboard } from './HrmKeuanganDashboard';
 
 export const HrmDashboard: React.FC = () => {
-  const { role } = useHrmAuth();
+  const { role, isImpersonating } = useHrmAuth();
   const cleanRole = (role || '').toLowerCase().replace(/[\s_-]/g, '');
 
   const checkIsMobileOrPwa = () => {
@@ -45,6 +45,11 @@ export const HrmDashboard: React.FC = () => {
     sessionStorage.removeItem('hrm_prefer_desktop_dashboard');
     setPreferDesktop(false);
   };
+
+  // 0. Superadmin Ghost Mode (Mode Pantau Akun Karyawan Aktif):
+  if (isImpersonating) {
+    return <HrmEmployeeDashboard onSwitchToDesktop={handleSwitchToDesktop} />;
+  }
 
   // 1. Pada perangkat Mobile Smartphone / PWA Mode:
   // Semua karyawan (termasuk staf Keuangan, Admin, HRD, dll.) yang membuka aplikasi di HP
