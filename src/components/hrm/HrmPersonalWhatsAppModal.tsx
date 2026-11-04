@@ -32,6 +32,7 @@ import {
   Loader2,
   Sparkles,
   Info,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface HrmPersonalWhatsAppModalProps {
@@ -208,6 +209,16 @@ export const HrmPersonalWhatsAppModal: React.FC<HrmPersonalWhatsAppModalProps> =
               <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 text-[10px] rounded-full gap-1 font-semibold">
                 <ShieldAlert className="w-3 h-3 text-amber-600" />
                 Belum Registrasi Wajah
+              </Badge>
+            )}
+            {user.welcomeWaSent ? (
+              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-400 text-[10px] rounded-full gap-1 font-semibold" title={user.welcomeWaSentAt ? `Terkirim pada ${new Date(user.welcomeWaSentAt).toLocaleString('id-ID')}` : 'Notifikasi selamat datang sudah terkirim'}>
+                <CheckCircle2 className="w-3 h-3 text-blue-600" />
+                WA Sambutan Terkirim
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 text-[10px] rounded-full gap-1 font-semibold">
+                Belum Ada WA Sambutan
               </Badge>
             )}
           </div>

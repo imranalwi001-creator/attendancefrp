@@ -507,6 +507,8 @@ function formatUserRow(r) {
     allowOgsClockOut: r.allow_ogs_clock_out !== false,
     isLateDeductionEnabled: r.is_late_deduction_enabled === true || isSpecial,
     lateDeductionPerMinute: r.late_deduction_per_minute ? parseFloat(r.late_deduction_per_minute) : (isSpecial ? 1000.00 : 1000.00),
+    welcomeWaSent: r.welcome_wa_sent === true,
+    welcomeWaSentAt: r.welcome_wa_sent_at || null,
     createdAt: r.created_at,
   };
 }
@@ -1413,6 +1415,10 @@ app.post('/api/users', async (req, res) => {
       LIMIT 1
     `, [createdId]);
 
+    if (u.phone && String(u.phone).trim()) {
+      sendFaceEnrollmentWelcomeWhatsApp(targetId).catch(e => console.warn('[Auto Welcome on User Update]:', e.message));
+    }
+
     res.json({ success: true, data: formatUserRow(fullUserRes.rows[0]) });
   } catch (err) {
     console.error('Add user error:', err);
@@ -1634,6 +1640,10 @@ app.put('/api/users/:id', async (req, res) => {
       WHERE p.id = $1
       LIMIT 1
     `, [targetId]);
+
+    if (u.phone && String(u.phone).trim()) {
+      sendFaceEnrollmentWelcomeWhatsApp(targetId).catch(e => console.warn('[Auto Welcome on User Update]:', e.message));
+    }
 
     res.json({ success: true, data: formatUserRow(fullUserRes.rows[0]) });
   } catch (err) {
@@ -2629,34 +2639,50 @@ async function sendWhatsAppAlert({ phone, message }) {
 }
 
 // ─── NOTIFIKASI OTOMATIS WHATSAPP REGISTRASI BIOMETRIK WAJAH & AKUN ──────────
+// Invariant Mutlak PT FRP: Hanya mengirimkan notifikasi selamat datang otomatis SATU KALI
+// saat karyawan pertama kali terdaftar dan mendaftarkan WhatsApp-nya. Dilarang duplikasi.
 async function sendFaceEnrollmentWelcomeWhatsApp(userIdOrProfile) {
   try {
-    let profile = null;
-    if (typeof userIdOrProfile === 'object' && userIdOrProfile !== null && userIdOrProfile.nip) {
-      profile = userIdOrProfile;
-    } else {
-      const q = await pool.query(`
-        SELECT p.id, p.full_name, p.nip, p.phone, d.name as division_name, s.name as shift_name
-        FROM hrm_profiles p
-        LEFT JOIN hrm_divisions d ON p.division_id = d.id
-        LEFT JOIN hrm_shifts s ON p.shift_id = s.id
-        WHERE p.id::text = $1 OR p.nip = $1
-        LIMIT 1
-      `, [userIdOrProfile]);
-      profile = q.rows[0];
+    let targetId = typeof userIdOrProfile === 'object' && userIdOrProfile !== null ? (userIdOrProfile.id || userIdOrProfile.userId) : userIdOrProfile;
+    if (!targetId) return;
+
+    // Ambil data profil karyawan beserta flag welcome_wa_sent langsung dari PostgreSQL
+    const q = await pool.query(`
+      SELECT p.id, p.full_name, p.nip, p.phone, p.welcome_wa_sent, p.is_face_enrolled,
+             d.name as division_name, s.name as shift_name
+      FROM hrm_profiles p
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+      WHERE p.id::text = $1 OR p.nip = $1
+      LIMIT 1
+    `, [targetId]);
+
+    const profile = q.rows[0];
+    if (!profile) return;
+
+    // 1. INVARIANT MUTLAK: Jika sudah pernah dikirimkan notifikasi selamat datang, HENTIKAN (ANTI GANDA)
+    if (profile.welcome_wa_sent === true) {
+      console.log(`[Face Enrollment Welcome WA Guard]: Melewati pengiriman. Karyawan ${profile.full_name} (${profile.nip}) SUDAH PERNAH menerima notifikasi selamat datang pertama kali.`);
+      return;
     }
 
-    if (!profile) return;
+    // 2. Karyawan wajib sudah enroll wajah
+    if (!profile.is_face_enrolled) {
+      console.log(`[Face Enrollment Welcome WA Guard]: Karyawan ${profile.full_name} (${profile.nip}) belum enroll wajah biometrik.`);
+      return;
+    }
+
+    // 3. Periksa kelayakan nomor telepon WhatsApp (minimal 9 digit numerik)
     const rawPhone = (profile.phone || '').trim();
     if (!rawPhone || rawPhone.replace(/\D/g, '').length < 9) {
-      console.log(`[Face Enrollment Welcome WA Skipped]: No valid phone number for ${profile.full_name} (${profile.nip})`);
+      console.log(`[Face Enrollment Welcome WA Pending]: Belum ada nomor WhatsApp valid untuk ${profile.full_name} (${profile.nip}). Menunggu pendaftaran nomor.`);
       return;
     }
 
     const empName = profile.full_name || 'Karyawan';
     const empNip = profile.nip || '-';
-    const divName = profile.division_name || profile.divisionName || 'Operasional Lapangan';
-    const shiftName = profile.shift_name || profile.shiftName || 'Shift Terjadwal';
+    const divName = profile.division_name || 'Operasional Lapangan';
+    const shiftName = profile.shift_name || 'Shift Terjadwal';
 
     const waWelcomeMsg =
 `Halo Bpk/Ibu *${empName}* (NIP: *${empNip}*),
@@ -2679,16 +2705,25 @@ Selamat bertugas dan utamakan keselamatan kerja.
 
 _Pesan otomatis resmi dari Sistem HRM Terpadu PT. FAWWAZ RESKI PERWIRA._`;
 
+    // Kirim via gateway WhatsApp
     await sendWhatsAppAlert({ phone: rawPhone, message: waWelcomeMsg });
-    console.log(`[Face Enrollment Welcome WA Sent] to ${empName} (${rawPhone})`);
+
+    // 4. KUNCI PERMANEN: Tandai welcome_wa_sent = true di database agar tidak pernah dikirim ulang
+    await pool.query(`
+      UPDATE hrm_profiles
+      SET welcome_wa_sent = true,
+          welcome_wa_sent_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+    `, [profile.id]);
+
+    console.log(`[Face Enrollment Welcome WA Success]: Berhasil dikirim pertama kali ke ${empName} (${rawPhone}) dan dikunci welcome_wa_sent = true`);
 
     // In-app notification
-    if (profile.id) {
-      await pool.query(`
-        INSERT INTO hrm_notifications (id, user_id, title, message, type, is_read, created_at)
-        VALUES (gen_random_uuid(), $1, $2, $3, 'system', false, NOW())
-      `, [profile.id, 'Registrasi Wajah Berhasil', `Wajah biometrik Anda (NIP: ${empNip}) telah berhasil didaftarkan dan terverifikasi di sistem.`]).catch(() => {});
-    }
+    await pool.query(`
+      INSERT INTO hrm_notifications (id, user_id, title, message, type, is_read, created_at)
+      VALUES (gen_random_uuid(), $1, $2, $3, 'system', false, NOW())
+    `, [profile.id, 'Registrasi Wajah Berhasil', `Wajah biometrik Anda (NIP: ${empNip}) telah berhasil didaftarkan dan terverifikasi di sistem.`]).catch(() => {});
   } catch (err) {
     console.error('[sendFaceEnrollmentWelcomeWhatsApp Error]:', err.message);
   }
@@ -12598,10 +12633,17 @@ app.post('/api/whatsapp/update-phone', async (req, res) => {
   }
   try {
     const cleanPhone = (phone || '').trim();
-    await pool.query(
-      `UPDATE hrm_profiles SET phone = $1, updated_at = NOW() WHERE id::text = $2 OR nip = $2`,
+    const updateRes = await pool.query(
+      `UPDATE hrm_profiles SET phone = $1, updated_at = NOW() WHERE id::text = $2 OR nip = $2 RETURNING id, full_name, nip, is_face_enrolled, welcome_wa_sent`,
       [cleanPhone || null, userId]
     );
+
+    // Jika karyawan sudah enroll wajah tetapi belum pernah mendapatkan notifikasi welcome pertama kali:
+    const updatedUser = updateRes.rows[0];
+    if (updatedUser && updatedUser.is_face_enrolled && !updatedUser.welcome_wa_sent && cleanPhone.replace(/\D/g, '').length >= 9) {
+      sendFaceEnrollmentWelcomeWhatsApp(updatedUser.id).catch(e => console.warn('[Auto Welcome on Phone Update Error]:', e.message));
+    }
+
     res.json({ success: true, message: 'Nomor telepon berhasil diperbarui', phone: cleanPhone });
   } catch (err) {
     console.error('[Update Phone Error]:', err.message);

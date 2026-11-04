@@ -91,6 +91,12 @@ export async function initDb() {
       ALTER TABLE hrm_profiles 
       ADD COLUMN IF NOT EXISTS face_enrolled_at TIMESTAMP WITH TIME ZONE;
 
+      ALTER TABLE hrm_profiles 
+      ADD COLUMN IF NOT EXISTS welcome_wa_sent BOOLEAN DEFAULT false;
+
+      ALTER TABLE hrm_profiles 
+      ADD COLUMN IF NOT EXISTS welcome_wa_sent_at TIMESTAMPTZ DEFAULT NULL;
+
       -- Attendance Biometric 1:1 Verification Score Columns
       ALTER TABLE hrm_attendances 
       ADD COLUMN IF NOT EXISTS biometric_score NUMERIC(5,2);

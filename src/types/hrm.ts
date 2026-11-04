@@ -446,6 +446,8 @@ export interface UserProfile {
   faceDescriptor?: number[];
   faceEnrolledPhoto?: string;
   faceEnrolledAt?: string;
+  welcomeWaSent?: boolean;
+  welcomeWaSentAt?: string;
 
   // ─── Extended Personal Data ──────────────────────────────
   nickname?: string;             // Nama panggilan
