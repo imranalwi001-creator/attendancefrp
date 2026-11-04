@@ -33,6 +33,7 @@ import {
   CalendarClock,
   Award,
   Sparkles,
+  MessageSquare,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -301,6 +302,12 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       path: '/admin/divisi',
       icon: Building2,
       roles: ['superadmin', 'admin', 'hrd', 'pimpinan'],
+    },
+    {
+      label: 'Broadcast WA (80 Karyawan)',
+      path: '/admin/broadcast-wa',
+      icon: MessageSquare,
+      roles: ['superadmin'],
     },
     {
       label: 'Kelola Role & Akses',

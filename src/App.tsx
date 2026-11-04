@@ -36,6 +36,7 @@ import { HrmCutiPage } from '@/pages/hrm/HrmCutiPage';
 import { HrmKinerjaPage } from '@/pages/hrm/HrmKinerjaPage';
 import { HrmPelanggaranPage } from '@/pages/hrm/HrmPelanggaranPage';
 import { HrmAnalyticsPage } from '@/pages/hrm/HrmAnalyticsPage';
+import { HrmWhatsAppBroadcast80Page } from '@/pages/hrm/HrmWhatsAppBroadcast80Page';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -143,6 +144,15 @@ export const App: React.FC = () => {
                 />
 
                 {/* Super Admin & Admin Specific Master Data */}
+                <Route
+                  path="/admin/broadcast-wa"
+                  element={
+                    <HrmProtectedRoute allowedRoles={['superadmin']}>
+                      <HrmWhatsAppBroadcast80Page />
+                    </HrmProtectedRoute>
+                  }
+                />
+
                 <Route
                   path="/admin/karyawan"
                   element={

@@ -12304,6 +12304,225 @@ app.post('/api/attendances/auto-close-reconcile', async (req, res) => {
   }
 });
 
+// ─── 4D. SUPERADMIN WHATSAPP BROADCAST UNTUK 80 KARYAWAN ─────────────────────
+
+// GET /api/whatsapp/gateway-status - Cek status koneksi Baileys WhatsApp Gateway
+app.get('/api/whatsapp/gateway-status', async (req, res) => {
+  try {
+    const sRes = await pool.query(
+      "SELECT key, value FROM hrm_system_settings WHERE key IN ('wa_gateway_endpoint', 'wa_gateway_sender')"
+    );
+    const settings = {};
+    sRes.rows.forEach(r => { settings[r.key] = r.value; });
+
+    const endpoint = process.env.WA_GATEWAY_URL
+      ? `${process.env.WA_GATEWAY_URL}/status`
+      : (settings.wa_gateway_endpoint ? `${settings.wa_gateway_endpoint.replace('/send-message', '')}/status` : 'http://hrm-wa-gateway:5002/status');
+
+    try {
+      const response = await fetch(endpoint, { method: 'GET', signal: AbortSignal.timeout(4000) });
+      const data = await response.json().catch(() => ({}));
+      return res.json({
+        success: true,
+        connected: data.status === 'connected',
+        phone: data.phone || settings.wa_gateway_sender || '087812379189',
+        status: data.status || 'unknown',
+        hasQr: Boolean(data.hasQr),
+        timestamp: new Date().toISOString()
+      });
+    } catch (httpErr) {
+      return res.json({
+        success: true,
+        connected: false,
+        phone: settings.wa_gateway_sender || '087812379189',
+        status: 'disconnected',
+        error: httpErr.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/whatsapp/employees-80 - Ambil 80 personil sah operasional & wisma
+app.get('/api/whatsapp/employees-80', async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        id,
+        nip,
+        full_name as "fullName",
+        phone,
+        division_id as "divisionId",
+        division_name as "divisionName",
+        role_name as "roleName",
+        job_title as "jobTitle",
+        job_title as "jobPosition",
+        operational_group as "operationalGroup",
+        CASE 
+          WHEN operational_group = 'SHIPMENT' OR (nip >= 'FR07034' AND nip <= 'FR07080') THEN 'SHIPMENT'
+          WHEN operational_group = 'RUMAH TANGGA' OR (nip >= 'FR07001' AND nip <= 'FR07033') THEN 'RUMAH TANGGA'
+          ELSE 'OPERASIONAL'
+        END as "groupName",
+        CASE 
+          WHEN phone IS NOT NULL AND TRIM(phone) != '' AND LENGTH(REGEXP_REPLACE(phone, '[^0-9]', '', 'g')) >= 9 
+          THEN true ELSE false 
+        END as "hasPhone"
+      FROM hrm_profiles
+      WHERE (nip >= 'FR07001' AND nip <= 'FR07080')
+         OR operational_group IN ('SHIPMENT', 'RUMAH TANGGA')
+      ORDER BY 
+        CASE WHEN nip LIKE 'FR%' THEN 0 ELSE 1 END,
+        NULLIF(REGEXP_REPLACE(nip, '[^0-9]', '', 'g'), '')::INT ASC NULLS LAST,
+        nip ASC
+    `;
+    const result = await pool.query(query);
+    const rows = result.rows;
+
+    const totalCount = rows.length;
+    const shipmentCount = rows.filter(r => r.groupName === 'SHIPMENT').length;
+    const rumahTanggaCount = rows.filter(r => r.groupName === 'RUMAH TANGGA').length;
+    const withPhoneCount = rows.filter(r => r.hasPhone).length;
+    const withoutPhoneCount = totalCount - withPhoneCount;
+
+    res.json({
+      success: true,
+      summary: {
+        totalCount,
+        shipmentCount,
+        rumahTanggaCount,
+        withPhoneCount,
+        withoutPhoneCount,
+      },
+      employees: rows,
+    });
+  } catch (err) {
+    console.error('[Get 80 Employees Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/whatsapp/update-phone - Update nomor telepon karyawan oleh Superadmin
+app.post('/api/whatsapp/update-phone', async (req, res) => {
+  const { userId, phone } = req.body;
+  if (!userId) {
+    return res.status(400).json({ success: false, error: 'User ID wajib disertakan' });
+  }
+  try {
+    const cleanPhone = (phone || '').trim();
+    await pool.query(
+      `UPDATE hrm_profiles SET phone = $1, updated_at = NOW() WHERE id::text = $2 OR nip = $2`,
+      [cleanPhone || null, userId]
+    );
+    res.json({ success: true, message: 'Nomor telepon berhasil diperbarui', phone: cleanPhone });
+  } catch (err) {
+    console.error('[Update Phone Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/whatsapp/broadcast-80 - Kirim broadcast pesan WhatsApp massal ke 80 personil
+app.post('/api/whatsapp/broadcast-80', async (req, res) => {
+  const { recipients, messageTemplate, delayMs = 1200 } = req.body;
+
+  if (!Array.isArray(recipients) || recipients.length === 0) {
+    return res.status(400).json({ success: false, error: 'Daftar penerima pesan wajib disertakan' });
+  }
+
+  if (!messageTemplate || !messageTemplate.trim()) {
+    return res.status(400).json({ success: false, error: 'Konten pesan template wajib diisi' });
+  }
+
+  // Format tanggal hari ini dalam format Bahasa Indonesia
+  const now = new Date(Date.now() + 8 * 3600000); // WITA
+  const monthsIndo = [
+    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+  ];
+  const daysIndo = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+  const formattedDate = `${daysIndo[now.getUTCDay()]}, ${now.getUTCDate()} ${monthsIndo[now.getUTCMonth()]} ${now.getUTCFullYear()}`;
+  const formattedTime = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')} WITA`;
+
+  const results = [];
+  let sentCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
+    const rawPhone = (r.phone || '').trim();
+    const cleanPhone = rawPhone.replace(/[^0-9]/g, '');
+
+    // Cek kelayakan nomor telepon
+    if (!cleanPhone || cleanPhone.length < 9) {
+      skippedCount++;
+      results.push({
+        userId: r.userId || r.id,
+        name: r.name || r.fullName,
+        nip: r.nip,
+        phone: rawPhone || '-',
+        status: 'skipped',
+        error: 'Nomor WhatsApp belum terdaftar di sistem',
+      });
+      continue;
+    }
+
+    // Personalisasi template pesan dinamis
+    let personalized = messageTemplate
+      .replace(/{nama}/gi, r.name || r.fullName || 'Rekan Karyawan')
+      .replace(/{name}/gi, r.name || r.fullName || 'Rekan Karyawan')
+      .replace(/{nip}/gi, r.nip || '-')
+      .replace(/{divisi}/gi, r.division || r.divisionName || 'Operasional Lapangan')
+      .replace(/{division}/gi, r.division || r.divisionName || 'Operasional Lapangan')
+      .replace(/{grup}/gi, r.group || r.groupName || 'Operasional PT FRP')
+      .replace(/{group}/gi, r.group || r.groupName || 'Operasional PT FRP')
+      .replace(/{tanggal}/gi, formattedDate)
+      .replace(/{date}/gi, formattedDate)
+      .replace(/{waktu}/gi, formattedTime)
+      .replace(/{time}/gi, formattedTime);
+
+    try {
+      await sendWhatsAppAlert({ phone: cleanPhone, message: personalized });
+      sentCount++;
+      results.push({
+        userId: r.userId || r.id,
+        name: r.name || r.fullName,
+        nip: r.nip,
+        phone: cleanPhone,
+        status: 'sent',
+        messagePreview: personalized.slice(0, 60) + '...',
+      });
+    } catch (err) {
+      failedCount++;
+      results.push({
+        userId: r.userId || r.id,
+        name: r.name || r.fullName,
+        nip: r.nip,
+        phone: cleanPhone,
+        status: 'failed',
+        error: err.message,
+      });
+    }
+
+    // Jeda anti-spam jika masih ada pesan berikutnya
+    if (i < recipients.length - 1 && delayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+
+  res.json({
+    success: true,
+    summary: {
+      total: recipients.length,
+      sent: sentCount,
+      skipped: skippedCount,
+      failed: failedCount,
+    },
+    results,
+  });
+});
+
 // Start Server
 async function start() {
   try {

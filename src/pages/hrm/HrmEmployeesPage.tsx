@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, safeSetJson } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
@@ -70,6 +71,7 @@ import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 
 export const HrmEmployeesPage: React.FC = () => {
+  const navigate = useNavigate();
   const { user: currentUser } = useHrmAuth();
   const isSuperAdmin = (currentUser?.roleName || '').toLowerCase() === 'superadmin';
 
@@ -895,7 +897,19 @@ export const HrmEmployeesPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {isSuperAdmin && (
+            <Button
+              variant="outline"
+              onClick={() => navigate('/admin/broadcast-wa')}
+              className="border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 rounded-xl gap-2 font-medium shadow-sm"
+              title="Kirim pesan WhatsApp khusus 80 Karyawan Sah (Shipment & Wisma)"
+            >
+              <Send className="w-4 h-4 text-emerald-500" />
+              Broadcast WA (80)
+            </Button>
+          )}
+
           <Button
             variant="outline"
             onClick={() => {
