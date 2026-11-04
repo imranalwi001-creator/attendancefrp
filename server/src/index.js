@@ -1917,8 +1917,11 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     // Validasi Khusus Pos OGS: Titik Pos OGS (-4.787904, 119.613399) HANYA untuk Ceklok Pulang bagi divisi/karyawan biasa
     // Kecuali 3 Petugas Lapangan Khusus yang 100% dikecualikan (Aslam, Samsi, Takdir)
     if (!isExempt && latitude && longitude) {
-      const distToOgs = calculateHaversineMeters(parseFloat(latitude), parseFloat(longitude), -4.787904, 119.613399);
-      if (distToOgs <= 250) {
+      const curLat = parseFloat(latitude);
+      const curLon = parseFloat(longitude);
+      const distToOgs = calculateHaversineMeters(curLat, curLon, -4.787904, 119.613399);
+      // Pos OGS radius gerbang adalah 60m (bukan 250m yang menabrak Pos Segel 4/5 [jarak 207m] dan Timbangan 4/5 [jarak 205m]).
+      if (distToOgs <= 60) {
         return res.status(403).json({
           success: false,
           error: 'Presensi Masuk Ditolak: Titik Pos OGS hanya diizinkan untuk Ceklok Pulang (Presensi Keluar) bagi divisi dan karyawan yang ditentukan.',
@@ -3742,7 +3745,7 @@ app.post('/api/field-sentinel/submit-patrol-check', async (req, res) => {
             { code: 'KANTOR MATCHING BONTOA', name: 'Matching Bontoa', lat: -4.802450, lon: 119.598640, radius: 250 },
             { code: 'KANTOR PUSAT', name: 'Kantor Pusat', lat: -4.800089, lon: 119.608477, radius: 250 },
             { code: 'KANTOR STAFF', name: 'Kantor Staff', lat: -4.789289, lon: 119.612770, radius: 250 },
-            { code: 'PINTU OGS', name: 'Pos OGS', lat: -4.787904, lon: 119.613399, radius: 250 },
+            { code: 'PINTU OGS', name: 'Pos OGS', lat: -4.787904, lon: 119.613399, radius: 60 },
             { code: 'WISMA RUMAH TANGGA', name: 'Wisma Rumah Tangga', lat: -4.792870, lon: 119.608797, radius: 250 },
             { code: 'TIMBANGAN 2/3', name: 'Timbangan 2/3', lat: -4.783865, lon: 119.615338, radius: 50 },
             { code: 'TIMBANGAN 4', name: 'Timbangan 4', lat: -4.789666, lon: 119.612852, radius: 50 },
@@ -5257,7 +5260,7 @@ app.post('/api/attendances/clock-out', async (req, res) => {
               name: 'Pintu OGS Tonasa',
               lat: -4.787904,
               lon: 119.613399,
-              radius: 250,
+              radius: 60,
             });
           }
 

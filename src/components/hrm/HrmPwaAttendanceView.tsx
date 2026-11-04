@@ -2532,7 +2532,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const distToOgs = currentCoords
         ? geofenceService.calculateDistance(currentCoords, { latitude: -4.787904, longitude: 119.613399 })
         : 9999;
-      const isAtOgs = distToOgs <= 250;
+      // Pos OGS adalah gerbang keluar (radius 60m). Jika pegawai berada di pos resmi mereka (misal Segel 4/5 atau Timbangan 4/5), mereka BUKAN di Pos OGS!
+      const isInsideLegitimatePost = locationStatus === 'inside' && !assignedPostName.toLowerCase().includes('ogs');
+      const isAtOgs = !isInsideLegitimatePost && distToOgs <= 60;
 
       if (!isExemptOfficer && isAtOgs && actionType === 'clock_in') {
         toast.dismiss(toastLoadingId);

@@ -174,7 +174,7 @@ export const FIELD_SENTINEL_6_POST_PRESETS: DivisionAssignedPost[] = [
     name: 'Pos OGS',
     latitude: -4.787904,
     longitude: 119.613399,
-    radiusMeters: 250,
+    radiusMeters: 60,
     description: 'Titik Pos OGS (Khusus Ceklok Pulang)',
     allowClockIn: false,
     allowClockOut: true,

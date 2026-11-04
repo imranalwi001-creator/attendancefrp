@@ -3271,12 +3271,13 @@ export const hrmService = {
     ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes((user.nip || '').trim());
 
     // Validasi Pos OGS (Khusus Ceklok Pulang bagi karyawan biasa / divisi yang ditentukan)
+    // Radius OGS disesuaikan ke 60m agar tidak bertabrakan dengan Segel 4/5 (jarak 207m) atau Timbangan 4/5 (jarak 205m)
     if (!isExemptFieldOfficer && typeof data.latitude === 'number' && typeof data.longitude === 'number') {
       const dOgs = geofenceService.calculateDistance(
         { lat: data.latitude, lng: data.longitude },
         { latitude: -4.787904, longitude: 119.613399 }
       );
-      if (dOgs <= 250) {
+      if (dOgs <= 60) {
         throw new Error('Presensi Masuk Ditolak: Titik Pos OGS hanya diizinkan untuk Ceklok Pulang (Presensi Keluar). Silakan lakukan presensi masuk di titik kantor divisi Anda.');
       }
     }
