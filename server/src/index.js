@@ -2011,6 +2011,46 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         console.warn('[ClockIn] Field posts query warn:', fpErr.message);
       }
 
+      // A2. Warisan Geofence Karyawan Pengganti (Relief Duty Geofence Inheritance)
+      // Jika karyawan bertugas menggantikan rekan lain hari ini (dari Tukar Shift atau Pengganti Cuti/Izin resmi)
+      try {
+        const todayStr = date || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' });
+        const reliefPostsRes = await pool.query(
+          `SELECT 
+             orig_p.full_name as orig_user_name,
+             COALESCE(orig_p.assigned_latitude, orig_d.latitude) as lat,
+             COALESCE(orig_p.assigned_longitude, orig_d.longitude) as lon,
+             COALESCE(orig_p.assigned_radius_meters, orig_d.radius_meters, 150) as radius,
+             COALESCE(orig_p.assigned_location_name, orig_d.location_name, orig_d.name, 'Pos Lapangan') as pos_name
+           FROM (
+             -- 1. Pengganti Cuti/Izin yang Disetujui
+             SELECT user_id as orig_user_id FROM hrm_leave_requests 
+             WHERE substitute_id = $1 AND status = 'approved' AND $2::date BETWEEN start_date::date AND end_date::date
+             UNION
+             -- 2. Pengganti Tukar Shift yang Disetujui
+             SELECT requester_id as orig_user_id FROM hrm_shift_swaps 
+             WHERE substitute_id = $1 AND status = 'approved' AND swap_date = $2::date
+           ) r
+           JOIN hrm_profiles orig_p ON r.orig_user_id = orig_p.id
+           LEFT JOIN hrm_divisions orig_d ON orig_p.division_id = orig_d.id
+           WHERE orig_p.assigned_latitude IS NOT NULL OR orig_d.latitude IS NOT NULL;`,
+          [userId, todayStr]
+        );
+        for (const rp of reliefPostsRes.rows) {
+          if (rp.lat && rp.lon) {
+            candidateLocations.push({
+              name: `Pos Tugas Pengganti: ${rp.pos_name} [Ganti: ${rp.orig_user_name}]`,
+              lat: parseFloat(rp.lat),
+              lon: parseFloat(rp.lon),
+              radius: parseFloat(rp.radius || 150),
+              isReliefPost: true,
+            });
+          }
+        }
+      } catch (reliefErr) {
+        console.warn('[ClockIn] Relief duty post inheritance warn:', reliefErr.message);
+      }
+
       // B. Divisi & Kantor Pusat Resmi Karyawan (hrm_divisions & hrm_office_locations)
       try {
         const locRes = await pool.query(
@@ -3031,7 +3071,63 @@ app.get('/api/field-sentinel/posts', async (req, res) => {
     }
     query += ` ORDER BY fp.post_code ASC, fp.created_at ASC`;
     const result = await pool.query(query, params);
-    res.json({ success: true, data: result.rows });
+    const posts = [...result.rows];
+
+    // Jika mencari untuk user spesifik, sertakan juga pos rekan yang digantikan hari ini secara dinamis (Relief Duty)
+    if (userId) {
+      try {
+        const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' });
+        const dynamicRelief = await pool.query(
+          `SELECT 
+             orig_p.id as relief_original_user_id,
+             orig_p.full_name as relief_original_user_name,
+             orig_p.nip as relief_original_user_nip,
+             COALESCE(orig_d.code, 'RELIEF-POST') as post_code,
+             COALESCE(orig_p.assigned_location_name, orig_d.location_name, orig_d.name, 'Pos Lapangan') as post_name,
+             COALESCE(orig_p.assigned_latitude, orig_d.latitude) as latitude,
+             COALESCE(orig_p.assigned_longitude, orig_d.longitude) as longitude,
+             COALESCE(orig_p.assigned_radius_meters, orig_d.radius_meters, 150) as radius_meters,
+             'Penugasan Pengganti Pos Resmi (Relief Duty)' as description,
+             true as is_relief,
+             $2::date as relief_until
+           FROM (
+             SELECT user_id as orig_user_id FROM hrm_leave_requests 
+             WHERE substitute_id = $1 AND status = 'approved' AND $2::date BETWEEN start_date::date AND end_date::date
+             UNION
+             SELECT requester_id as orig_user_id FROM hrm_shift_swaps 
+             WHERE substitute_id = $1 AND status = 'approved' AND swap_date = $2::date
+           ) r
+           JOIN hrm_profiles orig_p ON r.orig_user_id = orig_p.id
+           LEFT JOIN hrm_divisions orig_d ON orig_p.division_id = orig_d.id
+           WHERE orig_p.assigned_latitude IS NOT NULL OR orig_d.latitude IS NOT NULL;`,
+          [userId, todayStr]
+        );
+        for (const dr of dynamicRelief.rows) {
+          if (dr.latitude && dr.longitude && !posts.some(p => Math.abs(parseFloat(p.latitude) - parseFloat(dr.latitude)) < 0.0001 && Math.abs(parseFloat(p.longitude) - parseFloat(dr.longitude)) < 0.0001)) {
+            posts.push({
+              id: `relief-${dr.relief_original_user_id}-${todayStr}`,
+              user_id: userId,
+              post_code: dr.post_code,
+              post_name: `${dr.post_name} [Ganti: ${dr.relief_original_user_name}]`,
+              latitude: dr.latitude,
+              longitude: dr.longitude,
+              radius_meters: dr.radius_meters,
+              description: dr.description,
+              is_active: true,
+              is_relief: true,
+              relief_until: dr.relief_until,
+              relief_original_user_id: dr.relief_original_user_id,
+              relief_original_user_name: dr.relief_original_user_name,
+              relief_original_user_nip: dr.relief_original_user_nip,
+            });
+          }
+        }
+      } catch (dynErr) {
+        console.warn('Dynamic relief fetch in posts API warn:', dynErr.message);
+      }
+    }
+
+    res.json({ success: true, data: posts });
   } catch (err) {
     console.error('Fetch field posts error:', err);
     res.status(500).json({ success: false, error: err.message });
