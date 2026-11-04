@@ -111,18 +111,6 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     }
   }, []);
 
-  // Sinkronisasi Sempurna: Tampilan browser HP wajib sama persis 100% dengan tampilan PWA (Lampiran 1 & 2).
-  // Hapus layout shell web (header ganda, bottom nav ganda, install banner) saat membuka presensi atau dashboard di mobile browser.
-  const isAttendanceOrEmployeeView = location.pathname === '/presensi' || (location.pathname === '/dashboard' && !['superadmin', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)));
-  if ((isPwaStandalone || isMobile) && isAttendanceOrEmployeeView) {
-    return (
-      <div className="min-h-screen bg-[#062225] text-foreground">
-        <HrmGhostBanner />
-        {children}
-      </div>
-    );
-  }
-
   const [ghostModalOpen, setGhostModalOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
@@ -176,6 +164,19 @@ export const HrmLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       window.removeEventListener('hrm_data_updated', refreshNotifications);
     };
   }, [user?.id, currentRole]);
+
+  // Sinkronisasi Sempurna: Tampilan browser HP wajib sama persis 100% dengan tampilan PWA (Lampiran 1 & 2).
+  // Hapus layout shell web (header ganda, bottom nav ganda, install banner) saat membuka presensi atau dashboard di mobile browser.
+  // WAJIB diletakkan SETELAH semua React Hooks dijalankan agar tidak melanggar Rules of Hooks (React Error #300).
+  const isAttendanceOrEmployeeView = location.pathname === '/presensi' || (location.pathname === '/dashboard' && !['superadmin', 'pimpinan', 'dirut'].some((r) => currentRole.includes(r)));
+  if ((isPwaStandalone || isMobile) && isAttendanceOrEmployeeView) {
+    return (
+      <div className="min-h-screen bg-[#062225] text-foreground">
+        <HrmGhostBanner />
+        {children}
+      </div>
+    );
+  }
 
   const handleLogout = () => {
     logout();
