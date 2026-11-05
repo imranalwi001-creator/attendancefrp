@@ -2051,6 +2051,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       lateCount,
       onTimeCount,
       totalLateMins,
+      usedLeave,
       remainingLeave,
       annualLeaveQuota,
       attendanceRate,
@@ -4751,9 +4752,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
 
                 <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800">
-                  <p className="text-[9.5px] text-slate-500 dark:text-slate-400">Sisa Hak Cuti</p>
+                  <p className="text-[9.5px] text-slate-500 dark:text-slate-400">Belum Diambil (Sisa)</p>
                   <p className="text-sm font-bold text-blue-600 dark:text-blue-400 mt-0.5">
                     {analyticsData.remainingLeave} <span className="text-[9.5px] font-normal text-slate-400">Hari</span>
+                  </p>
+                  <p className="text-[8px] text-slate-400 mt-0.5">
+                    Total {analyticsData.annualLeaveQuota} • Terpakai {analyticsData.usedLeave}
                   </p>
                 </div>
 
@@ -5120,6 +5124,44 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             {/* Riwayat Pengajuan Cuti / Izin */}
             {aktivitasSubTab === 'cuti' && (
               <div className="space-y-2.5">
+                {/* ─── KARTU INFORMASI KUOTA CUTI KARYAWAN ─── */}
+                <div className="p-3.5 bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-cyan-500/10 dark:from-emerald-950/40 dark:to-cyan-950/30 rounded-2xl border border-emerald-500/25 space-y-2.5 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                      <CalendarCheck2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      Status Kuota Cuti Tahunan
+                    </span>
+                    <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200/60 dark:border-emerald-800/60">
+                      Tahun {new Date().getFullYear()}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="bg-white/90 dark:bg-slate-900/80 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800 shadow-2xs">
+                      <p className="text-[9.5px] font-medium text-slate-500 dark:text-slate-400">Jumlah Kuota</p>
+                      <p className="text-base font-extrabold text-slate-900 dark:text-white mt-0.5">
+                        {analyticsData.annualLeaveQuota} <span className="text-[9px] font-normal text-slate-400">Hari</span>
+                      </p>
+                    </div>
+
+                    <div className="bg-white/90 dark:bg-slate-900/80 p-2.5 rounded-xl border border-amber-200/80 dark:border-amber-900/50 shadow-2xs">
+                      <p className="text-[9.5px] font-semibold text-amber-600 dark:text-amber-400">Telah Diambil</p>
+                      <p className="text-base font-extrabold text-amber-600 dark:text-amber-400 mt-0.5">
+                        {analyticsData.usedLeave} <span className="text-[9px] font-normal text-slate-400">Hari</span>
+                      </p>
+                    </div>
+
+                    <div className="bg-white/90 dark:bg-slate-900/80 p-2.5 rounded-xl border border-emerald-200/80 dark:border-emerald-900/50 shadow-2xs">
+                      <p className="text-[9.5px] font-semibold text-emerald-600 dark:text-emerald-400">Belum Diambil</p>
+                      <p className="text-base font-extrabold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                        {analyticsData.remainingLeave} <span className="text-[9px] font-normal text-slate-400">Hari</span>
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground italic text-center">
+                    *Hak cuti tahunan bersifat Use-It-Or-Lose-It (tidak dapat diuangkan / tidak ada kompensasi kas).
+                  </p>
+                </div>
                 {userLeaves.length === 0 ? (
                   <div className="p-6 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
                     Belum ada permohonan cuti atau izin yang diajukan.
@@ -5652,6 +5694,28 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           </DialogHeader>
 
           <div className="space-y-3 py-2 text-xs">
+            {/* ─── KARTU RINGKASAN KUOTA CUTI SAAT PENGAJUAN ─── */}
+            <div className="p-2.5 bg-emerald-500/10 dark:bg-emerald-950/30 rounded-2xl border border-emerald-500/20">
+              <div className="flex items-center justify-between text-[10px] text-emerald-800 dark:text-emerald-300 font-bold mb-1.5">
+                <span>Informasi Hak Cuti Anda</span>
+                <span className="text-[9px] font-normal text-slate-500">Tahun {new Date().getFullYear()}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 text-center">
+                <div className="bg-white/80 dark:bg-slate-900/60 p-1.5 rounded-lg border border-slate-200/60 dark:border-slate-800">
+                  <span className="text-[8.5px] text-slate-500 block">Jumlah Kuota</span>
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200">{analyticsData.annualLeaveQuota} Hari</span>
+                </div>
+                <div className="bg-white/80 dark:bg-slate-900/60 p-1.5 rounded-lg border border-amber-200/60 dark:border-amber-900/40">
+                  <span className="text-[8.5px] text-amber-600 block">Telah Diambil</span>
+                  <span className="text-xs font-bold text-amber-600">{analyticsData.usedLeave} Hari</span>
+                </div>
+                <div className="bg-white/80 dark:bg-slate-900/60 p-1.5 rounded-lg border border-emerald-200/60 dark:border-emerald-900/40">
+                  <span className="text-[8.5px] text-emerald-600 block">Belum Diambil</span>
+                  <span className="text-xs font-bold text-emerald-600">{analyticsData.remainingLeave} Hari</span>
+                </div>
+              </div>
+            </div>
+
             <div>
               <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
                 Jenis Permohonan:
@@ -5661,7 +5725,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 onChange={(e) => setLeaveType(e.target.value as any)}
                 className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200"
               >
-                <option value="annual_leave">🏖️ Cuti Tahunan (Sisa: {analyticsData.remainingLeave} Hari)</option>
+                <option value="annual_leave">🏖️ Cuti Tahunan (Sisa Belum Diambil: {analyticsData.remainingLeave} Hari)</option>
                 <option value="sick_leave">🏥 Izin Sakit (Disertai Surat Dokter)</option>
                 <option value="emergency_leave">🚨 Izin Kepentingan Darurat</option>
                 <option value="unpaid_leave">📋 Izin Khusus / Dispensasi Dinas</option>

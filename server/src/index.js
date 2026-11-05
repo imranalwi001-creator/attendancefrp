@@ -8389,7 +8389,7 @@ app.get('/api/hrm/executive-approval/info/:token', async (req, res) => {
 
     if (lRes.rows.length > 0) {
       const row = lRes.rows[0];
-      const annualQuota = Number(row.annual_leave_quota || 14);
+      const annualQuota = Number(row.annual_leave_quota || 12);
       const usedDays = Number(row.used_leave_days || 0);
       const requestedDays = Number(row.total_days || 1);
       const currentRemaining = Math.max(0, annualQuota - usedDays);
@@ -9142,7 +9142,7 @@ app.post('/api/leaves', async (req, res) => {
       execToken = crypto.randomBytes(16).toString('hex');
       await pool.query('UPDATE hrm_leave_requests SET executive_approval_token = $1 WHERE id = $2', [execToken, leaveRow.id]);
 
-      const annualQuota = Number(userProfile.annual_leave_quota || 14);
+      const annualQuota = Number(userProfile.annual_leave_quota || 12);
       const usedDays = Number(userProfile.used_leave_days || 0);
       const currentRemaining = Math.max(0, annualQuota - usedDays);
       const estRemaining = Math.max(0, currentRemaining - requestedDays);
@@ -10189,7 +10189,7 @@ async function generateSmartSubstituteRecommendations(requesterId, swapDate, ori
              (SELECT COUNT(*) FROM hrm_shift_swaps sw
               WHERE sw.substitute_id = p.id AND sw.swap_date = $2::date AND sw.status = 'approved') as date_swap_count,
              -- Leave Quota Info
-             COALESCE(p.annual_leave_quota, 14) as annual_leave_quota,
+             COALESCE(p.annual_leave_quota, 12) as annual_leave_quota,
              COALESCE(p.used_leave_days, 0) as used_leave_days
       FROM hrm_profiles p
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
@@ -10282,9 +10282,9 @@ async function generateSmartSubstituteRecommendations(requesterId, swapDate, ori
         ot_count: Number(emp.ot_count || 0),
         swap_substitute_count: Number(emp.swap_substitute_count || 0),
         swap_requester_count: Number(emp.swap_requester_count || 0),
-        annual_leave_quota: Number(emp.annual_leave_quota || 14),
+        annual_leave_quota: Number(emp.annual_leave_quota || 12),
         used_leave_days: Number(emp.used_leave_days || 0),
-        remaining_leave_days: Number(emp.annual_leave_quota || 14) - Number(emp.used_leave_days || 0),
+        remaining_leave_days: Number(emp.annual_leave_quota || 12) - Number(emp.used_leave_days || 0),
       };
 
       return {
