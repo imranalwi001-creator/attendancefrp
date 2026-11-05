@@ -650,23 +650,26 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     };
   }, [currentMonthStr, users, overtimes]);
 
+  const isDailyView = periodScope === 'today' || Boolean(selectedDayDate);
+  const targetDayDate = selectedDayDate || getTodayDateStr();
+
   const monitoredList = users.map((u) => {
-    if (periodScope === 'today') {
+    if (isDailyView) {
       const att = activePeriodAttendances.find(
-        (a) => a.userId === u.id || a.userId === u.email || a.userId === u.nip || (a.userNip && a.userNip === u.nip)
+        (a) => ((a.attendanceDate || (a as any).date) === targetDayDate) &&
+               (a.userId === u.id || a.userId === u.email || a.userId === u.nip || (a.userNip && a.userNip === u.nip))
       );
 
       let isLate = att && (att.status === 'terlambat' || (att.lateMinutes && att.lateMinutes > 0));
       let effectiveLateMinutes = att?.lateMinutes || 0;
 
       // Evaluasi jadwal kerja dan jam shift untuk mendeteksi status kehadiran secara akurat
-      const todayStr = getTodayDateStr();
-      const sched = todaySchedules.find((s) => s.userId === u.id || s.userNip === u.nip || (s as any).employeeNip === u.nip) || hrmService.getEmployeeTodaySchedule(u.id, todayStr);
+      const sched = todaySchedules.find((s) => s.userId === u.id || s.userNip === u.nip || (s as any).employeeNip === u.nip) || hrmService.getEmployeeTodaySchedule(u.id, targetDayDate);
       const uShift = resolveEffectiveShift(u, allShifts, sched);
       const nowWita = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Makassar', hour12: false, hour: '2-digit', minute: '2-digit' });
       
-      const witaDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Makassar' }));
-      const dayOfWeek = witaDate.getDay(); // 0 = Minggu (Sunday), 6 = Sabtu (Saturday)
+      const targetDateObj = new Date(targetDayDate);
+      const dayOfWeek = targetDateObj.getDay(); // 0 = Minggu (Sunday), 6 = Sabtu (Saturday)
       const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
       const isSpecialLeadership = isLeadershipSpecialFieldOfficer(u);
       const isFaceEnrolled = Boolean(u.isFaceEnrolled || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl);
@@ -681,13 +684,13 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         uShift?.name?.toLowerCase().includes('libur')
       );
 
-      // Cek pengajuan cuti / izin resmi yang disetujui hari ini
-      const todayLeave = approvedLeaves.find((l) => {
+      // Cek pengajuan cuti / izin resmi yang disetujui untuk targetDayDate
+      const activeLeave = approvedLeaves.find((l) => {
         const matchUser = l.userId === u.id || l.userNip === u.nip || (l as any).employeeNip === u.nip || (l as any).employeeId === u.id;
         if (!matchUser) return false;
         const start = l.startDate || (l as any).start_date;
         const end = l.endDate || (l as any).end_date || start;
-        return todayStr >= start && todayStr <= end;
+        return targetDayDate >= start && targetDayDate <= end;
       });
 
       const isLeaveRecord = att && (att.status === 'cuti' || att.status === 'sakit' || att.status === 'izin');
@@ -695,8 +698,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       const isAlfaRecord = att && (att.status === 'alfa' || att.status === 'alpa' || att.status === 'alpha');
 
       let absentSubtype: 'pending_shift' | 'in_progress' | 'mangkir' | 'off' | 'cuti' | 'sakit' | 'izin' | 'unregistered' = 'in_progress';
-      if (todayLeave || isLeaveRecord) {
-        const leaveTypeStr = String(todayLeave?.type || (todayLeave as any)?.leaveType || (todayLeave as any)?.leave_type || att?.status || 'cuti').toLowerCase();
+      if (activeLeave || isLeaveRecord) {
+        const leaveTypeStr = String(activeLeave?.type || (activeLeave as any)?.leaveType || (activeLeave as any)?.leave_type || att?.status || 'cuti').toLowerCase();
         if (leaveTypeStr.includes('sakit')) {
           absentSubtype = 'sakit';
         } else if (leaveTypeStr.includes('izin') || leaveTypeStr.includes('emergency')) {
@@ -705,10 +708,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           absentSubtype = 'cuti';
         }
       } else if (isOffRecord || isScheduleOff) {
-        // Karyawan dengan jadwal roster OFF (hari kerja maupun akhir pekan) resmi LIBUR / OFF
+        // Karyawan dengan jadwal roster OFF resmi LIBUR / OFF
         absentSubtype = 'off';
       } else if (isSpecialLeadership && isWeekend) {
-        // 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) resmi LIBUR di akhir pekan (Sabtu & Minggu)
+        // 3 Petugas Lapangan Khusus Pimpinan resmi LIBUR di akhir pekan (Sabtu & Minggu)
         absentSubtype = 'off';
       } else if (isWeekend && (!uShift || uShift.isOff || (uShift as any).code === 'OFF' || !u.isShiftWorker)) {
         // Karyawan reguler non-shift di akhir pekan adalah LIBUR
@@ -722,18 +725,22 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       } else if (!att || !att.clockIn) {
         if (!isFaceEnrolled || isSimAccount) {
           absentSubtype = 'unregistered';
-        } else if (uShift && uShift.startTime && uShift.endTime && uShift.startTime !== '00:00' && uShift.code !== 'OFF' && !uShift.isOff) {
-          const shiftEnd = uShift.endTime.slice(0, 5);
-          const shiftStart = uShift.startTime.slice(0, 5);
-          if (nowWita < shiftStart) {
-            absentSubtype = 'pending_shift';
-          } else if (nowWita >= shiftEnd) {
-            absentSubtype = 'mangkir';
+        } else if (targetDayDate === getTodayDateStr()) {
+          if (uShift && uShift.startTime && uShift.endTime && uShift.startTime !== '00:00' && uShift.code !== 'OFF' && !uShift.isOff) {
+            const shiftEnd = uShift.endTime.slice(0, 5);
+            const shiftStart = uShift.startTime.slice(0, 5);
+            if (nowWita < shiftStart) {
+              absentSubtype = 'pending_shift';
+            } else if (nowWita >= shiftEnd) {
+              absentSubtype = 'mangkir';
+            } else {
+              absentSubtype = 'in_progress';
+            }
           } else {
-            absentSubtype = 'in_progress';
+            absentSubtype = nowWita >= '17:00' ? 'mangkir' : 'in_progress';
           }
         } else {
-          absentSubtype = nowWita >= '17:00' ? 'mangkir' : 'in_progress';
+          absentSubtype = targetDayDate < getTodayDateStr() ? 'mangkir' : 'pending_shift';
         }
       }
 
@@ -755,7 +762,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       }
 
       let calculatedStatus: 'present' | 'late' | 'absent' | 'mangkir';
-      if (todayLeave || isLeaveRecord || isOffRecord) {
+      if (activeLeave || isLeaveRecord || isOffRecord) {
         calculatedStatus = 'absent';
       } else if (isAlfaRecord || (!att && absentSubtype === 'mangkir')) {
         calculatedStatus = absentSubtype === 'mangkir' ? 'mangkir' : 'absent';
@@ -767,10 +774,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         calculatedStatus = 'present';
       }
 
-      // Hitung lembur live hari ini & lembur bulan berjalan untuk karyawan
-      const todayOt = overtimes.find((o) =>
+      // Hitung lembur live hari target & lembur bulan berjalan untuk karyawan
+      const dayOt = overtimes.find((o) =>
         (o.userId === u.id || o.userNip === u.nip || (o as any).employeeNip === u.nip) &&
-        o.date === todayStr &&
+        o.date === targetDayDate &&
         (o.status === 'approved' || (o as any).status === 'completed')
       );
       const userMonthOts = overtimes.filter((o) => {
@@ -791,9 +798,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         totalLateMinutes: effectiveLateMinutes,
         lateCount: isLate ? 1 : 0,
         totalAttCount: (att && !isAlfaRecord && !isLeaveRecord && !isOffRecord) ? 1 : 0,
-        todayOvertime: todayOt || null,
-        todayOvertimeHours: todayOt ? Number(todayOt.approvedHours || todayOt.durationHours || 0) : 0,
-        todayOvertimePay: todayOt ? Number(todayOt.compensationAmount || todayOt.totalPay || 0) : 0,
+        todayOvertime: dayOt || null,
+        todayOvertimeHours: dayOt ? Number(dayOt.approvedHours || dayOt.durationHours || 0) : 0,
+        todayOvertimePay: dayOt ? Number(dayOt.compensationAmount || dayOt.totalPay || 0) : 0,
         monthlyOvertimeHours: userMonthOtHours,
         monthlyOvertimePay: userMonthOtPay,
         monthlyOvertimeCount: userMonthOts.length,
@@ -840,6 +847,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       }, 0);
       const latestAtt = userAtts[userAtts.length - 1];
 
+      // Filter Kehadiran Riil: TIDAK MENGHITUNG cuti, sakit, izin, off, alpa sebagai hari hadir
+      const presentAtts = userAtts.filter((a) => {
+        const isLeave = a.status === 'cuti' || a.status === 'sakit' || a.status === 'izin';
+        const isOffOrAlfa = a.status === 'off' || a.status === 'libur' || a.status === 'alfa' || a.status === 'alpa';
+        if (isLeave || isOffOrAlfa) return false;
+        return Boolean(a.clockIn || a.status === 'hadir' || a.status === 'terlambat');
+      });
+
       const sched = hrmService.getEmployeeTodaySchedule(u.id, getTodayDateStr());
       const uShift = resolveEffectiveShift(u, allShifts, sched);
       const userPeriodOts = overtimes.filter((o) => {
@@ -859,7 +874,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         shift: uShift,
         totalLateMinutes: totLateMin,
         lateCount: lateAtts.length,
-        totalAttCount: userAtts.length,
+        totalAttCount: presentAtts.length,
         todayOvertime: null,
         todayOvertimeHours: 0,
         todayOvertimePay: 0,
@@ -2061,16 +2076,16 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   <TableHead className="min-w-[140px] font-semibold text-muted-foreground">Divisi &amp; Jabatan</TableHead>
                   <TableHead className="min-w-[125px] text-center font-semibold text-muted-foreground">Jadwal Shift</TableHead>
                   <TableHead className="min-w-[125px] text-center font-semibold text-muted-foreground">
-                    {periodScope === 'today' ? 'Status Kehadiran' : 'Total Kehadiran'}
+                    {isDailyView ? 'Status Kehadiran' : 'Total Kehadiran'}
                   </TableHead>
                   <TableHead className="min-w-[100px] text-center font-semibold text-muted-foreground">
-                    {periodScope === 'today' ? 'Jam Masuk' : 'Frekuensi Terlambat'}
+                    {isDailyView ? 'Jam Masuk' : 'Frekuensi Terlambat'}
                   </TableHead>
                   <TableHead className="min-w-[100px] text-center font-semibold text-muted-foreground">
-                    {periodScope === 'today' ? 'Jam Pulang' : 'Denda Payroll'}
+                    {isDailyView ? 'Jam Pulang' : 'Denda Payroll'}
                   </TableHead>
                   <TableHead className="min-w-[120px] text-center font-semibold text-muted-foreground">
-                    {periodScope === 'today' ? 'Lembur (Jam) Live' : 'Total Lembur'}
+                    {isDailyView ? 'Lembur (Jam) Live' : 'Total Lembur'}
                   </TableHead>
                   <TableHead className="min-w-[160px] font-semibold text-muted-foreground">Verifikasi Keamanan</TableHead>
                   <TableHead className="min-w-[210px] text-right font-semibold text-muted-foreground">Tindakan &amp; Laporan</TableHead>
@@ -2167,7 +2182,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           )}
                         </TableCell>
                         <TableCell className="text-center">
-                          {periodScope === 'today' ? (
+                          {isDailyView ? (
                             status === 'present' ? (
                               <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
                                 Tepat Waktu
@@ -2225,7 +2240,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           )}
                         </TableCell>
                         <TableCell className="text-center">
-                          {periodScope === 'today' ? (
+                          {isDailyView ? (
                             <span className={`font-mono text-xs ${att?.clockIn ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
                               {att?.clockIn ? `${att.clockIn} WITA` : '-'}
                             </span>
@@ -2240,7 +2255,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           )}
                         </TableCell>
                         <TableCell className="text-center">
-                          {periodScope === 'today' ? (
+                          {isDailyView ? (
                             <span className={`font-mono text-xs ${att?.clockOut ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
                               {att?.clockOut ? `${att.clockOut} WITA` : '-'}
                             </span>
@@ -2251,7 +2266,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           )}
                         </TableCell>
                         <TableCell className="text-center">
-                          {periodScope === 'today' ? (
+                          {isDailyView ? (
                             todayOvertimeHours && todayOvertimeHours > 0 ? (
                               <div className="inline-flex flex-col items-center">
                                 <Badge className="bg-amber-500 hover:bg-amber-600 text-white font-mono text-[10px] px-2 py-0.5 gap-1 shadow-2xs">
