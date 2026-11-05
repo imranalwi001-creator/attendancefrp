@@ -7896,27 +7896,111 @@ async function assignReliefSubstituteHelper({
     ]
   );
 
+  // 3B. Sinkronkan Jadwal Shift di hrm_employee_schedules:
+  // Karyawan pengganti (reliefUserId) mengambil alih shift kerja originalUser di tanggal cuti
+  let appliedStartTime = '15:30';
+  let appliedEndTime = '22:30';
+  let appliedDuration = 7.0;
+  try {
+    const sDateObj = new Date(targetStart);
+    const eDateObj = new Date(targetEnd);
+    for (let d = new Date(sDateObj); d <= eDateObj; d.setDate(d.getDate() + 1)) {
+      const curDateStr = d.toISOString().split('T')[0];
+      
+      const origSchedRes = await pool.query(
+        `SELECT * FROM hrm_employee_schedules WHERE user_id = $1 AND schedule_date = $2 LIMIT 1`,
+        [originalUserId, curDateStr]
+      );
+      
+      let shiftId = originalUser.shift_id || null;
+      let shiftCode = 'S';
+      let shiftName = 'Shift II (15:30 - 22:30 WITA)';
+      let startTime = '15:30';
+      let endTime = '22:30';
+      let durationHours = 7.0;
+
+      if (origSchedRes.rows.length > 0 && !origSchedRes.rows[0].is_off) {
+        const os = origSchedRes.rows[0];
+        shiftId = os.shift_id || shiftId;
+        shiftCode = os.shift_code || shiftCode;
+        shiftName = os.shift_name || shiftName;
+        startTime = os.start_time ? os.start_time.substring(0, 5) : startTime;
+        endTime = os.end_time ? os.end_time.substring(0, 5) : endTime;
+        durationHours = os.duration_hours || durationHours;
+      }
+      appliedStartTime = startTime;
+      appliedEndTime = endTime;
+      appliedDuration = durationHours;
+
+      await pool.query(`
+        INSERT INTO hrm_employee_schedules (
+          user_id, schedule_date, shift_id, shift_code, shift_name, start_time, end_time, duration_hours, is_off, notes, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, false, $9, NOW()
+        )
+        ON CONFLICT (user_id, schedule_date) DO UPDATE SET
+          shift_id = EXCLUDED.shift_id,
+          shift_code = EXCLUDED.shift_code,
+          shift_name = EXCLUDED.shift_name,
+          start_time = EXCLUDED.start_time,
+          end_time = EXCLUDED.end_time,
+          duration_hours = EXCLUDED.duration_hours,
+          is_off = false,
+          notes = EXCLUDED.notes,
+          updated_at = NOW();
+      `, [
+        reliefUserId,
+        curDateStr,
+        shiftId,
+        shiftCode,
+        `${shiftName} - Pengganti ${originalUser.full_name}`,
+        startTime,
+        endTime,
+        durationHours,
+        `Tugas Pengganti Pos ${originalUser.full_name} (Cuti Resmi)`
+      ]);
+
+      await pool.query(`
+        UPDATE hrm_employee_schedules
+        SET notes = $1, updated_at = NOW()
+        WHERE user_id = $2 AND schedule_date = $3;
+      `, [
+        `Sedang Cuti (Digantikan: ${reliefUser.full_name})`,
+        originalUserId,
+        curDateStr
+      ]);
+    }
+  } catch (schedErr) {
+    console.error('[assignReliefSubstituteHelper Schedule Sync Error]:', schedErr.message);
+  }
+
   // 4. Catat di hrm_overtime_records (SPKL Pengganti Pos Resmi)
   const postNamesStr = originalPosts.map(p => p.post_name).join(', ') || 'Pos Dinas';
-  const otRes = await pool.query(
-    `INSERT INTO hrm_overtime_records (
-      user_id, date, start_time, end_time, duration_hours, requested_hours, approved_hours,
-      task_description, status, source, leave_request_id, approved_by, approved_by_name,
-      approval_notes, overtime_phase
-    ) VALUES (
-      $1, $2::date, '07:30', '15:30', 8.0, 8.0, 8.0,
-      $3, 'approved', 'shift_relief', $4, $5, $6,
-      'Disetujui otomatis sebagai Kompensasi Lembur Pengganti Pos (SPKL 8 Jam)', 'completed'
-    ) RETURNING *;`,
-    [
-      reliefUserId,
-      targetStart,
-      `Tugas Pengganti Pos Resmi untuk ${originalUser.full_name} di ${postNamesStr}`,
-      leaveId || null,
-      adminId || null,
-      adminName || 'Admin / Korlap'
-    ]
-  );
+  try {
+    await pool.query(
+      `INSERT INTO hrm_overtime_records (
+        user_id, date, start_time, end_time, duration_hours, rate_applied, compensation_amount,
+        task_description, status, source, leave_request_id, approved_by, overtime_phase
+      ) VALUES (
+        $1, $2::date, $3, $4, $5, $6, $7,
+        $8, 'approved', 'shift_relief', $9, $10, 'completed'
+      ) RETURNING *;`,
+      [
+        reliefUserId,
+        targetStart,
+        appliedStartTime,
+        appliedEndTime,
+        appliedDuration,
+        hourlyRate,
+        overtimeAmount,
+        `Tugas Pengganti Pos Resmi untuk ${originalUser.full_name} di ${postNamesStr}`,
+        leaveId || null,
+        adminId || null
+      ]
+    );
+  } catch (otErr) {
+    console.error('[assignReliefSubstituteHelper Overtime Insert Error]:', otErr.message);
+  }
 
   // 5. Kirim Notifikasi WhatsApp ke Karyawan Pengganti
   const reliefWaMsg = `🛡️ *SURAT TUGAS PENGGANTI POS (ZERO VACANCY) TERBIT*\n\n` +
@@ -8284,6 +8368,38 @@ app.post('/api/leaves/:id/reset-substitute', async (req, res) => {
           notes = COALESCE(notes, '') || E'\\n[Direset/Dibatalkan oleh Korlap: Karyawan berhalangan hadir]'
       WHERE reference_id = $1
     `, [leave.id]);
+
+    // 3B. Pulihkan Jadwal di hrm_employee_schedules ke Roster Asal (Libur / OFF)
+    if (oldSubId) {
+      try {
+        const sDateObj = new Date(sDate);
+        const eDateObj = new Date(eDate);
+        for (let d = new Date(sDateObj); d <= eDateObj; d.setDate(d.getDate() + 1)) {
+          const curDateStr = d.toISOString().split('T')[0];
+          await pool.query(`
+            UPDATE hrm_employee_schedules SET
+              shift_code = 'OFF',
+              shift_name = 'Libur / Off',
+              start_time = '00:00',
+              end_time = '00:00',
+              duration_hours = 0,
+              is_off = true,
+              notes = 'Jadwal Normal (Pengganti Direset oleh Korlap)',
+              updated_at = NOW()
+            WHERE user_id = $1 AND schedule_date = $2;
+          `, [oldSubId, curDateStr]);
+
+          await pool.query(`
+            UPDATE hrm_employee_schedules SET
+              notes = 'Jadwal Matriks 11/2026',
+              updated_at = NOW()
+            WHERE user_id = $1 AND schedule_date = $2;
+          `, [leave.user_id, curDateStr]);
+        }
+      } catch (rSchedErr) {
+        console.error('[reset-substitute Schedule Restore Error]:', rSchedErr.message);
+      }
+    }
 
     // 4. Reset field pengganti di hrm_leave_requests & kembalikan status ke 'pending' agar Korlap dapat memilih pengganti baru
     const updateRes = await pool.query(`

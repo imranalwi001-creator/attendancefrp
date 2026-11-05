@@ -892,12 +892,21 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                       ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'
                       : 'bg-primary/10 text-primary border-primary/20';
 
+                    const isReliefSub = Boolean(
+                      (sched.notes && sched.notes.toLowerCase().includes('pengganti')) ||
+                      (sched.shiftName && sched.shiftName.toLowerCase().includes('pengganti'))
+                    );
+
                     statusBadge = (
                       <div className="mt-1 flex flex-col gap-0.5">
                         <span className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded border w-fit font-mono ${badgeStyle}`}>
                           {sCode === 'DAY' ? 'DAY' : `Shift ${sCode}`}
                         </span>
-                        {d.isToday ? (
+                        {isReliefSub ? (
+                          <span className="text-[8px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/15 border border-amber-500/30 rounded px-1 py-0.2 truncate max-w-[85px]" title={sched.notes || sched.shiftName}>
+                            👑 Pengganti
+                          </span>
+                        ) : d.isToday ? (
                           <span className="text-[8px] text-amber-600 font-medium">Belum Absen</span>
                         ) : (
                           <span className="text-[8px] text-muted-foreground/80 font-mono">

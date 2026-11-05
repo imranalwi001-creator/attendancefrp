@@ -3170,10 +3170,29 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   }, [userOvertimeList, todayDateStr]);
 
   const approvedSubstituteToday = useMemo(() => {
-    return userSubstitutions.find(
+    const swap = userSubstitutions.find(
       (s) => s.status === 'approved' && (s.date === todayDateStr || s.targetDate === todayDateStr)
     );
-  }, [userSubstitutions, todayDateStr]);
+    if (swap) return swap;
+
+    if (user?.id) {
+      const sched = hrmService.getEmployeeTodaySchedule(user.id, todayDateStr);
+      if (sched && !sched.isOff && (
+        (sched.notes && sched.notes.toLowerCase().includes('pengganti')) ||
+        (sched.shiftName && sched.shiftName.toLowerCase().includes('pengganti'))
+      )) {
+        return {
+          id: sched.id,
+          dutyDate: todayDateStr,
+          status: 'approved',
+          shiftName: sched.shiftName,
+          notes: sched.notes,
+          isFromSchedule: true
+        };
+      }
+    }
+    return null;
+  }, [userSubstitutions, todayDateStr, user]);
 
   const hasApprovedOvertimeOrSubstituteToday = Boolean(approvedOvertimeToday || approvedSubstituteToday);
   const isInsideCoordinates = locationStatus === 'inside' || isFieldSpecial;
@@ -3188,20 +3207,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   // Syarat Tombol Absen Masuk Aktif:
   // - Tidak sedang Cuti / Izin (dilewati jika simulasi)
-  // - Tidak sedang Jadwal Libur (dilewati jika simulasi)
+  // - Tidak sedang Jadwal Libur (dilewati jika ada SPKL lembur / tugas pengganti atau simulasi)
   // - Berada di radius pos kerja
   // - Serta memenuhi salah satu dari:
   //   A. Mode Simulasi Sosialisasi Aktif (Bebas Jadwal 24 Jam)
-  //   B. Belum pernah absen masuk untuk shift ini (sesuai jadwal shift/lembur)
+  //   B. Belum pernah absen masuk untuk shift ini (sesuai jadwal shift/lembur/pengganti)
   //   C. Shift sebelumnya sudah selesai (isCurrentSessionClosed) dan shift berikutnya siap dimasuki
   const isShiftAssigned = userShift?.id !== 'unassigned' && Boolean(userShift?.startTime);
   const isClockInAllowed =
     (!hasActiveLeaveToday || isSimulationAtVenue) &&
-    (!isEmployeeOffToday || isSimulationAtVenue) &&
+    (!isEmployeeOffToday || hasApprovedOvertimeOrSubstituteToday || isSimulationAtVenue) &&
     isInsideCoordinates &&
     (
       isSimulationAtVenue ||
-      (!hasClockedIn && (isShiftAssigned || isFieldSpecial) && (isShiftWindowActive || hasApprovedOvertimeOrSubstituteToday || isFieldSpecial)) ||
+      (!hasClockedIn && (isShiftAssigned || isFieldSpecial || hasApprovedOvertimeOrSubstituteToday) && (isShiftWindowActive || hasApprovedOvertimeOrSubstituteToday || isFieldSpecial)) ||
       (isCurrentSessionClosed && Boolean(nextShiftInfo?.isNextShiftAvailable) && Boolean(nextShiftInfo?.isNextShiftWindowOpen) && Boolean(hasApprovedOvertimeOrSubstituteToday || isFieldSpecial))
     );
 
@@ -3216,7 +3235,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         : 'CUTI';
       return `SEDANG ${typeLabel} (DISETUJUI)`;
     }
-    if (isEmployeeOffToday) {
+    if (isEmployeeOffToday && !hasApprovedOvertimeOrSubstituteToday) {
       return 'JADWAL HARI INI: LIBUR (OFF DUTY)';
     }
     if (!isInsideCoordinates) {
@@ -4098,6 +4117,40 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               return null;
             })()}
 
+            {/* Banner Tugas Pengganti Pos Resmi (Zero Vacancy) untuk Karyawan Pengganti */}
+            {approvedSubstituteToday && (
+              <div className="p-3 bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-amber-500/5 border border-amber-500/30 rounded-2xl flex items-center gap-2.5 text-xs shadow-xs">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
+                  <ShieldCheck className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-extrabold text-amber-950 dark:text-amber-200 flex items-center gap-1.5">
+                    <span>👑 Tugas Pengganti Pos Resmi (Zero Vacancy)</span>
+                  </p>
+                  <p className="text-[10px] text-amber-900/80 dark:text-amber-300/80 mt-0.5 line-clamp-2">
+                    {approvedSubstituteToday.notes || 'Anda resmi ditugaskan menggantikan rekan kerja yang cuti/izin. Koordinat pos dinas aktif & presensi dibuka.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Banner Cuti Resmi untuk Karyawan Yang Sedang Cuti */}
+            {hasActiveLeaveToday && (
+              <div className="p-3 bg-gradient-to-r from-sky-500/15 via-blue-500/10 to-transparent border border-sky-500/30 rounded-2xl flex items-center gap-2.5 text-xs shadow-xs">
+                <div className="w-8 h-8 rounded-xl bg-sky-500/20 text-sky-700 dark:text-sky-300 flex items-center justify-center shrink-0">
+                  <Calendar className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-extrabold text-sky-950 dark:text-sky-200">
+                    🏖️ Sedang Cuti Resmi (Disetujui)
+                  </p>
+                  <p className="text-[10px] text-sky-900/80 dark:text-sky-300/80 mt-0.5">
+                    Permohonan cuti Anda aktif hari ini. Kekosongan pos telah ditangani oleh petugas pengganti resmi.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* ─── LINGKARAN KAMERA BIOMETRIK (CENTERPIECE PERSIS LAMPIRAN 2 - FIXED SIZING) ─── */}
             <div className="flex flex-col items-center justify-center py-1">
               <div
@@ -4323,6 +4376,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                         <span className="text-emerald-700 dark:text-emerald-400 font-extrabold">Aktif Bertugas (Sudah Absen Masuk)</span>
                       ) : hasActiveLeaveToday ? (
                         <span className="text-amber-600 dark:text-amber-400 font-bold">Sedang Cuti / Izin</span>
+                      ) : approvedSubstituteToday ? (
+                        <span className="text-amber-700 dark:text-amber-300 font-extrabold flex items-center gap-1">
+                          👑 Siap Bertugas: Pengganti Pos Resmi
+                        </span>
                       ) : isEmployeeOffToday ? (
                         <span className="text-indigo-600 dark:text-indigo-400 font-bold">Jadwal Hari Ini: Libur (Off Duty)</span>
                       ) : (
@@ -4537,12 +4594,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     ? `BELUM ADA SHIFT`
                     : hasActiveLeaveToday
                     ? `SEDANG CUTI/IZIN`
+                    : approvedSubstituteToday
+                    ? `MASUK (TUGAS PENGGANTI)`
                     : isEmployeeOffToday
                     ? `HARI LIBUR (OFF)`
                     : !isInsideCoordinates
                     ? `DI LUAR POS`
                     : !isShiftWindowActive && !hasApprovedOvertimeOrSubstituteToday && !isFieldSpecial
                     ? `BELUM BUKA (${checkShiftClockInWindow(userShift, currentTime).openTimeStr || userShift?.startTime || '08:00'})`
+                    : approvedSubstituteToday
+                    ? `MASUK (PENGGANTI POS)`
                     : hasApprovedOvertimeOrSubstituteToday
                     ? `MASUK (LEMBUR)`
                     : `ABSEN MASUK (${userShift?.startTime || '08:00'})`}
