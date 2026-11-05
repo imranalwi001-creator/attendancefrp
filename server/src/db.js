@@ -642,7 +642,7 @@ export async function initDb() {
       ALTER TABLE hrm_attendances DROP CONSTRAINT IF EXISTS unique_user_date;
       ALTER TABLE hrm_attendances ADD COLUMN IF NOT EXISTS shift_id UUID REFERENCES hrm_shifts(id) ON DELETE SET NULL;
       ALTER TABLE hrm_attendances ADD COLUMN IF NOT EXISTS shift_name VARCHAR(100);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_hrm_attendances_active_open ON hrm_attendances (user_id) WHERE clock_out IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_hrm_attendances_active_open ON hrm_attendances (user_id) WHERE clock_in IS NOT NULL AND clock_out IS NULL;
       CREATE INDEX IF NOT EXISTS idx_hrm_attendances_user_date ON hrm_attendances (user_id, attendance_date);
 
       -- Leave requests proof photo, substitute, and Pimpinan forwarding

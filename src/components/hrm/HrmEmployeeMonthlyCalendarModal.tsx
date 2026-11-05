@@ -1420,11 +1420,13 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                   const targetShiftName = targetSched?.shiftName || targetShift?.name;
                   const targetShiftId = targetSched?.shiftId || targetShift?.id;
 
+                  const isNonWorkingStatus = cleanStatus === 'cuti' || cleanStatus === 'izin' || cleanStatus === 'sakit' || cleanStatus === 'off' || cleanStatus === 'libur' || cleanStatus === 'alfa';
+
                   if (selectedRecord && selectedRecord.id) {
                     const res = await hrmService.correctAttendance(selectedRecord.id, {
                       status: cleanStatus,
-                      clockIn: cleanStatus === 'hadir' || cleanStatus === 'terlambat' ? (editClockIn ? `${editClockIn}:00` : undefined) : undefined,
-                      clockOut: cleanStatus === 'hadir' || cleanStatus === 'terlambat' ? (editClockOut ? `${editClockOut}:00` : null) : null,
+                      clockIn: isNonWorkingStatus ? (null as any) : (editClockIn ? `${editClockIn}:00` : undefined),
+                      clockOut: isNonWorkingStatus ? (null as any) : (editClockOut ? `${editClockOut}:00` : null),
                       notes: editNotes.trim() || cleanStatus,
                       lateMinutes: cleanStatus === 'terlambat' ? Number(editLateMinutes) : 0,
                       shiftId: targetShiftId,
@@ -1443,8 +1445,8 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                       userId: user.id,
                       attendanceDate: selectedDateStr,
                       status: cleanStatus,
-                      clockIn: cleanStatus === 'hadir' || cleanStatus === 'terlambat' ? (editClockIn ? `${editClockIn}:00` : '07:30:00') : undefined,
-                      clockOut: cleanStatus === 'hadir' || cleanStatus === 'terlambat' ? (editClockOut ? `${editClockOut}:00` : undefined) : undefined,
+                      clockIn: isNonWorkingStatus ? undefined : (editClockIn ? `${editClockIn}:00` : '07:30:00'),
+                      clockOut: isNonWorkingStatus ? undefined : (editClockOut ? `${editClockOut}:00` : undefined),
                       notes: editNotes.trim() || cleanStatus,
                       lateMinutes: cleanStatus === 'terlambat' ? Number(editLateMinutes) : 0,
                     });

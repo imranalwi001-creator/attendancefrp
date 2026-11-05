@@ -7747,6 +7747,56 @@ async function getSmartReliefRecommendations({ applicantId, startDate, endDate, 
   };
 }
 
+// ─── HELPER: SYNC APPROVED LEAVE TO DAILY ATTENDANCES ────────────────────────
+async function syncLeaveToAttendances(leave) {
+  if (!leave || !leave.user_id || !leave.start_date) return;
+  try {
+    const sDate = new Date(leave.start_date);
+    const eDate = new Date(leave.end_date || leave.start_date);
+    const lType = String(leave.leave_type || 'cuti').toLowerCase();
+    const attStatus = lType.includes('sakit') ? 'sakit' : (lType.includes('izin') || lType.includes('emergency') ? 'izin' : 'cuti');
+    const noteText = leave.reason || (attStatus === 'cuti' ? 'Cuti Tahunan Disetujui' : (attStatus === 'sakit' ? 'Izin Sakit (Surat Dokter)' : 'Izin Resmi Disetujui'));
+
+    for (let dt = new Date(sDate); dt <= eDate; dt.setDate(dt.getDate() + 1)) {
+      const curDateStr = dt.toISOString().split('T')[0];
+      await pool.query(`
+        INSERT INTO hrm_attendances (
+          user_id, attendance_date, status, clock_in, clock_out,
+          photo_in, photo_out, lat_in, long_in, lat_out, long_out,
+          work_duration_minutes, late_minutes, is_verified, is_locked, is_perimeter_breached,
+          auto_closed_type, notes, created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, NULL, NULL,
+          NULL, NULL, NULL, NULL, NULL, NULL,
+          0, 0, true, false, false,
+          NULL, $4, NOW(), NOW()
+        )
+        ON CONFLICT (user_id, attendance_date) DO UPDATE SET
+          status = EXCLUDED.status,
+          clock_in = NULL,
+          clock_out = NULL,
+          photo_in = NULL,
+          photo_out = NULL,
+          lat_in = NULL,
+          long_in = NULL,
+          lat_out = NULL,
+          long_out = NULL,
+          work_duration_minutes = 0,
+          late_minutes = 0,
+          auto_closed_type = NULL,
+          notes = EXCLUDED.notes,
+          is_verified = true,
+          is_locked = false,
+          is_perimeter_breached = false,
+          updated_at = NOW();
+      `, [leave.user_id, curDateStr, attStatus, noteText]);
+    }
+    console.log(`[syncLeaveToAttendances] Sukses sinkronisasi cuti/izin ${leave.user_id} (${leave.start_date} s/d ${leave.end_date}) ke tabel hrm_attendances`);
+  } catch (err) {
+    console.error('[syncLeaveToAttendances Error]:', err.message);
+  }
+}
+
 // ─── HELPER: ASSIGN RELIEF SUBSTITUTE & AUTO-INHERIT GEOFENCE ────────────────
 async function assignReliefSubstituteHelper({
   leaveId,
@@ -8987,6 +9037,7 @@ app.post(['/api/hrm/executive-approval/wa-inbound-action', '/api/whatsapp/webhoo
             WHERE id = $2;
           `, [requestedDays, targetLeave.user_id]);
         }
+        await syncLeaveToAttendances(targetLeave);
       }
 
       const newRemaining = Math.max(0, annualQuota - newUsedDays);
@@ -9367,8 +9418,14 @@ app.put('/api/leaves/:id/status', async (req, res) => {
     }
     const leave = lRes.rows[0];
 
-    // Aturan Zero Vacancy: Jika disetujui, pengganti wajib ada!
-    if (status === 'approved' && !substituteName && !leave.substitute_name) {
+    // Aturan Zero Vacancy: Jika disetujui, pengganti wajib ada! (Kecuali 3 Petugas Lapangan Khusus Pimpinan)
+    const isSpecial3 = isExemptFieldOfficer({
+      id: leave.user_id,
+      userId: leave.user_id,
+      nip: leave.user_nip,
+      email: leave.user_email,
+    });
+    if (!isSpecial3 && status === 'approved' && !substituteName && !leave.substitute_name) {
       return res.status(400).json({
         success: false,
         error: 'Sesuai aturan Zero Vacancy, pekerjaan tidak boleh kosong! Anda wajib menetapkan Karyawan Pengganti Pos sebelum menyetujui pengajuan cuti.',
@@ -9427,6 +9484,11 @@ app.put('/api/leaves/:id/status', async (req, res) => {
           updated_at = NOW()
         WHERE user_id = $2 AND attendance_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date;
       `, [leave.reason, leave.user_id]);
+    }
+
+    // 2B. Sinkronisasi kehadiran harian (hrm_attendances) ke status Cuti/Izin agar tidak muncul hadir/mangkir
+    if (status === 'approved') {
+      await syncLeaveToAttendances(leave);
     }
 
     const typeLabel = (leave.leave_type || 'cuti').replace(/_/g, ' ').toUpperCase();
@@ -12819,28 +12881,62 @@ app.put('/api/attendances/:id/manual-correct', async (req, res) => {
     const { id } = req.params;
     const { status, clockIn, clockOut, notes, lateMinutes, shiftId, shiftName } = req.body;
 
-    if (status === 'off' || status === 'libur') {
-      const offQuery = `
+    const nonWorkingStatuses = ['off', 'libur', 'cuti', 'annual_leave', 'izin', 'permission', 'sakit', 'sick', 'alfa', 'alpha'];
+    if (nonWorkingStatuses.includes(status)) {
+      const canonicalStatus = (status === 'annual_leave' ? 'cuti' : (status === 'libur' ? 'off' : (status === 'permission' ? 'izin' : (status === 'sick' ? 'sakit' : (status === 'alpha' ? 'alfa' : status)))));
+      const defaultNote = canonicalStatus === 'cuti'
+        ? 'Cuti Resmi Disahkan'
+        : (canonicalStatus === 'sakit'
+          ? 'Izin Sakit'
+          : (canonicalStatus === 'izin'
+            ? 'Izin Resmi Disahkan'
+            : (canonicalStatus === 'alfa'
+              ? 'Mangkir / Alpa'
+              : 'Jadwal Libur / OFF')));
+
+      const nonWorkingQuery = `
         UPDATE hrm_attendances
-        SET status = 'off',
+        SET status = $1,
             clock_in = NULL,
             clock_out = NULL,
             photo_in = NULL,
             photo_out = NULL,
-            notes = COALESCE($1, 'Jadwal Libur / OFF'),
+            lat_in = NULL,
+            long_in = NULL,
+            lat_out = NULL,
+            long_out = NULL,
+            work_duration_minutes = 0,
             late_minutes = 0,
+            auto_closed_type = NULL,
+            notes = COALESCE($2, notes, $3),
             is_verified = true,
             is_locked = false,
             is_perimeter_breached = false,
             updated_at = NOW()
-        WHERE id = $2
+        WHERE id = $4
         RETURNING *;
       `;
-      const offResult = await pool.query(offQuery, [notes || 'Jadwal Libur / OFF', id]);
-      if (offResult.rows.length === 0) {
+      const nonWorkingResult = await pool.query(nonWorkingQuery, [canonicalStatus, notes || null, defaultNote, id]);
+      if (nonWorkingResult.rows.length === 0) {
         return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
       }
-      return res.json({ success: true, data: offResult.rows[0], message: 'Presensi berhasil diubah menjadi Libur / OFF' });
+
+      // Jika diubah menjadi cuti, pastikan kuota profil tersinkron
+      const targetUserId = nonWorkingResult.rows[0].user_id;
+      if (targetUserId && canonicalStatus === 'cuti') {
+        await pool.query(`
+          UPDATE hrm_profiles
+          SET used_leave_days = GREATEST(COALESCE(used_leave_days, 0), (
+            SELECT COUNT(DISTINCT attendance_date)
+            FROM hrm_attendances
+            WHERE user_id = $1 AND status = 'cuti'
+          )),
+          updated_at = NOW()
+          WHERE id = $1;
+        `, [targetUserId]);
+      }
+
+      return res.json({ success: true, data: nonWorkingResult.rows[0], message: `Presensi berhasil diubah menjadi ${canonicalStatus.toUpperCase()}` });
     }
 
     const cleanStatus = status || null;
@@ -13465,7 +13561,8 @@ async function runAutoCloseCompliantAttendance() {
       LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = a.attendance_date
       WHERE a.attendance_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
         AND a.clock_in IS NOT NULL
-        AND a.clock_out IS NULL;
+        AND a.clock_out IS NULL
+        AND a.status IN ('hadir', 'terlambat');
     `);
 
     if (candidates.rows.length === 0) return;
