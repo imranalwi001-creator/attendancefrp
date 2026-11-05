@@ -26,6 +26,7 @@ import {
   FileCheck2,
   ArrowRight,
   Info,
+  RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -103,6 +104,41 @@ export const HrmLeavePage: React.FC = () => {
   // Attachment Preview Modal
   const [previewAttachment, setPreviewAttachment] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [resettingSubId, setResettingSubId] = useState<string | null>(null);
+
+  const handleResetSubstitute = async (leave: LeaveRequest) => {
+    const subName = leave.substituteName || 'karyawan pengganti';
+    const confirmReset = window.confirm(
+      `Batalkan penugasan pengganti (${subName}) untuk ${leave.userName}?\n\n` +
+      `Sistem akan otomatis mencabut pos bantuan dan SPKL lembur pengganti sebelumnya, serta mengembalikan status permohonan ke 'Pending' agar dapat memilih rekan pengganti baru.`
+    );
+    if (!confirmReset) return;
+
+    setResettingSubId(leave.id);
+    try {
+      const res = await fetch(`/api/leaves/${leave.id}/reset-substitute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approverId: user?.id,
+          approverName: user?.fullName || 'Superadmin',
+          reason: 'Pengganti berhalangan hadir / dibatalkan',
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success(json.message);
+        if (detailModalOpen) setDetailModalOpen(false);
+        loadData();
+      } else {
+        toast.error(json.error || 'Gagal mereset karyawan pengganti.');
+      }
+    } catch (err: any) {
+      toast.error('Gagal menghubungi server: ' + err.message);
+    } finally {
+      setResettingSubId(null);
+    }
+  };
 
   const loadData = () => {
     if (!user) return;
@@ -1326,20 +1362,36 @@ export const HrmLeavePage: React.FC = () => {
                       </Badge>
                     )}
                   </div>
-                  <p className="text-foreground font-semibold text-xs">
+                  <div className="text-foreground font-semibold text-xs">
                     {selectedDetailLeave.substituteName ? (
-                      <>
-                        {selectedDetailLeave.substituteName}{' '}
-                        {selectedDetailLeave.substituteNip && (
-                          <span className="font-mono text-muted-foreground">({selectedDetailLeave.substituteNip})</span>
-                        )}
-                      </>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span>
+                            {selectedDetailLeave.substituteName}{' '}
+                            {selectedDetailLeave.substituteNip && (
+                              <span className="font-mono text-muted-foreground">({selectedDetailLeave.substituteNip})</span>
+                            )}
+                          </span>
+                          {['superadmin', 'admin', 'hrd', 'korlap', 'pimpinan', 'dirut'].includes(user?.role || '') && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={resettingSubId === selectedDetailLeave.id}
+                              onClick={() => handleResetSubstitute(selectedDetailLeave)}
+                              className="h-6 px-2 text-[10px] font-bold text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/10 gap-1 rounded-md"
+                            >
+                              <RotateCcw className={`w-2.5 h-2.5 ${resettingSubId === selectedDetailLeave.id ? 'animate-spin' : ''}`} />
+                              <span>Ganti Pengganti</span>
+                            </Button>
+                          )}
+                        </div>
+                      </div>
                     ) : (
                       <span className="text-muted-foreground italic font-normal">
                         Belum ada karyawan pengganti yang ditugaskan. Korlap, Admin, atau K3 wajib menetapkan satu pengganti saat menyetujui permohonan.
                       </span>
                     )}
-                  </p>
+                  </div>
                 </div>
 
                 {/* Attachment */}

@@ -37,6 +37,7 @@ import { HrmKinerjaPage } from '@/pages/hrm/HrmKinerjaPage';
 import { HrmPelanggaranPage } from '@/pages/hrm/HrmPelanggaranPage';
 import { HrmAnalyticsPage } from '@/pages/hrm/HrmAnalyticsPage';
 import { HrmWhatsAppBroadcast80Page } from '@/pages/hrm/HrmWhatsAppBroadcast80Page';
+import { HrmSubstituteConfirmPage } from '@/pages/hrm/HrmSubstituteConfirmPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -95,6 +96,12 @@ export const App: React.FC = () => {
                 <Route
                   path="/enroll-face"
                   element={<HrmMobileEnrollPage />}
+                />
+
+                {/* Public 1-Click WhatsApp Substitute Confirmation Route */}
+                <Route
+                  path="/substitute-confirm"
+                  element={<HrmSubstituteConfirmPage />}
                 />
 
                 <Route

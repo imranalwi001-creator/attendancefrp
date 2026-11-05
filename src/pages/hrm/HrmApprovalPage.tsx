@@ -32,6 +32,7 @@ import {
   MessageCircle,
   FileText,
   Users,
+  RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -180,6 +181,41 @@ export const HrmApprovalPage: React.FC = () => {
   const [loadingSubstituteCandidates, setLoadingSubstituteCandidates] = useState(false);
   const [submittingDecision, setSubmittingDecision] = useState(false);
   const [sendingReminderId, setSendingReminderId] = useState<string | null>(null);
+  const [resettingSubId, setResettingSubId] = useState<string | null>(null);
+
+  const handleResetSubstitute = async (leave: LeaveRequest) => {
+    const subName = leave.substituteName || 'karyawan pengganti';
+    const confirmReset = window.confirm(
+      `Batalkan penugasan pengganti (${subName}) untuk ${leave.userName}?\n\n` +
+      `Sistem akan otomatis mencabut pos bantuan dan SPKL lembur pengganti sebelumnya, serta mengembalikan status permohonan ke 'Pending' agar dapat memilih rekan pengganti baru.`
+    );
+    if (!confirmReset) return;
+
+    setResettingSubId(leave.id);
+    try {
+      const res = await fetch(`/api/leaves/${leave.id}/reset-substitute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approverId: user?.id,
+          approverName: user?.fullName || 'Superadmin',
+          reason: 'Pengganti berhalangan hadir / dibatalkan',
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success(json.message);
+        if (detailModalOpen) setDetailModalOpen(false);
+        loadRealtimeData();
+      } else {
+        toast.error(json.error || 'Gagal mereset karyawan pengganti.');
+      }
+    } catch (err: any) {
+      toast.error('Gagal menghubungi server: ' + err.message);
+    } finally {
+      setResettingSubId(null);
+    }
+  };
 
   const handleSendWaReminder = async (cand: any) => {
     if (!cand || !selectedLeave) return;
@@ -1022,9 +1058,24 @@ export const HrmApprovalPage: React.FC = () => {
                               </div>
                             )
                           ) : (
-                            <span className="text-[10.5px] text-muted-foreground italic pl-1">
-                              {l.status === 'approved' ? 'Disetujui' : 'Ditolak'} ({l.approvedByName || 'Approver'})
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {l.status === 'approved' && l.substituteName && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={resettingSubId === l.id}
+                                  onClick={() => handleResetSubstitute(l)}
+                                  className="h-7 text-[10px] gap-1 px-2 rounded-lg border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 font-bold"
+                                  title="Ganti karyawan pengganti jika berhalangan hadir"
+                                >
+                                  <RotateCcw className={`w-3 h-3 ${resettingSubId === l.id ? 'animate-spin' : ''}`} />
+                                  <span className="hidden sm:inline">Ganti Pengganti</span>
+                                </Button>
+                              )}
+                              <span className="text-[10.5px] text-muted-foreground italic pl-1">
+                                {l.status === 'approved' ? 'Disetujui' : 'Ditolak'} ({l.approvedByName || 'Approver'})
+                              </span>
+                            </div>
                           )}
                         </div>
                       </td>
@@ -2004,12 +2055,26 @@ export const HrmApprovalPage: React.FC = () => {
                   </div>
                   <p className="text-foreground font-semibold text-xs">
                     {leaveForDetail.substituteName ? (
-                      <>
-                        {leaveForDetail.substituteName}{' '}
-                        {leaveForDetail.substituteNip && (
-                          <span className="font-mono text-muted-foreground">({leaveForDetail.substituteNip})</span>
-                        )}
-                      </>
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span>
+                            {leaveForDetail.substituteName}{' '}
+                            {leaveForDetail.substituteNip && (
+                              <span className="font-mono text-muted-foreground">({leaveForDetail.substituteNip})</span>
+                            )}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={resettingSubId === leaveForDetail.id}
+                            onClick={() => handleResetSubstitute(leaveForDetail)}
+                            className="h-6 px-2 text-[10px] font-bold text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/10 gap-1 rounded-md"
+                          >
+                            <RotateCcw className={`w-2.5 h-2.5 ${resettingSubId === leaveForDetail.id ? 'animate-spin' : ''}`} />
+                            <span>Ganti Pengganti</span>
+                          </Button>
+                        </div>
+                      </div>
                     ) : (
                       <span className="text-muted-foreground italic font-normal">
                         Belum ada karyawan pengganti yang ditugaskan. Korlap, Admin, atau K3 wajib menetapkan satu pengganti saat menyetujui.

@@ -686,7 +686,14 @@ export async function initDb() {
 
       ALTER TABLE hrm_leave_requests
       ADD COLUMN IF NOT EXISTS relief_duty_assigned BOOLEAN DEFAULT false,
-      ADD COLUMN IF NOT EXISTS substitute_role_type VARCHAR(50) DEFAULT NULL;
+      ADD COLUMN IF NOT EXISTS substitute_role_type VARCHAR(50) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS substitute_confirmed BOOLEAN DEFAULT false,
+      ADD COLUMN IF NOT EXISTS substitute_confirmation_status VARCHAR(30) DEFAULT 'unconfirmed',
+      ADD COLUMN IF NOT EXISTS substitute_confirmed_at TIMESTAMPTZ DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS substitute_decline_reason TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS substitute_confirm_token VARCHAR(100) DEFAULT NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_hrm_leaves_sub_token ON hrm_leave_requests(substitute_confirm_token);
 
       -- ─── 18. DISCIPLINARY & SURAT PERINGATAN (SP 1, 2, 3) ───
       CREATE TABLE IF NOT EXISTS hrm_disciplinary_records (

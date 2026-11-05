@@ -17,6 +17,11 @@ import {
   UserCheck,
   PhoneCall,
   UserPlus,
+  RotateCcw,
+  Send,
+  MessageSquare,
+  AlertCircle,
+  Phone,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -52,6 +57,13 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
   const [candidatesMap, setCandidatesMap] = useState<Record<string, any[]>>({});
   const [selectedSubMap, setSelectedSubMap] = useState<Record<string, any>>({});
   const [loadingCandidates, setLoadingCandidates] = useState<Record<string, boolean>>({});
+  const [sendingWaMap, setSendingWaMap] = useState<Record<string, boolean>>({});
+  const [manualConfirmedMap, setManualConfirmedMap] = useState<Record<string, boolean>>({});
+  const [resettingLeaveId, setResettingLeaveId] = useState<string | null>(null);
+  const [confirmModalData, setConfirmModalData] = useState<{
+    leave: LeaveRequest;
+    substitute: any;
+  } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -85,6 +97,12 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
             substituteId: l.substitute_id || l.substituteId,
             substituteName: l.substitute_name || l.substituteName,
             substituteNip: l.substitute_nip || l.substituteNip,
+            substitutePhone: l.substitute_phone || l.substitutePhone,
+            substituteConfirmed: l.substitute_confirmed ?? l.substituteConfirmed ?? false,
+            substituteConfirmationStatus: l.substitute_confirmation_status || l.substituteConfirmationStatus || 'unconfirmed',
+            substituteConfirmedAt: l.substitute_confirmed_at || l.substituteConfirmedAt,
+            substituteDeclineReason: l.substitute_decline_reason || l.substituteDeclineReason,
+            substituteConfirmToken: l.substitute_confirm_token || l.substituteConfirmToken,
             attachmentUrl: l.attachment_url || l.attachmentUrl,
             approvalNotes: l.approval_notes || l.approvalNotes,
             approvedBy: l.approved_by || l.approvedBy,
@@ -208,14 +226,109 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
     });
   }, [overtimes, searchQuery]);
 
+  // Kirim Notifikasi Konfirmasi WA Resmi ke Rekan Pengganti
+  const handleSendWaConfirmation = async (leave: LeaveRequest) => {
+    const chosenSubstitute = selectedSubMap[leave.id] || {
+      id: leave.substituteId,
+      name: leave.substituteName,
+      nip: leave.substituteNip,
+      phone: leave.substitutePhone,
+    };
+
+    if (!chosenSubstitute?.id) {
+      toast.error('Harap pilih rekan pengganti terlebih dahulu');
+      return;
+    }
+
+    setSendingWaMap((prev) => ({ ...prev, [leave.id]: true }));
+    try {
+      const res = await api.post<{ success: boolean; message: string; waSent: boolean; error?: string }>(
+        '/hrm/substitute/request-confirmation',
+        {
+          substituteId: chosenSubstitute.id,
+          applicantId: leave.userId,
+          startDate: leave.startDate,
+          endDate: leave.endDate,
+          submissionType: leave.leaveType,
+          reason: leave.reason,
+          leaveId: leave.id,
+        }
+      );
+
+      if (res && res.success) {
+        toast.success(res.message);
+        loadData();
+      } else {
+        toast.error(res?.error || 'Gagal mengirim konfirmasi WhatsApp.');
+      }
+    } catch (err: any) {
+      toast.error('Terjadi kesalahan: ' + (err.message || 'Gagal menghubungi server'));
+    } finally {
+      setSendingWaMap((prev) => ({ ...prev, [leave.id]: false }));
+    }
+  };
+
+  // Reset Karyawan Pengganti (Jika Pengganti Berhalangan Hadir)
+  const handleResetSubstitute = async (leave: LeaveRequest) => {
+    const subName = leave.substituteName || selectedSubMap[leave.id]?.name || 'pengganti';
+    const confirmReset = window.confirm(
+      `Batalkan penugasan pengganti (${subName}) untuk ${leave.userName}?\n\n` +
+      `Sistem akan otomatis mencabut pos bantuan dan SPKL lembur pengganti sebelumnya, serta mengembalikan status permohonan ke 'Pending' agar Anda dapat memilih rekan pengganti baru.`
+    );
+    if (!confirmReset) return;
+
+    setResettingLeaveId(leave.id);
+    try {
+      const approverName = currentUser?.fullName || 'Muh Aslam Faisal (Korlap)';
+      const approverId = currentUser?.id || 'ebf10b16-ab2f-4b53-ab22-b3ffc00694db';
+
+      const res = await api.post<{ success: boolean; message: string; error?: string }>(
+        `/leaves/${leave.id}/reset-substitute`,
+        {
+          approverId,
+          approverName,
+          reason: 'Pengganti berhalangan hadir / dibatalkan oleh Korlap',
+        }
+      );
+
+      if (res && res.success) {
+        toast.success(res.message);
+        setSelectedSubMap((prev) => {
+          const next = { ...prev };
+          delete next[leave.id];
+          return next;
+        });
+        loadData();
+      } else {
+        toast.error(res?.error || 'Gagal mereset karyawan pengganti.');
+      }
+    } catch (err: any) {
+      toast.error('Terjadi kesalahan: ' + (err.message || 'Gagal menghubungi server'));
+    } finally {
+      setResettingLeaveId(null);
+    }
+  };
+
   // Handle Approve / Reject Leave with Zero Vacancy Relief Duty Enforcement
-  const handleLeaveDecision = async (leave: LeaveRequest, status: 'approved' | 'rejected') => {
+  const handleLeaveDecision = async (leave: LeaveRequest, status: 'approved' | 'rejected', force = false) => {
     const chosenSubstitute = selectedSubMap[leave.id];
 
     // Aturan Zero Vacancy: jika menyetujui, wajib ada personil pengganti!
     if (status === 'approved' && !chosenSubstitute && !leave.substituteName) {
       toast.error('Aturan Zero Vacancy: Pos tidak boleh kosong! Harap pilih Rekan Pengganti Pos sebelum menyetujui.', {
         duration: 4000,
+      });
+      return;
+    }
+
+    const isConfirmed = leave.substituteConfirmed ||
+      leave.substituteConfirmationStatus === 'confirmed' ||
+      manualConfirmedMap[leave.id];
+
+    if (status === 'approved' && !isConfirmed && !force) {
+      setConfirmModalData({
+        leave,
+        substitute: chosenSubstitute || { name: leave.substituteName, nip: leave.substituteNip },
       });
       return;
     }
@@ -234,7 +347,7 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
         approverId,
         approverName,
         notes: status === 'approved'
-          ? `Disetujui sah oleh Otoritas Lapangan (${approverName}). Petugas pengganti: ${subName || '-'}`
+          ? `Disetujui sah oleh Otoritas Lapangan (${approverName}). Petugas pengganti: ${subName || '-'}${manualConfirmedMap[leave.id] ? ' [Konfirmasi Lisan]' : ''}`
           : `Ditolak oleh Otoritas Lapangan (${approverName})`,
         substituteId: subId,
         substituteName: subName,
@@ -255,6 +368,7 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
       toast.error('Terjadi kesalahan: ' + (e.message || 'Gagal menghubungi server'));
     } finally {
       setProcessingId(null);
+      setConfirmModalData(null);
     }
   };
 
@@ -460,17 +574,40 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                         <p className="font-medium text-slate-200">{leave.reason || 'Tidak ada keterangan tambahan.'}</p>
                       </div>
 
-                      {/* Jika sudah disetujui dan ada pengganti */}
+                      {/* Jika sudah disetujui dan ada pengganti -> Tampilkan kartu & Tombol Reset Pengganti */}
                       {isApproved && (leave.substituteName || selectedCandidate?.name) && (
-                        <div className="p-2 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-[10.5px] text-emerald-300 flex items-center gap-1.5">
-                          <UserCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span>Petugas Pengganti Pos Resmi: <strong>{leave.substituteName || selectedCandidate?.name}</strong></span>
+                        <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 text-[10.5px] text-emerald-300 min-w-0">
+                              <UserCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <span className="truncate">Petugas Pengganti Pos Resmi: <strong>{leave.substituteName || selectedCandidate?.name}</strong></span>
+                            </div>
+                            <Badge variant="outline" className="text-[9px] bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shrink-0">
+                              SPKL Sah
+                            </Badge>
+                          </div>
+
+                          {/* Tombol Reset / Ganti Pengganti jika ybs berhalangan hadir */}
+                          <div className="pt-1.5 border-t border-emerald-500/20 flex items-center justify-between gap-2">
+                            <span className="text-[9.5px] text-slate-400">Pengganti berhalangan hadir?</span>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={resettingLeaveId === leave.id}
+                              onClick={() => handleResetSubstitute(leave)}
+                              className="h-7 px-2.5 border-amber-500/40 hover:bg-amber-500/20 text-amber-300 text-[10px] font-bold rounded-lg flex items-center gap-1 shrink-0 transition-all active:scale-95"
+                            >
+                              <RotateCcw className={`w-3 h-3 ${resettingLeaveId === leave.id ? 'animate-spin' : ''}`} />
+                              <span>{resettingLeaveId === leave.id ? 'Mereset...' : 'Ganti / Reset Pengganti'}</span>
+                            </Button>
+                          </div>
                         </div>
                       )}
 
                       {/* ─── FITUR CERDAS: REKOMENDASI PENGGANTI POS (ZERO VACANCY ENFORCEMENT) ─── */}
                       {isPending && (
-                        <div className="p-2.5 bg-slate-900/95 rounded-xl border border-emerald-500/30 space-y-2">
+                        <div className="p-2.5 bg-slate-900/95 rounded-xl border border-emerald-500/30 space-y-2.5">
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
                               <Sparkles className="w-3 h-3 text-emerald-400" />
@@ -484,7 +621,7 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                           </div>
 
                           {candidates.length > 0 ? (
-                            <div className="space-y-1.5">
+                            <div className="space-y-2">
                               <label className="text-[9.5px] text-slate-400 block font-medium">
                                 Pilih rekan kerja untuk mengisi pos tugas agar tidak kosong:
                               </label>
@@ -507,36 +644,116 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
 
                               {/* Selected Candidate Info & WhatsApp Action */}
                               {selectedCandidate && (
-                                <div className="p-2 bg-emerald-950/40 border border-emerald-500/30 rounded-lg flex items-center justify-between gap-2 mt-1">
-                                  <div className="min-w-0">
-                                    <p className="text-[11px] font-bold text-white truncate">
-                                      {selectedCandidate.name} ({selectedCandidate.nip})
-                                    </p>
-                                    <p className="text-[9.5px] text-emerald-300 truncate">
-                                      {selectedCandidate.categoryTitle || 'Kandidat Terbaik (OFF)'} • Pos dinas aman terisi
-                                    </p>
+                                <div className="p-2.5 bg-slate-950/80 border border-emerald-500/30 rounded-xl space-y-2">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <p className="text-[11px] font-bold text-white truncate">
+                                        {selectedCandidate.name} ({selectedCandidate.nip})
+                                      </p>
+                                      <p className="text-[9.5px] text-emerald-300 truncate">
+                                        {selectedCandidate.categoryTitle || 'Kandidat Terbaik (OFF)'} • Pos dinas aman terisi
+                                      </p>
+                                    </div>
+
+                                    {/* Status Konfirmasi Kesiapan Pengganti */}
+                                    {manualConfirmedMap[leave.id] ? (
+                                      <Badge variant="outline" className="text-[9px] bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shrink-0">
+                                        🟢 Terkonfirmasi Lisan
+                                      </Badge>
+                                    ) : leave.substituteConfirmationStatus === 'confirmed' || leave.substituteConfirmed ? (
+                                      <Badge variant="outline" className="text-[9px] bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shrink-0">
+                                        🟢 Bersedia (WA Sah)
+                                      </Badge>
+                                    ) : leave.substituteConfirmationStatus === 'pending_wa' ? (
+                                      <Badge variant="outline" className="text-[9px] bg-amber-500/20 text-amber-300 border-amber-500/40 shrink-0 animate-pulse">
+                                        🟡 Menunggu WA
+                                      </Badge>
+                                    ) : leave.substituteConfirmationStatus === 'declined' ? (
+                                      <Badge variant="outline" className="text-[9px] bg-rose-500/20 text-rose-300 border-rose-500/40 shrink-0">
+                                        🔴 Berhalangan
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="outline" className="text-[9px] bg-slate-800 text-slate-400 border-slate-700 shrink-0">
+                                        ⚪ Belum Dikonfirmasi
+                                      </Badge>
+                                    )}
                                   </div>
-                                  {selectedCandidate.phone && (
-                                    <a
-                                      href={
-                                        selectedCandidate.waConfirmUrl ||
-                                        `https://wa.me/${selectedCandidate.phone.replace(/^0/, '62')}?text=${encodeURIComponent(
-                                          `Halo Rekan *${selectedCandidate.name}*, kami dari Tim Korlap PT FRP.\n\n` +
-                                            `Rekan kerja Anda *${leave.userName}* mengajukan cuti tgl *${leave.startDate}* s/d *${leave.endDate}*.\n` +
-                                            `Sesuai aturan *Zero Vacancy*, pos dinas tidak boleh kosong.\n\n` +
-                                            `Apakah Anda bersedia bertugas sebagai *Petugas Pengganti Pos Resmi* pada tanggal tersebut? Tugas ini resmi dihitung lembur penuh (SPKL).\n` +
-                                            `Mohon konfirmasinya. Terima kasih.`
-                                        )}`
-                                      }
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="px-2 py-1 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 rounded-md text-[10px] font-bold flex items-center gap-1 shrink-0 transition-colors"
-                                      title="Tanya kesiapan via WhatsApp"
-                                    >
-                                      <PhoneCall className="w-2.5 h-2.5" />
-                                      <span>Tanya WA</span>
-                                    </a>
+
+                                  {/* Declined Alert if Candidate Said No */}
+                                  {leave.substituteConfirmationStatus === 'declined' && (
+                                    <div className="p-2 bg-rose-950/50 border border-rose-500/30 rounded-lg text-[10px] text-rose-300 space-y-0.5">
+                                      <span className="font-bold flex items-center gap-1">
+                                        <AlertTriangle className="w-3 h-3 text-rose-400" /> Karyawan Menyatakan Berhalangan:
+                                      </span>
+                                      <p className="italic">"{leave.substituteDeclineReason || 'Tidak dapat hadir bertugas'}"</p>
+                                      <p className="text-[9px] text-rose-200">Silakan pilih rekan pengganti lainnya dari menu dropdown di atas.</p>
+                                    </div>
                                   )}
+
+                                  {/* Action Buttons: Kirim WA Otomatis & Tanya WA Manual */}
+                                  <div className="pt-1 flex items-center gap-1.5 flex-wrap">
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      disabled={sendingWaMap[leave.id]}
+                                      onClick={() => handleSendWaConfirmation(leave)}
+                                      className="h-7 px-2.5 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold rounded-lg flex items-center gap-1 transition-colors"
+                                      title="Kirim pesan konfirmasi resmi otomatis dengan tautan 1-klik 'Bersedia' / 'Berhalangan'"
+                                    >
+                                      <Send className={`w-2.5 h-2.5 ${sendingWaMap[leave.id] ? 'animate-spin' : ''}`} />
+                                      <span>{sendingWaMap[leave.id] ? 'Mengirim WA...' : 'Kirim Konfirmasi WA Otomatis'}</span>
+                                    </Button>
+
+                                    {selectedCandidate.phone && (
+                                      <a
+                                        href={
+                                          selectedCandidate.waConfirmUrl ||
+                                          `https://wa.me/${selectedCandidate.phone.replace(/^0/, '62')}?text=${encodeURIComponent(
+                                            `Halo Rekan *${selectedCandidate.name}*, kami dari Tim Korlap PT FRP.\n\n` +
+                                              `Rekan kerja Anda *${leave.userName}* mengajukan cuti tgl *${leave.startDate}* s/d *${leave.endDate}*.\n` +
+                                              `Sesuai aturan *Zero Vacancy*, pos dinas tidak boleh kosong.\n\n` +
+                                              `Apakah Anda bersedia bertugas sebagai *Petugas Pengganti Pos Resmi* pada tanggal tersebut? Tugas ini resmi dihitung lembur penuh (SPKL).\n` +
+                                              `Mohon konfirmasinya. Terima kasih.`
+                                          )}`
+                                        }
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="h-7 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-lg text-[10px] font-semibold flex items-center gap-1 transition-colors"
+                                        title="Chat manual via WhatsApp"
+                                      >
+                                        <PhoneCall className="w-2.5 h-2.5" />
+                                        <span>Chat WA</span>
+                                      </a>
+                                    )}
+
+                                    {/* Tombol Reset jika leave sudah ada substitute sebelumnya */}
+                                    {leave.substituteName && (
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={resettingLeaveId === leave.id}
+                                        onClick={() => handleResetSubstitute(leave)}
+                                        className="h-7 px-2 border-slate-700 hover:bg-slate-800 text-slate-400 text-[10px] rounded-lg flex items-center gap-1"
+                                      >
+                                        <RotateCcw className="w-2.5 h-2.5" />
+                                        <span>Reset</span>
+                                      </Button>
+                                    )}
+                                  </div>
+
+                                  {/* Fallback Checkbox Konfirmasi Lisan */}
+                                  <label className="flex items-center gap-1.5 text-[9.5px] text-slate-400 cursor-pointer pt-1 border-t border-slate-800/80">
+                                    <input
+                                      type="checkbox"
+                                      checked={!!manualConfirmedMap[leave.id]}
+                                      onChange={(e) =>
+                                        setManualConfirmedMap((prev) => ({ ...prev, [leave.id]: e.target.checked }))
+                                      }
+                                      className="rounded border-slate-700 text-emerald-500 focus:ring-0 w-3 h-3 bg-slate-900"
+                                    />
+                                    <span>Telah konfirmasi kesanggupan langsung (Telepon / HT / Lisan)</span>
+                                  </label>
                                 </div>
                               )}
                             </div>
@@ -756,6 +973,56 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
             Tutup
           </Button>
         </div>
+
+        {/* Modal Prompt Konfirmasi Kesiapan Pengganti jika belum terkonfirmasi */}
+        {confirmModalData && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in">
+            <div className="w-full max-w-sm bg-slate-900 border border-amber-500/50 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-2xl text-slate-100">
+              <div className="flex items-center gap-2.5 text-amber-400">
+                <AlertCircle className="w-5 h-5 shrink-0" />
+                <h3 className="font-bold text-sm text-white">Konfirmasi Kesiapan Pengganti</h3>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Rekan <strong>{confirmModalData.substitute.name || confirmModalData.substitute.fullName}</strong> belum memberikan konfirmasi resmi kesanggupan bertugas via WhatsApp.
+              </p>
+              <p className="text-[11px] text-amber-300/90 bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
+                💡 Rekomendasi: Kirim konfirmasi WA terlebih dahulu agar calon pengganti dapat menyatakan kesediaannya sebelum disahkan.
+              </p>
+              <div className="space-y-2 pt-1">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    const l = confirmModalData.leave;
+                    setConfirmModalData(null);
+                    handleSendWaConfirmation(l);
+                  }}
+                  className="w-full h-9 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Kirim Konfirmasi WA Sekarang</span>
+                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleLeaveDecision(confirmModalData.leave, 'approved', true)}
+                    className="flex-1 h-8 border-slate-700 hover:bg-slate-800 text-slate-300 text-xs rounded-xl"
+                  >
+                    Tetap Sahkan Sekarang
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setConfirmModalData(null)}
+                    className="h-8 px-3 text-slate-400 hover:text-white text-xs"
+                  >
+                    Batal
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

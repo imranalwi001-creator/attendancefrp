@@ -9,6 +9,7 @@ const FACE_AI_URL = process.env.FACE_AI_URL || 'http://hrm-face-ai:5001';
 
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -7374,11 +7375,13 @@ app.get('/api/leaves', async (req, res) => {
     let query = `
       SELECT l.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name,
              p.annual_leave_quota, p.used_leave_days, p.division_id as user_division_id,
-             ap.full_name as approver_name
+             ap.full_name as approver_name,
+             sp.phone as substitute_phone, sp.full_name as sub_profile_name, sp.nip as sub_profile_nip
       FROM hrm_leave_requests l
       JOIN hrm_profiles p ON l.user_id = p.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
       LEFT JOIN hrm_profiles ap ON l.approved_by = ap.id
+      LEFT JOIN hrm_profiles sp ON l.substitute_id = sp.id
     `;
     const params = [];
     const conditions = [];
@@ -7894,7 +7897,7 @@ app.post('/api/hrm/relief/assign', async (req, res) => {
 });
 
 // Endpoint Konfirmasi WhatsApp Cepat & Reminder Resmi untuk Karyawan Pengganti (Sisi Korlap)
-app.post('/api/hrm/substitute/confirm-wa', async (req, res) => {
+app.post(['/api/hrm/substitute/confirm-wa', '/api/hrm/substitute/request-confirmation'], async (req, res) => {
   const { substituteId, applicantId, startDate, endDate, submissionType, reason, leaveId } = req.body;
   if (!substituteId || !applicantId) {
     return res.status(400).json({ success: false, error: 'substituteId dan applicantId wajib disertakan' });
@@ -7915,22 +7918,50 @@ app.post('/api/hrm/substitute/confirm-wa', async (req, res) => {
     const typeStr = (submissionType || 'Cuti / Izin').toUpperCase();
     const datesStr = startDate && endDate ? (startDate === endDate ? startDate : `${startDate} s/d ${endDate}`) : 'Jadwal Terkait';
 
+    // Buat token unik 16-hex untuk konfirmasi tautan 1-klik di WhatsApp
+    const confirmToken = crypto.randomBytes(12).toString('hex');
+
+    if (leaveId) {
+      await pool.query(`
+        UPDATE hrm_leave_requests SET
+          substitute_id = $1,
+          substitute_name = $2,
+          substitute_nip = $3,
+          substitute_confirm_token = $4,
+          substitute_confirmation_status = 'pending_wa',
+          substitute_confirmed = false,
+          updated_at = NOW()
+        WHERE id = $5
+      `, [sub.id, sub.full_name, sub.nip, confirmToken, leaveId]);
+    }
+
+    const acceptLink = `https://fawwazreskiperwira.com/substitute-confirm?token=${confirmToken}&action=accept`;
+    const declineLink = `https://fawwazreskiperwira.com/substitute-confirm?token=${confirmToken}&action=decline`;
+
     const reminderMsg =
-`🔔 *REMINDER TUGAS KARYAWAN PENGGANTI (PT FRP)*
+`🔔 *KONFIRMASI KESANGGUPAN PENGGANTI POS (ZERO VACANCY)*
+*PT. FAWWAZ RESKI PERWIRA*
 
 Halo Rekan *${sub.full_name}* (${sub.nip || '-'}),
-Anda direkomendasikan resmi oleh Koordinator Lapangan (*Muh Aslam Faisal*) sebagai *Petugas Pengganti Pos Dinas* untuk mengisi kekosongan tugas rekan Anda:
+Koordinator Lapangan (*Muh Aslam Faisal*) merekomendasikan Anda sebagai *Petugas Pengganti Pos Dinas Resmi* untuk mengisi kekosongan tugas rekan Anda:
 
 👤 Menggantikan: *${applicant.full_name}* (${applicant.nip || '-'})
-🏢 Pos/Divisi: *${applicant.division_name || 'Operasional'}*
+🏢 Pos Dinas: *${applicant.division_name || 'Operasional'}*
 📅 Jadwal Tugas: *${datesStr}*
 📝 Permohonan: *${typeStr}*
-💬 Alasan Kekosongan: "${reason || 'Izin Operasional'}"
-💰 Kompensasi: *Otomatis Dihitung Lembur (Relief Duty Pay)*
+💬 Alasan: "${reason || 'Izin Operasional'}"
+💰 Kompensasi: *Otomatis Dihitung Lembur Penuh (SPKL 8 Jam)*
 
-⚡ *ZERO VACANCY:* Pos dinas tidak boleh kosong! Pekerjaan harus tetap berjalan lancar. Mohon segera bersiap dan konfirmasi kesiapan Anda dengan membalas pesan ini atau menghubungi Korlap (*085342470909*).
+⚡ *ZERO VACANCY:* Pos dinas tidak boleh kosong! Mohon segera konfirmasi kesiapan & kesanggupan Anda dengan mengklik salah satu link resmi di bawah ini:
 
-Setelah disahkan, seluruh pos lokasi dinas rekan yang Anda gantikan otomatis aktif di akun Anda tanpa kendala radius.`;
+✅ *SAYA BERSEDIA BERTUGAS:*
+${acceptLink}
+
+❌ *SAYA BERHALANGAN:*
+${declineLink}
+
+Atau balas pesan ini / hubungi Korlap (*085342470909*).
+Setelah disahkan, seluruh pos lokasi dinas rekan yang Anda gantikan otomatis aktif di akun Anda tanpa kendala radius. Terima kasih.`;
 
     let waSent = false;
     if (sub.phone) {
@@ -7945,18 +7976,250 @@ Setelah disahkan, seluruh pos lokasi dinas rekan yang Anda gantikan otomatis akt
       message: `Korlap merekomendasikan Anda menggantikan ${applicant.full_name} pada ${datesStr}. Harap segera konfirmasi kesiapan Anda.`,
       type: 'leave',
       link: '/admin/approval',
-      metadata: { substituteId, applicantId, startDate, endDate, leaveId }
+      metadata: { substituteId, applicantId, startDate, endDate, leaveId, token: confirmToken }
     });
 
     res.json({
       success: true,
       waSent,
+      token: confirmToken,
+      confirmationStatus: 'pending_wa',
       message: waSent
-        ? `Notifikasi reminder resmi WhatsApp berhasil dikirim ke ${sub.full_name} (${sub.phone}).`
+        ? `Notifikasi konfirmasi resmi WhatsApp berhasil dikirim ke ${sub.full_name} (${sub.phone}). Menunggu tanggapan karyawan.`
         : `Karyawan pengganti (${sub.full_name}) belum memiliki nomor telepon di sistem, notifikasi in-app telah dikirimkan.`
     });
   } catch (err) {
     console.error('[confirm-wa Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint Public: Ambil Informasi Tugas Pengganti Berdasarkan Token Konfirmasi
+app.get('/api/hrm/substitute/token-info/:token', async (req, res) => {
+  const { token } = req.params;
+  try {
+    const lRes = await pool.query(`
+      SELECT l.*, 
+             p.full_name as applicant_name, p.nip as applicant_nip, d.name as division_name,
+             sp.full_name as substitute_full_name, sp.nip as substitute_full_nip, sp.phone as substitute_phone
+      FROM hrm_leave_requests l
+      JOIN hrm_profiles p ON l.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_profiles sp ON l.substitute_id = sp.id
+      WHERE l.substitute_confirm_token = $1 LIMIT 1
+    `, [token]);
+    if (lRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Tautan konfirmasi tidak valid atau tugas pengganti telah diperbarui oleh Korlap.' });
+    }
+    const row = lRes.rows[0];
+    res.json({
+      success: true,
+      data: {
+        leaveId: row.id,
+        applicantName: row.applicant_name,
+        applicantNip: row.applicant_nip,
+        divisionName: row.division_name || 'Operasional Lapangan',
+        startDate: typeof row.start_date === 'string' ? row.start_date.substring(0, 10) : row.start_date,
+        endDate: typeof row.end_date === 'string' ? row.end_date.substring(0, 10) : row.end_date,
+        leaveType: row.leave_type,
+        reason: row.reason,
+        substituteName: row.substitute_name || row.substitute_full_name,
+        substituteNip: row.substitute_nip || row.substitute_full_nip,
+        substituteId: row.substitute_id,
+        status: row.substitute_confirmation_status || 'unconfirmed',
+        confirmedAt: row.substitute_confirmed_at,
+        declineReason: row.substitute_decline_reason,
+      }
+    });
+  } catch (err) {
+    console.error('[token-info Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint Public: Respons Konfirmasi Calon Pengganti (Accept / Decline via 1-Klik WhatsApp)
+app.post('/api/hrm/substitute/respond-token', async (req, res) => {
+  const { token, action, reason } = req.body;
+  if (!token || !['accept', 'decline'].includes(action)) {
+    return res.status(400).json({ success: false, error: 'Token dan tindakan (accept / decline) wajib disertakan' });
+  }
+  try {
+    const lRes = await pool.query(`
+      SELECT l.*, 
+             p.full_name as applicant_name, p.nip as applicant_nip, d.name as division_name,
+             sp.full_name as sub_name, sp.nip as sub_nip, sp.phone as sub_phone
+      FROM hrm_leave_requests l
+      JOIN hrm_profiles p ON l.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_profiles sp ON l.substitute_id = sp.id
+      WHERE l.substitute_confirm_token = $1 LIMIT 1
+    `, [token]);
+    if (lRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Tautan konfirmasi tidak ditemukan atau telah kedaluwarsa.' });
+    }
+    const leave = lRes.rows[0];
+    const sDate = typeof leave.start_date === 'string' ? leave.start_date.substring(0, 10) : leave.start_date;
+    const eDate = typeof leave.end_date === 'string' ? leave.end_date.substring(0, 10) : leave.end_date;
+    const datesStr = sDate === eDate ? sDate : `${sDate} s/d ${eDate}`;
+    const subName = leave.sub_name || leave.substitute_name;
+
+    if (action === 'accept') {
+      await pool.query(`
+        UPDATE hrm_leave_requests SET
+          substitute_confirmed = true,
+          substitute_confirmation_status = 'confirmed',
+          substitute_confirmed_at = NOW(),
+          updated_at = NOW()
+        WHERE id = $1
+      `, [leave.id]);
+
+      // Notifikasi WhatsApp ke Korlap (Muh Aslam Faisal: 085342470909) dan Superadmin (081355904897)
+      const acceptMsg =
+`✅ *KONFIRMASI PENGGANTI DITERIMA (PT FRP)*
+
+Rekan *${subName}* (${leave.sub_nip || '-'}) TELAH MENYATAKAN BERSEDIA & SIAP bertugas mengisi kekosongan:
+👤 Menggantikan: *${leave.applicant_name}* (${leave.applicant_nip})
+🏢 Pos: *${leave.division_name || 'Operasional'}*
+📅 Tanggal Tugas: *${datesStr}*
+💰 Kompensasi: *Lembur Penuh SPKL (8 Jam)*
+
+Status kesiapan kini telah terverifikasi. Silakan buka aplikasi Pusat Otoritas Lapangan untuk mengesahkan penetapan tugas Zero Vacancy.`;
+
+      await sendWhatsAppAlert({ phone: '085342470909', message: acceptMsg });
+      await sendWhatsAppAlert({ phone: '081355904897', message: acceptMsg });
+
+      return res.json({
+        success: true,
+        action: 'accept',
+        message: `Terima kasih! Kesiapan Anda (${subName}) telah berhasil dikonfirmasi. Koordinator Lapangan telah diberitahu.`
+      });
+    } else {
+      // Decline
+      await pool.query(`
+        UPDATE hrm_leave_requests SET
+          substitute_confirmed = false,
+          substitute_confirmation_status = 'declined',
+          substitute_decline_reason = $1,
+          substitute_id = NULL,
+          substitute_name = NULL,
+          substitute_nip = NULL,
+          substitute_confirm_token = NULL,
+          updated_at = NOW()
+        WHERE id = $2
+      `, [reason || 'Karyawan berhalangan hadir', leave.id]);
+
+      // Notifikasi WhatsApp ke Korlap bahwa pengganti berhalangan hadir
+      const declineMsg =
+`⚠️ *PENGGANTI BERHALANGAN HADIR (PT FRP)*
+
+Rekan *${subName}* (${leave.sub_nip || '-'}) menyatakan BERHALANGAN hadir menggantikan *${leave.applicant_name}* pada *${datesStr}*.
+💬 Alasan: "${reason || 'Sedang berhalangan hadir'}"
+
+Pos dinas berisiko kosong! Sesuai aturan *Zero Vacancy*, mohon segera buka aplikasi Pusat Otoritas Lapangan untuk memilih kandidat pengganti lain dari rekomendasi sistem.`;
+
+      await sendWhatsAppAlert({ phone: '085342470909', message: declineMsg });
+      await sendWhatsAppAlert({ phone: '081355904897', message: declineMsg });
+
+      return res.json({
+        success: true,
+        action: 'decline',
+        message: 'Konfirmasi berhalangan telah disampaikan ke Koordinator Lapangan. Pos tugas akan dialihkan ke rekan lain.'
+      });
+    }
+  } catch (err) {
+    console.error('[respond-token Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint: Reset Karyawan Pengganti (Jika Pengganti Berhalangan Hadir Pasca-Disetujui / Saat Pending)
+app.post('/api/leaves/:id/reset-substitute', async (req, res) => {
+  const { id } = req.params;
+  const { approverId, approverName, reason } = req.body;
+  try {
+    const lRes = await pool.query(`
+      SELECT l.*, 
+             p.full_name as applicant_name, p.nip as applicant_nip, d.name as division_name,
+             sp.full_name as sub_name, sp.nip as sub_nip, sp.phone as sub_phone
+      FROM hrm_leave_requests l
+      JOIN hrm_profiles p ON l.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_profiles sp ON l.substitute_id = sp.id
+      WHERE l.id::text = $1 LIMIT 1
+    `, [id]);
+    if (lRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Pengajuan cuti tidak ditemukan' });
+    }
+    const leave = lRes.rows[0];
+    const oldSubId = leave.substitute_id;
+    const oldSubName = leave.sub_name || leave.substitute_name;
+    const oldSubPhone = leave.sub_phone;
+    const sDate = typeof leave.start_date === 'string' ? leave.start_date.substring(0, 10) : leave.start_date;
+    const eDate = typeof leave.end_date === 'string' ? leave.end_date.substring(0, 10) : leave.end_date;
+    const datesStr = sDate === eDate ? sDate : `${sDate} s/d ${eDate}`;
+
+    // 1. Cabut bank pos pewarisan relief duty di hrm_field_assigned_posts
+    await pool.query(`
+      DELETE FROM hrm_field_assigned_posts
+      WHERE relief_leave_request_id = $1
+         OR (user_id = $2 AND is_relief = true AND relief_original_user_id = $3)
+    `, [leave.id, oldSubId || '00000000-0000-0000-0000-000000000000', leave.user_id]);
+
+    // 2. Cabut rekapan lembur SPKL otomatis di hrm_overtime_records
+    await pool.query(`
+      DELETE FROM hrm_overtime_records
+      WHERE leave_request_id = $1 AND source = 'shift_relief'
+    `, [leave.id]);
+
+    // 3. Batalkan rekapan di hrm_shift_substitutions
+    await pool.query(`
+      UPDATE hrm_shift_substitutions
+      SET status = 'cancelled',
+          notes = COALESCE(notes, '') || E'\\n[Direset/Dibatalkan oleh Korlap: Karyawan berhalangan hadir]'
+      WHERE reference_id = $1
+    `, [leave.id]);
+
+    // 4. Reset field pengganti di hrm_leave_requests & kembalikan status ke 'pending' agar Korlap dapat memilih pengganti baru
+    const updateRes = await pool.query(`
+      UPDATE hrm_leave_requests SET
+        substitute_id = NULL,
+        substitute_name = NULL,
+        substitute_nip = NULL,
+        relief_duty_assigned = false,
+        substitute_confirmed = false,
+        substitute_confirmation_status = 'unconfirmed',
+        substitute_confirm_token = NULL,
+        substitute_decline_reason = $1,
+        status = 'pending',
+        approval_notes = COALESCE(approval_notes, '') || E'\\n[Pengganti Direset oleh Korlap: ' || $2 || E']',
+        updated_at = NOW()
+      WHERE id = $3
+      RETURNING *;
+    `, [
+      reason || 'Karyawan pengganti sebelumnya berhalangan hadir',
+      `Pengganti (${oldSubName || '-'}) dibatalkan/direset pada ${(new Date()).toLocaleDateString('id-ID')}`,
+      leave.id
+    ]);
+
+    // 5. Kirim pemberitahuan WhatsApp ke pengganti lama (jika ada nomor HP) agar tidak bingung
+    if (oldSubPhone) {
+      const notifyOldSub =
+`ℹ️ *PEMBERITAHUAN PENYESUAIAN PENUGASAN (PT FRP)*
+
+Halo Rekan *${oldSubName}*,
+Penugasan sebagai Petugas Pengganti Pos untuk rekan *${leave.applicant_name}* pada *${datesStr}* telah disesuaikan / dibatalkan oleh Koordinator Lapangan (${approverName || 'Muh Aslam Faisal'}).
+
+Jadwal kerja dan presensi Anda kembali normal sesuai shift rutin Anda. Terima kasih atas pengertiannya.`;
+      await sendWhatsAppAlert({ phone: oldSubPhone, message: notifyOldSub });
+    }
+
+    res.json({
+      success: true,
+      message: `Penugasan pengganti (${oldSubName || 'sebelumnya'}) berhasil direset. Status permohonan kini kembali terbuka untuk menetapkan rekomendasi pengganti baru.`,
+      data: updateRes.rows[0]
+    });
+  } catch (err) {
+    console.error('[reset-substitute Error]:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

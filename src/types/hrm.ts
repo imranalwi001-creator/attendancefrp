@@ -712,8 +712,14 @@ export interface LeaveRequest {
   substituteId?: string;
   substituteName?: string;
   substituteNip?: string;
+  substitutePhone?: string;
   reliefDutyAssigned?: boolean;
   substituteRoleType?: ReliefRecommendationType | string;
+  substituteConfirmed?: boolean;
+  substituteConfirmationStatus?: 'unconfirmed' | 'pending_wa' | 'confirmed' | 'declined';
+  substituteConfirmedAt?: string;
+  substituteDeclineReason?: string;
+  substituteConfirmToken?: string;
   createdAt: string;
 }
 
