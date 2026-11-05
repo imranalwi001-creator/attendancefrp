@@ -75,6 +75,56 @@ async function startWhatsAppBot() {
       console.log(`[WA-Gateway] WhatsApp CONNECTED! Phone: ${connectedPhone}`);
     }
   });
+
+  // ─── INBOUND MESSAGE LISTENER (CONVERSATIONAL EXECUTIVE APPROVAL) ───
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    try {
+      if (type !== 'notify') return;
+      for (const msg of messages) {
+        if (!msg.message || msg.key.fromMe) continue;
+
+        const remoteJid = msg.key.remoteJid || '';
+        if (!remoteJid.endsWith('@s.whatsapp.net')) continue; // abaikan grup
+
+        const senderPhone = remoteJid.replace('@s.whatsapp.net', '');
+        const messageText =
+          msg.message.conversation ||
+          msg.message.extendedTextMessage?.text ||
+          msg.message.imageMessage?.caption ||
+          '';
+
+        if (!messageText || !messageText.trim()) continue;
+
+        const quotedText =
+          msg.message.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
+          msg.message.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text ||
+          '';
+
+        console.log(`[WA-Gateway Inbound] From: ${senderPhone} | Message: "${messageText.trim()}" | Quoted: "${quotedText.substring(0, 40)}"`);
+
+        // Teruskan ke HRM Backend
+        const backendUrl = process.env.BACKEND_URL || 'http://hrm-backend:5000';
+        fetch(`${backendUrl}/api/hrm/executive-approval/wa-inbound-action`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            senderPhone,
+            messageText: messageText.trim(),
+            quotedText: quotedText.trim(),
+          }),
+        })
+          .then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            console.log('[WA-Gateway Inbound Handled]:', data);
+          })
+          .catch((err) => {
+            console.error('[WA-Gateway Forward Error]:', err.message);
+          });
+      }
+    } catch (err) {
+      console.error('[WA-Gateway messages.upsert Error]:', err.message);
+    }
+  });
 }
 
 // ─── API ENDPOINTS ─────────────────────────────────────────────────────────────
