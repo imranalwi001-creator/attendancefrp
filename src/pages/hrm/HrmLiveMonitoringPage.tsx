@@ -2280,6 +2280,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           )}
                         </TableCell>
                         <TableCell>
+                          {absentSubtype === 'cuti' ? (
                             <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-400 text-[10px] gap-1 rounded-full font-medium">
                               <CheckCircle2 size={10} /> Disahkan Direksi
                             </Badge>
