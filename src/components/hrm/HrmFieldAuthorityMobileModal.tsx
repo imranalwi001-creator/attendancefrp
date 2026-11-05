@@ -312,16 +312,18 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
   // Handle Approve / Reject Leave with Zero Vacancy Relief Duty Enforcement
   const handleLeaveDecision = async (leave: LeaveRequest, status: 'approved' | 'rejected', force = false) => {
     const chosenSubstitute = selectedSubMap[leave.id];
+    const isSpecialOfficer = isLeadershipSpecialFieldOfficer(leave.userId || leave.userNip || leave.userName);
 
-    // Aturan Zero Vacancy: jika menyetujui, wajib ada personil pengganti!
-    if (status === 'approved' && !chosenSubstitute && !leave.substituteName) {
+    // Aturan Zero Vacancy: jika menyetujui, wajib ada personil pengganti (KECUALI 3 Petugas Lapangan Khusus Pimpinan: Aslam, Samsi, Takdir)!
+    if (status === 'approved' && !chosenSubstitute && !leave.substituteName && !isSpecialOfficer) {
       toast.error('Aturan Zero Vacancy: Pos tidak boleh kosong! Harap pilih Rekan Pengganti Pos sebelum menyetujui.', {
         duration: 4000,
       });
       return;
     }
 
-    const isConfirmed = leave.substituteConfirmed ||
+    const isConfirmed = isSpecialOfficer ||
+      leave.substituteConfirmed ||
       leave.substituteConfirmationStatus === 'confirmed' ||
       manualConfirmedMap[leave.id];
 
@@ -606,7 +608,22 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                       )}
 
                       {/* ─── FITUR CERDAS: REKOMENDASI PENGGANTI POS (ZERO VACANCY ENFORCEMENT) ─── */}
-                      {isPending && (
+                      {isPending && isLeadershipSpecialFieldOfficer(leave.userId || leave.userNip || leave.userName) ? (
+                        <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10.5px] font-bold text-amber-300 flex items-center gap-1.5">
+                              <ShieldCheck className="w-4 h-4 text-amber-400" />
+                              <span>Petugas Lapangan Khusus (Bebas Pengganti)</span>
+                            </span>
+                            <Badge variant="outline" className="text-[9px] bg-amber-500/20 text-amber-300 border-amber-500/40">
+                              Otoritas Direksi
+                            </Badge>
+                          </div>
+                          <p className="text-[10px] text-slate-300 leading-relaxed">
+                            Personil ini berada di bawah pengawasan langsung Pimpinan dan <strong>tidak membutuhkan rekan pengganti pos</strong>. Persetujuan sah dipegang langsung oleh Direktur Utama atau Pimpinan.
+                          </p>
+                        </div>
+                      ) : isPending && (
                         <div className="p-2.5 bg-slate-900/95 rounded-xl border border-emerald-500/30 space-y-2.5">
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">

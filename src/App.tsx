@@ -38,6 +38,7 @@ import { HrmPelanggaranPage } from '@/pages/hrm/HrmPelanggaranPage';
 import { HrmAnalyticsPage } from '@/pages/hrm/HrmAnalyticsPage';
 import { HrmWhatsAppBroadcast80Page } from '@/pages/hrm/HrmWhatsAppBroadcast80Page';
 import { HrmSubstituteConfirmPage } from '@/pages/hrm/HrmSubstituteConfirmPage';
+import { HrmExecutiveApprovalPage } from '@/pages/hrm/HrmExecutiveApprovalPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -102,6 +103,12 @@ export const App: React.FC = () => {
                 <Route
                   path="/substitute-confirm"
                   element={<HrmSubstituteConfirmPage />}
+                />
+
+                {/* Public 1-Click Executive (Dirut / Pimpinan) WhatsApp Approval Route */}
+                <Route
+                  path="/executive-approval"
+                  element={<HrmExecutiveApprovalPage />}
                 />
 
                 <Route

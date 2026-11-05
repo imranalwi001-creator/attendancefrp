@@ -363,6 +363,7 @@ function isExemptFieldOfficer(user) {
   ];
 
   if (exemptEmails.includes(email) || exemptIds.includes(id)) return true;
+  if (cleanNip.includes('07065') || cleanNip.includes('07066') || cleanNip.includes('07046')) return true;
   if (name.includes('aslam') || name.includes('samsi') || name.includes('unga') || name.includes('takdir')) {
     return true;
   }
@@ -2879,9 +2880,110 @@ async function notifyAllPartiesViaWhatsApp({
   decisionStatus = 'approved', // 'approved' | 'rejected'
   approverName,
   approvalNotes,
+  isSpecialOfficer = false,
+  execToken = null,
+  quota = null,
 }) {
   try {
     const isApproved = decisionStatus === 'approved';
+
+    // 0. KHUSUS 3 PETUGAS LAPANGAN KHUSUS PIMPINAN (ASLAM, SAMSI, TAKDIR):
+    // TIDAK MEMBUTUHKAN PENGGANTI POS & OTORITAS PENUH BERADA PADA DIRUT ATAU PIMPINAN (FIRST-RESPONDER)
+    if (isSpecialOfficer) {
+      if (!isDecision) {
+        // Notifikasi ke Pemohon sendiri
+        if (applicant?.phone) {
+          const applicantSpecialMsg =
+`👑 *TANDA TERIMA PENGAJUAN PETUGAS KHUSUS (PT FRP)*
+
+Halo *${applicant.fullName}* (${applicant.nip || '-'}),
+Pengajuan *${submissionType}* Anda telah resmi diteruskan langsung ke *Direktur Utama (Bpk Alam AS)* dan *Pimpinan (Bpk Reski Faisal)* untuk persetujuan eksekutif.
+
+📅 Jadwal: *${details}*
+🏢 Jabatan: *Petugas Lapangan Khusus Pimpinan (Bebas Pengganti)*
+💬 Alasan: "${reasonOrTask || '-'}"
+
+Pemberitahuan instan akan otomatis dikirimkan begitu salah satu Direksi memberikan keputusan.`;
+          await sendWhatsAppAlert({ phone: applicant.phone, message: applicantSpecialMsg });
+        }
+
+        // Susun Rekapitulasi Kuota Cuti Pemohon
+        const quotaSection = quota ?
+`📊 *REKAPITULASI KUOTA CUTI PEMOHON:*
+• Cuti yang Telah Dipakai: *${quota.usedDays || 0} Hari*
+• Cuti yang Akan Dipakai: *${quota.requestedDays || 1} Hari*
+• Sisa Cuti Saat Ini: *${quota.currentRemaining || 0} Hari* (dari Kuota ${quota.annualQuota || 14} Hari)
+• *Estimasi Sisa Pasca Disetujui:* *${quota.estRemaining || 0} Hari*
+
+` : '';
+
+        const approveUrl = execToken
+          ? `https://fawwazreskiperwira.com/executive-approval?token=${execToken}&decision=approved`
+          : `https://fawwazreskiperwira.com/admin/approval`;
+        const rejectUrl = execToken
+          ? `https://fawwazreskiperwira.com/executive-approval?token=${execToken}&decision=rejected`
+          : `https://fawwazreskiperwira.com/admin/approval`;
+
+        const executiveMsg =
+`👑 *PERMOHONAN KHUSUS DIREKSI (PT. FAWWAZ RESKI PERWIRA)*
+*Pusat Otoritas & Komando Direksi*
+
+Yth. *Bapak Direktur Utama / Bapak Pimpinan*,
+Salah satu Petugas Lapangan Khusus mengajukan permohonan dinas resmi:
+
+👤 *Nama Pemohon:* *${applicant.fullName}*
+🆔 *NIP:* ${applicant.nip || '-'}
+🏢 *Jabatan:* Petugas Lapangan Khusus Pimpinan *(Bebas Pengganti)*
+📝 *Jenis Permohonan:* *${submissionType}*
+📅 *Jadwal Pelaksanaan:* *${details}*
+💬 *Alasan/Keterangan:* "${reasonOrTask || '-'}"
+
+${quotaSection}*(Catatan Kebijakan: Hak cuti tahunan PT FRP bersifat Use-It-Or-Lose-It / tidak dapat diuangkan & tidak membebani kas perusahaan).*
+
+Sesuai ketentuan, permohonan Petugas Khusus disahkan langsung oleh salah satu Direksi (First-Responder Rule). Mohon berikan keputusan Bapak melalui salah satu tautan 1-klik di bawah ini:
+
+✅ *SETUJUI PERMOHONAN (1-KLIK):*
+${approveUrl}
+
+❌ *TOLAK PERMOHONAN (1-KLIK):*
+${rejectUrl}
+
+*Keputusan Bapak langsung disinkronkan ke PostgreSQL, kartu presensi, dan aplikasi Pusat Otoritas Lapangan PT FRP.*`;
+
+        // Kirim serentak ke Dirut, Pimpinan, dan Superadmin
+        await sendWhatsAppAlert({ phone: '082291998026', message: executiveMsg }); // Bpk Alam AS (Dirut)
+        await sendWhatsAppAlert({ phone: '082192755755', message: executiveMsg }); // Bpk Reski Faisal (Pimpinan)
+        await sendWhatsAppAlert({ phone: '081355904897', message: executiveMsg }); // Superadmin
+        return; // Selesai untuk pengajuan khusus direksi
+      } else {
+        // Laporan hasil keputusan direksi ke Dirut, Pimpinan, Superadmin, dan Pemohon
+        const decisionSpecialMsg =
+`📢 *KEPUTUSAN PERMOHONAN PETUGAS KHUSUS DIREKSI (PT FRP)*
+
+👤 Pemohon: *${applicant.fullName}* (${applicant.nip || '-'})
+📝 Jenis: *${submissionType}* (${details})
+⚖️ Keputusan: *${isApproved ? '✅ DISETUJUI SAH' : '❌ DITOLAK'}*
+👑 Disahkan Oleh: *${approverName || 'Direksi'}*
+${approvalNotes ? `💬 Catatan: "${approvalNotes}"\n` : ''}
+💾 Data dan kuota cuti di database PostgreSQL telah otomatis disinkronkan.`;
+
+        await sendWhatsAppAlert({ phone: '082291998026', message: decisionSpecialMsg });
+        await sendWhatsAppAlert({ phone: '082192755755', message: decisionSpecialMsg });
+        await sendWhatsAppAlert({ phone: '081355904897', message: decisionSpecialMsg });
+
+        if (applicant?.phone) {
+          const applicantDecMsg =
+`🔔 *KEPUTUSAN RESMI DIREKSI (PT FRP)*
+
+Halo *${applicant.fullName}*,
+Pengajuan *${submissionType}* Anda (${details}) telah *${isApproved ? '✅ DISETUJUI SAH' : '❌ DITOLAK'}* oleh *${approverName || 'Direksi'}*.
+${approvalNotes ? `Catatan: "${approvalNotes}"\n` : ''}
+Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
+          await sendWhatsAppAlert({ phone: applicant.phone, message: applicantDecMsg });
+        }
+        return;
+      }
+    }
 
     // 1. KIRIM KE PEMOHON SENDIRI
     if (applicant?.phone) {
@@ -8265,6 +8367,300 @@ app.post('/api/hrm/overtime/emergency-verify/:id', async (req, res) => {
 });
 
 
+// ─── EXECUTIVE 1-CLICK WHATSAPP APPROVAL ENDPOINTS (DIRUT & PIMPINAN) ───────
+// Endpoint Public: Ambil Informasi Pengajuan Khusus Petugas Lapangan Khusus Direksi
+app.get('/api/hrm/executive-approval/info/:token', async (req, res) => {
+  const { token } = req.params;
+  try {
+    // 1. Cek di hrm_leave_requests
+    const lRes = await pool.query(`
+      SELECT l.*,
+             p.full_name as applicant_name, p.nip as applicant_nip, p.phone as applicant_phone,
+             p.annual_leave_quota, p.used_leave_days, d.name as division_name
+      FROM hrm_leave_requests l
+      JOIN hrm_profiles p ON l.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      WHERE l.executive_approval_token = $1 LIMIT 1
+    `, [token]);
+
+    if (lRes.rows.length > 0) {
+      const row = lRes.rows[0];
+      const annualQuota = Number(row.annual_leave_quota || 14);
+      const usedDays = Number(row.used_leave_days || 0);
+      const requestedDays = Number(row.total_days || 1);
+      const currentRemaining = Math.max(0, annualQuota - usedDays);
+      const estRemaining = Math.max(0, currentRemaining - requestedDays);
+
+      return res.json({
+        success: true,
+        type: 'leave',
+        id: row.id,
+        applicant: {
+          id: row.user_id,
+          name: row.applicant_name,
+          nip: row.applicant_nip,
+          phone: row.applicant_phone,
+          division: row.division_name || 'Operasional Lapangan',
+        },
+        details: {
+          submissionType: (row.leave_type || 'cuti_tahunan').replace(/_/g, ' ').toUpperCase(),
+          startDate: typeof row.start_date === 'string' ? row.start_date.substring(0, 10) : row.start_date,
+          endDate: typeof row.end_date === 'string' ? row.end_date.substring(0, 10) : row.end_date,
+          totalDays: requestedDays,
+          reason: row.reason,
+          attachmentUrl: row.attachment_url,
+          isSpecialOfficer: true,
+          noSubstituteNeeded: true,
+        },
+        quota: {
+          annualQuota,
+          usedDays,
+          requestedDays,
+          currentRemaining,
+          estRemaining,
+        },
+        status: row.status,
+        alreadyProcessed: row.status !== 'pending',
+        processedBy: row.executive_approved_by_name || row.approval_notes,
+        actionAt: row.executive_action_at,
+      });
+    }
+
+    // 2. Cek di hrm_overtime_records
+    const otRes = await pool.query(`
+      SELECT ot.*,
+             p.full_name as applicant_name, p.nip as applicant_nip, p.phone as applicant_phone,
+             d.name as division_name
+      FROM hrm_overtime_records ot
+      JOIN hrm_profiles p ON ot.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      WHERE ot.executive_approval_token = $1 LIMIT 1
+    `, [token]);
+
+    if (otRes.rows.length > 0) {
+      const row = otRes.rows[0];
+      return res.json({
+        success: true,
+        type: 'overtime',
+        id: row.id,
+        applicant: {
+          id: row.user_id,
+          name: row.applicant_name,
+          nip: row.applicant_nip,
+          phone: row.applicant_phone,
+          division: row.division_name || 'Operasional Lapangan',
+        },
+        details: {
+          submissionType: 'LEMBUR (SPL)',
+          date: typeof row.date === 'string' ? row.date.substring(0, 10) : row.date,
+          startTime: row.start_time,
+          endTime: row.end_time,
+          durationHours: Number(row.duration_hours || 2),
+          totalPay: Number(row.total_pay || 0),
+          reason: row.task_description,
+          isSpecialOfficer: true,
+          noSubstituteNeeded: true,
+        },
+        status: row.status,
+        alreadyProcessed: row.status !== 'pending',
+        processedBy: row.executive_approved_by_name,
+        actionAt: row.executive_action_at,
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      error: 'Tautan persetujuan tidak valid atau permohonan telah selesai diproses oleh Direksi.'
+    });
+  } catch (err) {
+    console.error('[executive-approval/info Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint Public: Eksekusi Keputusan Direksi (One-Click Executive WhatsApp Response)
+app.post('/api/hrm/executive-approval/respond', async (req, res) => {
+  const { token, decision, notes, approverPhone, approverRole } = req.body;
+  if (!token || !['approved', 'rejected'].includes(decision)) {
+    return res.status(400).json({ success: false, error: 'Token dan keputusan (approved / rejected) wajib disertakan' });
+  }
+  try {
+    let approverName = 'Direksi PT FRP';
+    let approverId = '09b38e8f-856c-43aa-a889-3dd1f05adb6c'; // Default Pimpinan ID
+    let roleName = 'pimpinan';
+
+    if (approverRole === 'dirut' || (approverPhone && approverPhone.includes('8026'))) {
+      approverName = 'Alam AS simpuang ago, S.Sos (Direktur Utama)';
+      approverId = 'a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5e';
+      roleName = 'dirut';
+    } else {
+      approverName = 'Reski Faisal (Pimpinan)';
+      approverId = '09b38e8f-856c-43aa-a889-3dd1f05adb6c';
+      roleName = 'pimpinan';
+    }
+
+    // 1. Coba proses di hrm_leave_requests
+    const lRes = await pool.query(`
+      SELECT l.*,
+             p.full_name as applicant_name, p.nip as applicant_nip, p.phone as applicant_phone,
+             p.annual_leave_quota, p.used_leave_days, d.name as division_name
+      FROM hrm_leave_requests l
+      JOIN hrm_profiles p ON l.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      WHERE l.executive_approval_token = $1 LIMIT 1
+    `, [token]);
+
+    if (lRes.rows.length > 0) {
+      const leave = lRes.rows[0];
+      if (leave.status !== 'pending') {
+        return res.status(400).json({
+          success: false,
+          error: `Permohonan ini telah ${leave.status.toUpperCase()} sebelumnya oleh ${leave.executive_approved_by_name || 'Direksi lain'}.`
+        });
+      }
+
+      const requestedDays = Number(leave.total_days || 1);
+      const finalNotes = notes || (decision === 'approved'
+        ? `Disetujui sah via WhatsApp One-Click oleh ${approverName}`
+        : `Ditolak via WhatsApp oleh ${approverName}`);
+
+      await pool.query(`
+        UPDATE hrm_leave_requests SET
+          status = $1,
+          approved_by = $2,
+          approved_at = NOW(),
+          approval_notes = $3,
+          executive_approval_token = NULL,
+          executive_approver_role = $4,
+          executive_approved_by_name = $5,
+          executive_action_at = NOW(),
+          updated_at = NOW()
+        WHERE id = $6
+      `, [decision, approverId, finalNotes, roleName, approverName, leave.id]);
+
+      // SINKRONISASI KUOTA CUTI DATABASE POSTGRESQL
+      if (decision === 'approved') {
+        const type = (leave.leave_type || '').toLowerCase();
+        if (type === 'cuti_tahunan' || type === 'annual_leave' || type === 'cuti') {
+          await pool.query(`
+            UPDATE hrm_profiles SET
+              used_leave_days = COALESCE(used_leave_days, 0) + $1,
+              updated_at = NOW()
+            WHERE id = $2;
+          `, [requestedDays, leave.user_id]);
+        } else if (type === 'izin' || type === 'permission') {
+          await pool.query(`
+            UPDATE hrm_profiles SET
+              used_permission_days = COALESCE(used_permission_days, 0) + $1,
+              updated_at = NOW()
+            WHERE id = $2;
+          `, [requestedDays, leave.user_id]);
+        }
+      }
+
+      // Notifikasi WhatsApp ke Pemohon
+      if (leave.applicant_phone) {
+        const notifyApplicantMsg =
+`🔔 *PEMBERITAHUAN KEPUTUSAN DIREKSI (PT FRP)*
+
+Halo *${leave.applicant_name}* (${leave.applicant_nip || '-'}),
+Permohonan *${(leave.leave_type || 'Cuti').toUpperCase()}* Anda (${leave.start_date} s/d ${leave.end_date}, ${requestedDays} Hari) telah resmi:
+*${decision === 'approved' ? '✅ DISETUJUI SAH' : '❌ DITOLAK'}*
+Oleh: *${approverName}*
+
+${decision === 'approved' ? 'Status presensi dan kuota cuti Anda telah disinkronkan otomatis di sistem HRM.' : `Catatan: "${finalNotes}"`}`;
+
+        await sendWhatsAppAlert({ phone: leave.applicant_phone, message: notifyApplicantMsg });
+      }
+
+      // Notifikasi tembusan ke Dirut, Pimpinan & Superadmin
+      const auditBroadcast =
+`📢 *AUDIT KEPUTUSAN DIREKSI (FIRST-RESPONDER PT FRP)*
+
+Permohonan cuti Petugas Lapangan Khusus:
+👤 Pemohon: *${leave.applicant_name}* (${leave.applicant_nip || '-'})
+📝 Keputusan: *${decision === 'approved' ? '✅ DISETUJUI' : '❌ DITOLAK'}*
+👑 Disahkan Oleh: *${approverName}*
+📅 Jadwal: ${leave.start_date} s/d ${leave.end_date} (${requestedDays} Hari)
+
+Status dan saldo kuota cuti di database telah tersinkronisasi otomatis.`;
+
+      await sendWhatsAppAlert({ phone: '082291998026', message: auditBroadcast });
+      await sendWhatsAppAlert({ phone: '082192755755', message: auditBroadcast });
+      await sendWhatsAppAlert({ phone: '081355904897', message: auditBroadcast });
+
+      return res.json({
+        success: true,
+        decision,
+        message: `Permohonan ${leave.applicant_name} berhasil ${decision === 'approved' ? 'DISETUJUI' : 'DITOLAK'} oleh ${approverName}. Seluruh rekapan kuota cuti telah otomatis disinkronkan.`,
+      });
+    }
+
+    // 2. Coba proses di hrm_overtime_records
+    const otRes = await pool.query(`
+      SELECT ot.*,
+             p.full_name as applicant_name, p.nip as applicant_nip, p.phone as applicant_phone
+      FROM hrm_overtime_records ot
+      JOIN hrm_profiles p ON ot.user_id = p.id
+      WHERE ot.executive_approval_token = $1 LIMIT 1
+    `, [token]);
+
+    if (otRes.rows.length > 0) {
+      const ot = otRes.rows[0];
+      if (ot.status !== 'pending') {
+        return res.status(400).json({
+          success: false,
+          error: `Pengajuan lembur ini telah ${ot.status.toUpperCase()} sebelumnya oleh ${ot.executive_approved_by_name || 'Direksi lain'}.`
+        });
+      }
+
+      const finalNotes = notes || (decision === 'approved'
+        ? `Disetujui sah via WhatsApp One-Click oleh ${approverName}`
+        : `Ditolak via WhatsApp oleh ${approverName}`);
+
+      await pool.query(`
+        UPDATE hrm_overtime_records SET
+          status = $1,
+          approved_by = $2,
+          approval_notes = $3,
+          executive_approval_token = NULL,
+          executive_approver_role = $4,
+          executive_approved_by_name = $5,
+          executive_action_at = NOW(),
+          updated_at = NOW()
+        WHERE id = $6
+      `, [decision, approverId, finalNotes, roleName, approverName, ot.id]);
+
+      // Notifikasi ke pemohon
+      if (ot.applicant_phone) {
+        const notifyOtMsg =
+`🔔 *KEPUTUSAN LEMBUR DIREKSI (PT FRP)*
+
+Halo *${ot.applicant_name}*,
+Pengajuan lembur SPL Anda tanggal ${ot.date} (${ot.duration_hours} Jam) telah:
+*${decision === 'approved' ? '✅ DISETUJUI SAH' : '❌ DITOLAK'}*
+Oleh: *${approverName}*`;
+        await sendWhatsAppAlert({ phone: ot.applicant_phone, message: notifyOtMsg });
+      }
+
+      return res.json({
+        success: true,
+        decision,
+        message: `Pengajuan lembur ${ot.applicant_name} berhasil ${decision === 'approved' ? 'DISETUJUI' : 'DITOLAK'} oleh ${approverName}.`,
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      error: 'Token persetujuan tidak ditemukan atau telah kedaluwarsa.'
+    });
+  } catch (err) {
+    console.error('[executive-approval/respond Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
 app.post('/api/leaves', async (req, res) => {
   const { userId, leaveType, startDate, endDate, totalDays, reason, attachmentUrl, substituteId, substituteName, substituteNip, assignedByAdmin, isManualAdmin, status: requestedStatus, approvalNotes, adminId, adminName } = req.body;
   if (!userId || !startDate || !endDate || !reason) {
@@ -8404,9 +8800,30 @@ app.post('/api/leaves', async (req, res) => {
     const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
     const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
 
-    // Resolve substitute profile if specified
+    let execToken = null;
+    let quotaInfo = null;
+
+    if (isSpecial3FieldOfficer) {
+      execToken = crypto.randomBytes(16).toString('hex');
+      await pool.query('UPDATE hrm_leave_requests SET executive_approval_token = $1 WHERE id = $2', [execToken, leaveRow.id]);
+
+      const annualQuota = Number(userProfile.annual_leave_quota || 14);
+      const usedDays = Number(userProfile.used_leave_days || 0);
+      const currentRemaining = Math.max(0, annualQuota - usedDays);
+      const estRemaining = Math.max(0, currentRemaining - requestedDays);
+
+      quotaInfo = {
+        annualQuota,
+        usedDays,
+        requestedDays,
+        currentRemaining,
+        estRemaining,
+      };
+    }
+
+    // Resolve substitute profile if specified (TIDAK WAJIB untuk 3 Petugas Lapangan Khusus)
     let substituteProfile = null;
-    if (substituteId || substituteNip) {
+    if (!isSpecial3FieldOfficer && (substituteId || substituteNip)) {
       try {
         const subRes = await pool.query(
           "SELECT id, full_name, nip, phone FROM hrm_profiles WHERE (id::text = $1 OR nip = $2) AND is_active = true LIMIT 1",
@@ -8427,14 +8844,17 @@ app.post('/api/leaves', async (req, res) => {
         phone: userProfile.phone,
         divisionName: userProfile.division_name,
       },
-      substitute: substituteProfile ? {
+      substitute: isSpecial3FieldOfficer ? null : (substituteProfile ? {
         id: substituteProfile.id,
         fullName: substituteProfile.full_name,
         nip: substituteProfile.nip,
         phone: substituteProfile.phone,
-      } : (substituteName ? { fullName: substituteName, nip: substituteNip } : null),
+      } : (substituteName ? { fullName: substituteName, nip: substituteNip } : null)),
       reasonOrTask: finalReason,
       approvalLink: '/admin/approval?tab=leaves',
+      isSpecialOfficer: isSpecial3FieldOfficer,
+      execToken,
+      quota: quotaInfo,
     });
 
     // In-App Notification Broadcast
@@ -8881,6 +9301,12 @@ app.post('/api/overtime', async (req, res) => {
     const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
     const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
 
+    let execOtToken = null;
+    if (isSpecial3FieldOfficer) {
+      execOtToken = crypto.randomBytes(16).toString('hex');
+      await pool.query('UPDATE hrm_overtime_records SET executive_approval_token = $1 WHERE id = $2', [execOtToken, otRow.id]);
+    }
+
     // 📢 NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
     await notifyAllPartiesViaWhatsApp({
       submissionType: 'LEMBUR (SPL)',
@@ -8894,6 +9320,8 @@ app.post('/api/overtime', async (req, res) => {
       },
       reasonOrTask: taskDescription,
       approvalLink: '/admin/approval?tab=overtime',
+      isSpecialOfficer: isSpecial3FieldOfficer,
+      execToken: execOtToken,
     });
 
     // Broadcast Notifikasi In-App

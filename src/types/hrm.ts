@@ -311,6 +311,7 @@ export const isLeadershipSpecialFieldOfficer = (userOrNipOrEmail: any): boolean 
   return (
     ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes(email) ||
     ['ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632'].includes(id) ||
+    nip.includes('07065') || nip.includes('07066') || nip.includes('07046') ||
     name.includes('aslam') ||
     name.includes('unga samsi') ||
     name.includes('samsi') ||
@@ -720,6 +721,10 @@ export interface LeaveRequest {
   substituteConfirmedAt?: string;
   substituteDeclineReason?: string;
   substituteConfirmToken?: string;
+  executiveApprovalToken?: string;
+  executiveApproverRole?: string;
+  executiveApprovedByName?: string;
+  executiveActionAt?: string;
   createdAt: string;
 }
 
@@ -959,6 +964,10 @@ export interface OvertimeRecord {
   completionPhotos?: string[];
   isEmergency?: boolean;      // True jika lembur pekerjaan darurat / on-call
   source?: 'planned' | 'emergency_post_shift' | 'shift_relief' | string;
+  executiveApprovalToken?: string;
+  executiveApproverRole?: string;
+  executiveApprovedByName?: string;
+  executiveActionAt?: string;
   emergencyReportedAt?: string;
   isSubstituteOvertime?: boolean; // True jika lembur karena menggantikan karyawan libur/cuti
   substituteForUserId?: string;   // ID karyawan yang digantikan

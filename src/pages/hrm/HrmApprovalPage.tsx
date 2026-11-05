@@ -510,7 +510,9 @@ export const HrmApprovalPage: React.FC = () => {
   const handleConfirmDecision = async () => {
     if (!selectedLeave || !user) return;
 
-    if (decision === 'approved' && !selectedSubstituteId) {
+    const isSpecialOfficer = isLeadershipSpecialFieldOfficer(selectedLeave.userId || selectedLeave.userNip || selectedLeave.userName);
+
+    if (decision === 'approved' && !selectedSubstituteId && !isSpecialOfficer) {
       toast.error('Sesuai aturan operasional PT FRP, pekerjaan tidak boleh kosong saat karyawan cuti/izin. Tetapkan satu karyawan pengganti sebelum menyetujui.');
       return;
     }

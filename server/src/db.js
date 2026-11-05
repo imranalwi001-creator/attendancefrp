@@ -691,9 +691,22 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS substitute_confirmation_status VARCHAR(30) DEFAULT 'unconfirmed',
       ADD COLUMN IF NOT EXISTS substitute_confirmed_at TIMESTAMPTZ DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS substitute_decline_reason TEXT DEFAULT NULL,
-      ADD COLUMN IF NOT EXISTS substitute_confirm_token VARCHAR(100) DEFAULT NULL;
+      ADD COLUMN IF NOT EXISTS substitute_confirm_token VARCHAR(100) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS executive_approval_token VARCHAR(100) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS executive_approver_role VARCHAR(50) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS executive_approved_by_name VARCHAR(100) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS executive_action_at TIMESTAMPTZ DEFAULT NULL;
 
       CREATE INDEX IF NOT EXISTS idx_hrm_leaves_sub_token ON hrm_leave_requests(substitute_confirm_token);
+      CREATE INDEX IF NOT EXISTS idx_hrm_leaves_exec_token ON hrm_leave_requests(executive_approval_token);
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS executive_approval_token VARCHAR(100) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS executive_approver_role VARCHAR(50) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS executive_approved_by_name VARCHAR(100) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS executive_action_at TIMESTAMPTZ DEFAULT NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_hrm_ot_exec_token ON hrm_overtime_records(executive_approval_token);
 
       -- ─── 18. DISCIPLINARY & SURAT PERINGATAN (SP 1, 2, 3) ───
       CREATE TABLE IF NOT EXISTS hrm_disciplinary_records (
