@@ -4355,6 +4355,10 @@ export const hrmService = {
     divisionId?: string;
   }): Promise<{
     success: boolean;
+    isMultiDay?: boolean;
+    totalDays?: number;
+    dailySlots?: import('@/types/hrm').SmartReliefDailySlot[];
+    allRanked?: import('@/types/hrm').SmartReliefCandidate[];
     sameDivOff: any[];
     sameDivShift: any[];
     globalAll: any[];
@@ -4367,12 +4371,12 @@ export const hrmService = {
       if (params.divisionId) qs.set('divisionId', params.divisionId);
       const res = await api.get<any>(`/leaves/substitute-candidates?${qs.toString()}`);
       if (res && res.success) {
-        return res;
+        return res.data || res;
       }
-      return { success: false, sameDivOff: [], sameDivShift: [], globalAll: [] };
+      return { success: false, isMultiDay: false, totalDays: 1, dailySlots: [], sameDivOff: [], sameDivShift: [], globalAll: [] };
     } catch (err) {
       console.warn('[HRM] Error fetching substitute candidates:', err);
-      return { success: false, sameDivOff: [], sameDivShift: [], globalAll: [] };
+      return { success: false, isMultiDay: false, totalDays: 1, dailySlots: [], sameDivOff: [], sameDivShift: [], globalAll: [] };
     }
   },
 
@@ -4383,7 +4387,8 @@ export const hrmService = {
     notes?: string,
     substituteId?: string,
     substituteName?: string,
-    substituteNip?: string
+    substituteNip?: string,
+    dailySubstitutes?: Array<{ date: string; substituteId: string; substituteName?: string; substituteNip?: string }>
   ): Promise<LeaveRequest> => {
     const leaves = hrmService.getLeaves();
     const idx = leaves.findIndex((l) => l.id === leaveId);
@@ -4401,6 +4406,7 @@ export const hrmService = {
         substituteId,
         substituteName,
         substituteNip,
+        dailySubstitutes,
       });
     } catch (err: any) {
       console.error('[HRM] Error updating leave status in backend:', err);
@@ -4415,6 +4421,15 @@ export const hrmService = {
     if (substituteId) leaves[idx].substituteId = substituteId;
     if (substituteName) leaves[idx].substituteName = substituteName;
     if (substituteNip) leaves[idx].substituteNip = substituteNip;
+    if (dailySubstitutes && dailySubstitutes.length > 0) {
+      leaves[idx].dailySubstitutes = dailySubstitutes.map((d, i) => ({
+        dutyDate: d.date,
+        daySequence: i + 1,
+        substituteId: d.substituteId,
+        substituteName: d.substituteName || '',
+        substituteNip: d.substituteNip || '',
+      }));
+    }
 
     if (status === 'approved' && (leaves[idx].leaveType === 'cuti_tahunan' || leaves[idx].leaveType === 'annual_leave')) {
       const users = hrmService.getUsers();

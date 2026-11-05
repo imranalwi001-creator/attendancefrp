@@ -784,6 +784,31 @@ export async function initDb() {
       ALTER TABLE hrm_attendances ADD COLUMN IF NOT EXISTS mangkir_kpi_flagged BOOLEAN DEFAULT true;
       ALTER TABLE hrm_overtime_records ADD COLUMN IF NOT EXISTS mangkir_deduction_amount NUMERIC(12,2) DEFAULT 0;
       CREATE UNIQUE INDEX IF NOT EXISTS uq_hrm_attendances_user_date ON hrm_attendances (user_id, attendance_date);
+
+      -- ─── 22. MULTI-DAY LEAVE DAILY RELIEF SUBSTITUTES (1 SUBSTITUTE = 1 DAY MAX) ───
+      CREATE TABLE IF NOT EXISTS hrm_leave_daily_substitutes (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        leave_request_id UUID NOT NULL REFERENCES hrm_leave_requests(id) ON DELETE CASCADE,
+        duty_date DATE NOT NULL,
+        day_sequence INTEGER NOT NULL DEFAULT 1,
+        substitute_id UUID NOT NULL REFERENCES hrm_profiles(id) ON DELETE CASCADE,
+        substitute_name VARCHAR(150),
+        substitute_nip VARCHAR(50),
+        substitute_phone VARCHAR(50),
+        compensation_amount NUMERIC(12,2) DEFAULT 187054.32,
+        confirmation_status VARCHAR(30) DEFAULT 'confirmed',
+        confirm_token VARCHAR(100),
+        confirmed_at TIMESTAMPTZ,
+        overtime_record_id UUID REFERENCES hrm_overtime_records(id) ON DELETE SET NULL,
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT uq_leave_daily_sub_date UNIQUE (leave_request_id, duty_date)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_leave_daily_sub_leave ON hrm_leave_daily_substitutes(leave_request_id);
+      CREATE INDEX IF NOT EXISTS idx_leave_daily_sub_user_date ON hrm_leave_daily_substitutes(substitute_id, duty_date);
+      CREATE INDEX IF NOT EXISTS idx_leave_daily_sub_token ON hrm_leave_daily_substitutes(confirm_token);
     `);
 
     console.log('[Database] Schema verification, Biometric, Geofence, Field Sentinel Multi-Posts & Notifications extensions completed.');

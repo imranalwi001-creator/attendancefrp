@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { LeaveRequest, OvertimeRecord, OvertimeStatus, OvertimePaymentStatus, UserProfile, ShiftSwapRecord, SmartSubstituteCandidate, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
+import { LeaveRequest, OvertimeRecord, OvertimeStatus, OvertimePaymentStatus, UserProfile, ShiftSwapRecord, SmartSubstituteCandidate, SmartReliefDailySlot, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
 import {
   FileCheck2,
   CheckCircle2,
@@ -172,6 +172,8 @@ export const HrmApprovalPage: React.FC = () => {
   const [substituteCandidates, setSubstituteCandidates] = useState<UserProfile[]>([]);
   const [selectedSubstituteId, setSelectedSubstituteId] = useState<string>('');
   const [selectedSubstituteObj, setSelectedSubstituteObj] = useState<any | null>(null);
+  const [dailySlots, setDailySlots] = useState<SmartReliefDailySlot[]>([]);
+  const [selectedDailySubs, setSelectedDailySubs] = useState<Record<string, { substituteId: string; substituteName: string; substituteNip?: string }>>({});
   const [candidateCategory, setCandidateCategory] = useState<'same_off' | 'same_shift' | 'global'>('same_off');
   const [substituteGroups, setSubstituteGroups] = useState<{
     sameDivOff: any[];
@@ -477,6 +479,25 @@ export const HrmApprovalPage: React.FC = () => {
         globalAll: globalList,
       });
 
+      // Multi-Day Relief Slots initialization (1 Day = 1 Substitute Rule)
+      if (candidates.dailySlots && candidates.dailySlots.length > 1) {
+        setDailySlots(candidates.dailySlots);
+        const initialMap: Record<string, { substituteId: string; substituteName: string; substituteNip?: string }> = {};
+        candidates.dailySlots.forEach((slot) => {
+          if (slot.recommendedSubstitute) {
+            initialMap[slot.date] = {
+              substituteId: slot.recommendedSubstitute.id,
+              substituteName: slot.recommendedSubstitute.name,
+              substituteNip: slot.recommendedSubstitute.nip,
+            };
+          }
+        });
+        setSelectedDailySubs(initialMap);
+      } else {
+        setDailySlots([]);
+        setSelectedDailySubs({});
+      }
+
       // Default selection logic:
       if (leave.substituteId) {
         setSelectedSubstituteId(leave.substituteId);
@@ -512,9 +533,26 @@ export const HrmApprovalPage: React.FC = () => {
 
     const isSpecialOfficer = isLeadershipSpecialFieldOfficer(selectedLeave.userId || selectedLeave.userNip || selectedLeave.userName);
 
-    if (decision === 'approved' && !selectedSubstituteId && !isSpecialOfficer) {
-      toast.error('Sesuai aturan operasional PT FRP, pekerjaan tidak boleh kosong saat karyawan cuti/izin. Tetapkan satu karyawan pengganti sebelum menyetujui.');
-      return;
+    if (decision === 'approved' && !isSpecialOfficer) {
+      if (dailySlots.length > 1) {
+        // Multi-day verification
+        const missingDays = dailySlots.filter((s) => !selectedDailySubs[s.date]?.substituteId);
+        if (missingDays.length > 0) {
+          toast.error(`Mohon tetapkan karyawan pengganti untuk semua hari (${missingDays.map((m) => m.dayName).join(', ')} belum terisi).`);
+          return;
+        }
+
+        // Anti-duplicate validation: 1 substitute = 1 day only
+        const chosenSubs = dailySlots.map((s) => selectedDailySubs[s.date]?.substituteId).filter(Boolean);
+        const uniqueSubs = new Set(chosenSubs);
+        if (uniqueSubs.size < chosenSubs.length) {
+          toast.error('Aturan Baku PT FRP: 1 Karyawan Pengganti Hanya Berlaku untuk 1 Hari Saja! Anda memilih karyawan yang sama di lebih dari 1 hari. Mohon pilih personil berbeda untuk tiap hari.');
+          return;
+        }
+      } else if (!selectedSubstituteId) {
+        toast.error('Sesuai aturan operasional PT FRP, pekerjaan tidak boleh kosong saat karyawan cuti/izin. Tetapkan satu karyawan pengganti sebelum menyetujui.');
+        return;
+      }
     }
 
     setSubmittingDecision(true);
@@ -522,22 +560,36 @@ export const HrmApprovalPage: React.FC = () => {
       const allCands = [...substituteGroups.sameDivOff, ...substituteGroups.sameDivShift, ...substituteGroups.globalAll];
       const selectedSub = selectedSubstituteObj || allCands.find((c) => c.id === selectedSubstituteId) || users.find((u) => u.id === selectedSubstituteId);
 
+      const dailySubsPayload = dailySlots.length > 1
+        ? dailySlots.map((s) => ({
+            date: s.date,
+            substituteId: selectedDailySubs[s.date]?.substituteId,
+            substituteName: selectedDailySubs[s.date]?.substituteName,
+            substituteNip: selectedDailySubs[s.date]?.substituteNip,
+          }))
+        : undefined;
+
+      const subNameFormatted = dailySubsPayload
+        ? dailySubsPayload.map((s, i) => `${s.substituteName} (H-${i + 1})`).join(', ')
+        : (selectedSub?.fullName || selectedSub?.name);
+
       await hrmService.updateLeaveStatus(
         selectedLeave.id,
         decision,
         user.id,
         notes.trim(),
-        decision === 'approved' ? selectedSubstituteId : undefined,
-        decision === 'approved' ? (selectedSub?.fullName || selectedSub?.name) : undefined,
-        decision === 'approved' ? selectedSub?.nip : undefined
+        decision === 'approved' ? (dailySubsPayload ? dailySubsPayload[0]?.substituteId : selectedSubstituteId) : undefined,
+        decision === 'approved' ? subNameFormatted : undefined,
+        decision === 'approved' ? (dailySubsPayload ? dailySubsPayload[0]?.substituteNip : selectedSub?.nip) : undefined,
+        decision === 'approved' ? dailySubsPayload : undefined
       );
 
       setModalOpen(false);
       const leaveSuccessMsg = `Pengajuan ${selectedLeave.userName} berhasil di-${decision === 'approved' ? 'setujui' : 'tolak'}.`;
       setActionSuccess(
         `${leaveSuccessMsg} ${
-          decision === 'approved' && selectedSub
-            ? `Karyawan Pengganti Resmi: ${selectedSub.fullName || selectedSub.name} (${selectedSub.nip}). Notifikasi WhatsApp & aplikasi telah dikirimkan ke seluruh pihak.`
+          decision === 'approved' && (dailySubsPayload || selectedSub)
+            ? `Karyawan Pengganti Resmi: ${subNameFormatted}. Notifikasi WhatsApp & aplikasi telah dikirimkan ke seluruh pihak.`
             : ''
         }`
       );
@@ -2304,6 +2356,141 @@ export const HrmApprovalPage: React.FC = () => {
 
             {/* Smart Substitute Recommendation Engine (Zero Vacancy Rule) */}
             {decision === 'approved' && (
+              dailySlots.length > 1 ? (
+                <div className="space-y-3 p-3.5 bg-gradient-to-br from-blue-500/10 via-indigo-500/10 to-transparent border border-blue-500/30 rounded-xl">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div>
+                      <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                        <span>Rotasi Pengganti Cuti Multi-Hari (1 Hari = 1 Orang Pengganti)</span>
+                      </Label>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        SOP PT FRP: Karyawan pengganti hanya berlaku 1 hari. Sistem telah menyiapkan {dailySlots.length} rekomendasi personil berbeda untuk tiap hari guna mencegah kelelahan dan meratakan lembur.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const autoMap: Record<string, { substituteId: string; substituteName: string; substituteNip?: string }> = {};
+                        dailySlots.forEach((slot) => {
+                          if (slot.recommendedSubstitute) {
+                            autoMap[slot.date] = {
+                              substituteId: slot.recommendedSubstitute.id,
+                              substituteName: slot.recommendedSubstitute.name,
+                              substituteNip: slot.recommendedSubstitute.nip,
+                            };
+                          }
+                        });
+                        setSelectedDailySubs(autoMap);
+                        toast.success(`Diterapkan otomatis ${dailySlots.length} karyawan pengganti terbaik berbeda per hari!`);
+                      }}
+                      className="h-7 text-[10.5px] font-bold gap-1 rounded-lg border-blue-500/40 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10"
+                    >
+                      <Zap className="w-3 h-3" />
+                      Terapkan 1-Klik Rekomendasi
+                    </Button>
+                  </div>
+
+                  {/* Cards per Day */}
+                  <div className="space-y-2 mt-2">
+                    {dailySlots.map((slot, sIdx) => {
+                      const currentPick = selectedDailySubs[slot.date];
+                      const hasConflict = dailySlots.some(
+                        (other) => other.date !== slot.date && selectedDailySubs[other.date]?.substituteId === currentPick?.substituteId && currentPick?.substituteId
+                      );
+
+                      return (
+                        <div
+                          key={slot.date}
+                          className={`p-3 rounded-xl border transition-all ${
+                            hasConflict
+                              ? 'bg-rose-500/10 border-rose-500/50'
+                              : currentPick?.substituteId
+                              ? 'bg-background/90 border-blue-500/30 shadow-xs'
+                              : 'bg-background/60 border-border'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30 font-bold text-[10px]">
+                                Hari ke-{sIdx + 1}
+                              </Badge>
+                              <span className="font-bold text-xs text-foreground">
+                                {slot.dayName}, {slot.date}
+                              </span>
+                            </div>
+                            {slot.recommendedSubstitute && (
+                              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" />
+                                Rekomendasi Sistem: {slot.recommendedSubstitute.name}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Selector */}
+                          <div className="flex items-center gap-2">
+                            <select
+                              value={currentPick?.substituteId || ''}
+                              onChange={(e) => {
+                                const pickedId = e.target.value;
+                                const match = slot.candidates.find((c) => c.id === pickedId) || users.find((u) => u.id === pickedId);
+                                setSelectedDailySubs((prev) => ({
+                                  ...prev,
+                                  [slot.date]: {
+                                    substituteId: pickedId,
+                                    substituteName: match?.fullName || match?.name || '',
+                                    substituteNip: match?.nip || '',
+                                  },
+                                }));
+                              }}
+                              className="flex-1 h-9 px-2.5 rounded-lg border border-border bg-background text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                            >
+                              <option value="">-- Pilih Petugas Pengganti Hari Ini --</option>
+                              {slot.candidates.map((cand) => {
+                                const isUsedOther = dailySlots.some(
+                                  (other) => other.date !== slot.date && selectedDailySubs[other.date]?.substituteId === cand.id
+                                );
+                                return (
+                                  <option key={cand.id} value={cand.id}>
+                                    {cand.fullName || cand.name} ({cand.nip}) • {cand.categoryTitle} {isUsedOther ? '⚠️ [Dipilih di Hari Lain]' : `(Skor: ${cand.score}%)`}
+                                  </option>
+                                );
+                              })}
+                            </select>
+
+                            {currentPick?.substituteId && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  const cand = slot.candidates.find((c) => c.id === currentPick.substituteId);
+                                  if (cand) handleSendWaReminder({ ...cand, dutyDate: slot.date });
+                                }}
+                                disabled={sendingReminderId === currentPick.substituteId}
+                                className="h-9 px-2.5 text-[11px] gap-1 shrink-0 rounded-lg text-emerald-600 border-emerald-500/30 hover:bg-emerald-500/10 font-semibold"
+                                title="Kirim reminder WhatsApp"
+                              >
+                                <Zap className="w-3 h-3 text-emerald-600" />
+                                <span>WA</span>
+                              </Button>
+                            )}
+                          </div>
+
+                          {hasConflict && (
+                            <p className="text-[10px] text-destructive font-semibold mt-1.5 flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3 shrink-0" />
+                              Karyawan ini sudah dipilih di hari lain! Sesuai aturan, 1 karyawan hanya boleh menggantikan 1 hari saja.
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
               <div className="space-y-2.5 p-3.5 bg-blue-500/10 border border-blue-500/25 rounded-xl">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-bold text-blue-950 dark:text-blue-200 flex items-center gap-1.5">
@@ -2496,6 +2683,7 @@ export const HrmApprovalPage: React.FC = () => {
                   </div>
                 )}
               </div>
+              )
             )}
 
             <div className="space-y-1">

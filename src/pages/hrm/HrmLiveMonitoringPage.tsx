@@ -41,6 +41,7 @@ import {
   FileText,
   Download,
   Printer,
+  Coins,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -72,6 +73,7 @@ import { HrmAssignFieldLocationModal } from '@/components/hrm/HrmAssignFieldLoca
 import { HrmPatrolWatermarkPreviewModal } from '@/components/hrm/HrmPatrolWatermarkPreviewModal';
 import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMonthlyCalendarModal';
 import { HrmEmployeeRealtimeReportModal } from '@/components/hrm/HrmEmployeeRealtimeReportModal';
+import { HrmMonthlyFinancialRecapModal } from '@/components/hrm/HrmMonthlyFinancialRecapModal';
 
 export const HrmLiveMonitoringPage: React.FC = () => {
   const { user } = useHrmAuth();
@@ -137,6 +139,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [selectedReportUser, setSelectedReportUser] = useState<UserProfile | null>(null);
   const [selectedReportAttendance, setSelectedReportAttendance] = useState<AttendanceRecord | null>(null);
   const [selectedReportShift, setSelectedReportShift] = useState<any>(null);
+  const [financialRecapModalOpen, setFinancialRecapModalOpen] = useState<boolean>(false);
 
   const handleOpenRealtimeReport = (u: UserProfile, att?: AttendanceRecord | null, sft?: any) => {
     setSelectedReportUser(u);
@@ -574,6 +577,79 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   }, [divisions, users, activePeriodAttendances]);
 
   const allShifts = React.useMemo(() => hrmService.getShifts(), []);
+
+  // Perhitungan Realtime Finansial & Kuota Anggaran Lembur Sah (Shipment Rp 72 Jt, Wisma Rp 4 Jt, Total Rp 76 Jt)
+  const financialStats = React.useMemo(() => {
+    const curMonth = currentMonthStr; // 'YYYY-MM'
+    const officialUsers = users.filter((u) => isOfficialFrEmployee(u));
+    const BASE_SALARY = 4045050;
+    const BPJS_RATE = 0.04; // 3% TK + 1% Kes = Rp 161.802
+
+    const monthOvertimes = overtimes.filter((o) => {
+      const d = o.date || (o as any).createdAt || '';
+      return d.startsWith(curMonth) && (o.status === 'approved' || (o as any).status === 'completed');
+    });
+
+    let shipmentSpent = 0;
+    let shipmentHours = 0;
+    let wismaSpent = 0;
+    let wismaHours = 0;
+
+    monthOvertimes.forEach((o) => {
+      const u = users.find((usr) => usr.id === o.userId || usr.nip === o.userNip);
+      const nip = (u?.nip || o.userNip || '').toUpperCase();
+      const grp = (u?.operationalGroup || '').toUpperCase();
+      const numMatch = nip.match(/(\d+)/);
+      const nipNum = numMatch ? parseInt(numMatch[1], 10) : 999;
+      const isWisma = grp.includes('RUMAH') || grp.includes('WISMA') || (nipNum >= 1 && nipNum <= 33);
+      const amt = Number(o.compensationAmount || o.totalPay || 0);
+      const hrs = Number(o.approvedHours || o.durationHours || 0);
+
+      if (isWisma) {
+        wismaSpent += amt;
+        wismaHours += hrs;
+      } else {
+        shipmentSpent += amt;
+        shipmentHours += hrs;
+      }
+    });
+
+    const totalOvertimeSpent = shipmentSpent + wismaSpent;
+    const totalOvertimeHours = shipmentHours + wismaHours;
+    const TOTAL_BUDGET = 76000000;
+    const SHIPMENT_BUDGET = 72000000;
+    const WISMA_BUDGET = 4000000;
+
+    const remainingBudget = Math.max(0, TOTAL_BUDGET - totalOvertimeSpent);
+    const budgetPercent = Math.min(100, Math.round((totalOvertimeSpent / TOTAL_BUDGET) * 100));
+
+    // Standar 80 Personil Operasional Sah PT FRP
+    const totalBaseSalary = officialUsers.length * BASE_SALARY;
+    const totalBpjsDeduction = officialUsers.length * Math.round(BASE_SALARY * BPJS_RATE);
+    const totalEstimatedNet = totalBaseSalary - totalBpjsDeduction + totalOvertimeSpent;
+
+    return {
+      curMonth,
+      totalUsers: officialUsers.length,
+      TOTAL_BUDGET,
+      SHIPMENT_BUDGET,
+      WISMA_BUDGET,
+      totalOvertimeSpent,
+      totalOvertimeHours,
+      shipmentSpent,
+      shipmentHours,
+      wismaSpent,
+      wismaHours,
+      remainingBudget,
+      budgetPercent,
+      totalBaseSalary,
+      totalBpjsDeduction,
+      totalEstimatedNet,
+      isNearLimit: budgetPercent >= 85,
+      isExceeded: totalOvertimeSpent >= TOTAL_BUDGET,
+    };
+  }, [currentMonthStr, users, overtimes]);
+
   const monitoredList = users.map((u) => {
     if (periodScope === 'today') {
       const att = activePeriodAttendances.find(
@@ -691,6 +767,21 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         calculatedStatus = 'present';
       }
 
+      // Hitung lembur live hari ini & lembur bulan berjalan untuk karyawan
+      const todayOt = overtimes.find((o) =>
+        (o.userId === u.id || o.userNip === u.nip || (o as any).employeeNip === u.nip) &&
+        o.date === todayStr &&
+        (o.status === 'approved' || (o as any).status === 'completed')
+      );
+      const userMonthOts = overtimes.filter((o) => {
+        const d = o.date || (o as any).createdAt || '';
+        return (o.userId === u.id || o.userNip === u.nip || (o as any).employeeNip === u.nip) &&
+          d.startsWith(currentMonthStr) &&
+          (o.status === 'approved' || (o as any).status === 'completed');
+      });
+      const userMonthOtHours = userMonthOts.reduce((sum, o) => sum + Number(o.approvedHours || o.durationHours || 0), 0);
+      const userMonthOtPay = userMonthOts.reduce((sum, o) => sum + Number(o.compensationAmount || o.totalPay || 0), 0);
+
       return {
         user: u,
         attendance: att,
@@ -700,6 +791,12 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         totalLateMinutes: effectiveLateMinutes,
         lateCount: isLate ? 1 : 0,
         totalAttCount: (att && !isAlfaRecord && !isLeaveRecord && !isOffRecord) ? 1 : 0,
+        todayOvertime: todayOt || null,
+        todayOvertimeHours: todayOt ? Number(todayOt.approvedHours || todayOt.durationHours || 0) : 0,
+        todayOvertimePay: todayOt ? Number(todayOt.compensationAmount || todayOt.totalPay || 0) : 0,
+        monthlyOvertimeHours: userMonthOtHours,
+        monthlyOvertimePay: userMonthOtPay,
+        monthlyOvertimeCount: userMonthOts.length,
       };
     } else {
       const userAtts = activePeriodAttendances.filter(
@@ -743,13 +840,32 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       }, 0);
       const latestAtt = userAtts[userAtts.length - 1];
 
+      const sched = hrmService.getEmployeeTodaySchedule(u.id, getTodayDateStr());
+      const uShift = resolveEffectiveShift(u, allShifts, sched);
+      const userPeriodOts = overtimes.filter((o) => {
+        const d = o.date || (o as any).createdAt || '';
+        const matchPeriod = periodScope === 'month' ? d.startsWith(selectedMonth) : d.startsWith(currentYearStr);
+        return (o.userId === u.id || o.userNip === u.nip || (o as any).employeeNip === u.nip) &&
+          matchPeriod &&
+          (o.status === 'approved' || (o as any).status === 'completed');
+      });
+      const periodOtHours = userPeriodOts.reduce((sum, o) => sum + Number(o.approvedHours || o.durationHours || 0), 0);
+      const periodOtPay = userPeriodOts.reduce((sum, o) => sum + Number(o.compensationAmount || o.totalPay || 0), 0);
+
       return {
         user: u,
         attendance: latestAtt,
         status: userAtts.length === 0 ? 'absent' : lateAtts.length > 0 ? 'late' : 'present',
+        shift: uShift,
         totalLateMinutes: totLateMin,
         lateCount: lateAtts.length,
         totalAttCount: userAtts.length,
+        todayOvertime: null,
+        todayOvertimeHours: 0,
+        todayOvertimePay: 0,
+        monthlyOvertimeHours: periodOtHours,
+        monthlyOvertimePay: periodOtPay,
+        monthlyOvertimeCount: userPeriodOts.length,
       };
     }
   });
@@ -873,6 +989,76 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           </div>
         ))}
       </div>
+
+      {/* ── REALTIME OVERTIME BUDGET GUARDRAIL & MONTHLY FINANCIAL RECAP BANNER ── */}
+      <Card className="border-border/80 bg-gradient-to-br from-card via-card to-amber-500/5 rounded-2xl shadow-xs overflow-hidden">
+        <CardContent className="p-4 sm:p-5">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400 font-mono text-xs font-semibold px-2.5 py-0.5">
+                  <Coins size={12} className="mr-1 inline" /> PLAFON ANGGARAN LEMBUR RESMI PT FRP
+                </Badge>
+                <Badge className={financialStats.isExceeded ? 'bg-rose-600 text-white font-mono text-[11px]' : financialStats.isNearLimit ? 'bg-amber-600 text-white font-mono text-[11px]' : 'bg-emerald-600 text-white font-mono text-[11px]'}>
+                  {financialStats.isExceeded ? 'KUOTA HABIS / KUNCI AKTIF' : financialStats.isNearLimit ? 'SIAGA ANGGARAN' : 'ANGGARAN AMAN'}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Monitoring anggaran lembur sah (80 Personil) &amp; estimasi nominal gaji tersinkronisasi database secara realtime.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 self-stretch lg:self-auto">
+              <Button
+                type="button"
+                onClick={() => setFinancialRecapModalOpen(true)}
+                className="bg-amber-600 hover:bg-amber-700 text-white text-xs h-9 px-4 rounded-xl font-semibold gap-2 shadow-xs transition-all w-full sm:w-auto"
+              >
+                <Coins size={14} />
+                <span>Buka Rekap Gaji &amp; Lembur Realtime</span>
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 pt-4 border-t border-border/60 text-xs">
+            <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
+              <span className="text-[11px] text-muted-foreground block">Plafon Sah Lembur (Total)</span>
+              <span className="text-base font-bold text-foreground font-mono">Rp 76.000.000</span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">Shipment: Rp 72 Jt • Wisma: Rp 4 Jt</span>
+            </div>
+
+            <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
+              <span className="text-[11px] text-muted-foreground block">Realisasi Lembur Berjalan</span>
+              <span className="text-base font-bold text-amber-600 dark:text-amber-400 font-mono">
+                Rp {financialStats.totalOvertimeSpent.toLocaleString('id-ID')}
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">
+                {financialStats.totalOvertimeHours} Jam • {financialStats.budgetPercent}% Terserap
+              </span>
+            </div>
+
+            <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
+              <span className="text-[11px] text-muted-foreground block">Sisa Anggaran Lembur</span>
+              <span className={`text-base font-bold font-mono ${financialStats.remainingBudget === 0 ? 'text-rose-600' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                Rp {financialStats.remainingBudget.toLocaleString('id-ID')}
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">
+                {financialStats.remainingBudget === 0 ? 'Pencegahan overbudget aktif' : 'Kuota lembur masih tersedia'}
+              </span>
+            </div>
+
+            <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
+              <span className="text-[11px] text-muted-foreground block">Estimasi Payroll Bersih Realtime</span>
+              <span className="text-base font-bold text-foreground font-mono">
+                Rp {financialStats.totalEstimatedNet.toLocaleString('id-ID')}
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">
+                Gaji Pokok: Rp 323.6 Jt • BPJS: -Rp 12.9 Jt
+              </span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Status Counters */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3.5">
@@ -1146,6 +1332,17 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setFinancialRecapModalOpen(true)}
+                className="h-9 px-3 text-xs rounded-xl gap-1.5 border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 font-semibold shadow-xs"
+                title="Buka Rekapan Gaji & Lembur Realtime Seluruh Karyawan (Plafon Rp 76 Jt)"
+              >
+                <Coins size={13} /> Rekap Gaji &amp; Lembur
+              </Button>
+
               <Button
                 type="button"
                 size="sm"
@@ -1860,30 +2057,34 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               <TableHeader className="bg-muted/40">
                 <TableRow className="hover:bg-transparent border-b border-border/70 text-xs">
                   <TableHead className="w-12 text-center font-semibold text-muted-foreground">#</TableHead>
-                  <TableHead className="min-w-[220px] font-semibold text-muted-foreground">Karyawan</TableHead>
-                  <TableHead className="min-w-[150px] font-semibold text-muted-foreground">Divisi & Jabatan</TableHead>
-                  <TableHead className="min-w-[130px] text-center font-semibold text-muted-foreground">
+                  <TableHead className="min-w-[200px] font-semibold text-muted-foreground">Karyawan</TableHead>
+                  <TableHead className="min-w-[140px] font-semibold text-muted-foreground">Divisi &amp; Jabatan</TableHead>
+                  <TableHead className="min-w-[125px] text-center font-semibold text-muted-foreground">Jadwal Shift</TableHead>
+                  <TableHead className="min-w-[125px] text-center font-semibold text-muted-foreground">
                     {periodScope === 'today' ? 'Status Kehadiran' : 'Total Kehadiran'}
                   </TableHead>
-                  <TableHead className="min-w-[110px] text-center font-semibold text-muted-foreground">
+                  <TableHead className="min-w-[100px] text-center font-semibold text-muted-foreground">
                     {periodScope === 'today' ? 'Jam Masuk' : 'Frekuensi Terlambat'}
                   </TableHead>
-                  <TableHead className="min-w-[110px] text-center font-semibold text-muted-foreground">
+                  <TableHead className="min-w-[100px] text-center font-semibold text-muted-foreground">
                     {periodScope === 'today' ? 'Jam Pulang' : 'Denda Payroll'}
                   </TableHead>
-                  <TableHead className="min-w-[170px] font-semibold text-muted-foreground">Verifikasi Keamanan</TableHead>
-                  <TableHead className="min-w-[220px] text-right font-semibold text-muted-foreground">Tindakan &amp; Laporan</TableHead>
+                  <TableHead className="min-w-[120px] text-center font-semibold text-muted-foreground">
+                    {periodScope === 'today' ? 'Lembur (Jam) Live' : 'Total Lembur'}
+                  </TableHead>
+                  <TableHead className="min-w-[160px] font-semibold text-muted-foreground">Verifikasi Keamanan</TableHead>
+                  <TableHead className="min-w-[210px] text-right font-semibold text-muted-foreground">Tindakan &amp; Laporan</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody className="divide-y divide-border/60">
                 {filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-12 text-center text-muted-foreground text-xs">
+                    <TableCell colSpan={10} className="py-12 text-center text-muted-foreground text-xs">
                       Tidak ada data karyawan yang sesuai dengan kriteria filter.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filtered.map(({ user: u, attendance: att, status, absentSubtype, shift, totalLateMinutes, lateCount, totalAttCount }, idx) => {
+                  filtered.map(({ user: u, attendance: att, status, absentSubtype, shift, totalLateMinutes, lateCount, totalAttCount, todayOvertimeHours, todayOvertimePay, monthlyOvertimeHours, monthlyOvertimePay, monthlyOvertimeCount }, idx) => {
                     const userAnomaly = radarSummary.items.find((i) => i.userId === u.id);
                     return (
                       <TableRow key={u.id} className="hover:bg-muted/30 transition-colors">
@@ -1942,6 +2143,28 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           <p className="text-[11px] text-muted-foreground capitalize">
                             {u.role === 'admin' ? 'Administrator' : u.role === 'hr' ? 'HR Staff' : 'Karyawan'}
                           </p>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {absentSubtype === 'off' ? (
+                            <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 text-[10px] font-medium">
+                              Libur / OFF
+                            </Badge>
+                          ) : absentSubtype === 'cuti' ? (
+                            <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 text-[10px] font-medium">
+                              Cuti Tahunan
+                            </Badge>
+                          ) : shift ? (
+                            <div className="inline-flex flex-col items-center">
+                              <Badge variant="outline" className="text-[10px] font-semibold px-2 py-0.5 border-indigo-500/30 bg-indigo-50/70 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
+                                {shift.code || shift.name}
+                              </Badge>
+                              <span className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                                {shift.startTime ? `${shift.startTime.slice(0, 5)} - ${shift.endTime.slice(0, 5)}` : 'Non-Shift'}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground font-mono">Day Shift</span>
+                          )}
                         </TableCell>
                         <TableCell className="text-center">
                           {periodScope === 'today' ? (
@@ -2027,8 +2250,36 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                             </span>
                           )}
                         </TableCell>
+                        <TableCell className="text-center">
+                          {periodScope === 'today' ? (
+                            todayOvertimeHours && todayOvertimeHours > 0 ? (
+                              <div className="inline-flex flex-col items-center">
+                                <Badge className="bg-amber-500 hover:bg-amber-600 text-white font-mono text-[10px] px-2 py-0.5 gap-1 shadow-2xs">
+                                  <Clock size={10} /> {todayOvertimeHours} Jam
+                                </Badge>
+                                <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 font-mono mt-0.5" title="Kompensasi lembur hari ini">
+                                  Rp {todayOvertimePay?.toLocaleString('id-ID')}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground/50 font-mono">0 Jam (-)</span>
+                            )
+                          ) : (
+                            monthlyOvertimeHours && monthlyOvertimeHours > 0 ? (
+                              <div className="inline-flex flex-col items-center">
+                                <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px] px-2 py-0.5">
+                                  {monthlyOvertimeHours} Jam ({monthlyOvertimeCount || 1}x)
+                                </Badge>
+                                <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 font-mono mt-0.5">
+                                  Rp {monthlyOvertimePay?.toLocaleString('id-ID')}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground/40 font-mono">0 Jam</span>
+                            )
+                          )}
+                        </TableCell>
                         <TableCell>
-                          {absentSubtype === 'cuti' ? (
                             <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-400 text-[10px] gap-1 rounded-full font-medium">
                               <CheckCircle2 size={10} /> Disahkan Direksi
                             </Badge>
@@ -2846,6 +3097,16 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         attendance={selectedReportAttendance}
         allAttendances={allAttendances}
         shift={selectedReportShift}
+      />
+
+      {/* Modal Rekapitulasi Gaji & Lembur Realtime Seluruh Karyawan (Plafon Rp 76 Jt) */}
+      <HrmMonthlyFinancialRecapModal
+        isOpen={financialRecapModalOpen}
+        onClose={() => setFinancialRecapModalOpen(false)}
+        users={users}
+        overtimes={overtimes}
+        attendances={allAttendances}
+        schedules={todaySchedules}
       />
     </div>
   );

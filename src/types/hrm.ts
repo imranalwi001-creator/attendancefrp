@@ -581,6 +581,33 @@ export interface SmartReliefCandidate {
   otHoursMonth: number;
   waConfirmUrl?: string | null;
   applicantPosts?: FieldAssignedPost[];
+  isAlreadyAssignedAnotherDay?: boolean;
+  assignedDutyDate?: string;
+}
+
+export interface SmartReliefDailySlot {
+  date: string; // YYYY-MM-DD
+  dayIndex: number; // 1, 2, 3...
+  dayName: string; // 'Senin', 'Selasa'...
+  recommendedSubstitute: SmartReliefCandidate | null;
+  candidates: SmartReliefCandidate[];
+}
+
+export interface LeaveDailySubstitute {
+  id?: string;
+  leaveRequestId?: string;
+  dutyDate: string; // YYYY-MM-DD
+  daySequence: number;
+  substituteId: string;
+  substituteName: string;
+  substituteNip?: string;
+  substitutePhone?: string;
+  compensationAmount?: number;
+  confirmationStatus?: 'unconfirmed' | 'pending_wa' | 'confirmed' | 'declined';
+  confirmToken?: string;
+  confirmedAt?: string;
+  overtimeRecordId?: string;
+  notes?: string;
 }
 
 
@@ -725,6 +752,7 @@ export interface LeaveRequest {
   executiveApproverRole?: string;
   executiveApprovedByName?: string;
   executiveActionAt?: string;
+  dailySubstitutes?: LeaveDailySubstitute[];
   createdAt: string;
 }
 

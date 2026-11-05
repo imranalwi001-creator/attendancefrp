@@ -1363,16 +1363,43 @@ export const HrmLeavePage: React.FC = () => {
                     )}
                   </div>
                   <div className="text-foreground font-semibold text-xs">
-                    {selectedDetailLeave.substituteName ? (
+                    {selectedDetailLeave.substituteName || (selectedDetailLeave.dailySubstitutes && selectedDetailLeave.dailySubstitutes.length > 0) ? (
                       <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span>
-                            {selectedDetailLeave.substituteName}{' '}
-                            {selectedDetailLeave.substituteNip && (
-                              <span className="font-mono text-muted-foreground">({selectedDetailLeave.substituteNip})</span>
-                            )}
-                          </span>
-                          {['superadmin', 'admin', 'hrd', 'korlap', 'pimpinan', 'dirut'].includes(user?.role || '') && (
+                        {selectedDetailLeave.dailySubstitutes && selectedDetailLeave.dailySubstitutes.length > 0 ? (
+                          <div className="space-y-1.5 pt-1">
+                            <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
+                              Rotasi Harian (1 Hari = 1 Orang Pengganti Sesuai SOP PT FRP):
+                            </p>
+                            <div className="space-y-1">
+                              {selectedDetailLeave.dailySubstitutes.map((ds, idx) => (
+                                <div key={ds.id || idx} className="flex items-center justify-between p-2 rounded-lg bg-muted/40 border border-border text-xs">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[9.5px]">
+                                      Hari ke-{ds.daySequence || idx + 1}
+                                    </Badge>
+                                    <span className="font-mono text-muted-foreground text-[11px]">{ds.dutyDate}</span>
+                                    <span className="font-bold text-foreground">{ds.substituteName}</span>
+                                    {ds.substituteNip && <span className="font-mono text-[10px] text-muted-foreground">({ds.substituteNip})</span>}
+                                  </div>
+                                  <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[9.5px]">
+                                    SPKL 1 Shift
+                                  </Badge>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between">
+                            <span>
+                              {selectedDetailLeave.substituteName}{' '}
+                              {selectedDetailLeave.substituteNip && (
+                                <span className="font-mono text-muted-foreground">({selectedDetailLeave.substituteNip})</span>
+                              )}
+                            </span>
+                          </div>
+                        )}
+                        {['superadmin', 'admin', 'hrd', 'korlap', 'pimpinan', 'dirut'].includes(user?.role || '') && (
+                          <div className="pt-1 flex justify-end">
                             <Button
                               size="sm"
                               variant="outline"
@@ -1381,10 +1408,10 @@ export const HrmLeavePage: React.FC = () => {
                               className="h-6 px-2 text-[10px] font-bold text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/10 gap-1 rounded-md"
                             >
                               <RotateCcw className={`w-2.5 h-2.5 ${resettingSubId === selectedDetailLeave.id ? 'animate-spin' : ''}`} />
-                              <span>Ganti Pengganti</span>
+                              <span>Ganti / Reset Pengganti</span>
                             </Button>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <span className="text-muted-foreground italic font-normal">

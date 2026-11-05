@@ -2025,9 +2025,15 @@ app.post('/api/attendances/clock-in', async (req, res) => {
              COALESCE(orig_p.assigned_radius_meters, orig_d.radius_meters, 150) as radius,
              COALESCE(orig_p.assigned_location_name, orig_d.location_name, orig_d.name, 'Pos Lapangan') as pos_name
            FROM (
-             -- 1. Pengganti Cuti/Izin yang Disetujui
+             -- 1. Pengganti Cuti/Izin yang Disetujui (Single)
              SELECT user_id as orig_user_id FROM hrm_leave_requests 
              WHERE substitute_id = $1 AND status = 'approved' AND $2::date BETWEEN start_date::date AND end_date::date
+             UNION
+             -- 1B. Pengganti Cuti Harian Multi-Hari yang Disetujui
+             SELECT l.user_id as orig_user_id 
+             FROM hrm_leave_daily_substitutes ds
+             JOIN hrm_leave_requests l ON ds.leave_request_id = l.id
+             WHERE ds.substitute_id = $1 AND l.status = 'approved' AND ds.duty_date = $2::date
              UNION
              -- 2. Pengganti Tukar Shift yang Disetujui
              SELECT requester_id as orig_user_id FROM hrm_shift_swaps 
@@ -3216,6 +3222,11 @@ app.get('/api/field-sentinel/posts', async (req, res) => {
            FROM (
              SELECT user_id as orig_user_id FROM hrm_leave_requests 
              WHERE substitute_id = $1 AND status = 'approved' AND $2::date BETWEEN start_date::date AND end_date::date
+             UNION
+             SELECT l.user_id as orig_user_id 
+             FROM hrm_leave_daily_substitutes ds
+             JOIN hrm_leave_requests l ON ds.leave_request_id = l.id
+             WHERE ds.substitute_id = $1 AND l.status = 'approved' AND ds.duty_date = $2::date
              UNION
              SELECT requester_id as orig_user_id FROM hrm_shift_swaps 
              WHERE substitute_id = $1 AND status = 'approved' AND swap_date = $2::date
@@ -7498,7 +7509,22 @@ app.get('/api/leaves', async (req, res) => {
       SELECT l.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name,
              p.annual_leave_quota, p.used_leave_days, p.division_id as user_division_id,
              ap.full_name as approver_name,
-             sp.phone as substitute_phone, sp.full_name as sub_profile_name, sp.nip as sub_profile_nip
+             sp.phone as substitute_phone, sp.full_name as sub_profile_name, sp.nip as sub_profile_nip,
+             COALESCE((
+               SELECT json_agg(json_build_object(
+                 'id', ds.id,
+                 'dutyDate', ds.duty_date,
+                 'daySequence', ds.day_sequence,
+                 'substituteId', ds.substitute_id,
+                 'substituteName', ds.substitute_name,
+                 'substituteNip', ds.substitute_nip,
+                 'substitutePhone', ds.substitute_phone,
+                 'compensationAmount', ds.compensation_amount,
+                 'confirmationStatus', ds.confirmation_status
+               ) ORDER BY ds.duty_date ASC)
+               FROM hrm_leave_daily_substitutes ds
+               WHERE ds.leave_request_id = l.id
+             ), '[]'::json) as daily_substitutes
       FROM hrm_leave_requests l
       JOIN hrm_profiles p ON l.user_id = p.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
@@ -7535,46 +7561,38 @@ app.get('/api/leaves', async (req, res) => {
   }
 });
 
-// ─── SMART RELIEF VACANCY ENGINE (AI SMART MATCHING 4 TIERS) ────────────────
-async function getSmartReliefRecommendations({ applicantId, startDate, endDate, divisionId, shiftId }) {
-  const targetStart = startDate || new Date().toISOString().split('T')[0];
-  const targetEnd = endDate || targetStart;
+// ─── SMART RELIEF VACANCY ENGINE (AI SMART MATCHING 4 TIERS - DAILY 1-SUBSTITUTE LIMIT) ────────────────
+const INDO_DAY_NAMES_HRM = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
 
-  let validApplicantId = applicantId;
-  let applicantName = 'Karyawan Pemohon';
-  let applicantDivId = divisionId;
-  let applicantShiftId = shiftId;
-  let applicantPosts = [];
-
-  if (applicantId) {
-    const aRes = await pool.query(
-      `SELECT p.id, p.full_name, p.division_id, p.shift_id, p.placement_location,
-              d.name as division_name
-       FROM hrm_profiles p
-       LEFT JOIN hrm_divisions d ON p.division_id = d.id
-       WHERE p.id::text = $1 OR LOWER(p.email) = LOWER($1) OR LOWER(p.nip) = LOWER($1) LIMIT 1`,
-      [applicantId]
-    );
-    if (aRes.rows.length > 0) {
-      const a = aRes.rows[0];
-      validApplicantId = a.id;
-      applicantName = a.full_name;
-      if (!applicantDivId) applicantDivId = a.division_id;
-      if (!applicantShiftId) applicantShiftId = a.shift_id;
-
-      const pRes = await pool.query(
-        `SELECT post_code, post_name, latitude, longitude, radius_meters
-         FROM hrm_field_assigned_posts 
-         WHERE user_id = $1 AND is_active = true`,
-        [a.id]
-      );
-      applicantPosts = pRes.rows;
+function getDatesRangeHelper(startStr, endStr) {
+  const dates = [];
+  try {
+    const s = new Date(startStr);
+    const e = new Date(endStr);
+    if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+      return [startStr || new Date().toISOString().split('T')[0]];
     }
+    const cur = new Date(s);
+    let count = 0;
+    while (cur <= e && count < 31) {
+      dates.push(cur.toISOString().split('T')[0]);
+      cur.setDate(cur.getDate() + 1);
+      count++;
+    }
+  } catch (_) {
+    return [startStr];
   }
+  return dates.length > 0 ? dates : [startStr];
+}
 
-  // HARD CONSTRAINTS:
-  // 1. Exclude applicant themselves
-  // 2. BLOKIR TOTAL Karyawan yang sedang Cuti / Izin / Sakit pada rentang tanggal tersebut
+async function evaluateCandidatesForSingleDate({
+  validApplicantId,
+  targetDate,
+  applicantDivId,
+  applicantName,
+  applicantPosts,
+  allocatedSubstituteIds
+}) {
   const query = `
     SELECT p.id, p.nip, p.full_name, p.phone, p.avatar_url, p.division_id, 
            COALESCE(d.name, 'Operasional') as division_name,
@@ -7596,27 +7614,23 @@ async function getSmartReliefRecommendations({ applicantId, startDate, endDate, 
         SELECT 1 FROM hrm_leave_requests lr
         WHERE lr.user_id = p.id
           AND lr.status IN ('approved', 'pending')
-          AND (
-            (lr.start_date <= $3::date AND lr.end_date >= $2::date)
-          )
+          AND (lr.start_date <= $2::date AND lr.end_date >= $2::date)
       )
-    ORDER BY (p.division_id::text = $4) DESC, p.full_name ASC;
+    ORDER BY (p.division_id::text = $3) DESC, p.full_name ASC;
   `;
 
   const result = await pool.query(query, [
     validApplicantId || '00000000-0000-0000-0000-000000000000',
-    targetStart,
-    targetEnd,
+    targetDate,
     applicantDivId ? String(applicantDivId) : ''
   ]);
 
+  const ranked = [];
   const offDutyList = [];
   const differentShiftList = [];
   const extendedShiftList = [];
   const shiftTransitionList = [];
-  const allRanked = [];
 
-  // Legacy groupings for backward compatibility
   const sameDivOff = [];
   const sameDivShift = [];
   const globalAll = [];
@@ -7676,14 +7690,21 @@ async function getSmartReliefRecommendations({ applicantId, startDate, endDate, 
       reasons.push(`Lembur tinggi (${otMonth} jam)`);
     }
 
-    finalScore = Math.max(50, Math.min(99, Math.round(finalScore)));
+    // ─── ATURAN 1 HARI = 1 ORANG PENGGANTI (ANTI-KELELAHAN & SINGLE-DAY LIMIT) ───
+    const isAlreadyAssignedAnotherDay = allocatedSubstituteIds && allocatedSubstituteIds.has(row.id);
+    if (isAlreadyAssignedAnotherDay) {
+      finalScore -= 60; // Strong penalty agar merekomendasikan karyawan berbeda tiap hari
+      reasons.unshift('⚠️ Sudah dialokasikan di hari lain (Batas Maks 1 Hari Saja)');
+    }
+
+    finalScore = Math.max(10, Math.min(99, Math.round(finalScore)));
 
     const waText = `Halo Rekan *${row.full_name}*, kami dari Tim Pengawas PT FRP.\n\n` +
-      `Rekan kerja Anda *${applicantName}* mengajukan cuti/izin untuk tanggal *${targetStart}* s/d *${targetEnd}*.\n` +
-      `Sesuai aturan *Zero Vacancy*, pos dinas tidak boleh kosong.\n\n` +
+      `Rekan kerja Anda *${applicantName}* mengajukan cuti/izin untuk tanggal *${targetDate}*.\n` +
+      `Sesuai aturan *Zero Vacancy & Batas Tugas 1 Hari*, pos dinas tidak boleh kosong.\n\n` +
       `📋 *Status Anda:* ${categoryTitle}\n` +
       `💰 *Kompensasi:* ${compensationLabel}\n\n` +
-      `Apakah Anda bersedia bertugas sebagai *Petugas Pengganti Pos* pada tanggal tersebut? (Tugas ini resmi dan dihitung lembur).\n` +
+      `Apakah Anda bersedia bertugas sebagai *Petugas Pengganti Pos* pada tanggal ${targetDate}? (Tugas ini resmi dan dihitung lembur SPKL 8 Jam).\n` +
       `Mohon konfirmasinya. Terima kasih.`;
 
     const waConfirmUrl = cleanPhone ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(waText)}` : null;
@@ -7706,16 +7727,16 @@ async function getSmartReliefRecommendations({ applicantId, startDate, endDate, 
       hourlyOvertimeRate: Number(row.hourly_overtime_rate || 23381.79),
       otHoursMonth: otMonth,
       waConfirmUrl,
-      applicantPosts
+      applicantPosts,
+      isAlreadyAssignedAnotherDay
     };
 
-    allRanked.push(candidate);
+    ranked.push(candidate);
     if (recommendationType === 'off_duty') offDutyList.push(candidate);
     else if (recommendationType === 'different_shift') differentShiftList.push(candidate);
     else if (recommendationType === 'extended_shift') extendedShiftList.push(candidate);
     else shiftTransitionList.push(candidate);
 
-    // Legacy support
     if (isSameDivision) {
       if (isOff) {
         sameDivOff.push({ ...candidate, category: 'same_div_off', reason: 'Divisi Sama & Sedang Libur/OFF (Kandidat Terbaik)' });
@@ -7727,22 +7748,121 @@ async function getSmartReliefRecommendations({ applicantId, startDate, endDate, 
     }
   }
 
-  allRanked.sort((a, b) => b.score - a.score);
+  ranked.sort((a, b) => b.score - a.score);
   offDutyList.sort((a, b) => b.score - a.score);
   differentShiftList.sort((a, b) => b.score - a.score);
   extendedShiftList.sort((a, b) => b.score - a.score);
   shiftTransitionList.sort((a, b) => b.score - a.score);
 
+  return { ranked, offDutyList, differentShiftList, extendedShiftList, shiftTransitionList, sameDivOff, sameDivShift, globalAll };
+}
+
+async function getSmartReliefRecommendations({ applicantId, startDate, endDate, divisionId, shiftId }) {
+  const targetStart = startDate || new Date().toISOString().split('T')[0];
+  const targetEnd = endDate || targetStart;
+
+  let validApplicantId = applicantId;
+  let applicantName = 'Karyawan Pemohon';
+  let applicantDivId = divisionId;
+  let applicantShiftId = shiftId;
+  let applicantPosts = [];
+
+  if (applicantId) {
+    const aRes = await pool.query(
+      `SELECT p.id, p.full_name, p.division_id, p.shift_id, p.placement_location,
+              d.name as division_name
+       FROM hrm_profiles p
+       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+       WHERE p.id::text = $1 OR LOWER(p.email) = LOWER($1) OR LOWER(p.nip) = LOWER($1) LIMIT 1`,
+      [applicantId]
+    );
+    if (aRes.rows.length > 0) {
+      const a = aRes.rows[0];
+      validApplicantId = a.id;
+      applicantName = a.full_name;
+      if (!applicantDivId) applicantDivId = a.division_id;
+      if (!applicantShiftId) applicantShiftId = a.shift_id;
+
+      const pRes = await pool.query(
+        `SELECT post_code, post_name, latitude, longitude, radius_meters
+         FROM hrm_field_assigned_posts 
+         WHERE user_id = $1 AND is_active = true`,
+        [a.id]
+      );
+      applicantPosts = pRes.rows;
+    }
+  }
+
+  const dateList = getDatesRangeHelper(targetStart, targetEnd);
+  const allocatedSubstituteIds = new Set();
+  const dailySlots = [];
+
+  let combinedAllRanked = [];
+  let combinedOffDuty = [];
+  let combinedDifferentShift = [];
+  let combinedExtendedShift = [];
+  let combinedShiftTransition = [];
+  let combinedSameDivOff = [];
+  let combinedSameDivShift = [];
+  let combinedGlobalAll = [];
+
+  for (let idx = 0; idx < dateList.length; idx++) {
+    const curDate = dateList[idx];
+    const dtObj = new Date(curDate);
+    const dayName = INDO_DAY_NAMES_HRM[dtObj.getDay()] || `Hari ke-${idx + 1}`;
+
+    const evalRes = await evaluateCandidatesForSingleDate({
+      validApplicantId,
+      targetDate: curDate,
+      applicantDivId,
+      applicantName,
+      applicantPosts,
+      allocatedSubstituteIds
+    });
+
+    // Pilih kandidat terbaik yang BELUM bertugas di hari lain
+    let chosen = evalRes.ranked.find(c => !c.isAlreadyAssignedAnotherDay);
+    if (!chosen && evalRes.ranked.length > 0) {
+      chosen = evalRes.ranked[0]; // fallback jika personil habis
+    }
+
+    if (chosen) {
+      allocatedSubstituteIds.add(chosen.id);
+    }
+
+    dailySlots.push({
+      date: curDate,
+      dayIndex: idx + 1,
+      dayName,
+      recommendedSubstitute: chosen || null,
+      candidates: evalRes.ranked
+    });
+
+    if (idx === 0) {
+      combinedAllRanked = evalRes.ranked;
+      combinedOffDuty = evalRes.offDutyList;
+      combinedDifferentShift = evalRes.differentShiftList;
+      combinedExtendedShift = evalRes.extendedShiftList;
+      combinedShiftTransition = evalRes.shiftTransitionList;
+      combinedSameDivOff = evalRes.sameDivOff;
+      combinedSameDivShift = evalRes.sameDivShift;
+      combinedGlobalAll = evalRes.globalAll;
+    }
+  }
+
   return {
-    allRanked,
-    offDutyList,
-    differentShiftList,
-    extendedShiftList,
-    shiftTransitionList,
-    sameDivOff,
-    sameDivShift,
-    globalAll,
-    total: allRanked.length,
+    isMultiDay: dateList.length > 1,
+    totalDays: dateList.length,
+    dailySlots,
+    allRanked: combinedAllRanked,
+    offDutyList: combinedOffDuty,
+    differentShiftList: combinedDifferentShift,
+    extendedShiftList: combinedExtendedShift,
+    shiftTransitionList: combinedShiftTransition,
+    sameDivOff: combinedSameDivOff,
+    sameDivShift: combinedSameDivShift,
+    globalAll: combinedGlobalAll,
+    total: combinedAllRanked.length,
     applicantPosts
   };
 }
@@ -8433,6 +8553,12 @@ app.post('/api/leaves/:id/reset-substitute', async (req, res) => {
       SET status = 'cancelled',
           notes = COALESCE(notes, '') || E'\\n[Direset/Dibatalkan oleh Korlap: Karyawan berhalangan hadir]'
       WHERE reference_id = $1
+    `, [leave.id]);
+
+    // 3A. Hapus rekapan alokasi pengganti harian di hrm_leave_daily_substitutes
+    await pool.query(`
+      DELETE FROM hrm_leave_daily_substitutes
+      WHERE leave_request_id = $1
     `, [leave.id]);
 
     // 3B. Pulihkan Jadwal di hrm_employee_schedules ke Roster Asal (Libur / OFF)
@@ -9400,7 +9526,7 @@ app.post('/api/leaves', async (req, res) => {
 // Update Status Cuti / Izin / Izin Darurat (Approval oleh Korlap, Admin, K3, atau Pimpinan)
 app.put('/api/leaves/:id/status', async (req, res) => {
   const { id } = req.params;
-  const { status, approverId, approverName, notes, substituteId, substituteName, substituteNip } = req.body;
+  const { status, approverId, approverName, notes, substituteId, substituteName, substituteNip, dailySubstitutes } = req.body;
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ success: false, error: 'Status tidak valid (hanya approved / rejected)' });
   }
@@ -9425,7 +9551,8 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       nip: leave.user_nip,
       email: leave.user_email,
     });
-    if (!isSpecial3 && status === 'approved' && !substituteName && !leave.substitute_name) {
+    const hasDaily = Array.isArray(dailySubstitutes) && dailySubstitutes.length > 0;
+    if (!isSpecial3 && status === 'approved' && !substituteName && !leave.substitute_name && !hasDaily) {
       return res.status(400).json({
         success: false,
         error: 'Sesuai aturan Zero Vacancy, pekerjaan tidak boleh kosong! Anda wajib menetapkan Karyawan Pengganti Pos sebelum menyetujui pengajuan cuti.',
@@ -9444,8 +9571,17 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       if (sRes.rows.length > 0) validSubId = sRes.rows[0].id;
     }
 
-    const finalSubName = substituteName || leave.substitute_name;
-    const finalSubNip = substituteNip || leave.substitute_nip;
+    let finalSubName = substituteName || leave.substitute_name;
+    let finalSubNip = substituteNip || leave.substitute_nip;
+
+    // Jika menggunakan format rotasi harian (1 hari = 1 orang)
+    let dailySummaryFormatted = '';
+    if (hasDaily) {
+      const distinctNames = dailySubstitutes.map(s => s.substituteName || s.name).filter(Boolean);
+      finalSubName = distinctNames.join(', ');
+      validSubId = dailySubstitutes[0].substituteId || dailySubstitutes[0].id;
+      finalSubNip = dailySubstitutes[0].substituteNip || dailySubstitutes[0].nip;
+    }
 
     const updateRes = await pool.query(`
       UPDATE hrm_leave_requests SET
@@ -9493,11 +9629,127 @@ app.put('/api/leaves/:id/status', async (req, res) => {
 
     const typeLabel = (leave.leave_type || 'cuti').replace(/_/g, ' ').toUpperCase();
     const statusText = status === 'approved' ? 'DISETUJUI' : 'DITOLAK';
-    const subNotice = finalSubName ? `\n🛡️ *Petugas Pengganti Pos:* *${finalSubName}* (${finalSubNip || '-'})` : '';
 
     if (status === 'approved') {
-      // 3. AUTO-ASSIGN RELIEF SUBSTITUTE: Pewarisan Titik Pos Otomatis + SPKL Pengganti + Notifikasi WhatsApp
-      if (validSubId) {
+      // 3. AUTO-ASSIGN RELIEF SUBSTITUTES:
+      if (hasDaily) {
+        // Hapus alokasi lama jika ada
+        await pool.query('DELETE FROM hrm_leave_daily_substitutes WHERE leave_request_id = $1', [leave.id]);
+
+        const summaryLines = [];
+        for (let idx = 0; idx < dailySubstitutes.length; idx++) {
+          const ds = dailySubstitutes[idx];
+          const subUserId = ds.substituteId || ds.id;
+          const dutyDate = ds.date || ds.dutyDate;
+
+          const sProfRes = await pool.query(
+            'SELECT id, full_name, nip, phone, COALESCE(hourly_overtime_rate, 23381.79) as rate FROM hrm_profiles p LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id WHERE p.id = $1',
+            [subUserId]
+          );
+          const sProf = sProfRes.rows[0] || { id: subUserId, full_name: ds.substituteName || ds.name, nip: ds.substituteNip || ds.nip, phone: '' };
+          const compensation = Math.round(parseFloat(sProf.rate || 23381.79) * 8.0);
+          const subToken = crypto.randomBytes(12).toString('hex');
+
+          await pool.query(`
+            INSERT INTO hrm_leave_daily_substitutes (
+              leave_request_id, duty_date, day_sequence, substitute_id, substitute_name, substitute_nip, substitute_phone,
+              compensation_amount, confirmation_status, confirm_token, updated_at
+            ) VALUES (
+              $1, $2::date, $3, $4, $5, $6, $7, $8, 'confirmed', $9, NOW()
+            )
+            ON CONFLICT (leave_request_id, duty_date) DO UPDATE SET
+              substitute_id = EXCLUDED.substitute_id,
+              substitute_name = EXCLUDED.substitute_name,
+              substitute_nip = EXCLUDED.substitute_nip,
+              substitute_phone = EXCLUDED.substitute_phone,
+              compensation_amount = EXCLUDED.compensation_amount,
+              updated_at = NOW();
+          `, [
+            leave.id,
+            dutyDate,
+            idx + 1,
+            sProf.id,
+            sProf.full_name,
+            sProf.nip,
+            sProf.phone,
+            compensation,
+            subToken
+          ]);
+
+          // Terapkan pewarisan pos geofence dan SPKL lembur 1 hari khusus untuk pengganti ini di tanggal ini
+          let createdOtId = null;
+          try {
+            const assignRes = await assignReliefSubstituteHelper({
+              leaveId: leave.id,
+              originalUserId: leave.user_id,
+              reliefUserId: sProf.id,
+              startDate: dutyDate,
+              endDate: dutyDate,
+              notes: notes || `Pengganti resmi cuti Hari ke-${idx + 1} (${dutyDate})`,
+              adminId: validApproverId,
+              adminName: approverName || 'Atasan / Korlap'
+            });
+            if (assignRes?.overtimeRecord?.id) {
+              createdOtId = assignRes.overtimeRecord.id;
+              await pool.query(
+                'UPDATE hrm_leave_daily_substitutes SET overtime_record_id = $1 WHERE leave_request_id = $2 AND duty_date = $3::date',
+                [createdOtId, leave.id, dutyDate]
+              );
+            }
+          } catch (slotSubErr) {
+            console.error(`[assignReliefSubstituteHelper Slot ${dutyDate} Error]:`, slotSubErr.message);
+          }
+
+          // In-App Notification (PWA / Mobile Flutter / Web UI)
+          await pool.query(`
+            INSERT INTO hrm_notifications (id, user_id, title, message, type, link, metadata, is_read, created_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, 'task', '/attendance', $4, false, NOW())
+          `, [
+            sProf.id,
+            `🛡️ Surat Tugas Pengganti Pos (Hari ke-${idx + 1})`,
+            `Anda resmi ditugaskan menggantikan ${leave.user_name} pada tanggal ${dutyDate}. Pos dinas & SPKL lembur 1 shift telah aktif otomatis.`,
+            JSON.stringify({ leaveId: leave.id, dutyDate, overtimeId: createdOtId })
+          ]).catch(() => {});
+
+          // Realtime WebSocket broadcast
+          broadcastNotification({
+            title: `Surat Tugas Pengganti Pos (Hari ke-${idx + 1})`,
+            message: `${sProf.full_name} resmi ditugaskan menggantikan ${leave.user_name} pada ${dutyDate}`,
+            type: 'info',
+            link: '/attendance',
+            data: { userId: sProf.id, dutyDate, leaveId: leave.id }
+          });
+
+          // Kirim notifikasi WhatsApp ke masing-masing personil pengganti harian
+          if (sProf.phone) {
+            const dailyWaMsg = `🛡️ *SURAT TUGAS PENGGANTI POS (HARI KE-${idx + 1})*\n` +
+              `*PT. FAWWAZ RESKI PERWIRA*\n\n` +
+              `Halo Rekan *${sProf.full_name}* (NIP: ${sProf.nip || '-'}),\n` +
+              `Anda telah resmi ditugaskan menggantikan rekan kerja Anda:\n` +
+              `👤 *Karyawan:* ${leave.user_name} (${leave.user_nip})\n` +
+              `📅 *Tanggal Tugas:* *${dutyDate}* (Khusus 1 Hari)\n` +
+              `💰 *Kompensasi:* Lembur Resmi SPKL 1 Shift Penuh (8 Jam)\n\n` +
+              `✅ Koordinat titik pos dinas telah diaktifkan otomatis di aplikasi PWA Anda untuk tanggal tersebut. Mohon bertugas sesuai jadwal.\n\n` +
+              `_Sistem Sentinel HRM PT FRP_`;
+            await sendWhatsAppAlert({ phone: sProf.phone, message: dailyWaMsg }).catch(() => {});
+          }
+
+          summaryLines.push(`• Hari ke-${idx + 1} (${dutyDate}): *${sProf.full_name}* (${sProf.nip || '-'})`);
+        }
+        dailySummaryFormatted = summaryLines.join('\n');
+
+        // Notifikasi In-App untuk Karyawan Pemohon Cuti
+        await pool.query(`
+          INSERT INTO hrm_notifications (id, user_id, title, message, type, link, metadata, is_read, created_at)
+          VALUES (gen_random_uuid(), $1, $2, $3, 'leave', '/leave', $4, false, NOW())
+        `, [
+          leave.user_id,
+          '✅ Pengajuan Cuti Disetujui Resmi',
+          `Permohonan cuti Anda (${leave.start_date} s/d ${leave.end_date}) telah disetujui. Petugas pengganti harian telah dialokasikan sesuai SOP Zero Vacancy.`,
+          JSON.stringify({ leaveId: leave.id })
+        ]).catch(() => {});
+      } else if (validSubId) {
+        // Fallback single substitute
         try {
           await assignReliefSubstituteHelper({
             leaveId: leave.id,
@@ -9514,7 +9766,7 @@ app.put('/api/leaves/:id/status', async (req, res) => {
         }
       }
 
-      // 4. NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Pengganti, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
+      // 4. NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
       let subProfile = null;
       if (validSubId) {
         try {
@@ -9523,9 +9775,12 @@ app.put('/api/leaves/:id/status', async (req, res) => {
         } catch (_) {}
       }
 
+      const formattedDetails = `${leave.start_date} s/d ${leave.end_date} (${leave.total_days} Hari)` +
+        (dailySummaryFormatted ? `\n\n🛡️ *Rotasi Pengganti 1 Hari = 1 Orang:*\n${dailySummaryFormatted}` : '');
+
       await notifyAllPartiesViaWhatsApp({
         submissionType: typeLabel,
-        details: `${leave.start_date} s/d ${leave.end_date} (${leave.total_days} Hari)`,
+        details: formattedDetails,
         applicant: {
           id: leave.user_id,
           fullName: leave.user_name,
@@ -9535,7 +9790,7 @@ app.put('/api/leaves/:id/status', async (req, res) => {
         },
         substitute: subProfile ? {
           id: subProfile.id,
-          fullName: subProfile.full_name,
+          fullName: finalSubName || subProfile.full_name,
           nip: subProfile.nip,
           phone: subProfile.phone,
         } : (finalSubName ? { fullName: finalSubName, nip: substituteNip } : null),
@@ -9638,6 +9893,95 @@ app.get('/api/overtime', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// Helper Guardrail Anti-Overbudget Lembur PT FRP
+// 47 Shiftman Lapangan (Shipment): Plafon Rp 72.000.000 / bulan
+// 33 Wisma Biring Ere (Rumah Tangga): Plafon Rp 4.000.000 / bulan
+// Total Plafon Anggaran Sah Perusahaan: Rp 76.000.000 / bulan
+async function verifyOvertimeBudgetGuardrail(dbPool, userId, otDateStr, newCompensationAmount, excludeRecordId = null) {
+  const monthStr = (otDateStr || '').substring(0, 7); // YYYY-MM
+  if (!monthStr || monthStr.length !== 7) return { allowed: true };
+
+  const uRes = await dbPool.query(`
+    SELECT id, nip, full_name, operational_group, division_id
+    FROM hrm_profiles
+    WHERE id = $1
+    LIMIT 1
+  `, [userId]);
+  if (uRes.rows.length === 0) return { allowed: true };
+  const user = uRes.rows[0];
+
+  const nipUpper = (user.nip || '').toUpperCase();
+  const groupUpper = (user.operational_group || '').toUpperCase();
+
+  let isWisma = groupUpper.includes('RUMAH') || groupUpper.includes('WISMA');
+  if (!isWisma && nipUpper.startsWith('FR')) {
+    const num = parseInt(nipUpper.replace(/[^0-9]/g, ''), 10);
+    if (num >= 1 && num <= 33) {
+      isWisma = true;
+    }
+  }
+
+  const groupName = isWisma ? 'RUMAH TANGGA (WISMA BIRING ERE)' : 'SHIPMENT (SHIFTMAN LAPANGAN)';
+  const groupLimit = isWisma ? 4000000 : 72000000;
+  const companyTotalLimit = 76000000;
+
+  let queryAll = `
+    SELECT COALESCE(SUM(o.compensation_amount), 0) as total_spent
+    FROM hrm_overtime_records o
+    JOIN hrm_profiles p ON o.user_id = p.id
+    WHERE o.status = 'approved'
+      AND to_char(o.date, 'YYYY-MM') = $1
+  `;
+  const paramsAll = [monthStr];
+  if (excludeRecordId) {
+    queryAll += ` AND o.id != $2`;
+    paramsAll.push(excludeRecordId);
+  }
+  const allSpentRes = await dbPool.query(queryAll, paramsAll);
+  const totalApprovedAll = parseFloat(allSpentRes.rows[0]?.total_spent || 0);
+
+  let queryGroup = `
+    SELECT COALESCE(SUM(o.compensation_amount), 0) as total_spent
+    FROM hrm_overtime_records o
+    JOIN hrm_profiles p ON o.user_id = p.id
+    WHERE o.status = 'approved'
+      AND to_char(o.date, 'YYYY-MM') = $1
+  `;
+  if (isWisma) {
+    queryGroup += ` AND (UPPER(p.operational_group) LIKE '%RUMAH%' OR UPPER(p.operational_group) LIKE '%WISMA%' OR p.nip ~ '^(FR|FRP)0?7?0?(0[1-9]|1[0-9]|2[0-9]|3[0-3])$')`;
+  } else {
+    queryGroup += ` AND NOT (UPPER(p.operational_group) LIKE '%RUMAH%' OR UPPER(p.operational_group) LIKE '%WISMA%' OR p.nip ~ '^(FR|FRP)0?7?0?(0[1-9]|1[0-9]|2[0-9]|3[0-3])$')`;
+  }
+  const paramsGroup = [monthStr];
+  if (excludeRecordId) {
+    queryGroup += ` AND o.id != $2`;
+    paramsGroup.push(excludeRecordId);
+  }
+  const groupSpentRes = await dbPool.query(queryGroup, paramsGroup);
+  const currentGroupSpent = parseFloat(groupSpentRes.rows[0]?.total_spent || 0);
+
+  const newTotalGroup = currentGroupSpent + Number(newCompensationAmount);
+  const newTotalCompany = totalApprovedAll + Number(newCompensationAmount);
+
+  if (newTotalGroup > groupLimit) {
+    const sisa = Math.max(0, groupLimit - currentGroupSpent);
+    return {
+      allowed: false,
+      reason: `Persetujuan/Pengajuan lembur ini melebihi Plafon Anggaran Resmi Grup ${groupName}. Plafon: Rp ${groupLimit.toLocaleString('id-ID')}, Realisasi: Rp ${Math.round(currentGroupSpent).toLocaleString('id-ID')}, Sisa Kuota: Rp ${Math.round(sisa).toLocaleString('id-ID')}. Nilai SPKL ini (Rp ${Math.round(newCompensationAmount).toLocaleString('id-ID')}) melebihi budget yang disediakan.`
+    };
+  }
+
+  if (newTotalCompany > companyTotalLimit) {
+    const sisa = Math.max(0, companyTotalLimit - totalApprovedAll);
+    return {
+      allowed: false,
+      reason: `Persetujuan/Pengajuan lembur ini melebihi Plafon Anggaran Total Perusahaan (Rp ${companyTotalLimit.toLocaleString('id-ID')}). Realisasi Total: Rp ${Math.round(totalApprovedAll).toLocaleString('id-ID')}, Sisa Kuota: Rp ${Math.round(sisa).toLocaleString('id-ID')}. Ditolak oleh guardrail anti-overbudget.`
+    };
+  }
+
+  return { allowed: true, currentGroupSpent, remainingGroup: groupLimit - newTotalGroup };
+}
 
 app.post('/api/overtime', async (req, res) => {
   const {
@@ -9755,6 +10099,14 @@ app.post('/api/overtime', async (req, res) => {
         comp = Math.round((7 * 2.0 * officialRate) + ((hours - 7) * 3.0 * officialRate));
       } else {
         comp = Math.round((7 * 2.0 * officialRate) + (1 * 3.0 * officialRate) + ((hours - 8) * 4.0 * officialRate));
+      }
+    }
+
+    // Verifikasi Guardrail Anti-Overbudget Lembur PT FRP (Total Rp 76 Jt: Shipment Rp 72 Jt, Wisma Rp 4 Jt)
+    if (targetStatus === 'approved') {
+      const budgetGuard = await verifyOvertimeBudgetGuardrail(pool, validUserId, date, comp);
+      if (!budgetGuard.allowed) {
+        return res.status(403).json({ success: false, error: budgetGuard.reason });
       }
     }
 
@@ -9929,6 +10281,15 @@ app.put('/api/overtime/:id/status', async (req, res) => {
         compensation = Math.round((7 * 2.0 * officialRate) + (1 * 3.0 * officialRate) + ((finalHours - 8) * 4.0 * officialRate));
       }
     }
+
+    // Verifikasi Guardrail Anti-Overbudget Lembur PT FRP (Total Rp 76 Jt: Shipment Rp 72 Jt, Wisma Rp 4 Jt)
+    if (status === 'approved') {
+      const budgetGuard = await verifyOvertimeBudgetGuardrail(pool, ot.user_id, ot.date, compensation, ot.id);
+      if (!budgetGuard.allowed) {
+        return res.status(403).json({ success: false, error: budgetGuard.reason });
+      }
+    }
+
     const nextPhase = status === 'approved' ? 'in_progress' : 'rejected';
 
     const updateRes = await pool.query(`
@@ -11439,192 +11800,7 @@ app.get('/api/payroll/slip/:userId/print', async (req, res) => {
       }
       return INDO_MONTHS[new Date().getMonth()];
     })();
-    const pesangonLabel = `Pesangon ${activeMonthPrint}`;
-
-    const seqNoPrint = Number(row.employee_sequence_no || 0);
-    const isTabunganPesangonPrint = row.severance_scheme === 'tabungan' || (seqNoPrint > 0 && seqNoPrint <= 33);
-    const rawPesangonPrint = Number(row.pesangon_amount || 0);
-    const pesangonAmount = isTabunganPesangonPrint ? 0 : rawPesangonPrint;
-    const grossEarnings = upah + lembur + pesangonAmount;
-
-    const bpjsTk = upah === 4045050 ? 121351 : Math.round(upah * 0.03);
-    const bpjsKes = upah === 4045050 ? 40450 : Math.round(upah * 0.01);
-    const alpaDays = Number(row.alpa_days || 0);
-    const alpaRate = Number(row.alpa_rate || 155000);
-    const alpaAmount = Number(row.absence_deduction || 0);
-    const totalDeductions = (upah === 4045050 ? 161802 : (bpjsTk + bpjsKes)) + alpaAmount;
-    const netSalary = grossEarnings - totalDeductions;
-
-    const printedDateStr = row.printed_date
-      ? new Date(row.printed_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' })
-      : new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
-
-    // Read Logo as base64 for instant offline rendering
-    let logoDataUrl = '';
-    const logoFile = path.join(__dirname, 'assets/logo.png');
-    if (fs.existsSync(logoFile)) {
-      const buf = fs.readFileSync(logoFile);
-      logoDataUrl = `data:image/png;base64,${buf.toString('base64')}`;
-    }
-
-    const html = `<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8">
-  <title>Slip Gaji - ${row.employee_name} (${row.period_label || 'September 2026'})</title>
-  <style>
-    @page {
-      size: A4 portrait;
-      margin: 15mm 20mm;
-    }
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
-      color: #000;
-    }
-    body {
-      background: #f1f5f9;
-      padding: 24px 16px;
-    }
-    .print-actions {
-      max-width: 820px;
-      margin: 0 auto 16px auto;
-      display: flex;
-      justify-content: flex-end;
-      gap: 12px;
-    }
-    .btn-print {
-      background: #059669;
-      color: #fff;
-      border: none;
-      padding: 8px 18px;
-      font-size: 13px;
-      font-weight: 700;
-      border-radius: 6px;
-      cursor: pointer;
-    }
-    .slip-wrapper {
-      max-width: 820px;
-      margin: 0 auto;
-      background: #fff;
-      padding: 28px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-    }
-    
-    /* 1. Header Box */
-    .header-box {
-      border: 2px solid #000;
-      margin-bottom: 8px;
-    }
-    .header-top {
-      display: flex;
-      border-bottom: 2px solid #000;
-    }
-    .header-company {
-      flex: 1.1;
-      display: flex;
-      align-items: center;
-      padding: 8px 14px;
-      border-right: 2px solid #000;
-      gap: 12px;
-    }
-    .company-logo {
-      width: 48px;
-      height: 48px;
-      object-fit: contain;
-    }
-    .company-name {
-      text-align: center;
-      flex: 1;
-      line-height: 1.25;
-    }
-    .company-name-underline {
-      font-size: 17px;
-      font-weight: 800;
-      text-decoration: underline;
-      text-underline-offset: 3px;
-      letter-spacing: 0.5px;
-    }
-    .company-name-bold {
-      font-size: 17px;
-      font-weight: 800;
-      letter-spacing: 1px;
-    }
-    .header-title {
-      flex: 1.2;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      padding: 8px 14px;
-      text-align: center;
-    }
-    .slip-main-title {
-      font-size: 17px;
-      font-weight: 800;
-      letter-spacing: 0.5px;
-    }
-    .slip-period {
-      font-size: 14px;
-      font-weight: 700;
-      margin-top: 6px;
-    }
-    .header-meta {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-end;
-      padding: 8px 14px;
-      font-size: 13px;
-      line-height: 1.6;
-    }
-    .meta-col-left {
-      display: flex;
-      flex-direction: column;
-    }
-    .meta-item {
-      display: flex;
-    }
-    .meta-lbl {
-      width: 60px;
-      font-weight: 700;
-    }
-    .meta-sep {
-      width: 14px;
-      font-weight: 700;
-    }
-    .meta-val {
-      font-weight: 700;
-    }
-    .meta-col-right {
-      display: flex;
-      align-items: flex-end;
-      font-size: 12px;
-      font-weight: 600;
-    }
-
-    /* 2. Columns: PENDAPATAN & POTONGAN */
-    .columns-row {
-      display: flex;
-      gap: 10px;
-      align-items: stretch;
-    }
-    .col-box {
-      flex: 1;
-      border: 2px solid #000;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-    }
-    .col-header {
-      text-align: center;
-      font-size: 13.5px;
-      font-weight: 800;
-      padding: 6px 8px;
-      border-bottom: 2px solid #000;
-      letter-spacing: 0.5px;
-    }
+    const pes
     .col-body {
       padding: 8px 10px;
       flex: 1;
