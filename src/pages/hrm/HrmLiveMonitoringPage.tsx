@@ -614,27 +614,37 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         return todayStr >= start && todayStr <= end;
       });
 
+      const isLeaveRecord = att && (att.status === 'cuti' || att.status === 'sakit' || att.status === 'izin');
+      const isOffRecord = att && (att.status === 'off' || att.status === 'libur');
+      const isAlfaRecord = att && (att.status === 'alfa' || att.status === 'alpa' || att.status === 'alpha');
+
       let absentSubtype: 'pending_shift' | 'in_progress' | 'mangkir' | 'off' | 'cuti' | 'sakit' | 'izin' | 'unregistered' = 'in_progress';
-      if (!att) {
-        if (todayLeave) {
-          if (todayLeave.type === 'sakit') {
-            absentSubtype = 'sakit';
-          } else if (todayLeave.type === 'cuti') {
-            absentSubtype = 'cuti';
-          } else {
-            absentSubtype = 'izin';
-          }
-        } else if (isScheduleOff) {
-          // Karyawan dengan jadwal roster OFF (hari kerja maupun akhir pekan) resmi LIBUR / OFF
-          absentSubtype = 'off';
-        } else if (isSpecialLeadership && isWeekend) {
-          // 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) resmi LIBUR di akhir pekan (Sabtu & Minggu)
-          absentSubtype = 'off';
-        } else if (isWeekend && (!uShift || uShift.isOff || (uShift as any).code === 'OFF' || !u.isShiftWorker)) {
-          // Karyawan reguler non-shift di akhir pekan adalah LIBUR
-          absentSubtype = 'off';
-        } else if (!isFaceEnrolled || isSimAccount) {
-          // Karyawan belum registrasi wajah atau akun simulasi tidak dikenakan sanksi mangkir
+      if (todayLeave || isLeaveRecord) {
+        const leaveTypeStr = String(todayLeave?.type || (todayLeave as any)?.leaveType || (todayLeave as any)?.leave_type || att?.status || 'cuti').toLowerCase();
+        if (leaveTypeStr.includes('sakit')) {
+          absentSubtype = 'sakit';
+        } else if (leaveTypeStr.includes('izin') || leaveTypeStr.includes('emergency')) {
+          absentSubtype = 'izin';
+        } else {
+          absentSubtype = 'cuti';
+        }
+      } else if (isOffRecord || isScheduleOff) {
+        // Karyawan dengan jadwal roster OFF (hari kerja maupun akhir pekan) resmi LIBUR / OFF
+        absentSubtype = 'off';
+      } else if (isSpecialLeadership && isWeekend) {
+        // 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) resmi LIBUR di akhir pekan (Sabtu & Minggu)
+        absentSubtype = 'off';
+      } else if (isWeekend && (!uShift || uShift.isOff || (uShift as any).code === 'OFF' || !u.isShiftWorker)) {
+        // Karyawan reguler non-shift di akhir pekan adalah LIBUR
+        absentSubtype = 'off';
+      } else if (isAlfaRecord) {
+        if (!isFaceEnrolled || isSimAccount) {
+          absentSubtype = 'unregistered';
+        } else {
+          absentSubtype = 'mangkir';
+        }
+      } else if (!att || !att.clockIn) {
+        if (!isFaceEnrolled || isSimAccount) {
           absentSubtype = 'unregistered';
         } else if (uShift && uShift.startTime && uShift.endTime && uShift.startTime !== '00:00' && uShift.code !== 'OFF' && !uShift.isOff) {
           const shiftEnd = uShift.endTime.slice(0, 5);
@@ -647,13 +657,12 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             absentSubtype = 'in_progress';
           }
         } else {
-          // Default: jika sudah lewat pukul 17:00 WITA, dianggap Mangkir
           absentSubtype = nowWita >= '17:00' ? 'mangkir' : 'in_progress';
         }
       }
 
       // Realtime authoritative fallback evaluation jika status di database belum sinkron
-      if (att && att.clockIn && !isLate) {
+      if (att && att.clockIn && !isLate && !isLeaveRecord && !isOffRecord) {
         if (uShift && uShift.startTime) {
           const latenessEval = calculateAttendanceLateness({
             clockInTime: att.clockIn,
@@ -669,24 +678,18 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         }
       }
 
-      const isAlfaRecord = att && (att.status === 'alfa' || att.status === 'alpa' || att.status === 'alpha');
-      if (isAlfaRecord) {
-        if (isScheduleOff || (isWeekend && (isSpecialLeadership || !u.isShiftWorker))) {
-          absentSubtype = 'off';
-        } else if (!isFaceEnrolled || isSimAccount) {
-          absentSubtype = 'unregistered';
-        } else {
-          absentSubtype = 'mangkir';
-        }
+      let calculatedStatus: 'present' | 'late' | 'absent' | 'mangkir';
+      if (todayLeave || isLeaveRecord || isOffRecord) {
+        calculatedStatus = 'absent';
+      } else if (isAlfaRecord || (!att && absentSubtype === 'mangkir')) {
+        calculatedStatus = absentSubtype === 'mangkir' ? 'mangkir' : 'absent';
+      } else if (!att || !att.clockIn) {
+        calculatedStatus = 'absent';
+      } else if (isLate) {
+        calculatedStatus = 'late';
+      } else {
+        calculatedStatus = 'present';
       }
-
-      const calculatedStatus: 'present' | 'late' | 'absent' | 'mangkir' = (isAlfaRecord && absentSubtype === 'mangkir')
-        ? 'mangkir'
-        : !att
-        ? (absentSubtype === 'mangkir' ? 'mangkir' : 'absent')
-        : isLate
-        ? 'late'
-        : 'present';
 
       return {
         user: u,
@@ -696,7 +699,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         shift: uShift,
         totalLateMinutes: effectiveLateMinutes,
         lateCount: isLate ? 1 : 0,
-        totalAttCount: (att && !isAlfaRecord) ? 1 : 0,
+        totalAttCount: (att && !isAlfaRecord && !isLeaveRecord && !isOffRecord) ? 1 : 0,
       };
     } else {
       const userAtts = activePeriodAttendances.filter(
@@ -2025,7 +2028,21 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           )}
                         </TableCell>
                         <TableCell>
-                          {att ? (
+                          {absentSubtype === 'cuti' ? (
+                            <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-400 text-[10px] gap-1 rounded-full font-medium">
+                              <CheckCircle2 size={10} /> Disahkan Direksi
+                            </Badge>
+                          ) : absentSubtype === 'sakit' ? (
+                            <Badge variant="outline" className="bg-pink-50 text-pink-700 border-pink-200 dark:bg-pink-950/40 dark:text-pink-400 text-[10px] gap-1 rounded-full font-medium">
+                              <Activity size={10} /> Surat Dokter
+                            </Badge>
+                          ) : absentSubtype === 'izin' ? (
+                            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-400 text-[10px] gap-1 rounded-full font-medium">
+                              <CheckCircle2 size={10} /> Izin Disahkan
+                            </Badge>
+                          ) : absentSubtype === 'off' ? (
+                            <span className="text-muted-foreground/40 text-xs">-</span>
+                          ) : att && att.clockIn ? (
                             <div className="flex items-center gap-1.5 flex-wrap">
                               {/* Shield 1: Face-API Biometric 1:1 Verification */}
                               {att.biometricScore != null ? (
