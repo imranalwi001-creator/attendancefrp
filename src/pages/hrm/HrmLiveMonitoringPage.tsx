@@ -88,6 +88,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [perimeterViolations, setPerimeterViolations] = useState<PerimeterViolation[]>([]);
   const [approvedLeaves, setApprovedLeaves] = useState<LeaveRequest[]>([]);
   const [todaySchedules, setTodaySchedules] = useState<EmployeeSchedule[]>([]);
+  const [dailySchedules, setDailySchedules] = useState<EmployeeSchedule[]>([]);
 
   const [activeTab, setActiveTab] = useState<'all' | 'present' | 'late' | 'absent' | 'mangkir' | 'anomalies' | 'breaches' | 'field_radar'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -166,6 +167,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const currentMonthStr = getTodayDateStr().slice(0, 7);
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
   const [selectedDayDate, setSelectedDayDate] = useState<string>(''); // YYYY-MM-DD atau '' (semua tanggal di bulan)
+  const targetDayDate = selectedDayDate || getTodayDateStr();
   const [calendarModalOpen, setCalendarModalOpen] = useState<boolean>(false);
   const [selectedCalendarUser, setSelectedCalendarUser] = useState<UserProfile | null>(null);
   const [isFetchingMonth, setIsFetchingMonth] = useState<boolean>(false);
@@ -458,6 +460,29 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     };
   }, []);
 
+  // Sinkronisasi jadwal roster harian (hrm_employee_schedules) sesuai tanggal aktif targetDayDate
+  useEffect(() => {
+    let isCancelled = false;
+    const fetchSchedulesForDate = async () => {
+      try {
+        const res = await fetch(`/api/employee-schedules?date=${targetDayDate}`);
+        if (res.ok) {
+          const json = await res.json();
+          if (!isCancelled && json.success && Array.isArray(json.data)) {
+            setDailySchedules(json.data);
+            hrmService.saveEmployeeSchedules(json.data);
+          }
+        }
+      } catch (err) {
+        console.warn('[LiveMonitoring] Fetch schedules for target date notice:', err);
+      }
+    };
+    fetchSchedulesForDate();
+    return () => {
+      isCancelled = true;
+    };
+  }, [targetDayDate]);
+
   // Update Dynamic QR every second
   useEffect(() => {
     if (!qrModalOpen) return;
@@ -685,7 +710,6 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   }, [currentMonthStr, users, overtimes]);
 
   const isDailyView = periodScope === 'today' || Boolean(selectedDayDate);
-  const targetDayDate = selectedDayDate || getTodayDateStr();
 
   const monitoredList = users.map((u) => {
     if (isDailyView) {
@@ -698,7 +722,19 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       let effectiveLateMinutes = att?.lateMinutes || 0;
 
       // Evaluasi jadwal kerja dan jam shift untuk mendeteksi status kehadiran secara akurat
-      const sched = todaySchedules.find((s) => s.userId === u.id || s.userNip === u.nip || (s as any).employeeNip === u.nip) || hrmService.getEmployeeTodaySchedule(u.id, targetDayDate);
+      // Prioritaskan jadwal yang persis cocok dengan targetDayDate
+      const sched =
+        dailySchedules.find(
+          (s) =>
+            (s.scheduleDate === targetDayDate || (s as any).date === targetDayDate) &&
+            (s.userId === u.id || s.userNip === u.nip || (s as any).employeeNip === u.nip)
+        ) ||
+        todaySchedules.find(
+          (s) =>
+            (s.scheduleDate === targetDayDate || (s as any).date === targetDayDate) &&
+            (s.userId === u.id || s.userNip === u.nip || (s as any).employeeNip === u.nip)
+        ) ||
+        hrmService.getEmployeeTodaySchedule(u.id, targetDayDate);
       const uShift = resolveEffectiveShift(u, allShifts, sched);
       const nowWita = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Makassar', hour12: false, hour: '2-digit', minute: '2-digit' });
       
@@ -796,7 +832,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       }
 
       let calculatedStatus: 'present' | 'late' | 'absent' | 'mangkir';
-      if (activeLeave || isLeaveRecord || isOffRecord) {
+      if (activeLeave || isLeaveRecord || isOffRecord || isScheduleOff || absentSubtype === 'off') {
         calculatedStatus = 'absent';
       } else if (isAlfaRecord || (!att && absentSubtype === 'mangkir')) {
         calculatedStatus = absentSubtype === 'mangkir' ? 'mangkir' : 'absent';

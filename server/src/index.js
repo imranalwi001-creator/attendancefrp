@@ -11800,5 +11800,2807 @@ app.get('/api/payroll/slip/:userId/print', async (req, res) => {
       }
       return INDO_MONTHS[new Date().getMonth()];
     })();
-    const pes
-... [truncated for diff preview]
+    const pesangonLabel = `Pesangon ${activeMonthPrint}`;
+
+    const seqNoPrint = Number(row.employee_sequence_no || 0);
+    const isTabunganPesangonPrint = row.severance_scheme === 'tabungan' || (seqNoPrint > 0 && seqNoPrint <= 33);
+    const rawPesangonPrint = Number(row.pesangon_amount || 0);
+    const pesangonAmount = isTabunganPesangonPrint ? 0 : rawPesangonPrint;
+    const grossEarnings = upah + lembur + pesangonAmount;
+
+    const bpjsTk = upah === 4045050 ? 121351 : Math.round(upah * 0.03);
+    const bpjsKes = upah === 4045050 ? 40450 : Math.round(upah * 0.01);
+    const alpaDays = Number(row.alpa_days || 0);
+    const alpaRate = Number(row.alpa_rate || 155000);
+    const alpaAmount = Number(row.absence_deduction || 0);
+    const totalDeductions = (upah === 4045050 ? 161802 : (bpjsTk + bpjsKes)) + alpaAmount;
+    const netSalary = grossEarnings - totalDeductions;
+
+    const printedDateStr = row.printed_date
+      ? new Date(row.printed_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' })
+      : new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
+
+    // Read Logo as base64 for instant offline rendering
+    let logoDataUrl = '';
+    const logoFile = path.join(__dirname, 'assets/logo.png');
+    if (fs.existsSync(logoFile)) {
+      const buf = fs.readFileSync(logoFile);
+      logoDataUrl = `data:image/png;base64,${buf.toString('base64')}`;
+    }
+
+    const html = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Slip Gaji - ${row.employee_name} (${row.period_label || 'September 2026'})</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 15mm 20mm;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+      color: #000;
+    }
+    body {
+      background: #f1f5f9;
+      padding: 24px 16px;
+    }
+    .print-actions {
+      max-width: 820px;
+      margin: 0 auto 16px auto;
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+    .btn-print {
+      background: #059669;
+      color: #fff;
+      border: none;
+      padding: 8px 18px;
+      font-size: 13px;
+      font-weight: 700;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .slip-wrapper {
+      max-width: 820px;
+      margin: 0 auto;
+      background: #fff;
+      padding: 28px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    }
+    
+    /* 1. Header Box */
+    .header-box {
+      border: 2px solid #000;
+      margin-bottom: 8px;
+    }
+    .header-top {
+      display: flex;
+      border-bottom: 2px solid #000;
+    }
+    .header-company {
+      flex: 1.1;
+      display: flex;
+      align-items: center;
+      padding: 8px 14px;
+      border-right: 2px solid #000;
+      gap: 12px;
+    }
+    .company-logo {
+      width: 48px;
+      height: 48px;
+      object-fit: contain;
+    }
+    .company-name {
+      text-align: center;
+      flex: 1;
+      line-height: 1.25;
+    }
+    .company-name-underline {
+      font-size: 17px;
+      font-weight: 800;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      letter-spacing: 0.5px;
+    }
+    .company-name-bold {
+      font-size: 17px;
+      font-weight: 800;
+      letter-spacing: 1px;
+    }
+    .header-title {
+      flex: 1.2;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 8px 14px;
+      text-align: center;
+    }
+    .slip-main-title {
+      font-size: 17px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+    }
+    .slip-period {
+      font-size: 14px;
+      font-weight: 700;
+      margin-top: 6px;
+    }
+    .header-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      padding: 8px 14px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .meta-col-left {
+      display: flex;
+      flex-direction: column;
+    }
+    .meta-item {
+      display: flex;
+    }
+    .meta-lbl {
+      width: 60px;
+      font-weight: 700;
+    }
+    .meta-sep {
+      width: 14px;
+      font-weight: 700;
+    }
+    .meta-val {
+      font-weight: 700;
+    }
+    .meta-col-right {
+      display: flex;
+      align-items: flex-end;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    /* 2. Columns: PENDAPATAN & POTONGAN */
+    .columns-row {
+      display: flex;
+      gap: 10px;
+      align-items: stretch;
+    }
+    .col-box {
+      flex: 1;
+      border: 2px solid #000;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .col-header {
+      text-align: center;
+      font-size: 13.5px;
+      font-weight: 800;
+      padding: 6px 8px;
+      border-bottom: 2px solid #000;
+      letter-spacing: 0.5px;
+    }
+    .col-body {
+      padding: 8px 10px;
+      flex: 1;
+      min-height: 100px;
+    }
+    .col-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      line-height: 1.75;
+    }
+    .col-label {
+      flex: 1;
+    }
+    .col-sep {
+      width: 14px;
+      text-align: center;
+    }
+    .col-val {
+      min-width: 110px;
+      text-align: right;
+      font-weight: 600;
+    }
+    .col-footer {
+      border-top: 2px solid #000;
+      padding: 6px 10px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .footer-label {
+      flex: 1;
+    }
+    .footer-sep {
+      width: 14px;
+      text-align: center;
+    }
+    .footer-val {
+      min-width: 110px;
+      text-align: right;
+    }
+
+    /* 3. Bottom: Jumlah Gaji */
+    .total-thp-wrapper {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 8px;
+    }
+    .total-thp-box {
+      width: calc(50% - 5px);
+      border: 2px solid #000;
+      padding: 6px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .thp-label {
+      font-weight: 800;
+    }
+    .thp-sep {
+      width: 14px;
+      text-align: center;
+      font-weight: 800;
+    }
+    .thp-val {
+      min-width: 120px;
+      text-align: right;
+      font-weight: 900;
+      font-size: 15px;
+    }
+
+    @media print {
+      body {
+        background: #fff;
+        padding: 0;
+      }
+      .print-actions {
+        display: none !important;
+      }
+      .slip-wrapper {
+        box-shadow: none;
+        padding: 0;
+        max-width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-actions">
+    <button class="btn-print" onclick="window.print()">🖨️ Cetak / Simpan PDF</button>
+  </div>
+
+  <div class="slip-wrapper">
+    <!-- Header Box -->
+    <div class="header-box">
+      <div class="header-top">
+        <div class="header-company">
+          ${logoDataUrl ? `<img src="${logoDataUrl}" class="company-logo" alt="Logo FRP">` : ''}
+          <div class="company-name">
+            <div class="company-name-underline">PT. FAWWAZ RESKI</div>
+            <div class="company-name-bold">PERWIRA</div>
+          </div>
+        </div>
+        <div class="header-title">
+          <div class="slip-main-title">SLIP GAJI KARYAWAN</div>
+          <div class="slip-period">PERIODE : ${String(row.period_label || 'September 2026').toUpperCase()}</div>
+        </div>
+      </div>
+      <div class="header-meta">
+        <div class="meta-col-left">
+          <div class="meta-item">
+            <span class="meta-lbl">NAMA</span>
+            <span class="meta-sep">:</span>
+            <span class="meta-val">${row.employee_name || '-'}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-lbl">ID</span>
+            <span class="meta-sep">:</span>
+            <span class="meta-val">${row.employee_nip || '-'}</span>
+          </div>
+        </div>
+        <div class="meta-col-right">
+          <span>Dicetak Tanggal : &nbsp;${printedDateStr}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2 Columns Box -->
+    <div class="columns-row">
+      <!-- PENDAPATAN -->
+      <div class="col-box">
+        <div class="col-header">PENDAPATAN :</div>
+        <div class="col-body">
+          <div class="col-row">
+            <span class="col-label">Upah</span>
+            <span class="col-sep">:</span>
+            <span class="col-val">Rp ${fmt(upah)}</span>
+          </div>
+          <div class="col-row">
+            <span class="col-label">Lembur</span>
+            <span class="col-sep">:</span>
+            <span class="col-val">${lembur > 0 ? 'Rp ' + fmt(lembur) : ''}</span>
+          </div>
+          <div class="col-row">
+            <span class="col-label">${pesangonLabel}</span>
+            <span class="col-sep">:</span>
+            <span class="col-val">${pesangonAmount > 0 ? 'Rp ' + fmt(pesangonAmount) : ''}</span>
+          </div>
+        </div>
+        <div class="col-footer">
+          <span class="footer-label">Total Pendapatan</span>
+          <span class="footer-sep">:</span>
+          <span class="footer-val">Rp ${fmt(grossEarnings)}</span>
+        </div>
+      </div>
+
+      <!-- POTONGAN -->
+      <div class="col-box">
+        <div class="col-header">POTONGAN :</div>
+        <div class="col-body">
+          <div class="col-row">
+            <span class="col-label">BPJS Ketenagakerjaan 3%</span>
+            <span class="col-sep">:</span>
+            <span class="col-val">Rp ${fmt(bpjsTk)}</span>
+          </div>
+          <div class="col-row">
+            <span class="col-label">BPJS Kesehatan 1%</span>
+            <span class="col-sep">:</span>
+            <span class="col-val">Rp ${fmt(bpjsKes)}</span>
+          </div>
+          <div class="col-row">
+            <span class="col-label" style="display:flex; align-items:center; gap:6px;">
+              <span>Presensi / Alpa</span>
+              <span style="font-weight:bold;">:</span>
+              <span style="font-weight:normal;">${alpaDays > 0 ? `${alpaDays} Hari @` : 'Hari @'}</span>
+            </span>
+            <span class="col-sep">:</span>
+            <span class="col-val">${alpaAmount > 0 ? 'Rp ' + fmt(alpaAmount) : 'Rp &nbsp; &nbsp; &nbsp; -'}</span>
+          </div>
+          <div class="col-row">
+            <span class="col-label"></span>
+            <span class="col-sep">:</span>
+            <span class="col-val"></span>
+          </div>
+        </div>
+        <div class="col-footer">
+          <span class="footer-label">Total Potongan</span>
+          <span class="footer-sep">:</span>
+          <span class="footer-val">Rp ${fmt(totalDeductions)}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Jumlah Gaji Box -->
+    <div class="total-thp-wrapper">
+      <div class="total-thp-box">
+        <span class="thp-label">Jumlah Gaji</span>
+        <span class="thp-sep">:</span>
+        <span class="thp-val">Rp ${fmt(netSalary)}</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.onload = function() {
+      if (window.location.search.includes('autoprint=1')) {
+        setTimeout(function() { window.print(); }, 400);
+      }
+    };
+  </script>
+</body>
+</html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('Print slip error:', err);
+    res.status(500).send('<h3>Gagal membuat slip gaji: ' + err.message + '</h3>');
+  }
+});
+
+// ─── 11. BIOMETRIC FACE STATUS & HANDOFF ────────────────────────────────
+
+app.get('/api/biometrics/status/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const result = await pool.query(
+      'SELECT id, nip, full_name, is_face_enrolled, face_enrolled_photo, face_enrolled_at FROM hrm_profiles WHERE id::text = $1 OR nip = $1 OR LOWER(email) = LOWER($1) LIMIT 1',
+      [userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── 14. ENTERPRISE NOTIFICATION SYSTEM (POSTGRESQL MULTI-ROLE & PUSH SYNC) ──
+
+app.get('/api/notifications', async (req, res) => {
+  const { userId, role } = req.query;
+  try {
+    let query;
+    let params = [];
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let validUserId = null;
+
+    if (userId && uuidRegex.test(userId)) {
+      validUserId = userId;
+    } else if (userId) {
+      const uRes = await pool.query(
+        'SELECT id FROM hrm_profiles WHERE nip = $1 OR LOWER(email) = LOWER($1) LIMIT 1',
+        [userId]
+      );
+      if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
+    }
+
+    const cleanRole = (role || '').toLowerCase().replace(/[\s_-]/g, '');
+
+    if (validUserId && cleanRole) {
+      query = `
+        SELECT * FROM hrm_notifications
+        WHERE user_id = $1
+           OR recipient_role = $2
+           OR recipient_role = 'all'
+           OR ($2 IN ('admin', 'hrd') AND recipient_role IN ('admin', 'hrd', 'all_admin'))
+           OR ($2 = 'superadmin' AND recipient_role IN ('superadmin', 'admin', 'hrd', 'all_admin', 'pimpinan'))
+           OR ($2 = 'pimpinan' AND recipient_role IN ('pimpinan', 'all_pimpinan', 'all_admin'))
+        ORDER BY created_at DESC
+        LIMIT 60;
+      `;
+      params = [validUserId, cleanRole];
+    } else if (validUserId) {
+      query = `
+        SELECT * FROM hrm_notifications
+        WHERE user_id = $1 OR recipient_role = 'all'
+        ORDER BY created_at DESC
+        LIMIT 60;
+      `;
+      params = [validUserId];
+    } else if (cleanRole) {
+      query = `
+        SELECT * FROM hrm_notifications
+        WHERE recipient_role = $1
+           OR recipient_role = 'all'
+           OR ($1 IN ('admin', 'hrd') AND recipient_role IN ('admin', 'hrd', 'all_admin'))
+           OR ($1 = 'superadmin' AND recipient_role IN ('superadmin', 'admin', 'hrd', 'all_admin', 'pimpinan'))
+           OR ($1 = 'pimpinan' AND recipient_role IN ('pimpinan', 'all_pimpinan', 'all_admin'))
+        ORDER BY created_at DESC
+        LIMIT 60;
+      `;
+      params = [cleanRole];
+    } else {
+      query = `SELECT * FROM hrm_notifications ORDER BY created_at DESC LIMIT 60;`;
+    }
+
+    const result = await pool.query(query, params);
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    console.error('Fetch notifications error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.patch('/api/notifications/:id/read', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      'UPDATE hrm_notifications SET is_read = true WHERE id::text = $1 RETURNING *',
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Notifikasi tidak ditemukan' });
+    }
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Mark notification read error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/notifications/read-all', async (req, res) => {
+  const { userId, role } = req.body;
+  try {
+    const cleanRole = (role || '').toLowerCase().replace(/[\s_-]/g, '');
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let validUserId = null;
+
+    if (userId && uuidRegex.test(userId)) {
+      validUserId = userId;
+    } else if (userId) {
+      const uRes = await pool.query(
+        'SELECT id FROM hrm_profiles WHERE nip = $1 OR LOWER(email) = LOWER($1) LIMIT 1',
+        [userId]
+      );
+      if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
+    }
+
+    if (validUserId && cleanRole) {
+      await pool.query(`
+        UPDATE hrm_notifications
+        SET is_read = true
+        WHERE user_id = $1
+           OR recipient_role = $2
+           OR recipient_role = 'all'
+           OR ($2 IN ('admin', 'hrd') AND recipient_role IN ('admin', 'hrd', 'all_admin'))
+           OR ($2 = 'superadmin' AND recipient_role IN ('superadmin', 'admin', 'hrd', 'all_admin', 'pimpinan'))
+           OR ($2 = 'pimpinan' AND recipient_role IN ('pimpinan', 'all_pimpinan', 'all_admin'));
+      `, [validUserId, cleanRole]);
+    } else if (validUserId) {
+      await pool.query('UPDATE hrm_notifications SET is_read = true WHERE user_id = $1', [validUserId]);
+    } else if (cleanRole) {
+      await pool.query(`
+        UPDATE hrm_notifications
+        SET is_read = true
+        WHERE recipient_role = $1
+           OR recipient_role = 'all'
+           OR ($1 IN ('admin', 'hrd') AND recipient_role IN ('admin', 'hrd', 'all_admin'))
+           OR ($1 = 'superadmin' AND recipient_role IN ('superadmin', 'admin', 'hrd', 'all_admin', 'pimpinan'))
+           OR ($1 = 'pimpinan' AND recipient_role IN ('pimpinan', 'all_pimpinan', 'all_admin'));
+      `, [cleanRole]);
+    } else {
+      await pool.query('UPDATE hrm_notifications SET is_read = true');
+    }
+
+    res.json({ success: true, message: 'Semua notifikasi berhasil ditandai sudah dibaca' });
+  } catch (err) {
+    console.error('Mark all read error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/notifications', async (req, res) => {
+  const { userId, title, message, type, link, recipientRole, metadata } = req.body;
+  try {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let validUserId = null;
+
+    if (userId && uuidRegex.test(userId)) {
+      validUserId = userId;
+    } else if (userId && userId !== 'all' && userId !== 'all_admin') {
+      const uRes = await pool.query(
+        'SELECT id FROM hrm_profiles WHERE nip = $1 OR LOWER(email) = LOWER($1) LIMIT 1',
+        [userId]
+      );
+      if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
+    }
+
+    const query = `
+      INSERT INTO hrm_notifications (
+        user_id, title, message, type, link, recipient_role, metadata, is_read, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, false, NOW())
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [
+      validUserId,
+      title || 'Pemberitahuan Sistem',
+      message || '',
+      type || 'info',
+      link || null,
+      recipientRole || null,
+      JSON.stringify(metadata || {}),
+    ]);
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Create notification error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── ANALYTICS ENDPOINTS (Pimpinan / Keuangan / Superadmin / Korlap) ────────
+
+// GET /api/analytics/summary — KPI cards + weekly chart data + division breakdown
+app.get('/api/analytics/summary', async (req, res) => {
+  try {
+    const now = new Date();
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const today = now.toISOString().split('T')[0];
+
+    // KPI aggregations (parallel)
+    const [empRes, hadirRes, pendingRes, avgRes, weeklyRes, divisionRes, submissionsRes] = await Promise.all([
+      // Total active employees
+      pool.query(`SELECT COUNT(*) as total FROM hrm_profiles WHERE is_active = true`),
+      // Hadir today (biometric verified)
+      pool.query(`SELECT COUNT(DISTINCT user_id) as total FROM hrm_attendances WHERE attendance_date = $1 AND status IN ('hadir','terlambat')`, [today]),
+      // Pending approvals (cuti + lembur)
+      pool.query(`
+        SELECT
+          (SELECT COUNT(*) FROM hrm_leave_requests WHERE status = 'pending') +
+          (SELECT COUNT(*) FROM hrm_overtime_records WHERE status = 'pending') as total
+      `),
+      // Average monthly attendance %
+      pool.query(`
+        SELECT ROUND(
+          COALESCE(
+            (COUNT(DISTINCT a.user_id) FILTER (WHERE a.attendance_date >= $1)::float /
+            NULLIF((SELECT COUNT(*) FROM hrm_profiles WHERE is_active = true), 0)) * 100, 0
+          )::numeric, 1
+        ) as avg_pct
+        FROM hrm_attendances a
+        WHERE a.attendance_date >= $1
+      `, [monthStart]),
+      // Weekly attendance (last 7 days, Sun=0 → Mon last week start)
+      pool.query(`
+        SELECT
+          EXTRACT(DOW FROM attendance_date)::int as dow,
+          attendance_date,
+          COUNT(DISTINCT user_id) as hadir
+        FROM hrm_attendances
+        WHERE attendance_date >= ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '6 days')
+        GROUP BY attendance_date, EXTRACT(DOW FROM attendance_date)
+        ORDER BY attendance_date
+      `),
+      // Division breakdown
+      pool.query(`
+        SELECT d.name, COUNT(p.id) as count
+        FROM hrm_profiles p
+        LEFT JOIN hrm_divisions d ON p.division_id = d.id
+        WHERE p.is_active = true
+        GROUP BY d.name
+        ORDER BY count DESC
+        LIMIT 8
+      `),
+      // Submissions status count (this month)
+      pool.query(`
+        SELECT
+          SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
+          SUM(CASE WHEN status = 'pending'  THEN 1 ELSE 0 END) as pending,
+          SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected
+        FROM (
+          SELECT status FROM hrm_leave_requests WHERE created_at >= $1
+          UNION ALL
+          SELECT status FROM hrm_overtime_records WHERE created_at >= $1
+        ) combined
+      `, [monthStart]),
+    ]);
+
+    // Build weekly array [Mon..Sun] — last 7 days
+    const weeklyMap = {};
+    weeklyRes.rows.forEach(r => { weeklyMap[r.attendance_date] = parseInt(r.hadir, 10); });
+    const weeklyAttendance = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().split('T')[0];
+      weeklyAttendance.push(weeklyMap[key] || 0);
+    }
+
+    const sub = submissionsRes.rows[0] || {};
+
+    res.json({
+      success: true,
+      data: {
+        totalEmployees:       parseInt(empRes.rows[0]?.total || 0, 10),
+        hadirToday:           parseInt(hadirRes.rows[0]?.total || 0, 10),
+        pendingApprovals:     parseInt(pendingRes.rows[0]?.total || 0, 10),
+        avgAttendancePct:     parseFloat(avgRes.rows[0]?.avg_pct || 0),
+        weeklyAttendance,
+        divisionBreakdown:    divisionRes.rows.map(r => ({ name: r.name || 'Umum', count: parseInt(r.count, 10) })),
+        approvedSubmissions:  parseInt(sub.approved || 0, 10),
+        pendingSubmissions:   parseInt(sub.pending  || 0, 10),
+        rejectedSubmissions:  parseInt(sub.rejected || 0, 10),
+      },
+    });
+  } catch (err) {
+    console.error('[Analytics Summary] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/analytics/employees — individual employee metrics for progress chart
+app.get('/api/analytics/employees', async (req, res) => {
+  const { divisionId } = req.query;
+  try {
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+
+    let whereClause = 'WHERE p.is_active = true';
+    const params = [monthStart.toISOString().split('T')[0]];
+    if (divisionId) {
+      params.push(divisionId);
+      whereClause += ` AND p.division_id = $${params.length}`;
+    }
+
+    const result = await pool.query(`
+      SELECT
+        p.id,
+        p.full_name,
+        p.nip,
+        p.avatar_url,
+        d.name as division_name,
+        r.label as role_label,
+        -- Hadir this month
+        COALESCE((
+          SELECT COUNT(*)
+          FROM hrm_attendances a
+          WHERE a.user_id = p.id
+            AND a.attendance_date >= $1
+            AND a.status IN ('hadir', 'terlambat')
+        ), 0) as hadir_count,
+        -- Terlambat count
+        COALESCE((
+          SELECT COUNT(*)
+          FROM hrm_attendances a
+          WHERE a.user_id = p.id
+            AND a.attendance_date >= $1
+            AND a.status = 'terlambat'
+        ), 0) as terlambat_count,
+        -- Lembur hours approved
+        COALESCE((
+          SELECT SUM(duration_hours)
+          FROM hrm_overtime_records o
+          WHERE o.user_id = p.id
+            AND o.status = 'approved'
+            AND DATE_TRUNC('month', o.date) = DATE_TRUNC('month', $1::date)
+        ), 0) as lembur_hours,
+        -- Cuti used this year
+        COALESCE(p.used_leave_days, 0) as used_leave_days,
+        COALESCE(p.annual_leave_quota, 12) as annual_leave_quota,
+        -- Working days in month (approximate)
+        22 as target_days
+      FROM hrm_profiles p
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_roles r ON p.role_id = r.id
+      ${whereClause}
+      ORDER BY p.full_name
+      LIMIT 80
+    `, params);
+
+    // Compute attendance_pct server-side
+    const employees = result.rows.map(r => ({
+      ...r,
+      hadir_count:    parseInt(r.hadir_count, 10),
+      terlambat_count:parseInt(r.terlambat_count, 10),
+      lembur_hours:   parseFloat(r.lembur_hours),
+      used_leave_days:parseInt(r.used_leave_days, 10),
+      target_days:    22,
+      attendance_pct: Math.round((parseInt(r.hadir_count, 10) / 22) * 100),
+    }));
+
+    res.json({ success: true, data: employees });
+  } catch (err) {
+    console.error('[Analytics Employees] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── KEPALA REGU ASSIGNMENT MANAGEMENT ────────────────────────────────────────
+
+// GET /api/kepala-regu/list — list all kepala_regu users with their assigned employees
+app.get('/api/kepala-regu/list', async (req, res) => {
+  try {
+    const krRes = await pool.query(`
+      SELECT p.id, p.full_name, p.nip, p.avatar_url, d.name as division_name, d.id as division_id,
+        COALESCE(json_agg(
+          json_build_object('id', emp.id, 'fullName', emp.full_name, 'nip', emp.nip, 'divisionName', ed.name)
+        ) FILTER (WHERE emp.id IS NOT NULL), '[]') as assigned_employees
+      FROM hrm_profiles p
+      LEFT JOIN hrm_roles r ON p.role_id = r.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_profiles emp ON emp.kepala_regu_id = p.id
+      LEFT JOIN hrm_divisions ed ON emp.division_id = ed.id
+      WHERE (LOWER(r.name) = 'kepala_regu' OR LOWER(r.name) = 'kepalaregu') AND p.is_active = true
+      GROUP BY p.id, p.full_name, p.nip, p.avatar_url, d.name, d.id
+      ORDER BY p.full_name
+    `);
+    res.json({ success: true, data: krRes.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/kepala-regu/employees — list all employees with their kepala_regu assignment
+app.get('/api/kepala-regu/employees', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT p.id, p.full_name, p.nip, p.avatar_url,
+             d.name as division_name, d.id as division_id,
+             kr.id as kepala_regu_id, kr.full_name as kepala_regu_name
+      FROM hrm_profiles p
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      LEFT JOIN hrm_profiles kr ON p.kepala_regu_id = kr.id
+      LEFT JOIN hrm_roles r ON p.role_id = r.id
+      WHERE p.is_active = true
+        AND (LOWER(r.name) = 'karyawan' OR r.id IS NULL)
+      ORDER BY d.name, p.full_name
+    `);
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PUT /api/kepala-regu/assign — assign / update employee's kepala_regu
+app.put('/api/kepala-regu/assign', async (req, res) => {
+  const { employeeId, kepalaReguId } = req.body;
+  if (!employeeId) return res.status(400).json({ success: false, error: 'employeeId wajib diisi' });
+  try {
+    await pool.query(
+      'UPDATE hrm_profiles SET kepala_regu_id = $1, updated_at = NOW() WHERE id = $2',
+      [kepalaReguId || null, employeeId]
+    );
+    res.json({ success: true, message: 'Penugasan Kepala Regu berhasil diperbarui' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PUT /api/kepala-regu/bulk-assign — bulk assign division employees to a kepala_regu
+app.put('/api/kepala-regu/bulk-assign', async (req, res) => {
+  const { kepalaReguId, divisionId } = req.body;
+  if (!kepalaReguId || !divisionId) return res.status(400).json({ success: false, error: 'kepalaReguId dan divisionId wajib diisi' });
+  try {
+    await pool.query(
+      `UPDATE hrm_profiles SET kepala_regu_id = $1, updated_at = NOW()
+       WHERE division_id = $2`,
+      [kepalaReguId, divisionId]
+    );
+    res.json({ success: true, message: 'Semua karyawan divisi berhasil ditetapkan ke Kepala Regu' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── SHIFT SWAP: ALL SUBMISSIONS (for Approval Panel) ─────────────────────────
+
+// GET /api/shift-swaps/all — get all shift swaps for approval (korlap/kepala_regu)
+app.get('/api/shift-swaps/all', async (req, res) => {
+  const { status, role, userId, divisionId } = req.query;
+  try {
+    let params = [];
+    let whereClauses = [];
+
+    if (status && status !== 'all') {
+      params.push(status);
+      whereClauses.push(`s.status = $${params.length}`);
+    }
+
+    // For kepala_regu — only show swaps from their division
+    if (divisionId) {
+      params.push(divisionId);
+      whereClauses.push(`rp.division_id = $${params.length}`);
+    }
+
+    const whereStr = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
+
+    const result = await pool.query(`
+      SELECT s.*,
+        rp.full_name as requester_name, rp.nip as requester_nip,
+        rd.name as requester_division, rd.id as requester_division_id,
+        sp.full_name as substitute_name, sp.nip as substitute_nip,
+        dp.full_name as danru_name,
+        dsp.full_name as danru_substitute_name,
+        kp.full_name as korlap_name,
+        ap.full_name as approver_name
+      FROM hrm_shift_swaps s
+      LEFT JOIN hrm_profiles rp ON s.requester_id = rp.id
+      LEFT JOIN hrm_divisions rd ON rp.division_id = rd.id
+      LEFT JOIN hrm_profiles sp ON s.substitute_id = sp.id
+      LEFT JOIN hrm_profiles dp ON s.danru_id = dp.id
+      LEFT JOIN hrm_profiles dsp ON s.danru_substitute_id = dsp.id
+      LEFT JOIN hrm_profiles kp ON s.korlap_id = kp.id
+      LEFT JOIN hrm_profiles ap ON s.approved_by = ap.id
+      ${whereStr}
+      ORDER BY s.created_at DESC
+      LIMIT 200
+    `, params);
+
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    console.error('[ShiftSwap All] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PUT /api/shift-swaps/:id/korlap-approve — Korlap final decision on shift swap
+app.put('/api/shift-swaps/:id/korlap-approve', async (req, res) => {
+  const { id } = req.params;
+  const { korlapId, korlapName, action, substituteId, notes } = req.body;
+  if (!['approved', 'rejected'].includes(action)) {
+    return res.status(400).json({ success: false, error: 'action harus approved atau rejected' });
+  }
+  try {
+    const sRes = await pool.query('SELECT * FROM hrm_shift_swaps WHERE id = $1 LIMIT 1', [id]);
+    if (sRes.rows.length === 0) return res.status(404).json({ success: false, error: 'Data tidak ditemukan' });
+    const swap = sRes.rows[0];
+
+    const finalStatus = action === 'approved' ? 'approved' : 'rejected';
+    await pool.query(`
+      UPDATE hrm_shift_swaps SET
+        status = $1,
+        korlap_status = $2,
+        korlap_id = $3,
+        korlap_notes = $4,
+        substitute_id = COALESCE($5, substitute_id),
+        approved_by = $3,
+        approval_notes = $4,
+        updated_at = NOW()
+      WHERE id = $6
+    `, [finalStatus, action, korlapId || null, notes || null, substituteId || null, id]);
+
+    // Notify requester
+    const statusText = action === 'approved' ? 'DISETUJUI' : 'DITOLAK';
+    await broadcastNotification({
+      targetUserId: swap.requester_id,
+      title: `Pengajuan Tukar Shift ${statusText}`,
+      message: `Permohonan pengisian pos dinas Anda untuk tanggal ${swap.swap_date} telah ${statusText} oleh Korlap ${korlapName || ''}.${notes ? ' Catatan: ' + notes : ''}`,
+      type: action === 'approved' ? 'success' : 'warning',
+      metadata: { swapId: id, action },
+    });
+
+    res.json({ success: true, message: `Permohonan berhasil ${statusText} oleh Korlap` });
+  } catch (err) {
+    console.error('[ShiftSwap Korlap] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PUT /api/shift-swaps/:id/danru-approve — Kepala Regu (Danru) checker action
+app.put('/api/shift-swaps/:id/danru-approve', async (req, res) => {
+  const { id } = req.params;
+  const { danruId, danruName, action, recommendedSubstituteId, notes } = req.body;
+  try {
+    const sRes = await pool.query('SELECT * FROM hrm_shift_swaps WHERE id = $1 LIMIT 1', [id]);
+    if (sRes.rows.length === 0) return res.status(404).json({ success: false, error: 'Data tidak ditemukan' });
+    const swap = sRes.rows[0];
+
+    await pool.query(`
+      UPDATE hrm_shift_swaps SET
+        danru_status = $1,
+        danru_id = $2,
+        danru_notes = $3,
+        danru_substitute_id = COALESCE($4, danru_substitute_id),
+        status = CASE WHEN $1 = 'rejected' THEN 'rejected' ELSE 'pending_korlap' END,
+        updated_at = NOW()
+      WHERE id = $5
+    `, [action, danruId || null, notes || null, recommendedSubstituteId || null, id]);
+
+    // Notify Korlap for final decision if danru recommends
+    if (action !== 'rejected') {
+      await broadcastNotification({
+        recipientRoles: ['korlap', 'admin', 'superadmin'],
+        title: '🔁 Tukar Shift Siap Diputuskan Korlap',
+        message: `Kepala Regu ${danruName || ''} telah menelaah permohonan dinas tanggal ${swap.swap_date} dan meneruskan ke Korlap untuk keputusan akhir.`,
+        type: 'info',
+        link: '/admin/approval?tab=tukar',
+        metadata: { swapId: id, danruId, swapDate: swap.swap_date },
+      });
+    } else {
+      // Notify requester of rejection by danru
+      await broadcastNotification({
+        targetUserId: swap.requester_id,
+        title: 'Pengajuan Tukar Shift DITOLAK',
+        message: `Permohonan dinas Anda untuk tanggal ${swap.swap_date} ditolak oleh Kepala Regu.${notes ? ' Catatan: ' + notes : ''}`,
+        type: 'warning',
+        metadata: { swapId: id },
+      });
+    }
+
+    res.json({ success: true, message: action === 'rejected' ? 'Pengajuan ditolak oleh Danru' : 'Pengajuan diteruskan ke Korlap' });
+  } catch (err) {
+    console.error('[ShiftSwap Danru] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── EMPLOYEE SELF-PROGRESS API ────────────────────────────────────────────────
+
+// GET /api/analytics/self — Self-progress for individual employee
+app.get('/api/analytics/self', async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ success: false, error: 'userId wajib' });
+
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const uRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [userId]);
+      if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
+    }
+
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    const monthStartStr = monthStart.toISOString().split('T')[0];
+    const yearStart = `${new Date().getFullYear()}-01-01`;
+    const today = new Date().toISOString().split('T')[0];
+
+    const [profileRes, attendanceRes, otRes, leaveRes, weeklyRes] = await Promise.all([
+      pool.query('SELECT p.*, d.name as division_name FROM hrm_profiles p LEFT JOIN hrm_divisions d ON p.division_id = d.id WHERE p.id = $1', [validUserId]),
+      pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE status IN ('hadir','terlambat')) as hadir_count,
+          COUNT(*) FILTER (WHERE status = 'terlambat') as terlambat_count,
+          COUNT(*) FILTER (WHERE status = 'alpha') as alpha_count,
+          ROUND(COALESCE(AVG(work_duration_minutes) / 60.0, 0)::numeric, 2) as avg_hours_per_day
+        FROM hrm_attendances WHERE user_id = $1 AND attendance_date >= $2
+      `, [validUserId, monthStartStr]),
+      pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'approved') as approved_count,
+          COALESCE(SUM(duration_hours) FILTER (WHERE status = 'approved'), 0) as total_hours,
+          0 as total_compensation
+        FROM hrm_overtime_records WHERE user_id = $1 AND DATE_TRUNC('month', date) = DATE_TRUNC('month', ($2::date - INTERVAL '1 month'))
+      `, [validUserId, monthStartStr]),
+      pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'approved' AND leave_type = 'cuti_tahunan') as cuti_used,
+          COUNT(*) FILTER (WHERE status = 'pending') as pending_count
+        FROM hrm_leave_requests WHERE user_id = $1 AND created_at >= $2
+      `, [validUserId, yearStart]),
+      // Last 14 days attendance
+      pool.query(`
+        SELECT attendance_date, status
+        FROM hrm_attendances
+        WHERE user_id = $1 AND attendance_date >= ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '13 days')
+        ORDER BY attendance_date DESC
+        LIMIT 14
+      `, [validUserId]),
+    ]);
+
+    const profile = profileRes.rows[0];
+    const att = attendanceRes.rows[0];
+    const ot = otRes.rows[0];
+    const leave = leaveRes.rows[0];
+    const quota = parseInt(profile?.annual_leave_quota || 12, 10);
+    const used = parseInt(profile?.used_leave_days || 0, 10);
+
+    const weeklyData = weeklyRes.rows.reduce((acc, r) => {
+      let dateStr = '';
+      if (r.attendance_date instanceof Date) {
+        // Use local or ISO YYYY-MM-DD
+        const year = r.attendance_date.getFullYear();
+        const month = String(r.attendance_date.getMonth() + 1).padStart(2, '0');
+        const day = String(r.attendance_date.getDate()).padStart(2, '0');
+        dateStr = `${year}-${month}-${day}`;
+      } else if (typeof r.attendance_date === 'string') {
+        dateStr = r.attendance_date.split('T')[0];
+      } else {
+        dateStr = String(r.attendance_date);
+      }
+      acc[dateStr] = r.status;
+      return acc;
+    }, {});
+
+    const last14Days = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().split('T')[0];
+      last14Days.push({ date: key, status: weeklyData[key] || 'libur' });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        employee: {
+          fullName: profile?.full_name,
+          nip: profile?.nip,
+          divisionName: profile?.division_name,
+          avatarUrl: profile?.avatar_url,
+        },
+        attendance: {
+          hadirCount: parseInt(att?.hadir_count || 0, 10),
+          terlambatCount: parseInt(att?.terlambat_count || 0, 10),
+          alphaCount: parseInt(att?.alpha_count || 0, 10),
+          targetDays: 22,
+          attendancePct: Math.round((parseInt(att?.hadir_count || 0, 10) / 22) * 100),
+          avgHoursPerDay: parseFloat(att?.avg_hours_per_day || 0),
+        },
+        overtime: {
+          approvedCount: parseInt(ot?.approved_count || 0, 10),
+          totalHours: parseFloat(ot?.total_hours || 0),
+          totalCompensation: parseFloat(ot?.total_compensation || 0),
+        },
+        leave: {
+          annualQuota: quota,
+          usedDays: used,
+          remainingDays: Math.max(0, quota - used),
+          pendingRequests: parseInt(leave?.pending_count || 0, 10),
+        },
+        last14Days,
+      },
+    });
+  } catch (err) {
+    console.error('[Analytics Self] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Update /api/analytics/summary to support divisionId scoping for kepala_regu
+// Update /api/analytics/employees to support kepalaReguId for Kepala Regu scope
+// (These override the previous implementations to add division scope)
+
+// ─── EMPLOYEE SHIFT SCHEDULES API ─────────────────────────────────────────
+
+// GET /api/employee-schedules - Retrieve scheduled shifts with optional filters
+app.get('/api/employee-schedules', async (req, res) => {
+  const { month, year, divisionId, userId, date } = req.query;
+  try {
+    let query = `
+      SELECT 
+        s.id,
+        s.user_id as "userId",
+        p.full_name as "userName",
+        p.nip as "userNip",
+        p.employee_sequence_no as "employeeSequenceNo",
+        p.division_id as "divisionId",
+        p.division_name as "divisionName",
+        TO_CHAR(s.schedule_date, 'YYYY-MM-DD') as "scheduleDate",
+        s.shift_id as "shiftId",
+        s.shift_code as "shiftCode",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)'
+          ELSE s.shift_name
+        END as "shiftName",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_start_time
+          ELSE s.start_time
+        END as "startTime",
+        CASE
+          WHEN p.custom_end_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_end_time
+          ELSE s.end_time
+        END as "endTime",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 8.0
+          ELSE s.duration_hours
+        END as "durationHours",
+        s.is_night_shift as "isNightShift",
+        s.is_off as "isOff",
+        s.notes,
+        s.created_at as "createdAt",
+        s.updated_at as "updatedAt"
+      FROM hrm_employee_schedules s
+      JOIN hrm_profiles p ON s.user_id = p.id
+      WHERE 1=1
+        AND UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'
+    `;
+    const params = [];
+
+    if (userId) {
+      params.push(userId);
+      query += ` AND (s.user_id::text = $${params.length} OR p.nip = $${params.length} OR LOWER(p.email) = LOWER($${params.length}))`;
+    }
+    if (divisionId && divisionId !== 'all') {
+      params.push(divisionId);
+      query += ` AND p.division_id = $${params.length}`;
+    }
+    if (date) {
+      params.push(date);
+      query += ` AND s.schedule_date = $${params.length}`;
+    }
+    if (month) {
+      if (typeof month === 'string' && month.includes('-')) {
+        const [mYear, mMonth] = month.split('-').map(Number);
+        params.push(mMonth);
+        query += ` AND EXTRACT(MONTH FROM s.schedule_date) = $${params.length}`;
+        params.push(mYear);
+        query += ` AND EXTRACT(YEAR FROM s.schedule_date) = $${params.length}`;
+      } else if (year) {
+        params.push(Number(month));
+        query += ` AND EXTRACT(MONTH FROM s.schedule_date) = $${params.length}`;
+        params.push(Number(year));
+        query += ` AND EXTRACT(YEAR FROM s.schedule_date) = $${params.length}`;
+      }
+    }
+
+    query += ` ORDER BY s.schedule_date ASC, CASE WHEN p.nip LIKE 'FR%' THEN 0 ELSE 1 END, NULLIF(REGEXP_REPLACE(p.nip, '[^0-9]', '', 'g'), '')::INT ASC NULLS LAST, p.nip ASC, p.full_name ASC`;
+    const result = await pool.query(query, params);
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    console.error('[Employee Schedules] Error fetching:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/employee-schedules/today/:userId - Retrieve today's schedule for specific user
+app.get('/api/employee-schedules/today/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const today = req.query.date || new Date().toISOString().split('T')[0];
+  try {
+    const query = `
+      SELECT 
+        s.id,
+        s.user_id as "userId",
+        p.full_name as "userName",
+        p.nip as "userNip",
+        TO_CHAR(s.schedule_date, 'YYYY-MM-DD') as "scheduleDate",
+        s.shift_id as "shiftId",
+        s.shift_code as "shiftCode",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)'
+          ELSE s.shift_name
+        END as "shiftName",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_start_time
+          ELSE s.start_time
+        END as "startTime",
+        CASE
+          WHEN p.custom_end_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_end_time
+          ELSE s.end_time
+        END as "endTime",
+        CASE
+          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 8.0
+          ELSE s.duration_hours
+        END as "durationHours",
+        s.is_night_shift as "isNightShift",
+        s.is_off as "isOff",
+        s.notes
+      FROM hrm_employee_schedules s
+      JOIN hrm_profiles p ON s.user_id = p.id
+      WHERE (s.user_id::text = $1 OR p.nip = $1 OR LOWER(p.email) = LOWER($1)) AND s.schedule_date = $2::date
+      LIMIT 1
+    `;
+    const result = await pool.query(query, [userId, today]);
+    res.json({ success: true, data: result.rows[0] || null });
+  } catch (err) {
+    console.error('[Employee Schedules Today] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/employee-schedules/batch - Upsert multiple employee schedules
+app.post('/api/employee-schedules/batch', async (req, res) => {
+  const { schedules } = req.body;
+  if (!Array.isArray(schedules) || schedules.length === 0) {
+    return res.status(400).json({ success: false, error: 'Daftar jadwal wajib disertakan' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let upsertedCount = 0;
+
+    for (const item of schedules) {
+      if (!item.userId || !item.scheduleDate) continue;
+      const isSpecialLeadership = isExemptFieldOfficer({ id: item.userId, userId: item.userId });
+      let finalStartTime = item.startTime || (item.shiftCode === 'M' ? '22:30' : item.shiftCode === 'S' ? '15:30' : '07:30');
+      let finalEndTime = item.endTime || (item.shiftCode === 'DAY' ? '16:30' : item.shiftCode === 'M' ? '07:30' : item.shiftCode === 'S' ? '22:30' : '15:30');
+      let finalShiftName = item.shiftName || (item.shiftCode === 'OFF' ? 'Libur / Off' : item.shiftCode === 'DAY' ? 'Day Shift (07:30 - 16:30 WITA)' : `Shift ${item.shiftCode}`);
+      let finalDuration = item.durationHours ?? (item.shiftCode === 'OFF' ? 0 : item.shiftCode === 'DAY' ? 9 : item.shiftCode === 'M' ? 9 : item.shiftCode === 'S' ? 7 : 8);
+
+      if (isSpecialLeadership && (item.shiftCode === 'DAY' || (!item.isOff && item.shiftCode !== 'OFF'))) {
+        finalStartTime = '08:00';
+        finalEndTime = '16:00';
+        finalShiftName = 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)';
+        finalDuration = 8.0;
+      }
+
+      await client.query(`
+        INSERT INTO hrm_employee_schedules (
+          user_id,
+          schedule_date,
+          shift_id,
+          shift_code,
+          shift_name,
+          start_time,
+          end_time,
+          duration_hours,
+          is_night_shift,
+          is_off,
+          notes,
+          updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+        ON CONFLICT (user_id, schedule_date) 
+        DO UPDATE SET
+          shift_id = EXCLUDED.shift_id,
+          shift_code = EXCLUDED.shift_code,
+          shift_name = EXCLUDED.shift_name,
+          start_time = EXCLUDED.start_time,
+          end_time = EXCLUDED.end_time,
+          duration_hours = EXCLUDED.duration_hours,
+          is_night_shift = EXCLUDED.is_night_shift,
+          is_off = EXCLUDED.is_off,
+          notes = EXCLUDED.notes,
+          updated_at = NOW()
+      `, [
+        item.userId,
+        item.scheduleDate,
+        (item.shiftId && UUID_REGEX.test(item.shiftId)) ? item.shiftId : null,
+        item.shiftCode || 'OFF',
+        finalShiftName,
+        finalStartTime,
+        finalEndTime,
+        finalDuration,
+        Boolean(item.isNightShift || item.shiftCode === 'M'),
+        Boolean(item.isOff || item.shiftCode === 'OFF'),
+        item.notes || 'Disusun via Smart Roster Scheduler'
+      ]);
+      upsertedCount++;
+    }
+
+    // Otomatis sinkronisasi data presensi hrm_attendances yang sudah ada pada tanggal jadwal tersebut
+    await client.query(`
+      UPDATE hrm_attendances a
+      SET shift_name = s.shift_name,
+          shift_id = COALESCE(
+            s.shift_id,
+            (SELECT id FROM hrm_shifts sh WHERE sh.code = s.shift_code LIMIT 1),
+            (SELECT id FROM hrm_shifts sh WHERE sh.name = s.shift_name LIMIT 1)
+          ),
+          notes = CASE 
+            WHEN a.notes LIKE '%[MANGKIR OTOMATIS%' 
+            THEN '[MANGKIR OTOMATIS: Tidak hadir tanpa keterangan hingga jam shift (' || s.end_time || ' WITA) berakhir]'
+            ELSE a.notes
+          END,
+          clock_out = CASE 
+            WHEN a.status = 'alfa' AND a.clock_in IS NULL 
+            THEN s.end_time::time
+            ELSE a.clock_out
+          END
+      FROM hrm_employee_schedules s
+      WHERE a.user_id = s.user_id
+        AND a.attendance_date = s.schedule_date
+        AND (a.shift_name IS DISTINCT FROM s.shift_name OR a.shift_name != s.shift_name);
+    `);
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      count: upsertedCount,
+      message: `Berhasil menyimpan ${upsertedCount} jadwal shift ke database perusahaan`,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[Employee Schedules Batch] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ─── EPHEMERAL PHOTO RETENTION ENFORCER ──────────────────────────────────────
+// Kebijakan: Foto absensi masuk, pulang, dan foto patroli selfie tidak tersimpan permanen menumpuk.
+// Hanya 1 foto terbaru aktif per karyawan yang dipertahankan di database.
+async function enforceEphemeralPhotoRetention() {
+  try {
+    // 1. Bersihkan photo_in lama (hanya sisakan 1 photo_in terbaru per user)
+    const resIn = await pool.query(`
+      UPDATE hrm_attendances a
+      SET photo_in = NULL
+      WHERE photo_in IS NOT NULL
+        AND id NOT IN (
+          SELECT DISTINCT ON (user_id) id
+          FROM hrm_attendances
+          WHERE photo_in IS NOT NULL
+          ORDER BY user_id, attendance_date DESC, created_at DESC
+        );
+    `);
+
+    // 2. Bersihkan photo_out lama (hanya sisakan 1 photo_out terbaru per user)
+    const resOut = await pool.query(`
+      UPDATE hrm_attendances a
+      SET photo_out = NULL
+      WHERE photo_out IS NOT NULL
+        AND id NOT IN (
+          SELECT DISTINCT ON (user_id) id
+          FROM hrm_attendances
+          WHERE photo_out IS NOT NULL
+          ORDER BY user_id, attendance_date DESC, created_at DESC
+        );
+    `);
+
+    // 3. Bersihkan foto selfie titik lokasi pos lama (hanya sisakan 1 foto selfie terbaru per user)
+    const resPatrol = await pool.query(`
+      UPDATE hrm_field_patrol_checks p
+      SET watermarked_photo_url = NULL
+      WHERE watermarked_photo_url IS NOT NULL
+        AND id NOT IN (
+          SELECT DISTINCT ON (user_id) id
+          FROM hrm_field_patrol_checks
+          WHERE watermarked_photo_url IS NOT NULL
+          ORDER BY user_id, created_at DESC
+        );
+    `);
+
+    console.log(`[Ephemeral Photo Retention] Cleanup completed: ${resIn.rowCount || 0} old check-ins, ${resOut.rowCount || 0} old check-outs, ${resPatrol.rowCount || 0} old patrol photos purged.`);
+  } catch (err) {
+    console.error('[Ephemeral Photo Retention] Error during photo purge:', err.message);
+  }
+}
+
+// ─── ATTENDANCE MANUAL CORRECTION & CREATION API ────────────────────────────
+app.delete('/api/attendances/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const delRes = await pool.query('DELETE FROM hrm_attendances WHERE id = $1 RETURNING *', [id]);
+    if (delRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
+    }
+    const targetUserId = delRes.rows[0].user_id;
+    if (targetUserId) {
+      await pool.query(`
+        UPDATE hrm_profiles
+        SET used_leave_days = (
+          SELECT COUNT(DISTINCT attendance_date)
+          FROM hrm_attendances
+          WHERE user_id = $1 AND status = 'cuti'
+        )
+        WHERE id = $1;
+      `, [targetUserId]);
+    }
+    res.json({ success: true, message: 'Data presensi berhasil dihapus', data: delRes.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.put('/api/attendances/:id/manual-correct', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, clockIn, clockOut, notes, lateMinutes, shiftId, shiftName } = req.body;
+
+    const nonWorkingStatuses = ['off', 'libur', 'cuti', 'annual_leave', 'izin', 'permission', 'sakit', 'sick', 'alfa', 'alpha'];
+    if (nonWorkingStatuses.includes(status)) {
+      const canonicalStatus = (status === 'annual_leave' ? 'cuti' : (status === 'libur' ? 'off' : (status === 'permission' ? 'izin' : (status === 'sick' ? 'sakit' : (status === 'alpha' ? 'alfa' : status)))));
+      const defaultNote = canonicalStatus === 'cuti'
+        ? 'Cuti Resmi Disahkan'
+        : (canonicalStatus === 'sakit'
+          ? 'Izin Sakit'
+          : (canonicalStatus === 'izin'
+            ? 'Izin Resmi Disahkan'
+            : (canonicalStatus === 'alfa'
+              ? 'Mangkir / Alpa'
+              : 'Jadwal Libur / OFF')));
+
+      const nonWorkingQuery = `
+        UPDATE hrm_attendances
+        SET status = $1,
+            clock_in = NULL,
+            clock_out = NULL,
+            photo_in = NULL,
+            photo_out = NULL,
+            lat_in = NULL,
+            long_in = NULL,
+            lat_out = NULL,
+            long_out = NULL,
+            work_duration_minutes = 0,
+            late_minutes = 0,
+            auto_closed_type = NULL,
+            notes = COALESCE($2, notes, $3),
+            is_verified = true,
+            is_locked = false,
+            is_perimeter_breached = false,
+            updated_at = NOW()
+        WHERE id = $4
+        RETURNING *;
+      `;
+      const nonWorkingResult = await pool.query(nonWorkingQuery, [canonicalStatus, notes || null, defaultNote, id]);
+      if (nonWorkingResult.rows.length === 0) {
+        return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
+      }
+
+      // Jika diubah menjadi cuti, pastikan kuota profil tersinkron
+      const targetUserId = nonWorkingResult.rows[0].user_id;
+      if (targetUserId && canonicalStatus === 'cuti') {
+        await pool.query(`
+          UPDATE hrm_profiles
+          SET used_leave_days = GREATEST(COALESCE(used_leave_days, 0), (
+            SELECT COUNT(DISTINCT attendance_date)
+            FROM hrm_attendances
+            WHERE user_id = $1 AND status = 'cuti'
+          )),
+          updated_at = NOW()
+          WHERE id = $1;
+        `, [targetUserId]);
+      }
+
+      return res.json({ success: true, data: nonWorkingResult.rows[0], message: `Presensi berhasil diubah menjadi ${canonicalStatus.toUpperCase()}` });
+    }
+
+    const cleanStatus = status || null;
+    const cleanClockIn = clockIn !== undefined ? clockIn : null;
+    const cleanNotes = notes !== undefined ? notes : null;
+    const cleanLate = lateMinutes !== undefined ? Number(lateMinutes) : null;
+
+    let clockInSql = 'clock_in = COALESCE($2, clock_in)';
+    if (clockIn === null || clockIn === '') {
+      clockInSql = 'clock_in = NULL';
+    }
+
+    let clockOutSql = 'clock_out = clock_out';
+    const params = [cleanStatus, cleanClockIn, cleanNotes, cleanLate, id];
+
+    if (clockOut !== undefined) {
+      if (clockOut === null || clockOut === '') {
+        clockOutSql = 'clock_out = NULL, photo_out = NULL, lat_out = NULL, long_out = NULL';
+      } else {
+        params.push(clockOut);
+        clockOutSql = `clock_out = $${params.length}`;
+      }
+    }
+
+    let extraShiftSql = '';
+    if (shiftName) {
+      params.push(shiftName);
+      extraShiftSql += `, shift_name = $${params.length}`;
+    }
+    if (shiftId && UUID_REGEX.test(shiftId)) {
+      params.push(shiftId);
+      extraShiftSql += `, shift_id = $${params.length}`;
+    }
+
+    const query = `
+      UPDATE hrm_attendances
+      SET status = COALESCE($1, status),
+          ${clockInSql},
+          ${clockOutSql},
+          notes = COALESCE($3, notes),
+          late_minutes = COALESCE($4, late_minutes),
+          is_verified = true,
+          is_locked = false,
+          is_perimeter_breached = false${extraShiftSql},
+          updated_at = NOW()
+      WHERE id = $5
+      RETURNING *;
+    `;
+    const result = await pool.query(query, params);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
+    }
+
+    // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime
+    const targetUserId = result.rows[0].user_id;
+    if (targetUserId) {
+      await pool.query(`
+        UPDATE hrm_profiles
+        SET used_leave_days = (
+          SELECT COUNT(DISTINCT attendance_date)
+          FROM hrm_attendances
+          WHERE user_id = $1 AND status = 'cuti'
+        )
+        WHERE id = $1;
+      `, [targetUserId]);
+    }
+
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Manual attendance correct error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/attendances/manual-entry', async (req, res) => {
+  try {
+    const { userId, attendanceDate, status, clockIn, clockOut, notes, lateMinutes } = req.body;
+    if (!userId || !attendanceDate) {
+      return res.status(400).json({ success: false, error: 'userId dan attendanceDate wajib diisi' });
+    }
+    const query = `
+      INSERT INTO hrm_attendances (user_id, attendance_date, status, clock_in, clock_out, notes, late_minutes, is_verified, is_locked, is_perimeter_breached, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, true, false, false, NOW(), NOW())
+      ON CONFLICT (user_id, attendance_date) DO UPDATE
+      SET status = EXCLUDED.status,
+          clock_in = EXCLUDED.clock_in,
+          clock_out = EXCLUDED.clock_out,
+          notes = EXCLUDED.notes,
+          late_minutes = EXCLUDED.late_minutes,
+          is_verified = true,
+          is_locked = false,
+          is_perimeter_breached = false,
+          updated_at = NOW()
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [
+      userId,
+      attendanceDate,
+      status || 'hadir',
+      clockIn || '07:30:00',
+      clockOut ? clockOut : null,
+      notes || 'Presensi manual divalidasi oleh Superadmin',
+      lateMinutes || 0,
+    ]);
+
+    // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime
+    if (userId) {
+      await pool.query(`
+        UPDATE hrm_profiles
+        SET used_leave_days = (
+          SELECT COUNT(DISTINCT attendance_date)
+          FROM hrm_attendances
+          WHERE user_id = $1 AND status = 'cuti'
+        )
+        WHERE id = $1;
+      `, [userId]);
+    }
+
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Manual attendance entry error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── DISCIPLINARY & SURAT PERINGATAN (SP 1, 2, 3) API ───────────────────────
+app.get('/api/disciplinary', async (req, res) => {
+  try {
+    const query = `
+      SELECT d.*, 
+             p.full_name as user_name, 
+             p.nip as user_nip, 
+             div.name as division_name,
+             p.avatar_url as user_avatar
+      FROM hrm_disciplinary_records d
+      LEFT JOIN hrm_profiles p ON d.user_id = p.id
+      LEFT JOIN hrm_divisions div ON p.division_id = div.id
+      ORDER BY d.violation_date DESC, d.created_at DESC;
+    `;
+    const result = await pool.query(query);
+    res.json({
+      success: true,
+      data: result.rows.map((d) => ({
+        id: d.id,
+        userId: d.user_id,
+        userName: d.user_name || 'Karyawan',
+        userNip: d.user_nip || '',
+        divisionName: d.division_name || '-',
+        spType: d.sp_type,
+        letterNumber: d.letter_number || '',
+        violationDate: d.violation_date ? new Date(d.violation_date).toISOString().split('T')[0] : '',
+        violationType: d.violation_type || 'Kedisiplinan',
+        description: d.description || '',
+        sanction: d.sanction || '',
+        issuedBy: d.issued_by,
+        issuedByName: d.issued_by_name || 'Super Administrator',
+        validUntil: d.valid_until ? new Date(d.valid_until).toISOString().split('T')[0] : '',
+        status: d.status || 'active',
+        notes: d.notes || '',
+        createdAt: d.created_at,
+        updatedAt: d.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error('Get disciplinary error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/disciplinary', async (req, res) => {
+  try {
+    const {
+      userId,
+      spType,
+      letterNumber,
+      violationDate,
+      violationType,
+      description,
+      sanction,
+      issuedBy,
+      issuedByName,
+      validUntil,
+      status,
+      notes,
+    } = req.body;
+
+    if (!userId || !spType || !description) {
+      return res.status(400).json({ success: false, error: 'userId, spType, dan description wajib diisi' });
+    }
+
+    const query = `
+      INSERT INTO hrm_disciplinary_records (
+        user_id, sp_type, letter_number, violation_date, violation_type, 
+        description, sanction, issued_by, issued_by_name, valid_until, 
+        status, notes, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [
+      userId,
+      spType,
+      letterNumber || `SP-${Date.now().toString().slice(-4)}/FRP/${new Date().getFullYear()}`,
+      violationDate || new Date().toISOString().split('T')[0],
+      violationType || 'Kedisiplinan',
+      description,
+      sanction || 'Peringatan tertulis',
+      issuedBy || null,
+      issuedByName || 'Super Administrator',
+      validUntil || null,
+      status || 'active',
+      notes || '',
+    ]);
+
+    // Send in-app notification to employee
+    try {
+      await pool.query(
+        `
+        INSERT INTO hrm_notifications (user_id, title, message, type, link, metadata, created_at)
+        VALUES ($1, $2, $3, 'disciplinary', '/riwayat', $4, NOW())
+      `,
+        [
+          userId,
+          `Pemberitahuan Sanksi Kedisiplinan (${spType.toUpperCase()})`,
+          `Anda menerima ${spType.toUpperCase()} terkait: ${description}`,
+          JSON.stringify({ spType, violationDate, letterNumber }),
+        ]
+      );
+    } catch (notifErr) {
+      console.error('Error sending SP notification:', notifErr.message);
+    }
+
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Create disciplinary error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.put('/api/disciplinary/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+    const query = `
+      UPDATE hrm_disciplinary_records
+      SET status = $1,
+          notes = COALESCE($2, notes),
+          updated_at = NOW()
+      WHERE id = $3
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [status, notes, id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Data pelanggaran tidak ditemukan' });
+    }
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Update disciplinary status error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/disciplinary/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM hrm_disciplinary_records WHERE id = $1', [id]);
+    res.json({ success: true, message: 'Data pelanggaran berhasil dihapus' });
+  } catch (err) {
+    console.error('Delete disciplinary error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── KPI & PERFORMANCE APPRAISAL API ─────────────────────────────────────────
+app.get('/api/kpi', async (req, res) => {
+  try {
+    const { month } = req.query;
+    let query = `
+      SELECT k.*, 
+             p.full_name as user_name, 
+             p.nip as user_nip, 
+             div.name as division_name,
+             p.avatar_url as user_avatar
+      FROM hrm_employee_kpi k
+      LEFT JOIN hrm_profiles p ON k.user_id = p.id
+      LEFT JOIN hrm_divisions div ON p.division_id = div.id
+    `;
+    const params = [];
+    if (month) {
+      query += ` WHERE k.period_month = $1`;
+      params.push(month);
+    }
+    query += ` ORDER BY k.period_month DESC, k.final_score DESC;`;
+    const result = await pool.query(query, params);
+    res.json({
+      success: true,
+      data: result.rows.map((k) => ({
+        id: k.id,
+        userId: k.user_id,
+        userName: k.user_name || 'Karyawan',
+        userNip: k.user_nip || '',
+        divisionName: k.division_name || '-',
+        periodMonth: k.period_month,
+        attendanceScore: k.attendance_score !== null && k.attendance_score !== undefined ? Number(k.attendance_score) : 0,
+        operationalScore: k.operational_score !== null && k.operational_score !== undefined ? Number(k.operational_score) : 0,
+        competencyScore: k.competency_score !== null && k.competency_score !== undefined ? Number(k.competency_score) : 0,
+        finalScore: k.final_score !== null && k.final_score !== undefined ? Number(k.final_score) : 0,
+        grade: k.grade || 'D',
+        evaluatorId: k.evaluator_id,
+        evaluatorName: k.evaluator_name || 'Super Administrator',
+        feedback: k.feedback || '',
+        status: k.status || 'final',
+        createdAt: k.created_at,
+        updatedAt: k.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error('Get KPI error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/kpi', async (req, res) => {
+  try {
+    const {
+      userId,
+      periodMonth,
+      attendanceScore,
+      operationalScore,
+      competencyScore,
+      finalScore,
+      grade,
+      evaluatorId,
+      evaluatorName,
+      feedback,
+      status,
+    } = req.body;
+
+    if (!userId || !periodMonth) {
+      return res.status(400).json({ success: false, error: 'userId dan periodMonth wajib diisi' });
+    }
+
+    const query = `
+      INSERT INTO hrm_employee_kpi (
+        user_id, period_month, attendance_score, operational_score, 
+        competency_score, final_score, grade, evaluator_id, evaluator_name, 
+        feedback, status, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+      ON CONFLICT (user_id, period_month) DO UPDATE
+      SET attendance_score = EXCLUDED.attendance_score,
+          operational_score = EXCLUDED.operational_score,
+          competency_score = EXCLUDED.competency_score,
+          final_score = EXCLUDED.final_score,
+          grade = EXCLUDED.grade,
+          evaluator_id = EXCLUDED.evaluator_id,
+          evaluator_name = EXCLUDED.evaluator_name,
+          feedback = EXCLUDED.feedback,
+          status = EXCLUDED.status,
+          updated_at = NOW()
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [
+      userId,
+      periodMonth,
+      attendanceScore ?? 100,
+      operationalScore ?? 85,
+      competencyScore ?? 85,
+      finalScore ?? 88,
+      grade ?? 'A',
+      evaluatorId || null,
+      evaluatorName || 'Super Administrator',
+      feedback || 'Performa kerja memuaskan dan memenuhi standar operasional.',
+      status || 'final',
+    ]);
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error('Save KPI error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/kpi/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM hrm_employee_kpi WHERE id = $1', [id]);
+    res.json({ success: true, message: 'Data evaluasi KPI berhasil dihapus' });
+  } catch (err) {
+    console.error('Delete KPI error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Worker: Sinkronisasi 512-dimensi InsightFace Embedding untuk seluruh karyawan terdaftar
+async function syncAllUserBiometricEmbeddings() {
+  try {
+    const res = await pool.query(
+      "SELECT id, full_name, email, face_enrolled_photo FROM hrm_profiles WHERE (face_embedding IS NULL OR array_length(face_embedding, 1) = 0) AND face_enrolled_photo IS NOT NULL AND length(face_enrolled_photo) > 100"
+    );
+    if (res.rows.length === 0) {
+      console.log('[InsightFace AI] Seluruh profil karyawan terdaftar telah memiliki vektor biometrik 512-dimensi.');
+      return;
+    }
+    console.log(`[InsightFace AI] Menemukan ${res.rows.length} profil karyawan yang belum memiliki vektor 512-dimensi. Memproses via hrm-face-ai (port 5001)...`);
+    for (const row of res.rows) {
+      try {
+        const aiRes = await fetch(`${FACE_AI_URL}/extract-embedding-json`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_base64: row.face_enrolled_photo })
+        });
+        if (aiRes.ok) {
+          const data = await aiRes.json();
+          if (data.success && Array.isArray(data.embedding) && data.embedding.length === 512) {
+            await pool.query('UPDATE hrm_profiles SET face_embedding = $1 WHERE id = $2', [data.embedding, row.id]);
+            console.log(`[InsightFace AI] Sukses mengekstrak & menyimpan 512D vektor biometrik untuk ${row.full_name} (${row.email})`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[InsightFace AI] Gagal mengekstrak vektor untuk ${row.email}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.warn('[InsightFace AI] Worker error:', err.message);
+  }
+}
+
+// ─── 17. SUBMIT LAPORAN KELUAR AREA & AUTO-FILL JAM PULANG STANDAR ───
+app.post('/api/attendances/submit-breach-report', async (req, res) => {
+  const { userId, notes, latitude, longitude } = req.body;
+  if (!userId || !notes || !notes.trim()) {
+    return res.status(400).json({ success: false, error: 'User ID dan alasan pelaporan wajib diisi.' });
+  }
+
+  try {
+    // 1. Ambil data profil karyawan
+    const profRes = await pool.query(
+      `SELECT p.*, s.name as shift_name, s.start_time, s.end_time, s.is_cross_day, d.name as division_name,
+              kr.phone as korlap_phone, kr.full_name as korlap_name
+       FROM hrm_profiles p
+       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+       LEFT JOIN hrm_divisions d ON p.division_id = d.id
+       LEFT JOIN hrm_profiles kr ON p.kepala_regu_id = kr.id
+       WHERE p.id = $1 LIMIT 1;`,
+      [userId]
+    );
+
+    if (profRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan.' });
+    }
+    const prof = profRes.rows[0];
+
+    // 2. Ambil presensi hari ini
+    const todayRes = await pool.query(
+      `SELECT * FROM hrm_attendances
+       WHERE user_id = $1 AND attendance_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
+       ORDER BY created_at DESC LIMIT 1;`,
+      [userId]
+    );
+
+    if (todayRes.rows.length === 0 || !todayRes.rows[0].clock_in) {
+      return res.status(400).json({ success: false, error: 'Anda belum melakukan presensi masuk hari ini.' });
+    }
+
+    const todayAtt = todayRes.rows[0];
+
+    // 3. Tentukan jam pulang standar shift
+    const defaultEndTime = prof.custom_end_time || (prof.end_time ? prof.end_time.substring(0, 5) : '16:30');
+    const clockOutTimeStr = defaultEndTime.length === 5 ? `${defaultEndTime}:00` : defaultEndTime;
+
+    // Hitung estimasi durasi kerja
+    const [inH, inM] = (todayAtt.clock_in || '08:00:00').split(':').map(Number);
+    const [outH, outM] = clockOutTimeStr.split(':').map(Number);
+    let workDur = (outH * 60 + outM) - (inH * 60 + inM);
+    if (prof.is_cross_day && workDur < 0) workDur += 24 * 60;
+    workDur = Math.max(0, workDur);
+
+    const reportNoteFull = `[PELAPORAN KELUAR AREA: ${notes.trim()}]`;
+    const updatedNotes = todayAtt.notes ? `${todayAtt.notes} | ${reportNoteFull}` : reportNoteFull;
+
+    // 4. Update presensi di database: isi clock_out, buka kunci, simpan alasan
+    await pool.query(
+      `UPDATE hrm_attendances SET
+         clock_out = $1,
+         lat_out = COALESCE($2, lat_out),
+         long_out = COALESCE($3, long_out),
+         work_duration_minutes = $4,
+         status = 'present',
+         is_locked = false,
+         notes = $5,
+         breach_report_notes = $6,
+         breach_reported_at = NOW(),
+         auto_closed_type = 'BREACH_SELF_REPORTED',
+         updated_at = NOW()
+       WHERE id = $7;`,
+      [
+        clockOutTimeStr,
+        latitude != null ? parseFloat(latitude) : null,
+        longitude != null ? parseFloat(longitude) : null,
+        workDur,
+        updatedNotes,
+        notes.trim(),
+        todayAtt.id
+      ]
+    );
+
+    // Buka status out of bounds pada profil
+    await pool.query(
+      `UPDATE hrm_profiles SET
+         is_out_of_bounds = false,
+         out_of_bounds_distance = 0,
+         updated_at = NOW()
+       WHERE id = $1;`,
+      [userId]
+    );
+
+    // 5. Format waktu WITA untuk WhatsApp
+    const nowWita = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19) + ' WITA';
+
+    // 6. Cek apakah termasuk 3 Petugas Lapangan Khusus
+    const specialNips = ['FRP 07065', 'FR.07.066', 'FRP.07.046'];
+    const specialIds = [
+      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+      '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
+      '0a49f92e-5733-4b72-947c-7361f9490632'  // TAKDIR
+    ];
+    const isSpecialOfficer = specialIds.includes(prof.id) || specialNips.includes(prof.nip?.trim());
+
+    if (isSpecialOfficer) {
+      // Dispatch WhatsApp ke Dirut, Pimpinan, dan Superadmin (Tembusan)
+      const waSpecialMsg =
+`📝 *LAPORAN KELUAR AREA & KONFIRMASI KEPULANGAN*
+*PT. FAWWAZ RESKI PERWIRA*
+
+👤 Petugas Khusus: *${prof.full_name}*
+🆔 NIP: *${prof.nip || '-'}*
+🏢 Divisi: *${prof.division_name || 'Petugas Lapangan'}*
+🕒 Jam Pulang Standar: *${defaultEndTime} WITA* (Tercatat Otomatis)
+⏰ Waktu Pelaporan: ${nowWita}
+
+📄 *Alasan / Klarifikasi Petugas:*
+_"${notes.trim()}"_
+
+✅ Status presensi kepulangan telah tercatat di sistem dan kunci presensi telah dibuka.
+Tembusan: Direktur Utama, Pimpinan & Superadmin.`;
+
+      // 1. Dirut: 082291998026
+      await sendWhatsAppAlert({ phone: '082291998026', message: waSpecialMsg }).catch(e => console.error('[WA Dirut Breach Report Error]:', e.message));
+      // 2. Pimpinan: 082192755755
+      await sendWhatsAppAlert({ phone: '082192755755', message: waSpecialMsg }).catch(e => console.error('[WA Pimpinan Breach Report Error]:', e.message));
+      // 3. Superadmin: 081355904897
+      await sendWhatsAppAlert({ phone: '081355904897', message: waSpecialMsg }).catch(e => console.error('[WA Superadmin Breach Report Error]:', e.message));
+
+    } else {
+      // Dispatch WhatsApp untuk Karyawan Reguler ke Korlap, K3, dan Admin
+      const waRegularMsg =
+`📝 *LAPORAN KELUAR AREA & KONFIRMASI KEPULANGAN*
+*PT. FAWWAZ RESKI PERWIRA*
+
+👤 Karyawan: *${prof.full_name}*
+🆔 NIP: *${prof.nip || '-'}*
+🏢 Divisi: *${prof.division_name || '-'}*
+🕒 Jam Pulang Standar: *${defaultEndTime} WITA* (Tercatat Otomatis)
+⏰ Waktu Pelaporan: ${nowWita}
+
+📄 *Alasan / Keterangan:*
+_"${notes.trim()}"_
+
+✅ Jam kepulangan standar telah tercatat di sistem presensi.
+Tembusan: Korlap, K3 & Admin HRD.`;
+
+      // Admin HRD: 081355904897
+      await sendWhatsAppAlert({ phone: '081355904897', message: waRegularMsg }).catch(e => console.error('[WA Admin Breach Report Error]:', e.message));
+
+      // Jika ada nomor Korlap
+      if (prof.korlap_phone) {
+        await sendWhatsAppAlert({ phone: prof.korlap_phone, message: waRegularMsg }).catch(e => console.error('[WA Korlap Breach Report Error]:', e.message));
+      }
+
+      // Cari nomor K3 di database jika ada
+      const k3Res = await pool.query(
+        `SELECT p.phone FROM hrm_profiles p
+         JOIN hrm_roles r ON p.role_id = r.id
+         WHERE (r.name ILIKE '%k3%' OR r.label ILIKE '%k3%' OR p.job_title ILIKE '%k3%') AND p.phone IS NOT NULL AND p.phone != ''
+         LIMIT 3;`
+      ).catch(() => ({ rows: [] }));
+
+      for (const k3Row of k3Res.rows) {
+        if (k3Row.phone && k3Row.phone !== '081355904897' && k3Row.phone !== prof.korlap_phone) {
+          await sendWhatsAppAlert({ phone: k3Row.phone, message: waRegularMsg }).catch(e => console.error('[WA K3 Breach Report Error]:', e.message));
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Laporan berhasil dikirim. Jam pulang standar (${defaultEndTime} WITA) telah otomatis tercatat di sistem.`,
+      clockOut: clockOutTimeStr,
+      workDurationMinutes: workDur
+    });
+  } catch (err) {
+    console.error('[submit-breach-report Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── 18. AUTO-CLOSE SERVICE: AUTO-CLOCK OUT OTOMATIS (OPSI 2) ───
+// Menutup presensi pulang secara otomatis di jam akhir shift bagi karyawan yang:
+// a) Sudah lewat jam shift >= 2 jam (diffMins >= 120), ATAU
+// b) Terdeteksi di luar area kerja (is_out_of_bounds) setelah jam shift usai, ATAU
+// c) Presensi hari kemarin yang belum ditutup (isPastDate)
+async function runAutoCloseCompliantAttendance() {
+  try {
+    const candidates = await pool.query(`
+      SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.notes,
+             COALESCE(es.end_time::text, p.custom_end_time::text, s.end_time::text, '16:30') as shift_end_time,
+             COALESCE(es.start_time::text, p.custom_start_time::text, s.start_time::text, '07:30') as shift_start_time,
+             COALESCE(s.is_cross_day, false) as is_cross_day,
+             p.full_name, p.nip, p.phone, p.is_out_of_bounds,
+             (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date as today_wita
+      FROM hrm_attendances a
+      JOIN hrm_profiles p ON a.user_id = p.id
+      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+      LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = a.attendance_date
+      WHERE a.attendance_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
+        AND a.clock_in IS NOT NULL
+        AND a.clock_out IS NULL
+        AND a.status IN ('hadir', 'terlambat');
+    `);
+
+    if (candidates.rows.length === 0) return;
+
+    const nowWitaDate = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    const nowH = nowWitaDate.getUTCHours();
+    const nowM = nowWitaDate.getUTCMinutes();
+    const nowTotalMins = nowH * 60 + nowM;
+
+    for (const row of candidates.rows) {
+      const shiftEndStr = (row.shift_end_time || '16:30').substring(0, 5);
+      const [endH, endM] = shiftEndStr.split(':').map(Number);
+      const shiftEndTotalMins = endH * 60 + endM;
+
+      let effectiveNowMins = nowTotalMins;
+      if (row.is_cross_day && effectiveNowMins < 720 && shiftEndTotalMins >= 720) {
+        effectiveNowMins += 1440;
+      }
+
+      const diffMins = effectiveNowMins - shiftEndTotalMins;
+      const isPastDate = row.attendance_date < row.today_wita;
+
+      // GUARD MUTLAK: Dilarang keras auto-close presensi karyawan yang baru clock-in kurang dari 120 menit (2 jam)!
+      const [inH, inM] = (row.clock_in || '08:00:00').split(':').map(Number);
+      const clockInTotalMins = (Number.isFinite(inH) ? inH : 8) * 60 + (Number.isFinite(inM) ? inM : 0);
+      let clockInAgeMins = effectiveNowMins - clockInTotalMins;
+      if (clockInAgeMins < 0 && row.is_cross_day) clockInAgeMins += 1440;
+
+      if (!isPastDate && clockInAgeMins < 120) {
+        // Karyawan baru saja clock in (misal baru 20 menit), biarkan tetap aktif bekerja!
+        continue;
+      }
+
+      // Kondisi Opsi 2 (Auto-Clock Out Otomatis):
+      // 1. Sudah berganti hari (kemarin belum clock-out)
+      // 2. Karyawan sudah keluar radius area kerja setelah jam shift berakhir
+      // 3. Jam shift sudah berakhir lebih dari 2 jam (120 menit)
+      const shouldAutoClose = isPastDate || 
+                              (row.is_out_of_bounds && diffMins >= 0) || 
+                              (diffMins >= 120);
+
+      if (shouldAutoClose) {
+        const [inH, inM] = (row.clock_in || '08:00:00').split(':').map(Number);
+        let workDur = shiftEndTotalMins - (inH * 60 + inM);
+        if (row.is_cross_day && workDur < 0) workDur += 24 * 60;
+        workDur = Math.max(0, workDur);
+
+        const autoCloseNote = `[AUTO-CLOSED: JAM SHIFT USAI (${shiftEndStr} WITA) & TINGGALKAN AREA]`;
+        const updatedNotes = row.notes ? `${row.notes} | ${autoCloseNote}` : autoCloseNote;
+        const clockOutTime = shiftEndStr.length === 5 ? `${shiftEndStr}:00` : shiftEndStr;
+
+        await pool.query(`
+          UPDATE hrm_attendances SET
+            clock_out = $1,
+            work_duration_minutes = $2,
+            status = CASE WHEN status = 'terlambat' OR late_minutes > 0 THEN 'terlambat' ELSE 'hadir' END,
+            is_locked = false,
+            is_perimeter_breached = false,
+            auto_closed_type = 'AUTO_CLOCKOUT_OPTION_2',
+            notes = $3,
+            updated_at = NOW()
+          WHERE id = $4;
+        `, [clockOutTime, workDur, updatedNotes, row.id]);
+
+        console.log(`[Auto-Close Option 2] Sukses menutup presensi ${row.full_name} (${row.nip}) jam ${clockOutTime}`);
+
+        // Kirim WhatsApp pemberitahuan santun
+        if (row.phone) {
+          const dateLabel = row.attendance_date.toISOString ? row.attendance_date.toISOString().split('T')[0] : row.attendance_date;
+          const waAutoMsg = `✅ *NOTIFIKASI ABSEN PULANG OTOMATIS (HRM FRP)*\n\nHalo *${row.full_name}*,\nSistem mendeteksi Anda telah menyelesaikan jam kerja shift (${shiftEndStr} WITA) dan telah meninggalkan lokasi penugasan.\n\nPresensi pulang Anda untuk tanggal *${dateLabel}* telah **otomatis ditutup resmi pada pk ${shiftEndStr} WITA**. Jam kerja dan hak kehadiran Anda aman.\n\nSelamat beristirahat!\n_Sistem Absensi Cerdas PT Fawwaz Reski Perwira_`;
+          sendWhatsAppAlert({ phone: row.phone, message: waAutoMsg }).catch(() => null);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[runAutoCloseCompliantAttendance Error]:', err.message);
+  }
+}
+
+// ─── 11. AUTO-MARKING MANGKIR (ALFA / TANPA KETERANGAN) ────────────────────
+async function runAutoMarkMangkirAttendance(targetDateStr = null) {
+  try {
+    // Tanggal dan waktu WITA (Asia/Makassar) yang presisi & tahan format 24 jam
+    const nowWitaDate = targetDateStr || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' });
+    const todayWitaDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Makassar' });
+
+    // Format jam WITA dengan format en-GB yang aman (menghasilkan 00 s/d 23, BUKAN 24)
+    const timeParts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Makassar',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).formatToParts(new Date());
+
+    let witaH = 0;
+    let witaM = 0;
+    for (const p of timeParts) {
+      if (p.type === 'hour') witaH = parseInt(p.value, 10) % 24;
+      if (p.type === 'minute') witaM = parseInt(p.value, 10);
+    }
+    const nowWitaMinutes = witaH * 60 + witaM;
+    const nowWitaTime = `${String(witaH).padStart(2, '0')}:${String(witaM).padStart(2, '0')}`;
+
+    console.log(`[Auto-Mangkir Engine] Memeriksa status ketidakhadiran untuk tanggal ${nowWitaDate} (pk ${nowWitaTime} WITA)...`);
+
+    // 0. Periksa apakah tanggal adalah Hari Libur Nasional
+    const holidayCheck = await pool.query(
+      'SELECT id, holiday_name FROM hrm_national_holidays WHERE holiday_date = $1 LIMIT 1',
+      [nowWitaDate]
+    );
+    if (holidayCheck.rows.length > 0) {
+      console.log(`[Auto-Mangkir Engine] ${nowWitaDate} adalah Hari Libur Nasional (${holidayCheck.rows[0].holiday_name}). Melewati auto-mangkir.`);
+      return 0;
+    }
+
+    const dateObj = new Date(nowWitaDate + 'T12:00:00+08:00');
+    const dayOfWeek = dateObj.getDay(); // 0 = Minggu, 6 = Sabtu
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+    // 1. Ambil seluruh karyawan aktif yang SUDAH TERDAFTAR BIOMETRIK WAJAH & BUKAN AKUN SIMULASI
+    const usersRes = await pool.query(`
+      SELECT p.id, p.full_name, p.nip, p.email, p.phone, p.shift_id, p.is_face_enrolled,
+             (p.face_embedding IS NOT NULL OR p.face_descriptor IS NOT NULL) as has_face,
+             s.name as shift_name, s.start_time as shift_start, s.end_time as shift_end, s.is_cross_day
+      FROM hrm_profiles p
+      LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+      WHERE p.is_active = true 
+        AND UPPER(REPLACE(REPLACE(p.nip, ' ', ''), '.', '')) LIKE 'FR%'
+        AND p.is_face_enrolled = true
+        AND (p.face_embedding IS NOT NULL OR p.face_descriptor IS NOT NULL)
+    `);
+
+    let markedCount = 0;
+
+    for (const emp of usersRes.rows) {
+      // Safeguard ganda: Hanya personil resmi NIP FR dan sudah enroll wajah yang dievaluasi
+      if (!isOfficialFrEmployee(emp) || !emp.is_face_enrolled || !emp.has_face) {
+        continue;
+      }
+
+      // 1.5 Cek jadwal roster / shift kerja karyawan pada tanggal ini
+      const scheduleCheck = await pool.query(`
+        SELECT id, shift_id, shift_code, shift_name, start_time, end_time, is_off, is_night_shift 
+        FROM hrm_employee_schedules 
+        WHERE user_id = $1 AND schedule_date = $2 LIMIT 1
+      `, [emp.id, nowWitaDate]);
+
+      const hasSchedule = scheduleCheck.rows.length > 0;
+      const sched = hasSchedule ? scheduleCheck.rows[0] : null;
+      const isScheduleOff = sched && sched.is_off === true;
+
+      // Jika karyawan memiliki jadwal OFF atau pada akhir pekan (Sabtu/Minggu) tidak dijadwalkan masuk, lewati (karyawan OFF)
+      if (isScheduleOff || (isWeekend && (!hasSchedule || sched?.is_off))) {
+        continue;
+      }
+
+      // 2. Periksa apakah sudah ada presensi pada tanggal tersebut
+      const attCheck = await pool.query(`
+        SELECT id, status, clock_in FROM hrm_attendances 
+        WHERE user_id = $1 AND attendance_date = $2 LIMIT 1
+      `, [emp.id, nowWitaDate]);
+
+      if (attCheck.rows.length > 0) {
+        // Karyawan sudah memiliki record presensi (hadir, terlambat, atau sudah ditandai)
+        continue;
+      }
+
+      // 3. Periksa apakah karyawan memiliki pengajuan Cuti / Izin / Sakit yang disetujui (Approved)
+      const leaveCheck = await pool.query(`
+        SELECT id, leave_type FROM hrm_leave_requests
+        WHERE user_id = $1 
+          AND $2 >= start_date AND $2 <= end_date
+          AND status = 'approved'
+        LIMIT 1
+      `, [emp.id, nowWitaDate]);
+
+      if (leaveCheck.rows.length > 0) {
+        // Tidak mangkir karena ada izin/cuti resmi
+        continue;
+      }
+
+      // 4. Periksa apakah jam shift kerja sudah benar-benar usai
+      const effectiveShiftId = sched?.shift_id || emp.shift_id;
+      const effectiveShiftName = sched?.shift_name || emp.shift_name || 'Shift Reguler';
+      const effectiveShiftStart = (sched?.start_time || emp.shift_start || '07:30').slice(0, 5);
+      const effectiveShiftEnd = (sched?.end_time || emp.shift_end || '16:30').slice(0, 5);
+      const isCrossDay = Boolean(sched?.is_night_shift || emp.is_cross_day || sched?.shift_code === 'M');
+
+      const [startH, startM] = effectiveShiftStart.split(':').map(Number);
+      const [endH, endM] = effectiveShiftEnd.split(':').map(Number);
+      const startMinutes = (startH || 0) * 60 + (startM || 0);
+      const endMinutes = (endH || 0) * 60 + (endM || 0);
+
+      // Karyawan HANYA bisa ditandai Mangkir jika:
+      // a. Tanggal target adalah hari lampau (sebelum hari ini), ATAU
+      // b. Tanggal target adalah HARI INI dan jam sekarang SUDAH MELEWATI jam berakhir shift
+      const isTargetPastDate = nowWitaDate < todayWitaDate;
+      const isTargetToday = nowWitaDate === todayWitaDate;
+
+      if (!isTargetPastDate && !isTargetToday) {
+        // Tanggal masa depan (belum terjadi)
+        continue;
+      }
+
+      if (isTargetToday) {
+        // DINI HARI / PAGI SEBELUM SHIFT DIMULAI: Sama sekali TIDAK BOLEH ditandai mangkir!
+        if (nowWitaMinutes < startMinutes) {
+          continue;
+        }
+
+        if (!isCrossDay) {
+          // Shift reguler (misal 07:30 - 15:30 atau 15:30 - 22:30):
+          // Jika waktu saat ini masih sebelum jam selesai shift, JANGAN tandai mangkir!
+          if (nowWitaMinutes < endMinutes) {
+            continue;
+          }
+        } else {
+          // Shift lintas hari (malam, misal 22:30 - 07:30):
+          // Jam berakhir adalah keesokan harinya pk 07:30 pagi WITA.
+          // Jadi pada hari berjalan H, shift malam baru selesai besok pagi (H+1).
+          continue;
+        }
+      }
+
+      // 5. ATURAN PENETAPAN KOMPENSASI MANGKIR & KINERJA (PT. FAWWAZ RESKI PERWIRA):
+      // - Prioritas 1: Jika masih ada cuti, cuti dipotong otomatis 1 hari. Masuk kategori Mangkir untuk Penilaian Kinerja, tetapi TANPA POTONGAN UANG.
+      // - Prioritas 2: Jika cuti habis, dipotong 100% ke uang lembur (SPKL) jika ada lembur bulan tersebut. Masuk Penilaian Kinerja sebagai Mangkir.
+      // - Prioritas 3: Jika cuti habis & tidak ada lembur, dipotong otomatis ke gaji pokok. Masuk Penilaian Kinerja sebagai Mangkir.
+      const profRes = await pool.query(
+        'SELECT annual_leave_quota, used_leave_days, base_salary FROM hrm_profiles WHERE id = $1',
+        [emp.id]
+      );
+      const profile = profRes.rows[0] || {};
+      const annualQuota = parseInt(profile.annual_leave_quota ?? 12, 10);
+      const usedLeave = parseInt(profile.used_leave_days ?? 0, 10);
+      const remainingLeave = Math.max(0, annualQuota - usedLeave);
+      const baseSalary = Number(profile.base_salary || 4045050);
+      const dailyRate = Math.round(baseSalary / 25); // Standar operasional 25 hari kerja
+
+      let penaltyType = 'gaji_pokok';
+      let penaltyAmount = dailyRate;
+      let notesMsg = '';
+      const targetMonthStr = nowWitaDate.slice(0, 7); // 'YYYY-MM'
+
+      if (remainingLeave > 0) {
+        // TIER 1: Masih ada cuti -> Potong cuti otomatis, TANPA POTONGAN FINANSIAL, dilaporkan ke Kinerja sebagai Mangkir
+        penaltyType = 'cuti';
+        penaltyAmount = 0;
+        await pool.query(
+          'UPDATE hrm_profiles SET used_leave_days = used_leave_days + 1, updated_at = NOW() WHERE id = $1',
+          [emp.id]
+        );
+        const newRemaining = remainingLeave - 1;
+        notesMsg = `[MANGKIR VALID: Hak Cuti dipotong 1 hari (Sisa Cuti: ${newRemaining} hari). Tanpa potongan uang. Tercatat dalam Penilaian Kinerja]`;
+      } else {
+        // Cuti sudah habis -> Cek akumulasi uang lembur (SPKL) yang disetujui pada bulan berjalan
+        const otCheck = await pool.query(`
+          SELECT id, compensation_amount, duration_hours 
+          FROM hrm_overtime_records 
+          WHERE user_id = $1 
+            AND TO_CHAR(date, 'YYYY-MM') = $2 
+            AND status = 'approved'
+            AND COALESCE(compensation_amount, 0) > 0
+          ORDER BY date ASC
+        `, [emp.id, targetMonthStr]);
+
+        const totalOtAvailable = otCheck.rows.reduce((sum, r) => sum + Number(r.compensation_amount || 0), 0);
+
+        if (totalOtAvailable > 0) {
+          // TIER 2: Cuti habis tetapi ADA LEMBUR -> Dipotong 100% ke lembur senilai 1 hari upah mangkir
+          penaltyType = 'lembur';
+          penaltyAmount = Math.min(dailyRate, totalOtAvailable);
+
+          let remainingToDeduct = penaltyAmount;
+          for (const otRow of otCheck.rows) {
+            if (remainingToDeduct <= 0) break;
+            const currentComp = Number(otRow.compensation_amount || 0);
+            const deduct = Math.min(currentComp, remainingToDeduct);
+            await pool.query(`
+              UPDATE hrm_overtime_records 
+              SET compensation_amount = compensation_amount - $1,
+                  mangkir_deduction_amount = COALESCE(mangkir_deduction_amount, 0) + $1,
+                  updated_at = NOW()
+              WHERE id = $2
+            `, [deduct, otRow.id]);
+            remainingToDeduct -= deduct;
+          }
+
+          notesMsg = `[MANGKIR VALID: Cuti habis. Dipotong 100% dari Kompensasi Lembur senilai Rp ${penaltyAmount.toLocaleString('id-ID')}. Tercatat dalam Penilaian Kinerja]`;
+        } else {
+          // TIER 3: Cuti habis & TIDAK ADA LEMBUR -> Dipotong otomatis ke Gaji Pokok
+          penaltyType = 'gaji_pokok';
+          penaltyAmount = dailyRate;
+          notesMsg = `[MANGKIR VALID: Cuti habis & Tidak ada lembur. Dipotong otomatis ke Gaji Pokok senilai Rp ${penaltyAmount.toLocaleString('id-ID')}. Tercatat dalam Penilaian Kinerja]`;
+        }
+      }
+
+      // 6. Buat record resmi Mangkir (status = 'alfa') di hrm_attendances
+      await pool.query(`
+        INSERT INTO hrm_attendances (
+          user_id, attendance_date, status, late_minutes, early_leaving_minutes,
+          work_duration_minutes, is_locked, notes, shift_id, shift_name,
+          mangkir_penalty_type, mangkir_penalty_amount, mangkir_kpi_flagged,
+          created_at, updated_at
+        ) VALUES (
+          $1, $2, 'alfa', 0, 0,
+          0, false, $3, $4, $5,
+          $6, $7, true,
+          NOW(), NOW()
+        )
+        ON CONFLICT DO NOTHING
+      `, [emp.id, nowWitaDate, notesMsg, effectiveShiftId, effectiveShiftName, penaltyType, penaltyAmount]);
+
+      markedCount++;
+      console.log(`[Auto-Mangkir Engine] Berhasil mencatat Mangkir untuk ${emp.full_name} (${emp.nip})`);
+    }
+
+    console.log(`[Auto-Mangkir Engine] Selesai. Total karyawan dicatat Mangkir/Alfa: ${markedCount} orang.`);
+    return markedCount;
+  } catch (err) {
+    console.error('[runAutoMarkMangkirAttendance Error]:', err.message);
+    return 0;
+  }
+}
+
+// Endpoint manual trigger sinkronisasi mangkir oleh Superadmin
+app.post('/api/attendances/sync-mangkir', async (req, res) => {
+  try {
+    const { targetDate } = req.body;
+    const count = await runAutoMarkMangkirAttendance(targetDate || null);
+    res.json({
+      success: true,
+      markedCount: count,
+      message: `Audit mangkir selesai. Sebanyak ${count} karyawan tanpa keterangan telah dicatat berstatus Alfa.`
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Endpoint manual reconcile auto clock-out
+app.post('/api/attendances/auto-close-reconcile', async (req, res) => {
+  try {
+    await runAutoCloseCompliantAttendance();
+    res.json({ success: true, message: 'Rekonsiliasi auto-clock out berhasil diproses.' });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ─── 4D. SUPERADMIN WHATSAPP BROADCAST UNTUK 80 KARYAWAN ─────────────────────
+
+// GET /api/whatsapp/gateway-status - Cek status koneksi Baileys WhatsApp Gateway
+app.get('/api/whatsapp/gateway-status', async (req, res) => {
+  try {
+    const sRes = await pool.query(
+      "SELECT key, value FROM hrm_system_settings WHERE key IN ('wa_gateway_endpoint', 'wa_gateway_sender')"
+    );
+    const settings = {};
+    sRes.rows.forEach(r => { settings[r.key] = r.value; });
+
+    const endpoint = process.env.WA_GATEWAY_URL
+      ? `${process.env.WA_GATEWAY_URL}/status`
+      : (settings.wa_gateway_endpoint ? `${settings.wa_gateway_endpoint.replace('/send-message', '')}/status` : 'http://hrm-wa-gateway:5002/status');
+
+    try {
+      const response = await fetch(endpoint, { method: 'GET', signal: AbortSignal.timeout(4000) });
+      const data = await response.json().catch(() => ({}));
+      return res.json({
+        success: true,
+        connected: data.status === 'connected',
+        phone: data.phone || settings.wa_gateway_sender || '087812379189',
+        status: data.status || 'unknown',
+        hasQr: Boolean(data.hasQr),
+        timestamp: new Date().toISOString()
+      });
+    } catch (httpErr) {
+      return res.json({
+        success: true,
+        connected: false,
+        phone: settings.wa_gateway_sender || '087812379189',
+        status: 'disconnected',
+        error: httpErr.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/whatsapp/employees-80 - Ambil 80 personil sah operasional & wisma
+app.get('/api/whatsapp/employees-80', async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        id,
+        nip,
+        full_name as "fullName",
+        phone,
+        division_id as "divisionId",
+        division_name as "divisionName",
+        role_name as "roleName",
+        job_title as "jobTitle",
+        job_title as "jobPosition",
+        operational_group as "operationalGroup",
+        CASE 
+          WHEN operational_group = 'SHIPMENT' OR (nip >= 'FR07034' AND nip <= 'FR07080') THEN 'SHIPMENT'
+          WHEN operational_group = 'RUMAH TANGGA' OR (nip >= 'FR07001' AND nip <= 'FR07033') THEN 'RUMAH TANGGA'
+          ELSE 'OPERASIONAL'
+        END as "groupName",
+        CASE 
+          WHEN phone IS NOT NULL AND TRIM(phone) != '' AND LENGTH(REGEXP_REPLACE(phone, '[^0-9]', '', 'g')) >= 9 
+          THEN true ELSE false 
+        END as "hasPhone"
+      FROM hrm_profiles
+      WHERE (nip >= 'FR07001' AND nip <= 'FR07080')
+         OR operational_group IN ('SHIPMENT', 'RUMAH TANGGA')
+      ORDER BY 
+        CASE WHEN nip LIKE 'FR%' THEN 0 ELSE 1 END,
+        NULLIF(REGEXP_REPLACE(nip, '[^0-9]', '', 'g'), '')::INT ASC NULLS LAST,
+        nip ASC
+    `;
+    const result = await pool.query(query);
+    const rows = result.rows;
+
+    const totalCount = rows.length;
+    const shipmentCount = rows.filter(r => r.groupName === 'SHIPMENT').length;
+    const rumahTanggaCount = rows.filter(r => r.groupName === 'RUMAH TANGGA').length;
+    const withPhoneCount = rows.filter(r => r.hasPhone).length;
+    const withoutPhoneCount = totalCount - withPhoneCount;
+
+    res.json({
+      success: true,
+      summary: {
+        totalCount,
+        shipmentCount,
+        rumahTanggaCount,
+        withPhoneCount,
+        withoutPhoneCount,
+      },
+      employees: rows,
+    });
+  } catch (err) {
+    console.error('[Get 80 Employees Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/whatsapp/update-phone - Update nomor telepon karyawan oleh Superadmin
+app.post('/api/whatsapp/update-phone', async (req, res) => {
+  const { userId, phone } = req.body;
+  if (!userId) {
+    return res.status(400).json({ success: false, error: 'User ID wajib disertakan' });
+  }
+  try {
+    const cleanPhone = (phone || '').trim();
+    const updateRes = await pool.query(
+      `UPDATE hrm_profiles SET phone = $1, updated_at = NOW() WHERE id::text = $2 OR nip = $2 RETURNING id, full_name, nip, is_face_enrolled, welcome_wa_sent`,
+      [cleanPhone || null, userId]
+    );
+
+    // Jika karyawan sudah enroll wajah tetapi belum pernah mendapatkan notifikasi welcome pertama kali:
+    const updatedUser = updateRes.rows[0];
+    if (updatedUser && updatedUser.is_face_enrolled && !updatedUser.welcome_wa_sent && cleanPhone.replace(/\D/g, '').length >= 9) {
+      sendFaceEnrollmentWelcomeWhatsApp(updatedUser.id).catch(e => console.warn('[Auto Welcome on Phone Update Error]:', e.message));
+    }
+
+    res.json({ success: true, message: 'Nomor telepon berhasil diperbarui', phone: cleanPhone });
+  } catch (err) {
+    console.error('[Update Phone Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/whatsapp/broadcast-80 - Kirim broadcast pesan WhatsApp massal ke 80 personil
+app.post('/api/whatsapp/broadcast-80', async (req, res) => {
+  const { recipients, messageTemplate, delayMs = 1200 } = req.body;
+
+  if (!Array.isArray(recipients) || recipients.length === 0) {
+    return res.status(400).json({ success: false, error: 'Daftar penerima pesan wajib disertakan' });
+  }
+
+  if (!messageTemplate || !messageTemplate.trim()) {
+    return res.status(400).json({ success: false, error: 'Konten pesan template wajib diisi' });
+  }
+
+  // Format tanggal hari ini dalam format Bahasa Indonesia
+  const now = new Date(Date.now() + 8 * 3600000); // WITA
+  const monthsIndo = [
+    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+  ];
+  const daysIndo = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+  const formattedDate = `${daysIndo[now.getUTCDay()]}, ${now.getUTCDate()} ${monthsIndo[now.getUTCMonth()]} ${now.getUTCFullYear()}`;
+  const formattedTime = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')} WITA`;
+
+  const results = [];
+  let sentCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
+    const rawPhone = (r.phone || '').trim();
+    const cleanPhone = rawPhone.replace(/[^0-9]/g, '');
+
+    // Cek kelayakan nomor telepon
+    if (!cleanPhone || cleanPhone.length < 9) {
+      skippedCount++;
+      results.push({
+        userId: r.userId || r.id,
+        name: r.name || r.fullName,
+        nip: r.nip,
+        phone: rawPhone || '-',
+        status: 'skipped',
+        error: 'Nomor WhatsApp belum terdaftar di sistem',
+      });
+      continue;
+    }
+
+    // Personalisasi template pesan dinamis
+    let personalized = messageTemplate
+      .replace(/{nama}/gi, r.name || r.fullName || 'Rekan Karyawan')
+      .replace(/{name}/gi, r.name || r.fullName || 'Rekan Karyawan')
+      .replace(/{nip}/gi, r.nip || '-')
+      .replace(/{divisi}/gi, r.division || r.divisionName || 'Operasional Lapangan')
+      .replace(/{division}/gi, r.division || r.divisionName || 'Operasional Lapangan')
+      .replace(/{grup}/gi, r.group || r.groupName || 'Operasional PT FRP')
+      .replace(/{group}/gi, r.group || r.groupName || 'Operasional PT FRP')
+      .replace(/{tanggal}/gi, formattedDate)
+      .replace(/{date}/gi, formattedDate)
+      .replace(/{waktu}/gi, formattedTime)
+      .replace(/{time}/gi, formattedTime);
+
+    try {
+      await sendWhatsAppAlert({ phone: cleanPhone, message: personalized });
+      sentCount++;
+      results.push({
+        userId: r.userId || r.id,
+        name: r.name || r.fullName,
+        nip: r.nip,
+        phone: cleanPhone,
+        status: 'sent',
+        messagePreview: personalized.slice(0, 60) + '...',
+      });
+    } catch (err) {
+      failedCount++;
+      results.push({
+        userId: r.userId || r.id,
+        name: r.name || r.fullName,
+        nip: r.nip,
+        phone: cleanPhone,
+        status: 'failed',
+        error: err.message,
+      });
+    }
+
+    // Jeda anti-spam jika masih ada pesan berikutnya
+    if (i < recipients.length - 1 && delayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+
+  res.json({
+    success: true,
+    summary: {
+      total: recipients.length,
+      sent: sentCount,
+      skipped: skippedCount,
+      failed: failedCount,
+    },
+    results,
+  });
+});
+
+// POST /api/whatsapp/send-personal - Kirim pesan WhatsApp manual dari Superadmin ke karyawan tertentu
+app.post('/api/whatsapp/send-personal', async (req, res) => {
+  try {
+    const { userId, phone, message, subject } = req.body;
+    if (!userId && !phone) {
+      return res.status(400).json({ success: false, error: 'User ID atau Nomor Telepon wajib disertakan' });
+    }
+    if (!message || !message.trim()) {
+      return res.status(400).json({ success: false, error: 'Isi pesan WhatsApp tidak boleh kosong' });
+    }
+
+    let targetUser = null;
+    if (userId) {
+      const uRes = await pool.query(
+        'SELECT id, full_name, nip, phone, division_id FROM hrm_profiles WHERE id::text = $1 OR nip = $1 LIMIT 1',
+        [userId]
+      );
+      targetUser = uRes.rows[0];
+    }
+
+    const rawPhone = (phone || targetUser?.phone || '').trim();
+    const cleanPhone = rawPhone.replace(/\D/g, '');
+    if (!cleanPhone || cleanPhone.length < 9) {
+      return res.status(400).json({ success: false, error: 'Nomor WhatsApp tidak valid atau belum terdaftar untuk karyawan ini' });
+    }
+
+    // Jika nomor diupdate dan ada userId, simpan juga ke profile
+    if (userId && phone && phone.trim() !== (targetUser?.phone || '').trim()) {
+      await pool.query('UPDATE hrm_profiles SET phone = $1, updated_at = NOW() WHERE id = $2', [phone.trim(), targetUser?.id || userId]).catch(() => {});
+    }
+
+    // Format tanggal & waktu WITA
+    const now = new Date(Date.now() + 8 * 3600000); // WITA
+    const monthsIndo = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    const daysIndo = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const formattedDate = `${daysIndo[now.getUTCDay()]}, ${now.getUTCDate()} ${monthsIndo[now.getUTCMonth()]} ${now.getUTCFullYear()}`;
+    const formattedTime = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')} WITA`;
+
+    let personalized = message
+      .replace(/{nama}/gi, targetUser?.full_name || 'Rekan Karyawan')
+      .replace(/{name}/gi, targetUser?.full_name || 'Rekan Karyawan')
+      .replace(/{nip}/gi, targetUser?.nip || '-')
+      .replace(/{tanggal}/gi, formattedDate)
+      .replace(/{waktu}/gi, formattedTime);
+
+    // Kirim via gateway WhatsApp
+    await sendWhatsAppAlert({ phone: cleanPhone, message: personalized });
+
+    // Catat notifikasi in-app
+    if (targetUser?.id) {
+      await pool.query(`
+        INSERT INTO hrm_notifications (id, user_id, title, message, type, is_read, created_at)
+        VALUES (gen_random_uuid(), $1, $2, $3, 'system', false, NOW())
+      `, [targetUser.id, subject || 'Pemberitahuan Resmi Superadmin', personalized]).catch(() => {});
+    }
+
+    res.json({
+      success: true,
+      message: `Pesan WhatsApp berhasil dikirim ke ${targetUser?.full_name || cleanPhone}`,
+      sentTo: cleanPhone
+    });
+  } catch (err) {
+    console.error('[send-personal WA Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Start Server
+async function start() {
+  try {
+    await initDb();
+    await seedInitialUsers();
+    await enforceEphemeralPhotoRetention();
+    await syncAllUserBiometricEmbeddings();
+
+    // Jalankan pembersihan foto berkala setiap 6 jam
+    setInterval(enforceEphemeralPhotoRetention, 6 * 60 * 60 * 1000);
+
+    // Jalankan auto-close presensi tertib setiap 15 menit
+    setInterval(runAutoCloseCompliantAttendance, 15 * 60 * 1000);
+    // Jalankan satu kali saat startup
+    runAutoCloseCompliantAttendance().catch(() => {});
+
+    // Jalankan auto-marking mangkir setiap 30 menit
+    setInterval(() => runAutoMarkMangkirAttendance().catch(() => {}), 30 * 60 * 1000);
+    // Jalankan satu kali saat startup
+    runAutoMarkMangkirAttendance().catch(() => {});
+
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`[HRM-Backend] Server running on port ${PORT}`);
+    });
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
+    server.requestTimeout = 120000;
+  } catch (err) {
+    console.error('[HRM-Backend] Startup fatal error:', err);
+    process.exit(1);
+  }
+}
+
+start();
