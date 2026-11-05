@@ -1,5 +1,5 @@
 import express from 'express';
-import { default as makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import { default as makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, proto } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import QRCode from 'qrcode';
 import fs from 'fs';
@@ -17,6 +17,10 @@ let qrCodeDataUrl = null;
 let connectionStatus = 'initializing'; // 'initializing', 'qr_ready', 'connected', 'disconnected'
 let connectedPhone = null;
 
+// Cache antrean pesan untuk menjawab WhatsApp Decryption Retry Request (Mencegah "Menunggu pesan ini")
+const sentMessagesStore = new Map();
+const msgRetryCounterMap = new Map();
+
 async function startWhatsAppBot() {
   if (!fs.existsSync(SESSION_DIR)) {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
@@ -28,12 +32,23 @@ async function startWhatsAppBot() {
   sock = makeWASocket({
     version,
     logger: pino({ level: 'warn' }),
-    printQRInTerminal: true,
+    printQRInTerminal: false,
     auth: state,
     browser: ['PT FRP HRM Sentinel', 'Chrome', '1.0.0'],
     connectTimeoutMs: 60000,
     defaultQueryTimeoutMs: 60000,
     keepAliveIntervalMs: 10000,
+    msgRetryCounterCache: {
+      get: (key) => msgRetryCounterMap.get(key),
+      set: (key, value) => msgRetryCounterMap.set(key, value),
+      del: (key) => msgRetryCounterMap.delete(key),
+    },
+    getMessage: async (key) => {
+      if (key && key.id && sentMessagesStore.has(key.id)) {
+        return sentMessagesStore.get(key.id);
+      }
+      return proto.Message.fromObject({});
+    },
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -171,6 +186,15 @@ async function handleSendMessage(req, res) {
 
     const jid = `${cleanPhone}@s.whatsapp.net`;
     const sent = await sock.sendMessage(jid, { text: String(message) });
+
+    // Simpan pesan ke memory store agar bisa di-decode oleh WhatsApp saat pairwise handshake
+    if (sent?.key?.id && sent?.message) {
+      sentMessagesStore.set(sent.key.id, sent.message);
+      if (sentMessagesStore.size > 500) {
+        const oldestKey = sentMessagesStore.keys().next().value;
+        sentMessagesStore.delete(oldestKey);
+      }
+    }
 
     console.log(`[WA Sent] To: ${cleanPhone} | ID: ${sent?.key?.id}`);
     res.json({
