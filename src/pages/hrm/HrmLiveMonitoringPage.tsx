@@ -42,6 +42,8 @@ import {
   Download,
   Printer,
   Coins,
+  SlidersHorizontal,
+  Filter,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -51,6 +53,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
@@ -88,6 +92,36 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'all' | 'present' | 'late' | 'absent' | 'mangkir' | 'anomalies' | 'breaches' | 'field_radar'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterDivision, setFilterDivision] = useState('all');
+  const [filterShift, setFilterShift] = useState<string>('all');
+  const [filterStatusCol, setFilterStatusCol] = useState<string>('all');
+  const [filterOvertimeCol, setFilterOvertimeCol] = useState<string>('all');
+  const [visibleColumns, setVisibleColumns] = useState(() => {
+    try {
+      const saved = localStorage.getItem('hrm_monitoring_visible_columns');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      division: true,
+      shift: true,
+      status: true,
+      clockIn: true,
+      clockOut: true,
+      overtime: true,
+      security: true,
+      actions: true,
+    };
+  });
+
+  const updateVisibleColumns = (updater: (prev: typeof visibleColumns) => typeof visibleColumns) => {
+    setVisibleColumns((prev: any) => {
+      const next = updater(prev);
+      try {
+        localStorage.setItem('hrm_monitoring_visible_columns', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
 
   // Field Sentinel & Dynamic Geofence Radar State
@@ -891,7 +925,48 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     const matchSearch =
       item.user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.user.nip.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchTab && matchDiv && matchSearch;
+
+    // Filter Kolom Jadwal Shift
+    let matchShift = true;
+    if (filterShift !== 'all') {
+      const shiftCode = (item.shift?.code || item.shift?.name || '').toUpperCase();
+      if (filterShift === 'OFF') {
+        matchShift = item.absentSubtype === 'off' || shiftCode === 'OFF';
+      } else if (filterShift === 'cuti') {
+        matchShift = item.absentSubtype === 'cuti';
+      } else if (filterShift === 'P') {
+        matchShift = shiftCode.includes('P') || shiftCode.includes('PAGI') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('07'));
+      } else if (filterShift === 'S') {
+        matchShift = shiftCode.includes('S') || shiftCode.includes('SIANG') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('15'));
+      } else if (filterShift === 'M') {
+        matchShift = shiftCode.includes('M') || shiftCode.includes('MALAM') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('22'));
+      } else if (filterShift === 'DAY') {
+        matchShift = shiftCode.includes('DAY') || (!item.shift?.code && !item.user.isShiftWorker);
+      }
+    }
+
+    // Filter Kolom Status Kehadiran
+    let matchStatusCol = true;
+    if (filterStatusCol !== 'all') {
+      if (filterStatusCol === 'present') matchStatusCol = item.status === 'present';
+      else if (filterStatusCol === 'late') matchStatusCol = item.status === 'late';
+      else if (filterStatusCol === 'mangkir') matchStatusCol = item.status === 'mangkir' || item.absentSubtype === 'mangkir';
+      else if (filterStatusCol === 'cuti') matchStatusCol = item.absentSubtype === 'cuti';
+      else if (filterStatusCol === 'izin') matchStatusCol = item.absentSubtype === 'izin' || item.absentSubtype === 'sakit';
+      else if (filterStatusCol === 'off') matchStatusCol = item.absentSubtype === 'off';
+      else if (filterStatusCol === 'pending') matchStatusCol = item.absentSubtype === 'pending_shift';
+      else if (filterStatusCol === 'unregistered') matchStatusCol = item.absentSubtype === 'unregistered';
+    }
+
+    // Filter Kolom Lembur Live
+    let matchOt = true;
+    if (filterOvertimeCol === 'has_ot') {
+      matchOt = (item.todayOvertimeHours > 0) || (item.monthlyOvertimeHours > 0);
+    } else if (filterOvertimeCol === 'no_ot') {
+      matchOt = (item.todayOvertimeHours === 0) && (item.monthlyOvertimeHours === 0);
+    }
+
+    return matchTab && matchDiv && matchSearch && matchShift && matchStatusCol && matchOt;
   });
 
   const presentCount = monitoredList.filter((i) => i.status === 'present').length;
@@ -1318,8 +1393,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
       {/* Filter Bar */}
       <Card className="border-border/80 bg-card rounded-2xl shadow-xs">
-        <CardContent className="p-3.5">
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <CardContent className="p-3.5 space-y-3">
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
             <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="relative">
                 <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
@@ -1346,7 +1421,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               </Select>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+            <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
               <Button
                 type="button"
                 size="sm"
@@ -1379,33 +1454,191 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               >
                 <FileText size={13} /> Export PDF ({filtered.length})
               </Button>
-            {/* View Mode Toggle */}
-            <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border shrink-0 self-end sm:self-auto">
-              <Button
-                type="button"
-                variant={viewMode === 'table' ? 'default' : 'ghost'}
-                size="sm"
-                className={`h-7 px-2.5 text-xs rounded-lg gap-1.5 transition-all ${
-                  viewMode === 'table' ? 'shadow-xs font-medium' : 'text-muted-foreground hover:text-foreground'
-                }`}
-                onClick={() => setViewMode('table')}
-              >
-                <TableProperties size={13} />
-                <span>Tabel</span>
-              </Button>
-              <Button
-                type="button"
-                variant={viewMode === 'grid' ? 'default' : 'ghost'}
-                size="sm"
-                className={`h-7 px-2.5 text-xs rounded-lg gap-1.5 transition-all ${
-                  viewMode === 'grid' ? 'shadow-xs font-medium' : 'text-muted-foreground hover:text-foreground'
-                }`}
-                onClick={() => setViewMode('grid')}
-              >
-                <LayoutGrid size={13} />
-                <span>Kartu</span>
-              </Button>
+
+              {/* Popover Filter Visibilitas Kolom */}
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9 px-3 text-xs rounded-xl gap-1.5 border-primary/30 text-primary hover:bg-primary/10 font-semibold shadow-xs"
+                    title="Atur kolom yang ingin ditampilkan atau disembunyikan di tabel"
+                  >
+                    <SlidersHorizontal size={13} />
+                    <span>Filter Kolom</span>
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-64 p-3.5 rounded-2xl shadow-xl border border-border bg-card z-50">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between pb-2 border-b border-border/70">
+                      <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                        <SlidersHorizontal size={12} className="text-primary" /> Visibilitas Kolom
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => updateVisibleColumns(() => ({
+                          division: true,
+                          shift: true,
+                          status: true,
+                          clockIn: true,
+                          clockOut: true,
+                          overtime: true,
+                          security: true,
+                          actions: true,
+                        }))}
+                        className="text-[10px] text-primary hover:underline font-semibold"
+                      >
+                        Reset Semua
+                      </button>
+                    </div>
+                    <div className="space-y-2 text-xs">
+                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
+                        <Checkbox checked={visibleColumns.division} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, division: Boolean(v) }))} />
+                        <span className="text-foreground font-medium">Divisi &amp; Jabatan</span>
+                      </label>
+                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
+                        <Checkbox checked={visibleColumns.shift} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, shift: Boolean(v) }))} />
+                        <span className="text-foreground font-medium">Jadwal Shift</span>
+                      </label>
+                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
+                        <Checkbox checked={visibleColumns.status} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, status: Boolean(v) }))} />
+                        <span className="text-foreground font-medium">Status Kehadiran</span>
+                      </label>
+                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
+                        <Checkbox checked={visibleColumns.clockIn} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, clockIn: Boolean(v) }))} />
+                        <span className="text-foreground font-medium">Jam Masuk</span>
+                      </label>
+                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
+                        <Checkbox checked={visibleColumns.clockOut} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, clockOut: Boolean(v) }))} />
+                        <span className="text-foreground font-medium">Jam Pulang</span>
+                      </label>
+                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
+                        <Checkbox checked={visibleColumns.overtime} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, overtime: Boolean(v) }))} />
+                        <span className="text-foreground font-medium">Lembur (Jam) Live</span>
+                      </label>
+                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
+                        <Checkbox checked={visibleColumns.security} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, security: Boolean(v) }))} />
+                        <span className="text-foreground font-medium">Verifikasi Keamanan</span>
+                      </label>
+                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
+                        <Checkbox checked={visibleColumns.actions} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, actions: Boolean(v) }))} />
+                        <span className="text-foreground font-medium">Tindakan &amp; Laporan</span>
+                      </label>
+                    </div>
+                  </div>
+                </PopoverContent>
+              </Popover>
+
+              {/* View Mode Toggle */}
+              <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border shrink-0">
+                <Button
+                  type="button"
+                  variant={viewMode === 'table' ? 'default' : 'ghost'}
+                  size="sm"
+                  className={`h-7 px-2.5 text-xs rounded-lg gap-1.5 transition-all ${
+                    viewMode === 'table' ? 'shadow-xs font-medium' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => setViewMode('table')}
+                >
+                  <TableProperties size={13} />
+                  <span>Tabel</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                  size="sm"
+                  className={`h-7 px-2.5 text-xs rounded-lg gap-1.5 transition-all ${
+                    viewMode === 'grid' ? 'shadow-xs font-medium' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => setViewMode('grid')}
+                >
+                  <LayoutGrid size={13} />
+                  <span>Kartu</span>
+                </Button>
+              </div>
             </div>
+          </div>
+
+          {/* Baris Filter Kolom Cepat: Shift, Status, Lembur */}
+          <div className="flex flex-wrap items-center gap-2.5 pt-2.5 border-t border-border/60 text-xs">
+            <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1 shrink-0">
+              <Filter size={11} className="text-primary" /> Filter Nilai:
+            </span>
+
+            {/* Filter Nilai Shift */}
+            <div className="w-[170px]">
+              <Select value={filterShift} onValueChange={setFilterShift}>
+                <SelectTrigger className="h-8 text-xs rounded-xl bg-muted/40">
+                  <SelectValue placeholder="Semua Jadwal Shift" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Jadwal Shift</SelectItem>
+                  <SelectItem value="P">Shift Pagi (P / 07:30)</SelectItem>
+                  <SelectItem value="S">Shift Siang (S / 15:30)</SelectItem>
+                  <SelectItem value="M">Shift Malam (M / 22:30)</SelectItem>
+                  <SelectItem value="DAY">Day Shift / Normal</SelectItem>
+                  <SelectItem value="OFF">Libur / OFF Roster</SelectItem>
+                  <SelectItem value="cuti">Cuti Tahunan Sah</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Filter Nilai Status Kehadiran */}
+            <div className="w-[185px]">
+              <Select value={filterStatusCol} onValueChange={setFilterStatusCol}>
+                <SelectTrigger className="h-8 text-xs rounded-xl bg-muted/40">
+                  <SelectValue placeholder="Semua Status Kehadiran" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Status Kehadiran</SelectItem>
+                  <SelectItem value="present">Hadir Tepat Waktu</SelectItem>
+                  <SelectItem value="late">Terlambat</SelectItem>
+                  <SelectItem value="cuti">Cuti Tahunan</SelectItem>
+                  <SelectItem value="izin">Izin / Sakit Resmi</SelectItem>
+                  <SelectItem value="mangkir">Mangkir / Alpa</SelectItem>
+                  <SelectItem value="pending">Shift Belum Dimulai</SelectItem>
+                  <SelectItem value="off">Libur / OFF</SelectItem>
+                  <SelectItem value="unregistered">Belum Registrasi Wajah</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Filter Nilai Lembur */}
+            <div className="w-[155px]">
+              <Select value={filterOvertimeCol} onValueChange={setFilterOvertimeCol}>
+                <SelectTrigger className="h-8 text-xs rounded-xl bg-muted/40">
+                  <SelectValue placeholder="Semua Lembur" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Lembur</SelectItem>
+                  <SelectItem value="has_ot">Ada Lembur (SPKL)</SelectItem>
+                  <SelectItem value="no_ot">Tanpa Lembur (0 Jam)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {(filterShift !== 'all' || filterStatusCol !== 'all' || filterOvertimeCol !== 'all' || filterDivision !== 'all' || searchQuery) && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setFilterShift('all');
+                  setFilterStatusCol('all');
+                  setFilterOvertimeCol('all');
+                  setFilterDivision('all');
+                  setSearchQuery('');
+                }}
+                className="h-8 px-2.5 text-[11px] rounded-xl text-rose-600 hover:bg-rose-500/10 font-medium gap-1"
+                title="Reset seluruh filter"
+              >
+                <X size={12} /> Hapus Filter
+              </Button>
+            )}
+
+            <div className="ml-auto text-[11px] text-muted-foreground font-mono">
+              Menampilkan <strong>{filtered.length}</strong> dari {users.length} Karyawan
             </div>
           </div>
         </CardContent>
@@ -2073,28 +2306,36 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 <TableRow className="hover:bg-transparent border-b border-border/70 text-xs">
                   <TableHead className="w-12 text-center font-semibold text-muted-foreground">#</TableHead>
                   <TableHead className="min-w-[200px] font-semibold text-muted-foreground">Karyawan</TableHead>
-                  <TableHead className="min-w-[140px] font-semibold text-muted-foreground">Divisi &amp; Jabatan</TableHead>
-                  <TableHead className="min-w-[125px] text-center font-semibold text-muted-foreground">Jadwal Shift</TableHead>
-                  <TableHead className="min-w-[125px] text-center font-semibold text-muted-foreground">
-                    {isDailyView ? 'Status Kehadiran' : 'Total Kehadiran'}
-                  </TableHead>
-                  <TableHead className="min-w-[100px] text-center font-semibold text-muted-foreground">
-                    {isDailyView ? 'Jam Masuk' : 'Frekuensi Terlambat'}
-                  </TableHead>
-                  <TableHead className="min-w-[100px] text-center font-semibold text-muted-foreground">
-                    {isDailyView ? 'Jam Pulang' : 'Denda Payroll'}
-                  </TableHead>
-                  <TableHead className="min-w-[120px] text-center font-semibold text-muted-foreground">
-                    {isDailyView ? 'Lembur (Jam) Live' : 'Total Lembur'}
-                  </TableHead>
-                  <TableHead className="min-w-[160px] font-semibold text-muted-foreground">Verifikasi Keamanan</TableHead>
-                  <TableHead className="min-w-[210px] text-right font-semibold text-muted-foreground">Tindakan &amp; Laporan</TableHead>
+                  {visibleColumns.division && <TableHead className="min-w-[140px] font-semibold text-muted-foreground">Divisi &amp; Jabatan</TableHead>}
+                  {visibleColumns.shift && <TableHead className="min-w-[125px] text-center font-semibold text-muted-foreground">Jadwal Shift</TableHead>}
+                  {visibleColumns.status && (
+                    <TableHead className="min-w-[125px] text-center font-semibold text-muted-foreground">
+                      {isDailyView ? 'Status Kehadiran' : 'Total Kehadiran'}
+                    </TableHead>
+                  )}
+                  {visibleColumns.clockIn && (
+                    <TableHead className="min-w-[100px] text-center font-semibold text-muted-foreground">
+                      {isDailyView ? 'Jam Masuk' : 'Frekuensi Terlambat'}
+                    </TableHead>
+                  )}
+                  {visibleColumns.clockOut && (
+                    <TableHead className="min-w-[100px] text-center font-semibold text-muted-foreground">
+                      {isDailyView ? 'Jam Pulang' : 'Denda Payroll'}
+                    </TableHead>
+                  )}
+                  {visibleColumns.overtime && (
+                    <TableHead className="min-w-[120px] text-center font-semibold text-muted-foreground">
+                      {isDailyView ? 'Lembur (Jam) Live' : 'Total Lembur'}
+                    </TableHead>
+                  )}
+                  {visibleColumns.security && <TableHead className="min-w-[160px] font-semibold text-muted-foreground">Verifikasi Keamanan</TableHead>}
+                  {visibleColumns.actions && <TableHead className="min-w-[210px] text-right font-semibold text-muted-foreground">Tindakan &amp; Laporan</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody className="divide-y divide-border/60">
                 {filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={10} className="py-12 text-center text-muted-foreground text-xs">
+                    <TableCell colSpan={2 + Object.values(visibleColumns).filter(Boolean).length} className="py-12 text-center text-muted-foreground text-xs">
                       Tidak ada data karyawan yang sesuai dengan kriteria filter.
                     </TableCell>
                   </TableRow>
@@ -2153,321 +2394,337 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell>
-                          <p className="text-xs font-medium text-foreground truncate max-w-[160px]">{u.divisionName || '-'}</p>
-                          <p className="text-[11px] text-muted-foreground capitalize">
-                            {u.role === 'admin' ? 'Administrator' : u.role === 'hr' ? 'HR Staff' : 'Karyawan'}
-                          </p>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {absentSubtype === 'off' ? (
-                            <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 text-[10px] font-medium">
-                              Libur / OFF
-                            </Badge>
-                          ) : absentSubtype === 'cuti' ? (
-                            <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 text-[10px] font-medium">
-                              Cuti Tahunan
-                            </Badge>
-                          ) : shift ? (
-                            <div className="inline-flex flex-col items-center">
-                              <Badge variant="outline" className="text-[10px] font-semibold px-2 py-0.5 border-indigo-500/30 bg-indigo-50/70 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
-                                {shift.code || shift.name}
-                              </Badge>
-                              <span className="text-[10px] text-muted-foreground font-mono mt-0.5">
-                                {shift.startTime ? `${shift.startTime.slice(0, 5)} - ${shift.endTime.slice(0, 5)}` : 'Non-Shift'}
-                              </span>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground font-mono">Day Shift</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {isDailyView ? (
-                            status === 'present' ? (
-                              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
-                                Tepat Waktu
-                              </Badge>
-                            ) : status === 'late' ? (
-                              <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
-                                Telat {att?.lateMinutes || 0}m
-                              </Badge>
-                            ) : absentSubtype === 'off' ? (
-                              <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                        {visibleColumns.division && (
+                          <TableCell>
+                            <p className="text-xs font-medium text-foreground truncate max-w-[160px]">{u.divisionName || '-'}</p>
+                            <p className="text-[11px] text-muted-foreground capitalize">
+                              {u.role === 'admin' ? 'Administrator' : u.role === 'hr' ? 'HR Staff' : 'Karyawan'}
+                            </p>
+                          </TableCell>
+                        )}
+                        {visibleColumns.shift && (
+                          <TableCell className="text-center">
+                            {absentSubtype === 'off' ? (
+                              <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 text-[10px] font-medium">
                                 Libur / OFF
                               </Badge>
-                            ) : absentSubtype === 'unregistered' ? (
-                              <Badge variant="outline" className="bg-amber-50/80 text-amber-800 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
-                                Belum Registrasi Wajah
-                              </Badge>
                             ) : absentSubtype === 'cuti' ? (
-                              <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 dark:bg-purple-950/40 dark:text-purple-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                              <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 text-[10px] font-medium">
                                 Cuti Tahunan
                               </Badge>
-                            ) : absentSubtype === 'sakit' ? (
-                              <Badge variant="outline" className="bg-pink-50 text-pink-700 border-pink-300 dark:bg-pink-950/40 dark:text-pink-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
-                                Izin Sakit
-                              </Badge>
-                            ) : absentSubtype === 'izin' ? (
-                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300 dark:bg-blue-950/40 dark:text-blue-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
-                                Izin Resmi
-                              </Badge>
-                            ) : absentSubtype === 'mangkir' ? (
-                              <div className="flex flex-col items-center gap-0.5">
-                                <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 text-[11px] rounded-full px-2.5 py-0.5 font-bold shadow-xs">
-                                  Mangkir / Alpa
-                                </Badge>
-                                {att?.notes?.includes('Hak Cuti') ? (
-                                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold" title={att.notes}>Potong Cuti</span>
-                                ) : att?.notes?.includes('Lembur') ? (
-                                  <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold" title={att.notes}>Potong Lembur</span>
-                                ) : att?.notes?.includes('Gaji Pokok') ? (
-                                  <span className="text-[10px] text-rose-600 dark:text-rose-400 font-semibold" title={att.notes}>Potong Gaji</span>
-                                ) : null}
-                              </div>
-                            ) : absentSubtype === 'pending_shift' ? (
-                              <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-400 text-[11px] rounded-full px-2.5 py-0.5">
-                                Shift Pk {shift?.startTime ? shift.startTime.slice(0, 5) : '-'}
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline" className="bg-muted text-muted-foreground border-border text-[11px] rounded-full px-2.5 py-0.5">
-                                Belum Hadir
-                              </Badge>
-                            )
-                          ) : (
-                            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[11px] rounded-full px-2.5 py-0.5 font-mono font-medium">
-                              {totalAttCount} Hari Hadir
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {isDailyView ? (
-                            <span className={`font-mono text-xs ${att?.clockIn ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
-                              {att?.clockIn ? `${att.clockIn} WITA` : '-'}
-                            </span>
-                          ) : (
-                            lateCount > 0 ? (
-                              <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
-                                {lateCount}x ({totalLateMinutes} mnt)
-                              </Badge>
-                            ) : (
-                              <span className="text-[11px] text-emerald-600 font-medium">Nihil (0 mnt)</span>
-                            )
-                          )}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {isDailyView ? (
-                            <span className={`font-mono text-xs ${att?.clockOut ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
-                              {att?.clockOut ? `${att.clockOut} WITA` : '-'}
-                            </span>
-                          ) : (
-                            <span className="font-mono text-xs font-bold text-rose-600">
-                              Rp {(totalLateMinutes * 1000).toLocaleString('id-ID')}
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {isDailyView ? (
-                            todayOvertimeHours && todayOvertimeHours > 0 ? (
+                            ) : shift ? (
                               <div className="inline-flex flex-col items-center">
-                                <Badge className="bg-amber-500 hover:bg-amber-600 text-white font-mono text-[10px] px-2 py-0.5 gap-1 shadow-2xs">
-                                  <Clock size={10} /> {todayOvertimeHours} Jam
+                                <Badge variant="outline" className="text-[10px] font-semibold px-2 py-0.5 border-indigo-500/30 bg-indigo-50/70 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
+                                  {shift.code || shift.name}
                                 </Badge>
-                                <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 font-mono mt-0.5" title="Kompensasi lembur hari ini">
-                                  Rp {todayOvertimePay?.toLocaleString('id-ID')}
+                                <span className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                                  {shift.startTime ? `${shift.startTime.slice(0, 5)} - ${shift.endTime.slice(0, 5)}` : 'Non-Shift'}
                                 </span>
                               </div>
                             ) : (
-                              <span className="text-xs text-muted-foreground/50 font-mono">0 Jam (-)</span>
-                            )
-                          ) : (
-                            monthlyOvertimeHours && monthlyOvertimeHours > 0 ? (
-                              <div className="inline-flex flex-col items-center">
-                                <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px] px-2 py-0.5">
-                                  {monthlyOvertimeHours} Jam ({monthlyOvertimeCount || 1}x)
+                              <span className="text-xs text-muted-foreground font-mono">Day Shift</span>
+                            )}
+                          </TableCell>
+                        )}
+                        {visibleColumns.status && (
+                          <TableCell className="text-center">
+                            {isDailyView ? (
+                              status === 'present' ? (
+                                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                  Tepat Waktu
                                 </Badge>
-                                <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 font-mono mt-0.5">
-                                  Rp {monthlyOvertimePay?.toLocaleString('id-ID')}
-                                </span>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-muted-foreground/40 font-mono">0 Jam</span>
-                            )
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {absentSubtype === 'cuti' ? (
-                            <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-400 text-[10px] gap-1 rounded-full font-medium">
-                              <CheckCircle2 size={10} /> Disahkan Direksi
-                            </Badge>
-                          ) : absentSubtype === 'sakit' ? (
-                            <Badge variant="outline" className="bg-pink-50 text-pink-700 border-pink-200 dark:bg-pink-950/40 dark:text-pink-400 text-[10px] gap-1 rounded-full font-medium">
-                              <Activity size={10} /> Surat Dokter
-                            </Badge>
-                          ) : absentSubtype === 'izin' ? (
-                            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-400 text-[10px] gap-1 rounded-full font-medium">
-                              <CheckCircle2 size={10} /> Izin Disahkan
-                            </Badge>
-                          ) : absentSubtype === 'off' ? (
-                            <span className="text-muted-foreground/40 text-xs">-</span>
-                          ) : att && att.clockIn ? (
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              {/* Shield 1: Face-API Biometric 1:1 Verification */}
-                              {att.biometricScore != null ? (
-                                <Badge
-                                  variant="outline"
-                                  className={`text-[10px] gap-1 rounded-full ${
-                                    att.biometricMatch !== false
-                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300'
-                                      : 'bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-300'
-                                  }`}
-                                  title={`Skor Kemiripan Biometrik 1:1: ${att.biometricScore}%`}
-                                >
-                                  <ShieldCheck size={10} />
-                                  Face {att.biometricScore}%
+                              ) : status === 'late' ? (
+                                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                  Telat {att?.lateMinutes || 0}m
                                 </Badge>
-                              ) : att.securityFlags?.includes('BIOMETRIC_SELFIE_WATERMARKED') ? (
-                                <Badge className="bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[10px] gap-1 rounded-full">
-                                  <ShieldCheck size={10} /> Face Valid
+                              ) : absentSubtype === 'off' ? (
+                                <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                  Libur / OFF
                                 </Badge>
-                              ) : null}
-
-                              {/* Shield 2: Geofence Spatial Perimeter & Distance */}
-                              {att.isMockLocation || att.isMockSuspected ? (
-                                <Badge className="bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 text-[10px] gap-1 rounded-full">
-                                  <AlertTriangle size={10} /> Mock GPS
+                              ) : absentSubtype === 'unregistered' ? (
+                                <Badge variant="outline" className="bg-amber-50/80 text-amber-800 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                  Belum Registrasi Wajah
                                 </Badge>
-                              ) : att.geofenceDistance != null ? (
-                                <Badge
-                                  variant="outline"
-                                  className={`text-[10px] gap-1 rounded-full ${
-                                    att.geofenceValid !== false
-                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800'
-                                      : 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800'
-                                  }`}
-                                  title={`Jarak ke perimeter divisi: ${Math.round(att.geofenceDistance)} meter`}
-                                >
-                                  <MapPin size={10} />
-                                  {Math.round(att.geofenceDistance)}m {att.geofenceValid !== false ? 'Valid' : 'Luar'}
+                              ) : absentSubtype === 'cuti' ? (
+                                <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 dark:bg-purple-950/40 dark:text-purple-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                  Cuti Tahunan
                                 </Badge>
-                              ) : att.securityFlags?.includes('DYNAMIC_QR_OFFICE_VERIFIED') || att.securityFlags?.includes('TERMINAL_BARCODE_VERIFIED') ? (
-                                <Badge className="bg-cyan-50 text-cyan-800 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-400 dark:border-cyan-800 text-[10px] gap-1 rounded-full">
-                                  <ShieldCheck size={10} /> Terminal OK
+                              ) : absentSubtype === 'sakit' ? (
+                                <Badge variant="outline" className="bg-pink-50 text-pink-700 border-pink-300 dark:bg-pink-950/40 dark:text-pink-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                  Izin Sakit
+                                </Badge>
+                              ) : absentSubtype === 'izin' ? (
+                                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300 dark:bg-blue-950/40 dark:text-blue-400 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                  Izin Resmi
+                                </Badge>
+                              ) : absentSubtype === 'mangkir' ? (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 text-[11px] rounded-full px-2.5 py-0.5 font-bold shadow-xs">
+                                    Mangkir / Alpa
+                                  </Badge>
+                                  {att?.notes?.includes('Hak Cuti') ? (
+                                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold" title={att.notes}>Potong Cuti</span>
+                                  ) : att?.notes?.includes('Lembur') ? (
+                                    <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold" title={att.notes}>Potong Lembur</span>
+                                  ) : att?.notes?.includes('Gaji Pokok') ? (
+                                    <span className="text-[10px] text-rose-600 dark:text-rose-400 font-semibold" title={att.notes}>Potong Gaji</span>
+                                  ) : null}
+                                </div>
+                              ) : absentSubtype === 'pending_shift' ? (
+                                <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-400 text-[11px] rounded-full px-2.5 py-0.5">
+                                  Shift Pk {shift?.startTime ? shift.startTime.slice(0, 5) : '-'}
                                 </Badge>
                               ) : (
-                                <Badge className="bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[10px] gap-1 rounded-full">
-                                  <ShieldCheck size={10} /> Terverifikasi
+                                <Badge variant="outline" className="bg-muted text-muted-foreground border-border text-[11px] rounded-full px-2.5 py-0.5">
+                                  Belum Hadir
                                 </Badge>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground/40 text-xs">-</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            {(att?.isPerimeterBreached || att?.isLocked) && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 px-2 text-[10px] rounded-lg gap-1 border-rose-500/40 text-rose-600 hover:bg-rose-500/10 font-semibold"
-                                onClick={() => {
-                                  const existingViolation = perimeterViolations.find((v) => v.userId === u.id && v.status === 'active');
-                                  const vToUse = existingViolation || ({
-                                    id: `violation-${u.id}`,
-                                    userId: u.id,
-                                    attendanceId: att?.id,
-                                    divisionId: u.divisionId,
-                                    violationDate: getTodayDateStr(),
-                                    detectedAt: new Date().toISOString(),
-                                    distanceMeters: att?.geofenceDistance || 120,
-                                    status: 'active',
-                                    notes: 'Terdeteksi meninggalkan perimeter area kantor pada jam operasional.',
-                                    createdAt: new Date().toISOString(),
-                                    updatedAt: new Date().toISOString(),
-                                  } as PerimeterViolation);
-                                  setSelectedBreach(vToUse);
-                                  setUnlockReason('');
-                                  setUnlockModalOpen(true);
-                                }}
-                                title="Buka Kunci Presensi Pulang"
-                              >
-                                <Unlock size={11} /> Buka Kunci
-                              </Button>
+                              )
+                            ) : (
+                              <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[11px] rounded-full px-2.5 py-0.5 font-mono font-medium">
+                                {totalAttCount} Hari Hadir
+                              </Badge>
                             )}
-                            {/* REKOMENDASI 3: Remote Unlock oleh Admin/Korlap untuk Karyawan Aktif Bekerja */}
-                            {att?.clockIn && !att?.clockOut && (
-                              att?.isRemoteUnlocked ? (
-                                <Badge className="bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 text-[10px] gap-1 font-semibold rounded-lg">
-                                  <Unlock size={10} /> Terbuka
+                          </TableCell>
+                        )}
+                        {visibleColumns.clockIn && (
+                          <TableCell className="text-center">
+                            {isDailyView ? (
+                              <span className={`font-mono text-xs ${att?.clockIn ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
+                                {att?.clockIn ? `${att.clockIn} WITA` : '-'}
+                              </span>
+                            ) : (
+                              lateCount > 0 ? (
+                                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                  {lateCount}x ({totalLateMinutes} mnt)
                                 </Badge>
-                              ) : !(att?.isPerimeterBreached || att?.isLocked) ? (
+                              ) : (
+                                <span className="text-[11px] text-emerald-600 font-medium">Nihil (0 mnt)</span>
+                              )
+                            )}
+                          </TableCell>
+                        )}
+                        {visibleColumns.clockOut && (
+                          <TableCell className="text-center">
+                            {isDailyView ? (
+                              <span className={`font-mono text-xs ${att?.clockOut ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
+                                {att?.clockOut ? `${att.clockOut} WITA` : '-'}
+                              </span>
+                            ) : (
+                              <span className="font-mono text-xs font-bold text-rose-600">
+                                Rp {(totalLateMinutes * 1000).toLocaleString('id-ID')}
+                              </span>
+                            )}
+                          </TableCell>
+                        )}
+                        {visibleColumns.overtime && (
+                          <TableCell className="text-center">
+                            {isDailyView ? (
+                              todayOvertimeHours && todayOvertimeHours > 0 ? (
+                                <div className="inline-flex flex-col items-center">
+                                  <Badge className="bg-amber-500 hover:bg-amber-600 text-white font-mono text-[10px] px-2 py-0.5 gap-1 shadow-2xs">
+                                    <Clock size={10} /> {todayOvertimeHours} Jam
+                                  </Badge>
+                                  <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 font-mono mt-0.5" title="Kompensasi lembur hari ini">
+                                    Rp {todayOvertimePay?.toLocaleString('id-ID')}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-muted-foreground/50 font-mono">0 Jam (-)</span>
+                              )
+                            ) : (
+                              monthlyOvertimeHours && monthlyOvertimeHours > 0 ? (
+                                <div className="inline-flex flex-col items-center">
+                                  <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px] px-2 py-0.5">
+                                    {monthlyOvertimeHours} Jam ({monthlyOvertimeCount || 1}x)
+                                  </Badge>
+                                  <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 font-mono mt-0.5">
+                                    Rp {monthlyOvertimePay?.toLocaleString('id-ID')}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-muted-foreground/40 font-mono">0 Jam</span>
+                              )
+                            )}
+                          </TableCell>
+                        )}
+                        {visibleColumns.security && (
+                          <TableCell>
+                            {absentSubtype === 'cuti' ? (
+                              <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-400 text-[10px] gap-1 rounded-full font-medium">
+                                <CheckCircle2 size={10} /> Disahkan Direksi
+                              </Badge>
+                            ) : absentSubtype === 'sakit' ? (
+                              <Badge variant="outline" className="bg-pink-50 text-pink-700 border-pink-200 dark:bg-pink-950/40 dark:text-pink-400 text-[10px] gap-1 rounded-full font-medium">
+                                <Activity size={10} /> Surat Dokter
+                              </Badge>
+                            ) : absentSubtype === 'izin' ? (
+                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-400 text-[10px] gap-1 rounded-full font-medium">
+                                <CheckCircle2 size={10} /> Izin Disahkan
+                              </Badge>
+                            ) : absentSubtype === 'off' ? (
+                              <span className="text-muted-foreground/40 text-xs">-</span>
+                            ) : att && att.clockIn ? (
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {/* Shield 1: Face-API Biometric 1:1 Verification */}
+                                {att.biometricScore != null ? (
+                                  <Badge
+                                    variant="outline"
+                                    className={`text-[10px] gap-1 rounded-full ${
+                                      att.biometricMatch !== false
+                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300'
+                                        : 'bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-300'
+                                    }`}
+                                    title={`Skor Kemiripan Biometrik 1:1: ${att.biometricScore}%`}
+                                  >
+                                    <ShieldCheck size={10} />
+                                    Face {att.biometricScore}%
+                                  </Badge>
+                                ) : att.securityFlags?.includes('BIOMETRIC_SELFIE_WATERMARKED') ? (
+                                  <Badge className="bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[10px] gap-1 rounded-full">
+                                    <ShieldCheck size={10} /> Face Valid
+                                  </Badge>
+                                ) : null}
+
+                                {/* Shield 2: Geofence Spatial Perimeter & Distance */}
+                                {att.isMockLocation || att.isMockSuspected ? (
+                                  <Badge className="bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 text-[10px] gap-1 rounded-full">
+                                    <AlertTriangle size={10} /> Mock GPS
+                                  </Badge>
+                                ) : att.geofenceDistance != null ? (
+                                  <Badge
+                                    variant="outline"
+                                    className={`text-[10px] gap-1 rounded-full ${
+                                      att.geofenceValid !== false
+                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800'
+                                        : 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800'
+                                    }`}
+                                    title={`Jarak ke perimeter divisi: ${Math.round(att.geofenceDistance)} meter`}
+                                  >
+                                    <MapPin size={10} />
+                                    {Math.round(att.geofenceDistance)}m {att.geofenceValid !== false ? 'Valid' : 'Luar'}
+                                  </Badge>
+                                ) : att.securityFlags?.includes('DYNAMIC_QR_OFFICE_VERIFIED') || att.securityFlags?.includes('TERMINAL_BARCODE_VERIFIED') ? (
+                                  <Badge className="bg-cyan-50 text-cyan-800 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-400 dark:border-cyan-800 text-[10px] gap-1 rounded-full">
+                                    <ShieldCheck size={10} /> Terminal OK
+                                  </Badge>
+                                ) : (
+                                  <Badge className="bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[10px] gap-1 rounded-full">
+                                    <ShieldCheck size={10} /> Terverifikasi
+                                  </Badge>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground/40 text-xs">-</span>
+                            )}
+                          </TableCell>
+                        )}
+                        {visibleColumns.actions && (
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {(att?.isPerimeterBreached || att?.isLocked) && (
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  className="h-7 px-2 text-[10px] rounded-lg gap-1 border-primary/40 text-primary hover:bg-primary/10 font-semibold"
+                                  className="h-7 px-2 text-[10px] rounded-lg gap-1 border-rose-500/40 text-rose-600 hover:bg-rose-500/10 font-semibold"
                                   onClick={() => {
-                                    const adminName = user?.fullName || 'Admin / Korlap';
-                                    hrmService.remoteUnlockAttendance(u.id, adminName, 'Izin kepulangan dibuka via Monitoring');
-                                    toast.success(`Kunci checkout ${u.fullName} berhasil dibuka! Notifikasi telah dikirim ke perangkat karyawan.`);
-                                    loadData();
+                                    const existingViolation = perimeterViolations.find((v) => v.userId === u.id && v.status === 'active');
+                                    const vToUse = existingViolation || ({
+                                      id: `violation-${u.id}`,
+                                      userId: u.id,
+                                      attendanceId: att?.id,
+                                      divisionId: u.divisionId,
+                                      violationDate: getTodayDateStr(),
+                                      detectedAt: new Date().toISOString(),
+                                      distanceMeters: att?.geofenceDistance || 120,
+                                      status: 'active',
+                                      notes: 'Terdeteksi meninggalkan perimeter area kantor pada jam operasional.',
+                                      createdAt: new Date().toISOString(),
+                                      updatedAt: new Date().toISOString(),
+                                    } as PerimeterViolation);
+                                    setSelectedBreach(vToUse);
+                                    setUnlockReason('');
+                                    setUnlockModalOpen(true);
                                   }}
-                                  title="Buka Kunci Kepulangan (Rekomendasi 3)"
+                                  title="Buka Kunci Presensi Pulang"
                                 >
                                   <Unlock size={11} /> Buka Kunci
                                 </Button>
-                              ) : null
-                            )}
-                            {/* Tombol Kalender Presensi Bulanan Per Karyawan */}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 px-2 text-[11px] rounded-lg gap-1 border-primary/30 text-primary hover:bg-primary/10 font-medium"
-                              onClick={() => {
-                                setSelectedCalendarUser(u);
-                                setCalendarModalOpen(true);
-                              }}
-                              title={`Buka Kalender Presensi ${u.fullName}`}
-                            >
-                              <CalendarDays size={12} /> Kalender
-                            </Button>
-
-                            {/* Tombol Unduh Laporan Realtime Per Karyawan */}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 px-2 text-[11px] rounded-lg gap-1 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 font-medium"
-                              onClick={() => handleOpenRealtimeReport(u, att, shift)}
-                              title={`Unduh Laporan Realtime & Forensik ${u.fullName}`}
-                            >
-                              <FileSpreadsheet size={12} /> Laporan
-                            </Button>
-
-                            {att?.photoIn || (att as any)?.clockInPhoto || att?.photoOut || (att as any)?.clockOutPhoto ? (
+                              )}
+                              {/* REKOMENDASI 3: Remote Unlock oleh Admin/Korlap untuk Karyawan Aktif Bekerja */}
+                              {att?.clockIn && !att?.clockOut && (
+                                att?.isRemoteUnlocked ? (
+                                  <Badge className="bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 text-[10px] gap-1 font-semibold rounded-lg">
+                                    <Unlock size={10} /> Terbuka
+                                  </Badge>
+                                ) : !(att?.isPerimeterBreached || att?.isLocked) ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 px-2 text-[10px] rounded-lg gap-1 border-primary/40 text-primary hover:bg-primary/10 font-semibold"
+                                    onClick={() => {
+                                      const adminName = user?.fullName || 'Admin / Korlap';
+                                      hrmService.remoteUnlockAttendance(u.id, adminName, 'Izin kepulangan dibuka via Monitoring');
+                                      toast.success(`Kunci checkout ${u.fullName} berhasil dibuka! Notifikasi telah dikirim ke perangkat karyawan.`);
+                                      loadData();
+                                    }}
+                                    title="Buka Kunci Kepulangan (Rekomendasi 3)"
+                                  >
+                                    <Unlock size={11} /> Buka Kunci
+                                  </Button>
+                                ) : null
+                              )}
+                              {/* Tombol Kalender Presensi Bulanan Per Karyawan */}
                               <Button
                                 size="sm"
-                                variant="ghost"
-                                className="h-7 px-2 text-[11px] rounded-lg gap-1 text-primary hover:bg-primary/10"
-                                onClick={() => setPreviewForensic({
-                                  url: (att?.photoIn || (att as any)?.clockInPhoto || att?.photoOut || (att as any)?.clockOutPhoto)!,
-                                  name: u.fullName,
-                                  nip: u.nip,
-                                  division: u.divisionName,
-                                  time: att?.clockIn || att?.clockOut,
-                                  biometricScore: att?.biometricScore,
-                                  biometricMatch: att?.biometricMatch,
-                                  geofenceDistance: att?.geofenceDistance,
-                                  geofenceValid: att?.geofenceValid,
-                                  isMockLocation: att?.isMockLocation,
-                                  lat: att?.clockInLat || (att as any)?.latIn,
-                                  lng: att?.clockInLong || (att as any)?.longIn,
-                                  securityFlags: att?.securityFlags,
-                                })}
+                                variant="outline"
+                                className="h-7 px-2 text-[11px] rounded-lg gap-1 border-primary/30 text-primary hover:bg-primary/10 font-medium"
+                                onClick={() => {
+                                  setSelectedCalendarUser(u);
+                                  setCalendarModalOpen(true);
+                                }}
+                                title={`Buka Kalender Presensi ${u.fullName}`}
                               >
-                                <Eye size={12} /> Forensik
+                                <CalendarDays size={12} /> Kalender
                               </Button>
-                            ) : null}
-                          </div>
-                        </TableCell>
+
+                              {/* Tombol Unduh Laporan Realtime Per Karyawan */}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[11px] rounded-lg gap-1 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 font-medium"
+                                onClick={() => handleOpenRealtimeReport(u, att, shift)}
+                                title={`Unduh Laporan Realtime & Forensik ${u.fullName}`}
+                              >
+                                <FileSpreadsheet size={12} /> Laporan
+                              </Button>
+
+                              {att?.photoIn || (att as any)?.clockInPhoto || att?.photoOut || (att as any)?.clockOutPhoto ? (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-[11px] rounded-lg gap-1 text-primary hover:bg-primary/10"
+                                  onClick={() => setPreviewForensic({
+                                    url: (att?.photoIn || (att as any)?.clockInPhoto || att?.photoOut || (att as any)?.clockOutPhoto)!,
+                                    name: u.fullName,
+                                    nip: u.nip,
+                                    division: u.divisionName,
+                                    time: att?.clockIn || att?.clockOut,
+                                    biometricScore: att?.biometricScore,
+                                    biometricMatch: att?.biometricMatch,
+                                    geofenceDistance: att?.geofenceDistance,
+                                    geofenceValid: att?.geofenceValid,
+                                    isMockLocation: att?.isMockLocation,
+                                    lat: att?.clockInLat || (att as any)?.latIn,
+                                    lng: att?.clockInLong || (att as any)?.longIn,
+                                    securityFlags: att?.securityFlags,
+                                  })}
+                                >
+                                  <Eye size={12} /> Forensik
+                                </Button>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                        )}
                       </TableRow>
                     );
                   })
