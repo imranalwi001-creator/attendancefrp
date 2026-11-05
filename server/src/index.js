@@ -13636,7 +13636,7 @@ app.post('/api/whatsapp/send-personal', async (req, res) => {
 
     res.json({
       success: true,
-      message: `Pesan WhatsApp berhasil dikirim ke ${targetUser?.full_name || targetPhone}`,
+      message: `Pesan WhatsApp berhasil dikirim ke ${targetUser?.full_name || cleanPhone}`,
       sentTo: cleanPhone
     });
   } catch (err) {

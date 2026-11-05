@@ -42,7 +42,21 @@ export class ErrorBoundary extends Component<Props, State> {
     }
   }
 
-  private handleReload = () => {
+  private handleReload = async () => {
+    try {
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map((name) => caches.delete(name)));
+      }
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const registration of registrations) {
+          await registration.update();
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to purge service worker cache:', e);
+    }
     window.location.reload();
   };
 
