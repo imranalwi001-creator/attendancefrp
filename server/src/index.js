@@ -2989,6 +2989,16 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
       }
     }
 
+    // Susun Ringkasan Kuota Cuti Global jika tersedia
+    const globalQuotaText = quota ?
+`📊 *REKAPITULASI KUOTA CUTI PEMOHON:*
+• Hak Kuota Tahunan: *${quota.annualQuota} Hari*
+• Cuti Telah Digunakan: *${quota.usedDays || 0} Hari*
+• Sisa Kuota Saat Ini: *${quota.currentRemaining || 0} Hari*
+• Cuti Yang Diajukan: *${quota.requestedDays || 1} Hari*
+• *Estimasi Sisa Pasca Disetujui:* *${quota.estRemaining || 0} Hari*
+*(Kebijakan PT FRP: Hak cuti Use-It-Or-Lose-It / tidak dapat diuangkan)*\n\n` : '';
+
     // 1. KIRIM KE PEMOHON SENDIRI
     if (applicant?.phone) {
       let applicantMsg = '';
@@ -3001,6 +3011,7 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
           `🏢 Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
           `💬 Alasan/Tugas: "${reasonOrTask || '-'}"\n` +
           (substitute?.fullName ? `🛡️ Usulan Pengganti Pos: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '') +
+          `\n${globalQuotaText}` +
           `📌 Status: *Menunggu Persetujuan Atasan (Korlap / K3 / Admin / Pimpinan)*\n\n` +
           `Pemberitahuan otomatis akan kembali dikirimkan ke nomor ini setelah pengajuan Anda ditinjau oleh atasan.`;
       } else {
@@ -3010,6 +3021,7 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
             `Pengajuan *${submissionType}* Anda (${details}) telah *DISETUJUI RESMI* oleh *${approverName || 'Atasan'}*.\n` +
             (approvalNotes ? `💬 Catatan: "${approvalNotes}"\n` : '') +
             (substitute?.fullName ? `🛡️ Petugas Pengganti Pos Resmi: *${substitute.fullName}*\n` : '') +
+            (quota ? `\n📊 *Sisa Kuota Cuti Anda Saat Ini: ${quota.estRemaining ?? quota.currentRemaining} Hari* (dari Kuota ${quota.annualQuota} Hari, Terpakai: ${quota.usedDays} Hari)\n` : '') +
             `\nStatus presensi & jadwal roster kerja Anda telah otomatis disinkronkan di sistem HRM PT FRP.`
           : `⚠️ *PEMBERITAHUAN PENGAJUAN ${submissionType} DITOLAK*\n\n` +
             `Halo *${applicant.fullName}*,\n` +
@@ -3093,7 +3105,8 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
           `📅 Detail: *${details}*\n` +
           `💬 Alasan: "${reasonOrTask || '-'}"\n` +
           (substitute?.fullName ? `🛡️ Usulan Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Pengganti Pos:* Belum ditetapkan (Butuh segera ditetapkan Pengawas)\n') +
-          `\n⚡ *HUKUM ZERO VACANCY:* Pos dinas tidak boleh kosong tenaga kerja! Pekerjaan harus tetap berjalan lancar jika ada yang izin/cuti. Silakan segera buka portal HRM untuk menetapkan pengganti pos:\n` +
+          `\n${globalQuotaText}` +
+          `⚡ *HUKUM ZERO VACANCY:* Pos dinas tidak boleh kosong tenaga kerja! Pekerjaan harus tetap berjalan lancar jika ada yang izin/cuti. Silakan segera buka portal HRM untuk menetapkan pengganti pos:\n` +
           `🔗 Tautan: https://fawwazreskiperwira.com${approvalLink}`;
 
         // Kirim ke Samsi (088246270912) dan Takdir (085242606150)
@@ -3111,7 +3124,8 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
           `📅 Detail: *${details}*\n` +
           `💬 Alasan: "${reasonOrTask || '-'}"\n` +
           (substitute?.fullName ? `🛡️ Usulan Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Pengganti Pos:* Belum ditetapkan (Butuh penetapan Anda)\n') +
-          `\n⚡ *ATURAN ZERO VACANCY:* Pekerjaan tidak boleh kosong tenaga kerja! Pekerjaan harus tetap berjalan lancar jika karyawan izin/sakit/cuti. Silakan segera tinjau dan tetapkan karyawan pengganti di portal HRM:\n` +
+          `\n${globalQuotaText}` +
+          `⚡ *ATURAN ZERO VACANCY:* Pekerjaan tidak boleh kosong tenaga kerja! Pekerjaan harus tetap berjalan lancar jika karyawan izin/sakit/cuti. Silakan segera tinjau dan tetapkan karyawan pengganti di portal HRM:\n` +
           `🔗 Tautan: https://fawwazreskiperwira.com${approvalLink}`;
 
         await sendWhatsAppAlert({ phone: aslamPhone, message: korlapMsg }).catch(() => {});
@@ -3135,6 +3149,7 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
         `📅 Detail: *${details}*\n` +
         `💬 Keterangan: "${reasonOrTask || '-'}"\n` +
         (substitute?.fullName ? `🛡️ Usulan Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Petugas Pengganti:* Butuh penetapan Korlap (Zero Vacancy)\n') +
+        `\n${globalQuotaText}` +
         `📌 Penanggung Jawab Approval: ${isAslamOffOrLeave ? '*LA UNGA SAMSI / TAKDIR* (Forwarded karena Korlap Aslam libur/cuti)' : '*Muh Aslam Faisal* (Korlap 80 Personil)'}\n` +
         `\n⚡ *HUKUM ZERO VACANCY:* Pos dinas tidak boleh kosong! Pekerjaan harus tetap berjalan lancar.\n` +
         `🔗 Tautan: https://fawwazreskiperwira.com${approvalLink}`;
@@ -3147,6 +3162,7 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
         `⚖️ Keputusan: *${isApproved ? 'DISETUJUI' : 'DITOLAK'}* oleh *${approverName || 'Korlap'}*\n` +
         (approvalNotes ? `💬 Catatan: "${approvalNotes}"\n` : '') +
         (substitute?.fullName ? `🛡️ Personil Pengganti Pos Resmi: *${substitute.fullName}*\n` : '') +
+        (quota ? `\n📊 *Status Kuota Cuti Terkini:* Sisa ${quota.estRemaining ?? quota.currentRemaining} Hari (Terpakai: ${quota.usedDays} dari ${quota.annualQuota} Hari)\n` : '') +
         `\n💾 Audit trail & radius pos pengganti telah otomatis disinkronkan di sistem HRM PT FRP.`;
     }
 
@@ -9251,25 +9267,22 @@ app.post('/api/leaves', async (req, res) => {
     const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
     const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
 
-    let execToken = null;
-    let quotaInfo = null;
+    const annualQuota = Number(userProfile.annual_leave_quota || 12);
+    const usedDays = Number(userProfile.used_leave_days || 0);
+    const currentRemaining = Math.max(0, annualQuota - usedDays);
+    const estRemaining = Math.max(0, currentRemaining - requestedDays);
+
+    const quotaInfo = {
+      annualQuota,
+      usedDays,
+      requestedDays,
+      currentRemaining,
+      estRemaining,
+    };
 
     if (isSpecial3FieldOfficer) {
       execToken = crypto.randomBytes(16).toString('hex');
       await pool.query('UPDATE hrm_leave_requests SET executive_approval_token = $1 WHERE id = $2', [execToken, leaveRow.id]);
-
-      const annualQuota = Number(userProfile.annual_leave_quota || 12);
-      const usedDays = Number(userProfile.used_leave_days || 0);
-      const currentRemaining = Math.max(0, annualQuota - usedDays);
-      const estRemaining = Math.max(0, currentRemaining - requestedDays);
-
-      quotaInfo = {
-        annualQuota,
-        usedDays,
-        requestedDays,
-        currentRemaining,
-        estRemaining,
-      };
     }
 
     // Resolve substitute profile if specified (TIDAK WAJIB untuk 3 Petugas Lapangan Khusus)

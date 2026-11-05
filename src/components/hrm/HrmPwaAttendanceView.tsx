@@ -397,6 +397,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [overtimeModalOpen, setOvertimeModalOpen] = useState(false);
   const [userOvertimeList, setUserOvertimeList] = useState<OvertimeRecord[]>([]);
   const [userSubstitutions, setUserSubstitutions] = useState<any[]>([]);
+  const [liveLeaveBalance, setLiveLeaveBalance] = useState<{ annualLeaveQuota: number; usedLeaveDays: number; remainingLeaveDays: number; overtimeThisMonth?: any } | null>(null);
   const [otDate, setOtDate] = useState(getTodayDateStr());
   const [otCategory, setOtCategory] = useState<'shift1' | 'shift2' | 'shift3' | 'dayshift' | 'darurat_wajib' | 'custom'>('shift1');
   const [otStartTime, setOtStartTime] = useState('07:30');
@@ -1247,6 +1248,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         })
         .catch(() => null);
 
+      // 2A-2. Live Leave & Overtime Balance langsung dari server PostgreSQL (authoritative real-time sync)
+      api.get<{ success: boolean; data: any }>(`/leaves/balance?userId=${encodeURIComponent(user.id)}`)
+        .then((balRes) => {
+          if (balRes?.success && balRes.data) {
+            setLiveLeaveBalance(balRes.data);
+          }
+        })
+        .catch(() => null);
+
       // 2B. Data Permohonan Cuti/Izin Saya
       const myLeaves = hrmService.getUserLeaves(user.id);
       setUserLeaves(myLeaves);
@@ -1956,9 +1966,21 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const onTimeCount = Math.max(0, presentCount - lateCount);
     const totalLateMins = attendancesHistory.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
 
-    const annualLeaveQuota = user?.annualLeaveQuota || 12;
-    const usedLeave = user?.usedLeaveDays || 0;
-    const remainingLeave = Math.max(0, annualLeaveQuota - usedLeave);
+    const annualLeaveQuota = Number(
+      liveLeaveBalance?.annualLeaveQuota ??
+      user?.annualLeaveQuota ??
+      (user as any)?.annual_leave_quota ??
+      12
+    );
+    const usedLeave = Number(
+      liveLeaveBalance?.usedLeaveDays ??
+      user?.usedLeaveDays ??
+      (user as any)?.used_leave_days ??
+      0
+    );
+    const remainingLeave = liveLeaveBalance?.remainingLeaveDays !== undefined
+      ? Number(liveLeaveBalance.remainingLeaveDays)
+      : Math.max(0, annualLeaveQuota - usedLeave);
 
     const attendanceRate = totalWorkingDays > 0 ? Math.min(100, Math.round((presentCount / totalWorkingDays) * 100)) : 100;
 
@@ -3012,7 +3034,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
     setIsSubmittingLeave(true);
     try {
-      hrmService.createLeaveRequest({
+      await hrmService.createLeaveRequest({
         userId: user.id,
         leaveType,
         startDate: leaveStartDate,
@@ -3026,6 +3048,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       setLeaveStartDate('');
       setLeaveEndDate('');
       setLeaveProofPhoto('');
+      try {
+        const balRes = await api.get<{ success: boolean; data: any }>(`/leaves/balance?userId=${encodeURIComponent(user.id)}`);
+        if (balRes?.success && balRes.data) {
+          setLiveLeaveBalance(balRes.data);
+        }
+      } catch (_) {}
       await loadRealData();
     } catch (err: any) {
       toast.error('Gagal mengajukan izin: ' + (err.message || 'Error'));

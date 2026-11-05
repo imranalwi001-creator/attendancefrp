@@ -347,6 +347,18 @@ export async function initDb() {
       ALTER TABLE hrm_overtime_records
       ADD COLUMN IF NOT EXISTS completion_photos JSONB DEFAULT '[]'::jsonb;
 
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS approved_hours NUMERIC;
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS requested_hours NUMERIC;
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS approved_by_name VARCHAR(150);
+
+      ALTER TABLE hrm_overtime_records
+      ADD COLUMN IF NOT EXISTS approval_notes TEXT;
+
       -- ─── SALARY PROFILES COMPLIANCE ───
       CREATE TABLE IF NOT EXISTS hrm_payroll_salary_profiles (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
