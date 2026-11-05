@@ -185,7 +185,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   };
 
   const handleExportAllRealtimeExcel = () => {
-    const todayStr = getTodayDateStr();
+    const exportDateStr = targetDayDate || getTodayDateStr();
     const data = filtered.map(({ user: u, attendance: att, status, absentSubtype, shift }, idx) => {
       const isLate = status === 'terlambat' || (att?.lateMinutes && att.lateMinutes > 0);
       let statusText = 'BELUM HADIR';
@@ -228,8 +228,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     const worksheet = XLSX.utils.json_to_sheet(data);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Monitoring_Realtime');
-    XLSX.writeFile(workbook, `Monitoring_Realtime_Semua_Karyawan_${todayStr}.xlsx`);
-    toast.success(`Rekap realtime ${data.length} karyawan berhasil diunduh!`);
+    XLSX.writeFile(workbook, `Monitoring_Realtime_Semua_Karyawan_${exportDateStr}.xlsx`);
+    toast.success(`Rekap realtime ${data.length} karyawan (${exportDateStr}) berhasil diunduh!`);
   };
 
   const handleExportAllRealtimePdf = () => {
@@ -238,7 +238,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       return;
     }
 
-    const todayStr = getTodayDateStr();
+    const exportDateStr = targetDayDate || getTodayDateStr();
     const doc = new jsPDF({
       orientation: 'landscape',
       unit: 'mm',
@@ -251,7 +251,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     doc.text('PT. FAWWAZ RESKI PERWIRA', 14, 12);
     doc.setFontSize(9.5);
     doc.setFont('helvetica', 'normal');
-    doc.text(`LAPORAN MONITORING PRESENSI & OPERASIONAL REALTIME - ${todayStr} (WITA)`, 14, 17);
+    doc.text(`LAPORAN MONITORING PRESENSI & OPERASIONAL REALTIME - ${exportDateStr} (WITA)`, 14, 17);
     doc.setFontSize(7.5);
     doc.text(`Total Karyawan: ${filtered.length} Orang | Server: fawwazreskiperwira.com | Dicetak: ${new Date().toLocaleString('id-ID')}`, 14, 21);
 
@@ -521,13 +521,18 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     return d.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
   }, [selectedYearNum, selectedMonthNum]);
 
-  // Fungsi Fetch Presensi Bulan Terpilih dari PostgreSQL API
+  // Fungsi Fetch Presensi & Jadwal Bulan Terpilih dari PostgreSQL API
   const fetchMonthAttendances = React.useCallback(async (monthStr: string) => {
     try {
       setIsFetchingMonth(true);
-      const res = await fetch(`/api/attendances?month=${monthStr}`);
-      if (res.ok) {
-        const json = await res.json();
+      const [resAtt, resSched, resLeaves] = await Promise.all([
+        fetch(`/api/attendances?month=${monthStr}`),
+        fetch(`/api/employee-schedules?month=${monthStr}`),
+        fetch(`/api/leaves?status=approved`),
+      ]);
+
+      if (resAtt.ok) {
+        const json = await resAtt.json();
         if (json.success && Array.isArray(json.data)) {
           const monthAtts: AttendanceRecord[] = json.data;
           setAllAttendances((prev) => {
@@ -535,6 +540,25 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             monthAtts.forEach((a) => map.set(a.id, a));
             return Array.from(map.values());
           });
+        }
+      }
+
+      if (resSched.ok) {
+        const jsonSched = await resSched.json();
+        if (jsonSched.success && Array.isArray(jsonSched.data)) {
+          setDailySchedules((prev) => {
+            const map = new Map(prev.map((s) => [`${s.userId}_${s.scheduleDate}`, s]));
+            jsonSched.data.forEach((s: any) => map.set(`${s.userId}_${s.scheduleDate}`, s));
+            return Array.from(map.values());
+          });
+          hrmService.saveEmployeeSchedules(jsonSched.data);
+        }
+      }
+
+      if (resLeaves.ok) {
+        const jsonLeaves = await resLeaves.json();
+        if (jsonLeaves.success && Array.isArray(jsonLeaves.data)) {
+          setApprovedLeaves(jsonLeaves.data);
         }
       }
     } catch (e) {
@@ -756,10 +780,12 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
       // Cek pengajuan cuti / izin resmi yang disetujui untuk targetDayDate
       const activeLeave = approvedLeaves.find((l) => {
-        const matchUser = l.userId === u.id || l.userNip === u.nip || (l as any).employeeNip === u.nip || (l as any).employeeId === u.id;
+        const lUserId = l.userId || (l as any).user_id || (l as any).employeeId;
+        const lUserNip = l.userNip || (l as any).user_nip || (l as any).employeeNip;
+        const matchUser = lUserId === u.id || (Boolean(lUserNip) && lUserNip === u.nip);
         if (!matchUser) return false;
-        const start = l.startDate || (l as any).start_date;
-        const end = l.endDate || (l as any).end_date || start;
+        const start = String(l.startDate || (l as any).start_date || '').slice(0, 10);
+        const end = String(l.endDate || (l as any).end_date || start).slice(0, 10);
         return targetDayDate >= start && targetDayDate <= end;
       });
 
