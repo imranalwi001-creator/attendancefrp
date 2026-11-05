@@ -8798,8 +8798,11 @@ Oleh: *${approverName}*`;
 
 // ─── CONVERSATIONAL EXECUTIVE APPROVAL VIA WHATSAPP REPLY (TANPA LINK APLIKASI) ───
 // Menangani balasan langsung chat "SETUJU" atau "TOLAK" dari WhatsApp Dirut, Pimpinan, dan Superadmin
-app.post('/api/hrm/executive-approval/wa-inbound-action', async (req, res) => {
-  const { senderPhone, messageText, quotedText } = req.body;
+// Mendukung berbagai format webhook gateway: MPWA, Fonnte, Baileys, atau direct POST
+app.post(['/api/hrm/executive-approval/wa-inbound-action', '/api/whatsapp/webhook', '/api/wa/webhook'], async (req, res) => {
+  const senderPhone = req.body.senderPhone || req.body.sender || req.body.from || req.body.phone || req.body.chatId;
+  const messageText = req.body.messageText || req.body.message || req.body.body || req.body.text || (req.body.data && req.body.data.message);
+  const quotedText = req.body.quotedText || req.body.quoted || req.body.quote || req.body.quotedMsg;
   if (!senderPhone || !messageText) {
     return res.status(400).json({ success: false, error: 'senderPhone dan messageText wajib disertakan' });
   }

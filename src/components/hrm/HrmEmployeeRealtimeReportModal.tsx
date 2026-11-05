@@ -89,6 +89,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   const [serverAttendances, setServerAttendances] = useState<AttendanceRecord[]>([]);
   const [serverOvertimes, setServerOvertimes] = useState<OvertimeRecord[]>([]);
   const [serverLeaves, setServerLeaves] = useState<any[]>([]);
+  const [serverSchedules, setServerSchedules] = useState<any[]>([]);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
@@ -262,7 +263,23 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         setServerLeaves(localLeaves);
       });
 
-    Promise.allSettled([attPromise, otPromise, leavePromise]).finally(() => {
+    // Fetch schedules (Matriks Roster Karyawan) dari API
+    const schedPromise = api
+      .get<{ success: boolean; data?: any[] }>(`/employee-schedules?userId=${encodeURIComponent(user.id)}&month=${selectedMonth}`)
+      .then((res) => {
+        if (!isMounted) return;
+        if (res && res.success && Array.isArray(res.data)) {
+          setServerSchedules(res.data);
+        } else {
+          setServerSchedules([]);
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setServerSchedules([]);
+      });
+
+    Promise.allSettled([attPromise, otPromise, leavePromise, schedPromise]).finally(() => {
       if (isMounted) setIsLoadingData(false);
     });
 
@@ -310,6 +327,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     const month = parseInt(monthStr, 10);
     const daysInMonth = new Date(year, month, 0).getDate();
 
+    const validUserIds = [user.id, user.nip, user.email]
+      .filter(Boolean)
+      .map((s) => String(s).toLowerCase().trim());
+
     const rows = [];
 
     for (let day = 1; day <= daysInMonth; day++) {
@@ -322,13 +343,37 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       const isPast = dateStr < todayStr;
       const isToday = dateStr === todayStr;
 
-      // Cari presensi pada tanggal ini
+      // 1. Cari jadwal roster resmi dari serverSchedules
+      const sched = serverSchedules.find(
+        (s) => (s.scheduleDate || s.schedule_date || s.date || '').slice(0, 10) === dateStr
+      );
+      const hasSched = Boolean(sched);
+      const isRosterOff = Boolean(
+        sched && (sched.isOff || sched.is_off || sched.shiftCode === 'OFF' || sched.shift_code === 'OFF')
+      );
+
+      // 2. Cari permohonan Cuti / Izin / Sakit resmi yang DISAHKAN (approved)
+      const activeLeave = serverLeaves.find((l) => {
+        const isAppr = String(l.status || '').toLowerCase() === 'approved';
+        if (!isAppr) return false;
+        const lUserId = String(l.userId || l.user_id || '').toLowerCase().trim();
+        const lUserNip = String(l.userNip || l.user_nip || l.nip || '').toLowerCase().trim();
+        const userMatches = validUserIds.includes(lUserId) || (lUserNip && validUserIds.includes(lUserNip));
+        if (!userMatches) return false;
+        const sDate = (l.startDate || l.start_date || '').slice(0, 10);
+        const eDate = (l.endDate || l.end_date || sDate).slice(0, 10);
+        return dateStr >= sDate && dateStr <= eDate;
+      });
+
+      // 3. Cari presensi pada tanggal ini
       const att = combinedAttendances.find(
         (a) => (a.attendanceDate || (a as any).date || '').slice(0, 10) === dateStr
       );
 
-      // Cari lembur pada tanggal ini
-      const ot = combinedOvertimes.find((o) => o.date === dateStr);
+      // 4. Cari lembur pada tanggal ini
+      const ot = combinedOvertimes.find(
+        (o) => (o.date || o.overtimeDate || '').slice(0, 10) === dateStr
+      );
 
       let absenMasuk = '-';
       let absenPulang = '-';
@@ -343,84 +388,88 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       const hasClockIn = Boolean(att?.clockIn);
       const hasClockOut = Boolean(att?.clockOut);
 
-      // JIKA HARI LIBUR / AKHIR PEKAN (SABTU & MINGGU) DAN TIDAK ADA ABSEN FISIK & LEMBUR: MUTLAK OFF
-      if (isWeekend && !hasClockIn && !ot && att?.status !== 'hadir') {
-        absenMasuk = 'OFF';
-        absenPulang = 'OFF';
-        telatMnt = '-';
-        lemburMulai = '-';
-        lemburSelesai = '-';
-        realisasiJamLembur = '-';
-        uraianPekerjaan = '-';
-        memerintahkanKaur = '-';
-        ket = 'OFF';
-      } else if (att) {
-        if (hasClockIn) {
-          absenMasuk = (att.clockIn || '').substring(0, 5);
-        }
+      // PRIORITAS 1: Presensi Fisik Aktual
+      if (hasClockIn) {
+        absenMasuk = (att.clockIn || '').substring(0, 5);
         if (hasClockOut) {
           absenPulang = (att.clockOut || '').substring(0, 5);
+        } else if (isToday) {
+          absenPulang = 'Bertugas';
         }
-
         if (att.lateMinutes && Number(att.lateMinutes) > 0) {
           telatMnt = String(att.lateMinutes);
         }
-
-        if (att.status === 'hadir') {
-          ket = 'HADIR';
-        } else if (att.status === 'terlambat') {
-          ket = 'TELAT';
-        } else if (att.status === 'off' || att.status === 'libur') {
-          absenMasuk = 'OFF';
-          absenPulang = 'OFF';
-          ket = 'OFF';
-        } else if (att.status === 'cuti') {
-          absenMasuk = 'CUTI';
-          absenPulang = 'CUTI';
-          ket = 'CUTI';
-        } else if (att.status === 'izin') {
-          absenMasuk = 'IZIN';
-          absenPulang = 'IZIN';
-          ket = 'IZIN';
-        } else if (att.status === 'sakit') {
+        ket = att.status === 'terlambat' ? 'TELAT' : 'HADIR';
+        if (att.notes) {
+          uraianPekerjaan = att.notes;
+        } else {
+          uraianPekerjaan = isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : (sched?.shiftName || 'Tugas Lapangan Operasional');
+        }
+        memerintahkanKaur = isSpecialTarget ? 'Pimpinan PT. FRP' : (employeeKaur || 'Korlap');
+      }
+      // PRIORITAS 2: Cuti / Izin / Sakit Resmi yang Disetujui
+      else if (activeLeave) {
+        const lType = String(activeLeave.leaveType || activeLeave.leave_type || 'cuti').toLowerCase();
+        if (lType.includes('sakit')) {
           absenMasuk = 'SAKIT';
           absenPulang = 'SAKIT';
           ket = 'SAKIT';
-        } else if (att.status === 'alfa') {
-          if (isWeekend) {
-            absenMasuk = 'OFF';
-            absenPulang = 'OFF';
-            ket = 'OFF';
-          } else {
-            absenMasuk = '-';
-            absenPulang = '-';
-            ket = 'ALPA';
-          }
-        } else if (hasClockIn) {
-          ket = 'HADIR';
+          uraianPekerjaan = activeLeave.reason || 'Izin Sakit (Surat Dokter)';
+        } else if (lType.includes('izin') || lType.includes('emergency')) {
+          absenMasuk = 'IZIN';
+          absenPulang = 'IZIN';
+          ket = 'IZIN';
+          uraianPekerjaan = activeLeave.reason || 'Izin Resmi Disetujui';
+        } else {
+          absenMasuk = 'CUTI';
+          absenPulang = 'CUTI';
+          ket = 'CUTI';
+          const subNote = activeLeave.substitute_name || activeLeave.substituteName
+            ? ` (Digantikan: ${activeLeave.substitute_name || activeLeave.substituteName})`
+            : '';
+          uraianPekerjaan = (activeLeave.reason || 'Cuti Tahunan') + subNote;
         }
-
-        if (att.notes) {
-          uraianPekerjaan = att.notes;
+        memerintahkanKaur = activeLeave.approved_by_name || activeLeave.approvedByName || (isSpecialTarget ? 'Direksi PT. FRP' : (employeeKaur || 'Korlap'));
+      }
+      // PRIORITAS 3: Hari Libur Roster (OFF) atau Akhir Pekan tanpa jadwal shift kerja
+      else if (isRosterOff || (!hasSched && isWeekend)) {
+        absenMasuk = 'OFF';
+        absenPulang = 'OFF';
+        ket = 'OFF';
+        uraianPekerjaan = '-';
+        memerintahkanKaur = '-';
+      }
+      // PRIORITAS 4: Hari Ini (Belum Masuk Shift)
+      else if (isToday) {
+        absenMasuk = '-';
+        absenPulang = '-';
+        ket = 'BELUM ABSEN';
+        if (sched?.shiftName) {
+          const startT = sched.startTime ? sched.startTime.substring(0, 5) : '07:30';
+          uraianPekerjaan = `${sched.shiftName} (Mulai ${startT} WITA)`;
+        } else {
+          uraianPekerjaan = 'Menunggu Jam Masuk Kerja';
         }
-      } else {
-        // Belum ada data presensi
-        if (isWeekend) {
-          absenMasuk = 'OFF';
-          absenPulang = 'OFF';
-          ket = 'OFF';
-        } else if (isPast) {
-          absenMasuk = '-';
-          absenPulang = '-';
-          ket = 'ALPA';
-        } else if (isToday) {
-          absenMasuk = '-';
-          absenPulang = '-';
-          ket = 'BELUM ABSEN';
-        }
+        memerintahkanKaur = isSpecialTarget ? 'Pimpinan PT. FRP' : (employeeKaur || 'Korlap');
+      }
+      // PRIORITAS 5: Hari Lampau Tanpa Kehadiran (ALPA / MANGKIR)
+      else if (isPast) {
+        absenMasuk = '-';
+        absenPulang = '-';
+        ket = 'ALPA';
+        uraianPekerjaan = 'Mangkir / Tanpa Keterangan';
+        memerintahkanKaur = '-';
+      }
+      // PRIORITAS 6: Hari Mendatang (Jadwal Normal)
+      else {
+        absenMasuk = '-';
+        absenPulang = '-';
+        ket = '-';
+        uraianPekerjaan = sched?.shiftName || '-';
+        memerintahkanKaur = '-';
       }
 
-      // Lembur
+      // Lembur / SPKL
       if (ot) {
         lemburMulai = ot.startTime ? ot.startTime.substring(0, 5) : '-';
         lemburSelesai = ot.endTime ? ot.endTime.substring(0, 5) : '-';
@@ -438,36 +487,17 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         if (ket === '-' || ket === 'OFF') ket = 'LEMBUR';
       }
 
-      // Tentukan Uraian Pekerjaan secara Dinamis & Elegan (bebas tag teknis sistem)
-      if (ket === 'CUTI') {
-        uraianPekerjaan = 'Cuti Tahunan';
-      } else if (ket === 'SAKIT') {
-        uraianPekerjaan = 'Izin Sakit (Surat Dokter)';
-      } else if (ket === 'IZIN') {
-        uraianPekerjaan = 'Izin Tidak Masuk Kerja';
-      } else if (ket === 'ALPA') {
-        uraianPekerjaan = 'Mangkir / Tanpa Keterangan';
-      } else if (ket === 'OFF') {
-        uraianPekerjaan = '-';
-      } else if (ot && ot.taskDescription) {
-        uraianPekerjaan = ot.taskDescription;
-      } else if (att && att.notes) {
-        let clean = att.notes;
-        clean = clean
+      // Bersihkan uraian pekerjaan jika ada tag teknis sistem
+      if (uraianPekerjaan && uraianPekerjaan !== '-') {
+        uraianPekerjaan = uraianPekerjaan
           .replace(/\[Koreksi Superadmin: Kehadiran Disahkan\]/gi, '')
           .replace(/\[AUTO-CLOSED.*?\]/gi, '')
           .replace(/\[Dispensasi.*?\]/gi, '')
           .trim();
-        const posMatch = clean.match(/\[Pos:\s*([^\]]+)\]/i);
+        const posMatch = uraianPekerjaan.match(/\[Pos:\s*([^\]]+)\]/i);
         if (posMatch) {
           uraianPekerjaan = `Tugas Lapangan di Pos ${posMatch[1].trim()}`;
-        } else if (clean.length > 0 && !clean.startsWith('[')) {
-          uraianPekerjaan = clean;
-        } else {
-          uraianPekerjaan = isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : 'Tugas Lapangan Operasional';
         }
-      } else if (hasClockIn) {
-        uraianPekerjaan = isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : 'Tugas Lapangan Operasional';
       }
 
       // Default KAUR / Pengesahan: Khusus 3 Petugas Lapangan Khusus Pimpinan langsung oleh Pimpinan PT. FRP
@@ -519,7 +549,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     }
 
     return rows;
-  }, [selectedMonth, user, todayStr, combinedAttendances, combinedOvertimes, employeeKaur, isSpecialTarget]);
+  }, [selectedMonth, user, todayStr, combinedAttendances, combinedOvertimes, serverLeaves, serverSchedules, employeeKaur, isSpecialTarget]);
 
   // Statistik Rekapan Bulanan (Presisi & Dinamis)
   const stats = useMemo(() => {
