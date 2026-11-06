@@ -809,8 +809,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       } else if (isSpecialLeadership && isWeekend) {
         // 3 Petugas Lapangan Khusus Pimpinan resmi LIBUR di akhir pekan (Sabtu & Minggu)
         absentSubtype = 'off';
-      } else if (isWeekend && (!uShift || uShift.isOff || (uShift as any).code === 'OFF' || !u.isShiftWorker)) {
-        // Karyawan reguler non-shift di akhir pekan adalah LIBUR
+      } else if (isWeekend && (!sched || sched.isOff || sched.shiftCode === 'OFF' || (!['P', 'S', 'M'].includes(sched.shiftCode || '') && (!uShift || uShift.isOff || uShift.code === 'OFF' || uShift.code === 'DAY')))) {
+        // Karyawan reguler Day Shift tanpa jadwal rotasi shift di akhir pekan adalah LIBUR
         absentSubtype = 'off';
       } else if (isAlfaRecord) {
         if (!isFaceEnrolled || isSimAccount) {
@@ -993,17 +993,17 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     if (filterShift !== 'all') {
       const shiftCode = (item.shift?.code || item.shift?.name || '').toUpperCase();
       if (filterShift === 'OFF') {
-        matchShift = item.absentSubtype === 'off' || shiftCode === 'OFF';
+        matchShift = item.shift?.isOff === true || shiftCode === 'OFF' || item.shift?.name?.toLowerCase().includes('libur');
       } else if (filterShift === 'cuti') {
         matchShift = item.absentSubtype === 'cuti';
       } else if (filterShift === 'P') {
-        matchShift = shiftCode.includes('P') || shiftCode.includes('PAGI') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('07'));
+        matchShift = !item.shift?.isOff && (shiftCode === 'P' || shiftCode.includes('PAGI') || shiftCode.includes('SHIFT I ') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('07')));
       } else if (filterShift === 'S') {
-        matchShift = shiftCode.includes('S') || shiftCode.includes('SIANG') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('15'));
+        matchShift = !item.shift?.isOff && (shiftCode === 'S' || shiftCode.includes('SIANG') || shiftCode.includes('SHIFT II ') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('15')));
       } else if (filterShift === 'M') {
-        matchShift = shiftCode.includes('M') || shiftCode.includes('MALAM') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('22'));
+        matchShift = !item.shift?.isOff && (shiftCode === 'M' || shiftCode.includes('MALAM') || shiftCode.includes('SHIFT III ') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('22')));
       } else if (filterShift === 'DAY') {
-        matchShift = shiftCode.includes('DAY') || (!item.shift?.code && !item.user.isShiftWorker);
+        matchShift = !item.shift?.isOff && (shiftCode.includes('DAY') || shiftCode.includes('PIMPINAN') || (!item.shift?.code && !['P', 'S', 'M'].includes(shiftCode)));
       }
     }
 
@@ -2466,13 +2466,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         )}
                         {visibleColumns.shift && (
                           <TableCell className="text-center">
-                            {absentSubtype === 'off' ? (
+                            {shift?.isOff || shift?.code === 'OFF' ? (
                               <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 text-[10px] font-medium">
                                 Libur / OFF
-                              </Badge>
-                            ) : absentSubtype === 'cuti' ? (
-                              <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 text-[10px] font-medium">
-                                Cuti Tahunan
                               </Badge>
                             ) : shift ? (
                               <div className="inline-flex flex-col items-center">
