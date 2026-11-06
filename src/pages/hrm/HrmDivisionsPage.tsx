@@ -92,11 +92,12 @@ export const HrmDivisionsPage: React.FC = () => {
   const [leader, setLeader] = useState('');
   const [locationName, setLocationName] = useState('');
   const [address, setAddress] = useState('');
-  const [latitude, setLatitude] = useState<number>(-6.225);
-  const [longitude, setLongitude] = useState<number>(106.809);
+  const [latitude, setLatitude] = useState<number>(-4.794135);
+  const [longitude, setLongitude] = useState<number>(119.604382);
   const [radiusMeters, setRadiusMeters] = useState<number>(150);
   const [allowedPosts, setAllowedPosts] = useState<DivisionAssignedPost[]>([]);
   const [officialPostsList, setOfficialPostsList] = useState<DivisionAssignedPost[]>(FIELD_SENTINEL_6_POST_PRESETS);
+  const [searchPresetPost, setSearchPresetPost] = useState<string>('');
   const [gettingLocation, setGettingLocation] = useState(false);
   const [detectedAccuracy, setDetectedAccuracy] = useState<number | null>(null);
   const [detectedTime, setDetectedTime] = useState<string | null>(null);
@@ -840,7 +841,7 @@ export const HrmDivisionsPage: React.FC = () => {
           const existing = map.get(key);
           map.set(key, {
             code: p.postCode || existing?.code || p.postName.toUpperCase(),
-            name: p.postName,
+            name: existing?.name || p.postName,
             latitude: Number(p.latitude),
             longitude: Number(p.longitude),
             radiusMeters: Number(p.radiusMeters) || existing?.radiusMeters || 50,
@@ -851,7 +852,20 @@ export const HrmDivisionsPage: React.FC = () => {
           });
         });
       }
-      setOfficialPostsList(Array.from(map.values()));
+
+      // Sort with priority: Maccini Baji & FRP first, then alphabetical
+      const sorted = Array.from(map.values()).sort((a, b) => {
+        const aIsMaccini = a.name.toLowerCase().includes('maccini') || (a.code || '').toLowerCase().includes('maccini');
+        const bIsMaccini = b.name.toLowerCase().includes('maccini') || (b.code || '').toLowerCase().includes('maccini');
+        if (aIsMaccini && !bIsMaccini) return -1;
+        if (!aIsMaccini && bIsMaccini) return 1;
+        const aIsFrp = a.name.toLowerCase().includes('frp') || (a.code || '').toLowerCase().includes('frp');
+        const bIsFrp = b.name.toLowerCase().includes('frp') || (b.code || '').toLowerCase().includes('frp');
+        if (aIsFrp && !bIsFrp) return -1;
+        if (!aIsFrp && bIsFrp) return 1;
+        return a.name.localeCompare(b.name);
+      });
+      setOfficialPostsList(sorted);
     } catch (err) {
       console.warn('Gagal memuat pos lapangan dinamis:', err);
     }
@@ -940,6 +954,23 @@ export const HrmDivisionsPage: React.FC = () => {
     }
   };
 
+  const handleApplyPresetCoordinates = (preset: DivisionAssignedPost) => {
+    setLatitude(preset.latitude);
+    setLongitude(preset.longitude);
+    setRadiusMeters(preset.radiusMeters || 150);
+    setLocationName(preset.name);
+    setAddress(preset.description || `Area ${preset.name}`);
+    const exists = allowedPosts.some(
+      (p) =>
+        (p.code && preset.code && p.code.trim().toUpperCase() === preset.code.trim().toUpperCase()) ||
+        (p.name && preset.name && p.name.trim().toLowerCase() === preset.name.trim().toLowerCase())
+    );
+    if (!exists) {
+      setAllowedPosts((prev) => [...prev, { ...preset }]);
+    }
+    toast.success(`Titik koordinat "${preset.name}" diterapkan! (${preset.latitude.toFixed(6)}, ${preset.longitude.toFixed(6)} • Radius ${preset.radiusMeters || 150}m)`);
+  };
+
   const handleOpenAdd = () => {
     const defaultOffice = hrmService.getOfficeLocation();
     setEditingDiv(null);
@@ -947,12 +978,13 @@ export const HrmDivisionsPage: React.FC = () => {
     setName('');
     setDesc('');
     setLeader('');
-    setLocationName('');
-    setAddress(defaultOffice?.address || '');
-    setLatitude(defaultOffice?.latitude || -6.225);
-    setLongitude(defaultOffice?.longitude || 106.809);
-    setRadiusMeters(150);
+    setLocationName(defaultOffice?.name || 'Kantor Pusat PT FRP');
+    setAddress(defaultOffice?.address || 'Area Bontoa, Minasatene, Pangkep, Sulawesi Selatan');
+    setLatitude(typeof defaultOffice?.latitude === 'number' ? defaultOffice.latitude : -4.794135);
+    setLongitude(typeof defaultOffice?.longitude === 'number' ? defaultOffice.longitude : 119.604382);
+    setRadiusMeters(defaultOffice?.radiusMeters || 150);
     setAllowedPosts(officialPostsList.map((p) => ({ ...p })));
+    setSearchPresetPost('');
     setError(null);
     setModalOpen(true);
   };
@@ -965,14 +997,15 @@ export const HrmDivisionsPage: React.FC = () => {
     setLeader(d.leaderName || '');
     setLocationName(d.locationName || `Gedung Kantor Divisi ${d.name}`);
     setAddress(d.address || '');
-    setLatitude(typeof d.latitude === 'number' ? d.latitude : -6.225);
-    setLongitude(typeof d.longitude === 'number' ? d.longitude : 106.809);
+    setLatitude(typeof d.latitude === 'number' ? d.latitude : -4.794135);
+    setLongitude(typeof d.longitude === 'number' ? d.longitude : 119.604382);
     setRadiusMeters(d.radiusMeters || 150);
     setAllowedPosts(
       Array.isArray(d.allowedPosts) && d.allowedPosts.length > 0
         ? d.allowedPosts
         : officialPostsList.map((p) => ({ ...p }))
     );
+    setSearchPresetPost('');
     setError(null);
     setModalOpen(true);
   };
@@ -1775,6 +1808,57 @@ export const HrmDivisionsPage: React.FC = () => {
                 </div>
               )}
 
+              {/* PRESET KOORDINAT RESMI (AUTO-FILL DROPDOWN) */}
+              <div className="p-3.5 bg-card border border-indigo-500/30 dark:border-indigo-500/40 rounded-xl space-y-2 shadow-2xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                  <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                    Pilih Preset Koordinat Lokasi Resmi FRP (Auto-Fill Cepat):
+                  </Label>
+                  <span className="text-[10px] text-muted-foreground font-mono">
+                    {officialPostsList.length} Pos Tersedia
+                  </span>
+                </div>
+                <Select
+                  onValueChange={(val) => {
+                    const found = officialPostsList.find(
+                      (p) =>
+                        (p.code && p.code.trim().toUpperCase() === val.trim().toUpperCase()) ||
+                        (p.name && p.name.trim().toLowerCase() === val.trim().toLowerCase())
+                    );
+                    if (found) {
+                      handleApplyPresetCoordinates(found);
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-9 text-xs bg-background border-border rounded-lg font-medium">
+                    <SelectValue placeholder="-- Pilih Preset Lokasi (Contoh: Pelabuhan Maccini Baji) --" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    {officialPostsList.map((preset) => {
+                      const isMaccini = preset.name.toLowerCase().includes('maccini') || (preset.code || '').toLowerCase().includes('maccini');
+                      return (
+                        <SelectItem key={preset.code || preset.name} value={preset.code || preset.name}>
+                          <div className="flex items-center justify-between gap-3 text-xs w-full py-0.5">
+                            <span className={`font-semibold flex items-center gap-1.5 ${isMaccini ? 'text-indigo-600 dark:text-indigo-400 font-bold' : ''}`}>
+                              {isMaccini && <span>⚓</span>}
+                              <span>{preset.name}</span>
+                              <span className="text-[10px] font-mono text-muted-foreground">({preset.code})</span>
+                            </span>
+                            <span className="text-[10px] font-mono text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded">
+                              {preset.latitude.toFixed(6)}, {preset.longitude.toFixed(6)} • R: {preset.radiusMeters}m
+                            </span>
+                          </div>
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">
+                  Memilih preset di atas akan langsung mengisi Latitude, Longitude, Radius batas presensi, serta Nama Lokasi divisi secara otomatis.
+                </p>
+              </div>
+
               {/* Opsi Cepat: Multi-Titik Pos Lapangan FRP (Dapat Memilih Lebih Dari Satu Titik) */}
               <div className="space-y-2.5 p-3.5 bg-indigo-500/5 dark:bg-indigo-950/20 border border-indigo-500/25 rounded-2xl">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -1784,7 +1868,7 @@ export const HrmDivisionsPage: React.FC = () => {
                       Pilih Pos Presensi Lapangan (Bisa Pilih Lebih dari 1 Titik):
                     </Label>
                     <p className="text-[10px] text-muted-foreground mt-0.5">
-                      Klik kartu untuk menambah/menghapus pos presensi yang sah bagi divisi ini.
+                      Klik kartu untuk menambah/menghapus pos presensi yang sah, atau klik <strong>"Gunakan Koordinat"</strong> untuk menetapkannya sebagai titik koordinat utama divisi.
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -1816,92 +1900,132 @@ export const HrmDivisionsPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {officialPostsList.map((preset) => {
-                    const isSelected = allowedPosts.some(
-                      (p) =>
-                        (p.code && preset.code && p.code.trim().toUpperCase() === preset.code.trim().toUpperCase()) ||
-                        (p.name && preset.name && p.name.trim().toLowerCase() === preset.name.trim().toLowerCase())
-                    );
-                    const isPrimary = latitude === preset.latitude && longitude === preset.longitude;
+                {/* Filter / Pencarian Pos Lapangan */}
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    type="text"
+                    value={searchPresetPost}
+                    onChange={(e) => setSearchPresetPost(e.target.value)}
+                    placeholder="Cari pos lapangan (misal: Maccini Baji, FRP, Timbangan, Segel, Makassar)..."
+                    className="h-8 pl-8 pr-7 text-xs rounded-lg bg-card border-border"
+                  />
+                  {searchPresetPost && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchPresetPost('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
 
-                    return (
-                      <div
-                        key={preset.code || preset.name}
-                        onClick={() => {
-                          if (isSelected) {
-                            const next = allowedPosts.filter(
-                              (p) => !(
-                                (p.code && preset.code && p.code.trim().toUpperCase() === preset.code.trim().toUpperCase()) ||
-                                (p.name && preset.name && p.name.trim().toLowerCase() === preset.name.trim().toLowerCase())
-                              )
-                            );
-                            setAllowedPosts(next);
-                            if (isPrimary && next.length > 0) {
-                              setLatitude(next[0].latitude);
-                              setLongitude(next[0].longitude);
-                              setRadiusMeters(next[0].radiusMeters || 50);
-                              setLocationName(next[0].name);
-                              setAddress(next[0].description || next[0].name);
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-80 overflow-y-auto pr-1">
+                  {officialPostsList
+                    .filter((preset) => {
+                      if (!searchPresetPost.trim()) return true;
+                      const q = searchPresetPost.toLowerCase();
+                      return (
+                        preset.name.toLowerCase().includes(q) ||
+                        (preset.code || '').toLowerCase().includes(q) ||
+                        (preset.description || '').toLowerCase().includes(q)
+                      );
+                    })
+                    .map((preset) => {
+                      const isSelected = allowedPosts.some(
+                        (p) =>
+                          (p.code && preset.code && p.code.trim().toUpperCase() === preset.code.trim().toUpperCase()) ||
+                          (p.name && preset.name && p.name.trim().toLowerCase() === preset.name.trim().toLowerCase())
+                      );
+                      const isPrimary = Math.abs(latitude - preset.latitude) < 0.00001 && Math.abs(longitude - preset.longitude) < 0.00001;
+                      const isMaccini = preset.name.toLowerCase().includes('maccini') || (preset.code || '').toLowerCase().includes('maccini');
+
+                      return (
+                        <div
+                          key={preset.code || preset.name}
+                          onClick={() => {
+                            if (isSelected) {
+                              const next = allowedPosts.filter(
+                                (p) => !(
+                                  (p.code && preset.code && p.code.trim().toUpperCase() === preset.code.trim().toUpperCase()) ||
+                                  (p.name && preset.name && p.name.trim().toLowerCase() === preset.name.trim().toLowerCase())
+                                )
+                              );
+                              setAllowedPosts(next);
+                              if (isPrimary && next.length > 0) {
+                                setLatitude(next[0].latitude);
+                                setLongitude(next[0].longitude);
+                                setRadiusMeters(next[0].radiusMeters || 50);
+                                setLocationName(next[0].name);
+                                setAddress(next[0].description || next[0].name);
+                              }
+                              toast.info(`Titik ${preset.name} dihapus dari pilihan divisi.`);
+                            } else {
+                              const next = [...allowedPosts, { ...preset }];
+                              setAllowedPosts(next);
+                              toast.success(`Titik ${preset.name} ditambahkan! (${next.length} pos aktif)`);
                             }
-                            toast.info(`Titik ${preset.name} dihapus dari pilihan divisi.`);
-                          } else {
-                            const next = [...allowedPosts, { ...preset }];
-                            setAllowedPosts(next);
-                            if (allowedPosts.length === 0 || !locationName) {
-                              setLatitude(preset.latitude);
-                              setLongitude(preset.longitude);
-                              setRadiusMeters(preset.radiusMeters || 50);
-                              setLocationName(preset.name);
-                              setAddress(preset.description || preset.name);
-                            }
-                            toast.success(`Titik ${preset.name} ditambahkan! (${next.length} pos aktif)`);
-                          }
-                        }}
-                        className={`p-2.5 text-left rounded-xl border text-[11px] transition-all cursor-pointer select-none flex flex-col justify-between gap-1.5 relative ${
-                          isSelected
-                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-md ring-2 ring-indigo-500/30'
-                            : 'bg-card hover:bg-muted/60 border-border text-foreground hover:border-indigo-500/40'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-1">
-                          <div className="font-bold truncate text-xs">{preset.name}</div>
-                          <div className={`w-4 h-4 rounded-md flex items-center justify-center text-[10px] shrink-0 font-bold ${
-                            isSelected ? 'bg-white text-indigo-600 shadow-xs' : 'border border-muted-foreground/30 text-transparent'
-                          }`}>
-                            ✓
+                          }}
+                          className={`p-2.5 text-left rounded-xl border text-[11px] transition-all cursor-pointer select-none flex flex-col justify-between gap-1.5 relative ${
+                            isPrimary
+                              ? 'bg-amber-500/10 border-amber-500 text-foreground ring-2 ring-amber-500/40 shadow-xs'
+                              : isSelected
+                              ? 'bg-indigo-500/10 border-indigo-600 text-foreground ring-1 ring-indigo-500/30'
+                              : 'bg-card hover:bg-muted/60 border-border text-foreground hover:border-indigo-500/40'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-1">
+                            <div className="font-bold truncate text-xs flex items-center gap-1">
+                              {isMaccini && <span className="text-amber-500" title="Pos Pelabuhan Maccini Baji">⚓</span>}
+                              <span className={isMaccini ? 'text-indigo-600 dark:text-indigo-400 font-extrabold' : ''}>{preset.name}</span>
+                            </div>
+                            <div className={`w-4 h-4 rounded-md flex items-center justify-center text-[10px] shrink-0 font-bold ${
+                              isSelected ? 'bg-indigo-600 text-white shadow-xs' : 'border border-muted-foreground/30 text-transparent'
+                            }`}>
+                              ✓
+                            </div>
+                          </div>
+
+                          <div className="text-[10px] font-mono truncate text-muted-foreground">
+                            {preset.code} • R: {preset.radiusMeters}m
+                          </div>
+
+                          {/* KOORDINAT GPS JELAS TERTERA */}
+                          <div className="text-[10px] font-mono font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 px-1.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-800/50 flex items-center justify-between">
+                            <span>📍 {preset.latitude.toFixed(6)}, {preset.longitude.toFixed(6)}</span>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-1 pt-1 border-t border-border/50 mt-0.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleApplyPresetCoordinates(preset);
+                              }}
+                              className={`text-[9px] font-bold px-2 py-0.5 rounded transition-all flex items-center gap-1 ${
+                                isPrimary
+                                  ? 'bg-amber-400 text-amber-950 shadow-xs ring-1 ring-amber-500'
+                                  : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-2xs'
+                              }`}
+                              title="Gunakan titik koordinat ini sebagai lokasi utama divisi"
+                            >
+                              {isPrimary ? '★ Titik Utama' : 'Gunakan Koordinat'}
+                            </button>
+
+                            {preset.isClockOutOnly ? (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-600 border border-rose-500/20">
+                                Pulang
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                Masuk+Plg
+                              </span>
+                            )}
                           </div>
                         </div>
-
-                        <div className={`text-[10px] font-mono truncate ${isSelected ? 'text-indigo-100' : 'text-muted-foreground'}`}>
-                          {preset.code} • {preset.radiusMeters}m
-                        </div>
-
-                        <div className="flex items-center gap-1 flex-wrap pt-0.5">
-                          {isPrimary && (
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                              isSelected ? 'bg-amber-400 text-amber-950' : 'bg-amber-500/20 text-amber-600'
-                            }`}>
-                              ★ Titik Utama
-                            </span>
-                          )}
-                          {preset.isClockOutOnly ? (
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                              isSelected ? 'bg-white/20 text-white' : 'bg-rose-500/10 text-rose-600 border border-rose-500/20'
-                            }`}>
-                              Khusus Pulang
-                            </span>
-                          ) : (
-                            <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded ${
-                              isSelected ? 'bg-white/15 text-indigo-50' : 'bg-muted text-muted-foreground'
-                            }`}>
-                              Masuk & Pulang
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
                 </div>
               </div>
 
@@ -1999,8 +2123,18 @@ export const HrmDivisionsPage: React.FC = () => {
                   </Badge>
                 </div>
 
-                <div className="space-y-2 mt-2">
-                  {officialPostsList.map((preset) => {
+                <div className="space-y-2 mt-2 max-h-72 overflow-y-auto pr-1">
+                  {officialPostsList
+                    .filter((preset) => {
+                      if (!searchPresetPost.trim()) return true;
+                      const q = searchPresetPost.toLowerCase();
+                      return (
+                        preset.name.toLowerCase().includes(q) ||
+                        (preset.code || '').toLowerCase().includes(q) ||
+                        (preset.description || '').toLowerCase().includes(q)
+                      );
+                    })
+                    .map((preset) => {
                     const existingIdx = allowedPosts.findIndex(
                       (p) =>
                         (p.code && preset.code && p.code.trim().toUpperCase() === preset.code.trim().toUpperCase()) ||
