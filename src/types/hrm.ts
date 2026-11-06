@@ -383,12 +383,21 @@ export const isMacciniBajiOfficer = (userOrNipOrEmail: any): boolean => {
   if (typeof userOrNipOrEmail === 'string') {
     const s = userOrNipOrEmail.toUpperCase().replace(/[\s.]/g, '');
     if (['FR07073', 'FR07074', 'FR07075', 'FR07076'].includes(s)) return true;
+    const lower = userOrNipOrEmail.toLowerCase();
+    if (['fr07073@fawwazreski.co.id', 'fr07074@fawwazreski.co.id', 'fr07075@fawwazreski.co.id', 'fr07076@fawwazreski.co.id'].includes(lower)) return true;
+    if (['irfan dg ronrong', 'muh ikram', 'rahmatan', 'muh. adam', 'muh adam'].some(n => lower.includes(n))) return true;
     if (s.includes('MACCINI') || s.includes('MCBAJI')) return true;
     return false;
   }
   const u = userOrNipOrEmail;
   const nip = (u.nip || u.userNip || '').toUpperCase().trim().replace(/[\s.]/g, '');
   if (['FR07073', 'FR07074', 'FR07075', 'FR07076'].includes(nip)) return true;
+
+  const email = (u.email || '').toLowerCase().trim();
+  if (['fr07073@fawwazreski.co.id', 'fr07074@fawwazreski.co.id', 'fr07075@fawwazreski.co.id', 'fr07076@fawwazreski.co.id'].includes(email)) return true;
+
+  const fullName = (u.fullName || u.full_name || u.name || '').toLowerCase().trim();
+  if (['irfan dg ronrong', 'muh ikram', 'rahmatan', 'muh. adam', 'muh adam'].some(n => fullName.includes(n))) return true;
 
   const divCode = (u.divisionCode || u.division_code || '').trim().toUpperCase();
   if (divCode === 'MMB') return true;

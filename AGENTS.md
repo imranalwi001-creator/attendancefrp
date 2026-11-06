@@ -27,6 +27,18 @@ Pimpinan PT. FAWWAZ RESKI PERWIRA memberikan instruksi ketat untuk pengawasan **
 - **Forensic Watermarking & Spot-Check Biometrik**:
   - Foto verifikasi wajah dilengkapi watermark permanen (Canvas level pixel): Logo Instansi, Nama/NIP, Nama Pos, Latitude, Longitude, Akurasi GPS, Waktu WITA, dan Biometric Confidence Score 1:1.
 
+### 4 Petugas Resmi Pelabuhan Maccini Baji (Divisi MMB):
+Khusus penugasan di **Pelabuhan Maccini Baji** (Koordinat: `-4.773545, 119.487525`, Radius: 500m), petugasnya **HANYA 4 ORANG** (Bukan 3 Petugas Khusus Pimpinan di atas):
+1. **Irfan Dg Ronrong** (NIP: `FR07073`, Email: `fr07073@fawwazreski.co.id`)
+2. **Muh Ikram** (NIP: `FR07074`, Email: `fr07074@fawwazreski.co.id`)
+3. **Rahmatan** (NIP: `FR07075`, Email: `fr07075@fawwazreski.co.id`)
+4. **Muh. Adam** (NIP: `FR07076`, Email: `fr07076@fawwazreski.co.id`)
+
+**Aturan Operasional 4 Petugas Pelabuhan Maccini Baji:**
+- **Cek-In & Cek-Out**: Wajib 100% dilakukan di koordinat Pelabuhan Maccini Baji (radius 500m).
+- **Mode Kapal Bersandar (Docking)**: Saat info kapal tiba di dermaga, petugas klik `[ ⚓ Lapor Standby Kapal ]` dan wajib standby fisik di dermaga (geofence aktif).
+- **Mode Standby On-Call (Idle / Nihil Kapal)**: Saat tidak ada kapal, petugas klik `[ 🌊 Standby On-Call ]` dan bebas keluar radius dermaga tanpa alarm pelanggaran perimeter.
+
 ---
 
 ## 2. ARSITEKTUR TEKNIS & LINGKUNGAN PRODUKSI
