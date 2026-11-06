@@ -378,6 +378,35 @@ export const isSpecialDutyOfficer = (userOrNipOrEmail: any): boolean => {
   return isMobileOnlineOfficer(userOrNipOrEmail) || isLeadershipSpecialFieldOfficer(userOrNipOrEmail);
 };
 
+export const isMacciniBajiOfficer = (userOrNipOrEmail: any): boolean => {
+  if (!userOrNipOrEmail) return false;
+  if (typeof userOrNipOrEmail === 'string') {
+    const s = userOrNipOrEmail.toUpperCase().replace(/[\s.]/g, '');
+    if (['FR07073', 'FR07074', 'FR07075', 'FR07076'].includes(s)) return true;
+    if (s.includes('MACCINI') || s.includes('MCBAJI')) return true;
+    return false;
+  }
+  const u = userOrNipOrEmail;
+  const nip = (u.nip || u.userNip || '').toUpperCase().trim().replace(/[\s.]/g, '');
+  if (['FR07073', 'FR07074', 'FR07075', 'FR07076'].includes(nip)) return true;
+
+  const divCode = (u.divisionCode || u.division_code || '').trim().toUpperCase();
+  if (divCode === 'MMB') return true;
+
+  const divName = (u.divisionName || u.division_name || '').toLowerCase();
+  if (divName.includes('maccini') || divName.includes('biringkassi')) return true;
+
+  const locName = (u.assignedLocationName || u.assigned_location_name || u.divisionLocationName || u.locationName || '').toLowerCase();
+  if (locName.includes('maccini') || locName.includes('biringkassi')) return true;
+
+  if (Array.isArray(u.assignedPosts)) {
+    if (u.assignedPosts.some((p: any) => (p.postCode || p.post_code || p.name || p.postName || '').toLowerCase().includes('maccini'))) {
+      return true;
+    }
+  }
+  return false;
+};
+
 export const isOfficialFrEmployee = (userOrNipOrEmail: any): boolean => {
   if (!userOrNipOrEmail) return false;
   let nip = '';

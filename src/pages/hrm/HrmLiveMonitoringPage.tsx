@@ -3,7 +3,7 @@ import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { toast } from 'sonner';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer, isOfficialFrEmployee, isLeadershipSpecialFieldOfficer, isSimulationAccount, LeaveRequest, EmployeeSchedule } from '@/types/hrm';
+import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer, isOfficialFrEmployee, isLeadershipSpecialFieldOfficer, isSimulationAccount, LeaveRequest, EmployeeSchedule, isMacciniBajiOfficer } from '@/types/hrm';
 import { resolveEffectiveShift, calculateAttendanceLateness } from '@/lib/hrmShiftResolver';
 import {
   UserCheck,
@@ -162,6 +162,40 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
   const [allAttendances, setAllAttendances] = useState<AttendanceRecord[]>([]);
   const [periodScope, setPeriodScope] = useState<'today' | 'month' | 'year'>('today');
+
+  // ─── OPERASIONAL PELABUHAN MACCINI BAJI (STATUS KAPAL BERSANDAR & STANDBY ON-CALL) ───
+  const [macciniVesselStatus, setMacciniVesselStatus] = useState<{
+    status: 'idle' | 'docking';
+    vesselName: string;
+    updatedAt: string | null;
+    updatedBy: string;
+    notes: string;
+  }>({ status: 'idle', vesselName: '', updatedAt: null, updatedBy: '', notes: '' });
+
+  const handleAdminToggleMacciniStatus = async (target: 'docking' | 'idle') => {
+    try {
+      await hrmService.updateMacciniVesselStatus({
+        status: target,
+        vesselName: target === 'docking' ? (macciniVesselStatus.vesselName || 'Kapal Masuk') : '',
+        updatedBy: user?.fullName || 'Superadmin Monitoring',
+        notes: target === 'docking' ? 'Standby Operasional Kapal' : 'Standby On-Call',
+      });
+      setMacciniVesselStatus({
+        status: target,
+        vesselName: target === 'docking' ? (macciniVesselStatus.vesselName || 'Kapal Masuk') : '',
+        updatedAt: new Date().toISOString(),
+        updatedBy: user?.fullName || 'Superadmin Monitoring',
+        notes: target === 'docking' ? 'Standby Operasional Kapal' : 'Standby On-Call',
+      });
+      toast.success(
+        target === 'docking'
+          ? '⚓ Status diperbarui: KAPAL BERSANDAR (Dermaga Maccini Baji terkunci 500m)'
+          : '🌊 Status diperbarui: STANDBY ON-CALL (Petugas bebas keluar koordinat)'
+      );
+    } catch (e: any) {
+      toast.error('Gagal update status kapal: ' + (e?.message || 'Error'));
+    }
+  };
 
   // Navigasi Bulan & Kalender Presensi Per Karyawan
   const currentMonthStr = getTodayDateStr().slice(0, 7);
@@ -355,6 +389,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     setPerimeterViolations(hrmService.getPerimeterViolations().filter((v) => isOfficialFrEmployee(v.userNip)));
     loadFieldAgents();
     fetchLiveUsersFast();
+    hrmService.getMacciniVesselStatus().then((s) => {
+      if (s) setMacciniVesselStatus(s);
+    }).catch(() => null);
     fetch('/api/leaves?status=approved')
       .then((r) => r.json())
       .then((res) => {
@@ -1035,7 +1072,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const lateCount = monitoredList.filter((i) => i.status === 'late').length;
   const mangkirCount = monitoredList.filter((i) => i.status === 'mangkir' || (i as any).absentSubtype === 'mangkir').length;
   const absentCount = monitoredList.filter((i) => i.status === 'absent' && (i as any).absentSubtype !== 'mangkir').length;
-  const activeBreaches = perimeterViolations.filter((v) => v.status === 'active');
+  const activeBreaches = perimeterViolations.filter((v) => {
+    if (v.status !== 'active') return false;
+    const u = users.find((usr) => usr.id === v.userId || usr.nip === v.userNip);
+    if (u && isMacciniBajiOfficer(u) && macciniVesselStatus.status !== 'docking') {
+      return false;
+    }
+    return true;
+  });
 
   const radarSummary: AnomalyRadarSummary = React.useMemo(() => {
     return anomalyDetectionService.analyzeWorkforceAnomalies(users, activePeriodAttendances, overtimes);
@@ -1211,6 +1255,66 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           </div>
         </CardContent>
       </Card>
+
+      {/* ─── KONTROL & INDIKATOR OPERASIONAL PELABUHAN MACCINI BAJI ─── */}
+      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-indigo-500/30 rounded-2xl p-3.5 sm:p-4 text-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-xl shrink-0">
+            ⚓
+          </div>
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-xs sm:text-sm tracking-wide text-white">
+                OPERASIONAL PELABUHAN MACCINI BAJI
+              </span>
+              <Badge className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                macciniVesselStatus.status === 'docking'
+                  ? 'bg-amber-500 text-amber-950 hover:bg-amber-500'
+                  : 'bg-emerald-600 text-white hover:bg-emerald-600'
+              }`}>
+                {macciniVesselStatus.status === 'docking' ? '⚓ KAPAL BERSANDAR' : '🌊 STANDBY ON-CALL'}
+              </Badge>
+              {macciniVesselStatus.updatedAt && (
+                <span className="text-[10px] text-indigo-300 font-mono">
+                  (Diperbarui: {new Date(macciniVesselStatus.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WITA oleh {macciniVesselStatus.updatedBy})
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-indigo-200">
+              {macciniVesselStatus.status === 'docking'
+                ? `Kapal Sandar${macciniVesselStatus.vesselName ? ` (${macciniVesselStatus.vesselName})` : ''} • Seluruh petugas lapangan MMB wajib standby fisik di dermaga (Geofence 500m terkunci aktif).`
+                : 'Nihil Kapal di Dermaga • Petugas diberikan dispensasi sah Standby On-Call di luar radius dermaga tanpa alarm pelanggaran perimeter.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => handleAdminToggleMacciniStatus('docking')}
+            className={`h-8 px-3 text-xs font-bold rounded-xl transition-all ${
+              macciniVesselStatus.status === 'docking'
+                ? 'bg-amber-500 text-amber-950 ring-2 ring-amber-300'
+                : 'bg-slate-800 hover:bg-amber-500 hover:text-amber-950 text-slate-200 border border-slate-700'
+            }`}
+          >
+            ⚓ Lapor Standby Kapal
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => handleAdminToggleMacciniStatus('idle')}
+            className={`h-8 px-3 text-xs font-bold rounded-xl transition-all ${
+              macciniVesselStatus.status === 'idle'
+                ? 'bg-emerald-600 text-white ring-2 ring-emerald-300'
+                : 'bg-slate-800 hover:bg-emerald-600 hover:text-white text-slate-200 border border-slate-700'
+            }`}
+          >
+            🌊 Standby On-Call
+          </Button>
+        </div>
+      </div>
 
       {/* Status Counters */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3.5">
@@ -2000,7 +2104,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {(fieldAgents.length > 0 ? fieldAgents : users.filter((u) => u.isFieldSentinelEnabled)).map((agent: any) => {
               const isMobileSpecialist = isMobileOnlineOfficer(agent);
-              const isBreached = agent.isOutOfBounds && !isMobileSpecialist;
+              const isMaccini = isMacciniBajiOfficer(agent);
+              const isMacciniOnCall = isMaccini && macciniVesselStatus.status !== 'docking';
+              const isBreached = agent.isOutOfBounds && !isMobileSpecialist && !isMacciniOnCall;
               const pingTime = agent.lastKnownPingAt ? new Date(agent.lastKnownPingAt).getTime() : null;
               const pingAgeMinutes = pingTime ? Math.floor((Date.now() - pingTime) / 60000) : null;
               const isLiveNow = pingAgeMinutes !== null && pingAgeMinutes <= 15;
@@ -2078,6 +2184,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         <Badge className="bg-rose-600 text-white text-[10px] font-bold gap-1 animate-pulse">
                           <AlertTriangle size={11} /> KELUAR ({Math.round(agent.outOfBoundsDistance || 0)}m)
                         </Badge>
+                      ) : isMacciniOnCall ? (
+                        <Badge className="bg-emerald-600 text-white text-[10px] font-bold gap-1 shadow-xs">
+                          <CheckCircle2 size={11} /> 🌊 STANDBY ON-CALL
+                        </Badge>
+                      ) : isMaccini && macciniVesselStatus.status === 'docking' ? (
+                        <Badge className="bg-amber-600 text-white text-[10px] font-bold gap-1 shadow-xs">
+                          <CheckCircle2 size={11} /> ⚓ STANDBY DERMAGA
+                        </Badge>
                       ) : isMobileSpecialist ? (
                         <Badge className="bg-sky-600 text-white text-[10px] font-bold gap-1">
                           <Wifi size={11} /> WFA SAH (MOBILE)
@@ -2104,7 +2218,11 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                           <MapPin size={12} className="text-indigo-600" /> Pos Aktif Terdeteksi:
                         </span>
                         <span className="font-bold text-foreground truncate max-w-[190px]">
-                          {isLiveNow && agent.currentActivePostName ? (
+                          {isMacciniOnCall ? (
+                            <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                              🌊 Maccini Baji (Standby On-Call)
+                            </span>
+                          ) : isLiveNow && agent.currentActivePostName ? (
                             <span className="text-emerald-600 dark:text-emerald-400 font-bold">
                               🟢 {agent.currentActivePostName} (Live)
                             </span>
@@ -2679,35 +2797,46 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         {visibleColumns.actions && (
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-1.5">
-                              {(att?.isPerimeterBreached || att?.isLocked) && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 px-2 text-[10px] rounded-lg gap-1 border-rose-500/40 text-rose-600 hover:bg-rose-500/10 font-semibold"
-                                  onClick={() => {
-                                    const existingViolation = perimeterViolations.find((v) => v.userId === u.id && v.status === 'active');
-                                    const vToUse = existingViolation || ({
-                                      id: `violation-${u.id}`,
-                                      userId: u.id,
-                                      attendanceId: att?.id,
-                                      divisionId: u.divisionId,
-                                      violationDate: getTodayDateStr(),
-                                      detectedAt: new Date().toISOString(),
-                                      distanceMeters: att?.geofenceDistance || 120,
-                                      status: 'active',
-                                      notes: 'Terdeteksi meninggalkan perimeter area kantor pada jam operasional.',
-                                      createdAt: new Date().toISOString(),
-                                      updatedAt: new Date().toISOString(),
-                                    } as PerimeterViolation);
-                                    setSelectedBreach(vToUse);
-                                    setUnlockReason('');
-                                    setUnlockModalOpen(true);
-                                  }}
-                                  title="Buka Kunci Presensi Pulang"
-                                >
-                                  <Unlock size={11} /> Buka Kunci
-                                </Button>
-                              )}
+                              {(() => {
+                                const isMacciniUser = isMacciniBajiOfficer(u);
+                                const isMacciniOnCallUser = isMacciniUser && macciniVesselStatus.status !== 'docking';
+                                if (isMacciniOnCallUser) {
+                                  return (
+                                    <Badge className="bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 text-[10px] gap-1 font-semibold rounded-lg shadow-2xs">
+                                      🌊 On-Call Sah
+                                    </Badge>
+                                  );
+                                }
+                                return (att?.isPerimeterBreached || att?.isLocked) ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 px-2 text-[10px] rounded-lg gap-1 border-rose-500/40 text-rose-600 hover:bg-rose-500/10 font-semibold"
+                                    onClick={() => {
+                                      const existingViolation = perimeterViolations.find((v) => v.userId === u.id && v.status === 'active');
+                                      const vToUse = existingViolation || ({
+                                        id: `violation-${u.id}`,
+                                        userId: u.id,
+                                        attendanceId: att?.id,
+                                        divisionId: u.divisionId,
+                                        violationDate: getTodayDateStr(),
+                                        detectedAt: new Date().toISOString(),
+                                        distanceMeters: att?.geofenceDistance || 120,
+                                        status: 'active',
+                                        notes: 'Terdeteksi meninggalkan perimeter area kantor pada jam operasional.',
+                                        createdAt: new Date().toISOString(),
+                                        updatedAt: new Date().toISOString(),
+                                      } as PerimeterViolation);
+                                      setSelectedBreach(vToUse);
+                                      setUnlockReason('');
+                                      setUnlockModalOpen(true);
+                                    }}
+                                    title="Buka Kunci Presensi Pulang"
+                                  >
+                                    <Unlock size={11} /> Buka Kunci
+                                  </Button>
+                                ) : null;
+                              })()}
                               {/* REKOMENDASI 3: Remote Unlock oleh Admin/Korlap untuk Karyawan Aktif Bekerja */}
                               {att?.clockIn && !att?.clockOut && (
                                 att?.isRemoteUnlocked ? (

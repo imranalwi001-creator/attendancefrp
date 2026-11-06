@@ -6256,6 +6256,107 @@ app.post('/api/settings/break-policy', async (req, res) => {
   }
 });
 
+// ─── 4E. MACCINI BAJI VESSEL STATUS (STANDBY ON-CALL VS KAPAL BERSANDAR) ────────
+app.get('/api/maccini-vessel/status', async (req, res) => {
+  try {
+    const sRes = await pool.query(
+      "SELECT key, value FROM hrm_system_settings WHERE key IN ('maccini_baji_vessel_status', 'maccini_baji_vessel_name', 'maccini_baji_vessel_updated_at', 'maccini_baji_vessel_updated_by', 'maccini_baji_vessel_notes')"
+    );
+    const result = {
+      status: 'idle', // 'idle' (Nihil Kapal / Standby On-Call) or 'docking' (Kapal Bersandar)
+      vesselName: '',
+      updatedAt: null,
+      updatedBy: '',
+      notes: '',
+    };
+    sRes.rows.forEach(r => {
+      if (r.key === 'maccini_baji_vessel_status') result.status = r.value;
+      if (r.key === 'maccini_baji_vessel_name') result.vesselName = r.value;
+      if (r.key === 'maccini_baji_vessel_updated_at') result.updatedAt = r.value;
+      if (r.key === 'maccini_baji_vessel_updated_by') result.updatedBy = r.value;
+      if (r.key === 'maccini_baji_vessel_notes') result.notes = r.value;
+    });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/maccini-vessel/status', async (req, res) => {
+  const { status, vesselName, updatedBy, notes, photoData, latitude, longitude, userId } = req.body;
+  const newStatus = status === 'docking' ? 'docking' : 'idle';
+  const now = new Date().toISOString();
+  try {
+    await pool.query(
+      `INSERT INTO hrm_system_settings (key, value, updated_at)
+       VALUES 
+         ('maccini_baji_vessel_status', $1, NOW()),
+         ('maccini_baji_vessel_name', $2, NOW()),
+         ('maccini_baji_vessel_updated_at', $3, NOW()),
+         ('maccini_baji_vessel_updated_by', $4, NOW()),
+         ('maccini_baji_vessel_notes', $5, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
+      [
+        newStatus,
+        vesselName || '',
+        now,
+        updatedBy || 'Petugas Lapangan',
+        notes || '',
+      ]
+    );
+
+    // Jika disertai foto pelaporan / bukti patroli dari petugas
+    if (photoData && userId) {
+      try {
+        await pool.query(
+          `INSERT INTO hrm_field_patrol_checks 
+             (user_id, check_type, location_name, latitude, longitude, accuracy_meters, watermarked_photo_url, biometric_score, notes, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW());`,
+          [
+            userId,
+            newStatus === 'docking' ? 'vessel_docking_standby' : 'vessel_idle_on_call',
+            'Pelabuhan Maccini Baji',
+            latitude || -4.773545,
+            longitude || 119.487525,
+            10,
+            photoData,
+            98,
+            newStatus === 'docking' 
+              ? `Lapor Standby Kapal: ${vesselName || 'Kapal Bersandar'}`
+              : `Lapor Selesai Kapal: Standby On-Call`,
+          ]
+        );
+      } catch (pErr) {
+        console.warn('[MacciniVessel] Patrol check insert warn:', pErr);
+      }
+    }
+
+    // Broadcast in-app notification
+    try {
+      broadcastNotification({
+        type: 'maccini_vessel_status_changed',
+        title: newStatus === 'docking' ? '⚓ Info Kapal Bersandar (Maccini Baji)' : '🌊 Info Kapal Selesai (Maccini Baji)',
+        message: newStatus === 'docking'
+          ? `Kapal bersandar${vesselName ? ` (${vesselName})` : ''} di Pelabuhan Maccini Baji. Petugas wajib standby lokasi.`
+          : 'Operasional kapal selesai / nihil kapal. Petugas beralih ke Standby On-Call.',
+        data: { status: newStatus, vesselName, updatedBy, updatedAt: now }
+      });
+    } catch (bErr) {
+      // ignore
+    }
+
+    res.json({
+      success: true,
+      message: newStatus === 'docking'
+        ? 'Status Kapal Bersandar diaktifkan (Wajib Standby di Pelabuhan)'
+        : 'Status Standby On-Call diaktifkan (Bebas Koordinat)',
+      data: { status: newStatus, vesselName, updatedBy, updatedAt: now }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // GET /api/attendances/today - Ambil data presensi hari ini untuk karyawan secara realtime & akurat
 app.get('/api/attendances/today', async (req, res) => {
   const { userId, date } = req.query;

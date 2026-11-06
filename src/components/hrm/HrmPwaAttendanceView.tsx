@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr, normalizeAttendanceRecord, normalizeDateString } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, EmployeeSchedule, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isFieldOperationalWorker } from '@/types/hrm';
+import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, EmployeeSchedule, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isFieldOperationalWorker, isMacciniBajiOfficer } from '@/types/hrm';
 import {
   Clock,
   MapPin,
@@ -256,6 +256,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     emergencyOvertimeHours: number;
     emergencyOvertimeReason: string;
   } | null>(null);
+
+  // ─── MACCINI BAJI VESSEL BERTHING & ON-CALL CONTROL ───
+  const [macciniVesselStatus, setMacciniVesselStatus] = useState<{
+    status: 'idle' | 'docking';
+    vesselName: string;
+    updatedAt: string | null;
+    updatedBy: string;
+    notes: string;
+  }>({ status: 'idle', vesselName: '', updatedAt: null, updatedBy: '', notes: '' });
+  const [isUpdatingVesselStatus, setIsUpdatingVesselStatus] = useState(false);
+  const [vesselModalOpen, setVesselModalOpen] = useState(false);
+  const [targetVesselStatus, setTargetVesselStatus] = useState<'docking' | 'idle'>('docking');
+  const [inputVesselName, setInputVesselName] = useState('');
 
   // ─── EMERGENCY OVERRIDE CLOCK-IN STATES (REKOMENDASI 3: ABSEN TUGAS DARURAT MANDIRI) ───
   const [emergencyOverrideModalOpen, setEmergencyOverrideModalOpen] = useState<boolean>(false);
@@ -1277,6 +1290,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       );
       setUserNotifications(myNotifs);
 
+      // 2E. Status Kapal Pelabuhan Maccini Baji
+      if (isMacciniBajiOfficer(user)) {
+        hrmService.getMacciniVesselStatus().then((s) => {
+          if (s) setMacciniVesselStatus(s);
+        }).catch(() => null);
+      }
+
       // 3. Bank Pos Lapangan (Multi-Titik)
       let currentBankPosts: import('@/types/hrm').FieldAssignedPost[] = [];
       try {
@@ -1391,6 +1411,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       setDistanceToOffice(matchedDist);
       setLocationStatus('inside');
       setAssignedPostName(matchedName || 'Area Mobile / Online Remote (Matching/Pusat/Cafe/Rumah)');
+      return;
+    }
+
+    // ⚡ Evaluasi Pelabuhan Maccini Baji: Jika sudah Cek-In dan status 'idle' (Nihil Kapal), berikan dispensasi Standby On-Call
+    const isMaccini = isMacciniBajiOfficer(user);
+    const hasAlreadyClockedIn = Boolean(
+      todayAttendance && (todayAttendance.clockIn || todayAttendance.clock_in) && !(todayAttendance.clockOut || todayAttendance.clock_out)
+    );
+    if (isMaccini && hasAlreadyClockedIn && macciniVesselStatus.status !== 'docking') {
+      setCurrentCoords(coords);
+      setCoordsAccuracy(accuracy);
+      setDistanceToOffice(0);
+      setLocationStatus('inside');
+      setAssignedPostName('Pelabuhan Maccini Baji (Standby On-Call • Bebas Koordinat)');
       return;
     }
 
@@ -2085,6 +2119,47 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     };
   }, [attendancesHistory, user, todayAttendance, userLeaves, userOvertimeList, currentMonthStr]);
 
+  // ─── PENGENDALIAN OPERASIONAL PELABUHAN MACCINI BAJI (DUAL BUTTONS) ───
+  const handleToggleVesselStatus = (target: 'docking' | 'idle') => {
+    setTargetVesselStatus(target);
+    if (target === 'docking') {
+      setInputVesselName(macciniVesselStatus.vesselName || '');
+      setVesselModalOpen(true);
+    } else {
+      executeVesselStatusChange('idle', '');
+    }
+  };
+
+  const executeVesselStatusChange = async (target: 'docking' | 'idle', shipName: string) => {
+    setIsUpdatingVesselStatus(true);
+    try {
+      await hrmService.updateMacciniVesselStatus({
+        status: target,
+        vesselName: shipName.trim(),
+        updatedBy: user?.fullName || 'Petugas Lapangan',
+        notes: target === 'docking' ? 'Standby Operasional Kapal' : 'Standby On-Call',
+      });
+      setMacciniVesselStatus({
+        status: target,
+        vesselName: shipName.trim(),
+        updatedAt: new Date().toISOString(),
+        updatedBy: user?.fullName || 'Petugas Lapangan',
+        notes: target === 'docking' ? 'Standby Operasional Kapal' : 'Standby On-Call',
+      });
+      setVesselModalOpen(false);
+      toast.success(
+        target === 'docking'
+          ? '⚓ Mode Kapal Bersandar DIAKTIFKAN! Petugas wajib standby di dermaga.'
+          : '🌊 Mode Standby On-Call DIAKTIFKAN! Petugas bebas keluar koordinat dermaga.'
+      );
+      evaluateRealLocation(true);
+    } catch (err: any) {
+      toast.error('Gagal memperbarui status kapal: ' + (err.message || 'Error'));
+    } finally {
+      setIsUpdatingVesselStatus(false);
+    }
+  };
+
   // Start Camera Stream (Fullscreen View)
   const openLiveCamera = async (
     type: 'clock_in' | 'clock_out' | 'emergency_on_call' | 'emergency_on_call_out',
@@ -2123,6 +2198,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           }
           return;
         }
+
+        // ⚓ Validasi Khusus Petugas Pelabuhan Maccini Baji: Cek-Out Wajib Kembali ke Pelabuhan
+        const isMaccini = isMacciniBajiOfficer(user);
+        if (isMaccini) {
+          const distToPort = currentCoords ? geofenceService.calculateDistance(currentCoords, { latitude: -4.773545, longitude: 119.487525 }) : 9999;
+          const distToMatchPort = currentCoords ? geofenceService.calculateDistance(currentCoords, { latitude: -4.809100, longitude: 119.548800 }) : 9999;
+          const effectiveDist = Math.min(distToPort, distToMatchPort);
+          if (effectiveDist > 550 && !isOverrideActive) {
+            toast.error(`Presensi Pulang Ditolak! Anda wajib kembali ke area Pelabuhan Maccini Baji untuk Cek-Out (Jarak: ${Math.round(effectiveDist)}m).`);
+            return;
+          }
+        }
+
         if (todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached) {
           toast.error('Presensi Pulang Terkunci karena pelanggaran perimeter. Hubungi HRD.');
           return;
@@ -2430,8 +2518,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
     ctx.shadowBlur = Math.round(3 * scale);
     const isMobileWfa = isMobileOnlineOfficer(user);
+    const isMacciniWatermark = isMacciniBajiOfficer(user);
     const headerTitle = isSpotCheck
       ? `PT FAWWAZ RESKI PERWIRA • SELFIE REALTIME • SKOR: ${matchScore || 98}%`
+      : isMacciniWatermark && macciniVesselStatus.status === 'docking'
+      ? `PT FAWWAZ RESKI PERWIRA • STANDBY DERMAGA (KAPAL BERSANDAR) • SKOR: ${matchScore || 98}%`
+      : isMacciniWatermark && macciniVesselStatus.status === 'idle'
+      ? `PT FAWWAZ RESKI PERWIRA • STANDBY ON-CALL (NIHIL KAPAL) • SKOR: ${matchScore || 98}%`
       : isOnCall
       ? `PT FAWWAZ RESKI PERWIRA • ON-CALL WFA • SKOR: ${matchScore || 98}%`
       : isMobileWfa
@@ -3989,6 +4082,92 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             )}
 
+            {/* ─── BANNER / KONTROL KHUSUS: OPERASIONAL PELABUHAN MACCINI BAJI (DUAL BUTTONS) ─── */}
+            {isMacciniBajiOfficer(user) && (
+              <div className="bg-gradient-to-r from-indigo-900/15 via-blue-900/10 to-indigo-900/15 dark:from-indigo-950/40 dark:via-blue-950/40 dark:to-indigo-950/40 border-2 border-indigo-500/40 rounded-2xl p-3.5 shadow-sm space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                      <span className="text-sm">⚓</span>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-indigo-950 dark:text-indigo-100">
+                          OPERASIONAL PELABUHAN MACCINI BAJI
+                        </span>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                          macciniVesselStatus.status === 'docking' ? 'bg-amber-500 text-amber-950' : 'bg-emerald-600 text-white'
+                        }`}>
+                          {macciniVesselStatus.status === 'docking' ? 'KAPAL SANDAR' : 'STANDBY ON-CALL'}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-indigo-700 dark:text-indigo-300">
+                        {macciniVesselStatus.status === 'docking'
+                          ? `Kapal Bersandar${macciniVesselStatus.vesselName ? ` (${macciniVesselStatus.vesselName})` : ''} • Wajib Standby Dermaga`
+                          : 'Nihil Kapal di Dermaga • Bebas Keluar Koordinat'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white/70 dark:bg-slate-900/70 p-2.5 rounded-xl border border-indigo-200/60 dark:border-indigo-900/60 text-[10.5px] text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <MapPin className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span className="truncate">
+                      {macciniVesselStatus.status === 'docking'
+                        ? 'Radius 500m Terkunci Ketat di Pelabuhan'
+                        : 'Dispensasi Sah: Standby On-Call Bebas Radius'}
+                    </span>
+                  </div>
+                  <span className={`font-mono font-bold text-[10px] px-2 py-0.5 rounded-md border shrink-0 ${
+                    macciniVesselStatus.status === 'docking'
+                      ? 'text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border-amber-300/40'
+                      : 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300/40'
+                  }`}>
+                    {macciniVesselStatus.status === 'docking' ? '🔴 STANDBY DERMAGA' : '🟢 BEBAS KOORDINAT'}
+                  </span>
+                </div>
+
+                {/* 2 Tombol Operasional Pelabuhan */}
+                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                  <Button
+                    type="button"
+                    disabled={isUpdatingVesselStatus}
+                    onClick={() => handleToggleVesselStatus('docking')}
+                    className={`h-10 font-bold text-xs rounded-xl shadow-xs gap-1.5 transition-all ${
+                      macciniVesselStatus.status === 'docking'
+                        ? 'bg-amber-500 hover:bg-amber-600 text-amber-950 ring-2 ring-amber-300'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-amber-500 hover:text-white'
+                    }`}
+                  >
+                    <span>⚓</span>
+                    <span className="truncate">Lapor Standby Kapal</span>
+                  </Button>
+
+                  <Button
+                    type="button"
+                    disabled={isUpdatingVesselStatus}
+                    onClick={() => handleToggleVesselStatus('idle')}
+                    className={`h-10 font-bold text-xs rounded-xl shadow-xs gap-1.5 transition-all ${
+                      macciniVesselStatus.status === 'idle'
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-emerald-600 hover:text-white'
+                    }`}
+                  >
+                    <span>🌊</span>
+                    <span className="truncate">Standby On-Call</span>
+                  </Button>
+                </div>
+
+                <div className="text-[9px] text-muted-foreground flex items-center justify-between px-1 pt-0.5">
+                  <span>*Cek-In dan Cek-Out tetap wajib 100% di lokasi Pelabuhan Maccini Baji</span>
+                  {macciniVesselStatus.updatedAt && (
+                    <span>Update: {new Date(macciniVesselStatus.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WITA</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* ─── ROLE-ADAPTIVE SUPERVISORY & EXECUTIVE ACTION BANNERS ─── */}
             {(() => {
               const rClean = (user?.roleName || user?.role || '').toLowerCase();
@@ -4162,6 +4341,92 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             )}
 
+            {/* ─── BANNER / KONTROL KHUSUS: OPERASIONAL PELABUHAN MACCINI BAJI (DUAL BUTTONS) ─── */}
+            {isMacciniBajiOfficer(user) && (
+              <div className="bg-gradient-to-r from-indigo-900/15 via-blue-900/10 to-indigo-900/15 dark:from-indigo-950/40 dark:via-blue-950/40 dark:to-indigo-950/40 border-2 border-indigo-500/40 rounded-2xl p-3.5 shadow-sm space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                      <span className="text-sm">⚓</span>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-indigo-950 dark:text-indigo-100">
+                          OPERASIONAL PELABUHAN MACCINI BAJI
+                        </span>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                          macciniVesselStatus.status === 'docking' ? 'bg-amber-500 text-amber-950' : 'bg-emerald-600 text-white'
+                        }`}>
+                          {macciniVesselStatus.status === 'docking' ? 'KAPAL SANDAR' : 'STANDBY ON-CALL'}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-indigo-700 dark:text-indigo-300">
+                        {macciniVesselStatus.status === 'docking'
+                          ? `Kapal Bersandar${macciniVesselStatus.vesselName ? ` (${macciniVesselStatus.vesselName})` : ''} • Wajib Standby Dermaga`
+                          : 'Nihil Kapal di Dermaga • Bebas Keluar Koordinat'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white/70 dark:bg-slate-900/70 p-2.5 rounded-xl border border-indigo-200/60 dark:border-indigo-900/60 text-[10.5px] text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <MapPin className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span className="truncate">
+                      {macciniVesselStatus.status === 'docking'
+                        ? 'Radius 500m Terkunci Ketat di Pelabuhan'
+                        : 'Dispensasi Sah: Standby On-Call Bebas Radius'}
+                    </span>
+                  </div>
+                  <span className={`font-mono font-bold text-[10px] px-2 py-0.5 rounded-md border shrink-0 ${
+                    macciniVesselStatus.status === 'docking'
+                      ? 'text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border-amber-300/40'
+                      : 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300/40'
+                  }`}>
+                    {macciniVesselStatus.status === 'docking' ? '🔴 STANDBY DERMAGA' : '🟢 BEBAS KOORDINAT'}
+                  </span>
+                </div>
+
+                {/* 2 Tombol Operasional Pelabuhan */}
+                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                  <Button
+                    type="button"
+                    disabled={isUpdatingVesselStatus}
+                    onClick={() => handleToggleVesselStatus('docking')}
+                    className={`h-10 font-bold text-xs rounded-xl shadow-xs gap-1.5 transition-all ${
+                      macciniVesselStatus.status === 'docking'
+                        ? 'bg-amber-500 hover:bg-amber-600 text-amber-950 ring-2 ring-amber-300'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-amber-500 hover:text-white'
+                    }`}
+                  >
+                    <span>⚓</span>
+                    <span className="truncate">Lapor Standby Kapal</span>
+                  </Button>
+
+                  <Button
+                    type="button"
+                    disabled={isUpdatingVesselStatus}
+                    onClick={() => handleToggleVesselStatus('idle')}
+                    className={`h-10 font-bold text-xs rounded-xl shadow-xs gap-1.5 transition-all ${
+                      macciniVesselStatus.status === 'idle'
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-emerald-600 hover:text-white'
+                    }`}
+                  >
+                    <span>🌊</span>
+                    <span className="truncate">Standby On-Call</span>
+                  </Button>
+                </div>
+
+                <div className="text-[9px] text-muted-foreground flex items-center justify-between px-1 pt-0.5">
+                  <span>*Cek-In dan Cek-Out tetap wajib 100% di lokasi Pelabuhan Maccini Baji</span>
+                  {macciniVesselStatus.updatedAt && (
+                    <span>Update: {new Date(macciniVesselStatus.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WITA</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Banner Cuti Resmi untuk Karyawan Yang Sedang Cuti */}
             {hasActiveLeaveToday && (
               <div className="p-3 bg-gradient-to-r from-sky-500/15 via-blue-500/10 to-transparent border border-sky-500/30 rounded-2xl flex items-center gap-2.5 text-xs shadow-xs">
@@ -4175,6 +4440,92 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <p className="text-[10px] text-sky-900/80 dark:text-sky-300/80 mt-0.5">
                     Permohonan cuti Anda aktif hari ini. Kekosongan pos telah ditangani oleh petugas pengganti resmi.
                   </p>
+                </div>
+              </div>
+            )}
+
+            {/* ─── BANNER / KONTROL KHUSUS: OPERASIONAL PELABUHAN MACCINI BAJI (DUAL BUTTONS) ─── */}
+            {isMacciniBajiOfficer(user) && (
+              <div className="bg-gradient-to-r from-indigo-900/15 via-blue-900/10 to-indigo-900/15 dark:from-indigo-950/40 dark:via-blue-950/40 dark:to-indigo-950/40 border-2 border-indigo-500/40 rounded-2xl p-3.5 shadow-sm space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                      <span className="text-sm">⚓</span>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-indigo-950 dark:text-indigo-100">
+                          OPERASIONAL PELABUHAN MACCINI BAJI
+                        </span>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                          macciniVesselStatus.status === 'docking' ? 'bg-amber-500 text-amber-950' : 'bg-emerald-600 text-white'
+                        }`}>
+                          {macciniVesselStatus.status === 'docking' ? 'KAPAL SANDAR' : 'STANDBY ON-CALL'}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-indigo-700 dark:text-indigo-300">
+                        {macciniVesselStatus.status === 'docking'
+                          ? `Kapal Bersandar${macciniVesselStatus.vesselName ? ` (${macciniVesselStatus.vesselName})` : ''} • Wajib Standby Dermaga`
+                          : 'Nihil Kapal di Dermaga • Bebas Keluar Koordinat'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white/70 dark:bg-slate-900/70 p-2.5 rounded-xl border border-indigo-200/60 dark:border-indigo-900/60 text-[10.5px] text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <MapPin className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span className="truncate">
+                      {macciniVesselStatus.status === 'docking'
+                        ? 'Radius 500m Terkunci Ketat di Pelabuhan'
+                        : 'Dispensasi Sah: Standby On-Call Bebas Radius'}
+                    </span>
+                  </div>
+                  <span className={`font-mono font-bold text-[10px] px-2 py-0.5 rounded-md border shrink-0 ${
+                    macciniVesselStatus.status === 'docking'
+                      ? 'text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border-amber-300/40'
+                      : 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300/40'
+                  }`}>
+                    {macciniVesselStatus.status === 'docking' ? '🔴 STANDBY DERMAGA' : '🟢 BEBAS KOORDINAT'}
+                  </span>
+                </div>
+
+                {/* 2 Tombol Operasional Pelabuhan */}
+                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                  <Button
+                    type="button"
+                    disabled={isUpdatingVesselStatus}
+                    onClick={() => handleToggleVesselStatus('docking')}
+                    className={`h-10 font-bold text-xs rounded-xl shadow-xs gap-1.5 transition-all ${
+                      macciniVesselStatus.status === 'docking'
+                        ? 'bg-amber-500 hover:bg-amber-600 text-amber-950 ring-2 ring-amber-300'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-amber-500 hover:text-white'
+                    }`}
+                  >
+                    <span>⚓</span>
+                    <span className="truncate">Lapor Standby Kapal</span>
+                  </Button>
+
+                  <Button
+                    type="button"
+                    disabled={isUpdatingVesselStatus}
+                    onClick={() => handleToggleVesselStatus('idle')}
+                    className={`h-10 font-bold text-xs rounded-xl shadow-xs gap-1.5 transition-all ${
+                      macciniVesselStatus.status === 'idle'
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-emerald-600 hover:text-white'
+                    }`}
+                  >
+                    <span>🌊</span>
+                    <span className="truncate">Standby On-Call</span>
+                  </Button>
+                </div>
+
+                <div className="text-[9px] text-muted-foreground flex items-center justify-between px-1 pt-0.5">
+                  <span>*Cek-In dan Cek-Out tetap wajib 100% di lokasi Pelabuhan Maccini Baji</span>
+                  {macciniVesselStatus.updatedAt && (
+                    <span>Update: {new Date(macciniVesselStatus.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WITA</span>
+                  )}
                 </div>
               </div>
             )}
@@ -4564,6 +4915,92 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     <LogOut className="w-3.5 h-3.5 shrink-0" />
                     <span className="truncate">🛑 Selesai On-Call</span>
                   </Button>
+                </div>
+              </div>
+            )}
+
+            {/* ─── BANNER / KONTROL KHUSUS: OPERASIONAL PELABUHAN MACCINI BAJI (DUAL BUTTONS) ─── */}
+            {isMacciniBajiOfficer(user) && (
+              <div className="bg-gradient-to-r from-indigo-900/15 via-blue-900/10 to-indigo-900/15 dark:from-indigo-950/40 dark:via-blue-950/40 dark:to-indigo-950/40 border-2 border-indigo-500/40 rounded-2xl p-3.5 shadow-sm space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                      <span className="text-sm">⚓</span>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-indigo-950 dark:text-indigo-100">
+                          OPERASIONAL PELABUHAN MACCINI BAJI
+                        </span>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                          macciniVesselStatus.status === 'docking' ? 'bg-amber-500 text-amber-950' : 'bg-emerald-600 text-white'
+                        }`}>
+                          {macciniVesselStatus.status === 'docking' ? 'KAPAL SANDAR' : 'STANDBY ON-CALL'}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-indigo-700 dark:text-indigo-300">
+                        {macciniVesselStatus.status === 'docking'
+                          ? `Kapal Bersandar${macciniVesselStatus.vesselName ? ` (${macciniVesselStatus.vesselName})` : ''} • Wajib Standby Dermaga`
+                          : 'Nihil Kapal di Dermaga • Bebas Keluar Koordinat'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white/70 dark:bg-slate-900/70 p-2.5 rounded-xl border border-indigo-200/60 dark:border-indigo-900/60 text-[10.5px] text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <MapPin className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span className="truncate">
+                      {macciniVesselStatus.status === 'docking'
+                        ? 'Radius 500m Terkunci Ketat di Pelabuhan'
+                        : 'Dispensasi Sah: Standby On-Call Bebas Radius'}
+                    </span>
+                  </div>
+                  <span className={`font-mono font-bold text-[10px] px-2 py-0.5 rounded-md border shrink-0 ${
+                    macciniVesselStatus.status === 'docking'
+                      ? 'text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border-amber-300/40'
+                      : 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300/40'
+                  }`}>
+                    {macciniVesselStatus.status === 'docking' ? '🔴 STANDBY DERMAGA' : '🟢 BEBAS KOORDINAT'}
+                  </span>
+                </div>
+
+                {/* 2 Tombol Operasional Pelabuhan */}
+                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                  <Button
+                    type="button"
+                    disabled={isUpdatingVesselStatus}
+                    onClick={() => handleToggleVesselStatus('docking')}
+                    className={`h-10 font-bold text-xs rounded-xl shadow-xs gap-1.5 transition-all ${
+                      macciniVesselStatus.status === 'docking'
+                        ? 'bg-amber-500 hover:bg-amber-600 text-amber-950 ring-2 ring-amber-300'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-amber-500 hover:text-white'
+                    }`}
+                  >
+                    <span>⚓</span>
+                    <span className="truncate">Lapor Standby Kapal</span>
+                  </Button>
+
+                  <Button
+                    type="button"
+                    disabled={isUpdatingVesselStatus}
+                    onClick={() => handleToggleVesselStatus('idle')}
+                    className={`h-10 font-bold text-xs rounded-xl shadow-xs gap-1.5 transition-all ${
+                      macciniVesselStatus.status === 'idle'
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-emerald-600 hover:text-white'
+                    }`}
+                  >
+                    <span>🌊</span>
+                    <span className="truncate">Standby On-Call</span>
+                  </Button>
+                </div>
+
+                <div className="text-[9px] text-muted-foreground flex items-center justify-between px-1 pt-0.5">
+                  <span>*Cek-In dan Cek-Out tetap wajib 100% di lokasi Pelabuhan Maccini Baji</span>
+                  {macciniVesselStatus.updatedAt && (
+                    <span>Update: {new Date(macciniVesselStatus.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WITA</span>
+                  )}
                 </div>
               </div>
             )}
@@ -7210,6 +7647,70 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             >
               <Camera className="w-4 h-4" />
               <span>Buka Kamera & Foto Presensi Darurat</span>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── MODAL LAPOR KAPAL BERSANDAR (PELABUHAN MACCINI BAJI) ─── */}
+      <Dialog open={vesselModalOpen} onOpenChange={setVesselModalOpen}>
+        <DialogContent className="max-w-md p-4 sm:p-6 rounded-3xl bg-card border-border">
+          <DialogHeader className="space-y-1">
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
+                <span className="text-base">⚓</span>
+              </div>
+              <span>Lapor Kapal Bersandar di Dermaga</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Konfirmasi info kedatangan kapal di Pelabuhan Maccini Baji. Setelah dikonfirmasi, Anda dan tim wajib standby fisik di dermaga (radius 500m aktif).
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 text-xs">
+            <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
+              <div className="font-bold flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Peringatan Geofence Dermaga</span>
+              </div>
+              <p>
+                Status akan diperbarui ke <strong>KAPAL BERSANDAR</strong>. Sistem pemantauan radar akan memvalidasi keberadaan Anda di radius 500m Dermaga Pelabuhan Maccini Baji.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-foreground">
+                Nama Kapal / Tongkang / LCT <span className="text-muted-foreground font-normal">(Opsional)</span>:
+              </label>
+              <input
+                type="text"
+                placeholder="Contoh: TB. Bintang Samudra 01 / BG. Perkasa 28"
+                value={inputVesselName}
+                onChange={(e) => setInputVesselName(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-input bg-background text-foreground text-xs focus:ring-2 focus:ring-amber-500 outline-none"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="flex flex-row items-center justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setVesselModalOpen(false)}
+              className="rounded-xl text-xs"
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={isUpdatingVesselStatus}
+              onClick={() => executeVesselStatusChange('docking', inputVesselName)}
+              className="rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm"
+            >
+              <span>⚓</span>
+              <span>{isUpdatingVesselStatus ? 'Menyimpan...' : 'Konfirmasi Standby Kapal'}</span>
             </Button>
           </DialogFooter>
         </DialogContent>

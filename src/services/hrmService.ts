@@ -32,6 +32,7 @@ import {
   DisciplinaryStatus,
   EmployeeKpiRecord,
   isLeadershipSpecialFieldOfficer,
+  isMacciniBajiOfficer,
   isSimulationAccount,
   isOfficialFrEmployee,
   FiscalPeriodSettings,
@@ -1521,6 +1522,52 @@ export const hrmService = {
       console.warn('[HRM] Error fetching live divisions from backend:', e);
     }
     return hrmService.getDivisions();
+  },
+
+  getMacciniVesselStatus: async (): Promise<{
+    status: 'idle' | 'docking';
+    vesselName: string;
+    updatedAt: string | null;
+    updatedBy: string;
+    notes: string;
+  }> => {
+    try {
+      const res = await api.get<{ success: boolean; data: any }>('/maccini-vessel/status');
+      if (res && res.success && res.data) {
+        localStorage.setItem('hrm_maccini_vessel_status', JSON.stringify(res.data));
+        return {
+          status: res.data.status === 'docking' ? 'docking' : 'idle',
+          vesselName: res.data.vesselName || '',
+          updatedAt: res.data.updatedAt || null,
+          updatedBy: res.data.updatedBy || '',
+          notes: res.data.notes || '',
+        };
+      }
+    } catch (e) {
+      console.warn('[HRM] Error fetching Maccini vessel status:', e);
+    }
+    const local = safeGetJson<any>('hrm_maccini_vessel_status', { status: 'idle', vesselName: '', updatedAt: null, updatedBy: '', notes: '' });
+    return local;
+  },
+
+  updateMacciniVesselStatus: async (payload: {
+    status: 'idle' | 'docking';
+    vesselName?: string;
+    updatedBy?: string;
+    notes?: string;
+    photoData?: string;
+  }): Promise<{ success: boolean; data: any; message?: string }> => {
+    try {
+      localStorage.setItem('hrm_maccini_vessel_status', JSON.stringify(payload));
+      window.dispatchEvent(new Event('hrm_data_updated'));
+      const res = await api.post<{ success: boolean; data: any; message?: string }>('/maccini-vessel/status', payload);
+      if (res && res.success) {
+        return res;
+      }
+    } catch (e: any) {
+      console.warn('[HRM] Error updating Maccini vessel status:', e);
+    }
+    return { success: true, data: payload, message: payload.status === 'docking' ? 'Status Kapal Bersandar diaktifkan' : 'Status Standby On-Call diaktifkan' };
   },
 
   getSimulationStatus: async (): Promise<{ division: Division | null; countToday: number; isActive: boolean }> => {
@@ -6091,6 +6138,29 @@ export const hrmService = {
     const today = getTodayDateStr();
     const user = hrmService.getUsers().find((u) => u.id === data.userId);
     const div = hrmService.getDivisions().find((d) => d.id === data.divisionId);
+
+    // ⚡ Dispensasi Sah: Petugas Pelabuhan Maccini Baji saat Nihil Kapal Sandar (Standby On-Call)
+    if (isMacciniBajiOfficer(user)) {
+      const vStatus = safeGetJson<any>('hrm_maccini_vessel_status', { status: 'idle' });
+      if (vStatus.status !== 'docking') {
+        return {
+          id: `exempt-${Date.now()}`,
+          userId: data.userId,
+          userName: user?.fullName || 'Karyawan',
+          userNip: user?.nip || '',
+          attendanceId: data.attendanceId,
+          divisionId: data.divisionId,
+          divisionName: div?.name || user?.divisionName || 'Pelabuhan Maccini Baji',
+          violationDate: today,
+          detectedAt: new Date().toISOString(),
+          distanceMeters: data.distanceMeters,
+          durationOutsideMinutes: data.durationOutsideMinutes || 0,
+          status: 'resolved',
+          notes: 'Dispensasi Sah: Standby On-Call Pelabuhan Maccini Baji (Nihil Kapal Bersandar)',
+          createdAt: new Date().toISOString(),
+        };
+      }
+    }
 
     const newViolation: PerimeterViolation = {
       id: `viol-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
