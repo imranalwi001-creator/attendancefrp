@@ -2830,6 +2830,10 @@ export const hrmService = {
 
   getUserTodayAttendance: (userId: string): AttendanceRecord | undefined => {
     const today = getTodayDateStr();
+    const dYest = new Date();
+    dYest.setDate(dYest.getDate() - 1);
+    const yesterday = dYest.toISOString().split('T')[0];
+
     // 1. Cek dedicated persistent key first untuk kepastian tanpa race condition
     let fromStorage: AttendanceRecord | undefined = undefined;
     try {
@@ -2837,29 +2841,53 @@ export const hrmService = {
       if (cached) {
         const parsed = JSON.parse(cached);
         const parsedDate = normalizeDateString(parsed?.attendanceDate || parsed?.date || (parsed as any)?.attendance_date);
-        if (parsed && (parsed.clockIn || parsed.clock_in) && (!parsedDate || parsedDate === today)) {
+        if (parsed && (parsed.clockIn || parsed.clock_in) && (!parsedDate || parsedDate === today || parsedDate === yesterday)) {
           fromStorage = normalizeAttendanceRecord(parsed);
         } else {
           localStorage.removeItem(`hrm_confirmed_today_att_${userId}_${today}`);
         }
       }
+      // Jika di key today belum ada, cek key yesterday untuk sesi shift malam yang belum clock-out
+      if (!fromStorage) {
+        const cachedYest = localStorage.getItem(`hrm_confirmed_today_att_${userId}_${yesterday}`);
+        if (cachedYest) {
+          const parsedYest = JSON.parse(cachedYest);
+          if (parsedYest && (parsedYest.clockIn || parsedYest.clock_in) && !parsedYest.clockOut && !parsedYest.clock_out) {
+            fromStorage = normalizeAttendanceRecord(parsedYest);
+          }
+        }
+      }
     } catch (e) {}
 
-    const list = hrmService.getAttendances(today);
     const users = hrmService.getUsers();
     const u = users.find((x) => x.id === userId || x.email === userId || x.nip === userId);
     const validTargets = [userId, u?.id, u?.email, u?.nip].filter(Boolean);
-    const found = list.find((a) => {
+
+    // Cari di daftar presensi hari ini
+    const listToday = hrmService.getAttendances(today);
+    let found = listToday.find((a) => {
       const aUser = a.userId || (a as any).user_id;
       const aDate = normalizeDateString(a.attendanceDate || a.date || (a as any).attendance_date);
       return validTargets.includes(aUser) && (!aDate || aDate === today);
     });
 
+    // Cross-midnight Shift Guard: Jika hari ini belum ada, cari sesi aktif kemarin yang belum clock-out
+    if (!found) {
+      const listYesterday = hrmService.getAttendances(yesterday);
+      found = listYesterday.find((a) => {
+        const aUser = a.userId || (a as any).user_id;
+        const hasIn = Boolean(a.clockIn || (a as any).clock_in);
+        const hasOut = Boolean(a.clockOut || (a as any).clock_out);
+        return validTargets.includes(aUser) && hasIn && !hasOut;
+      });
+    }
+
     if (found && (found.clockIn || found.clock_in)) {
       const normFound = normalizeAttendanceRecord(found);
       const foundDate = normalizeDateString(normFound.attendanceDate || normFound.date);
-      if (foundDate && foundDate !== today) {
-        return undefined;
+      if (foundDate && foundDate !== today && (normFound.clockOut || normFound.clock_out)) {
+        // Jika sudah selesai dan bukan hari ini, biarkan storage lokal yang menangani
+        if (!fromStorage) return undefined;
       }
       // Monotonic guard: jika di storage lokal sudah ada clockOut, pertahankan!
       if (fromStorage?.clockOut && !normFound.clockOut) {
@@ -2879,7 +2907,8 @@ export const hrmService = {
 
     if (fromStorage) {
       const storageDate = normalizeDateString(fromStorage.attendanceDate || fromStorage.date);
-      if (storageDate && storageDate !== today) {
+      // Izinkan jika tanggal storage adalah today ATAU yesterday yang masih aktif belum clock-out
+      if (storageDate && storageDate !== today && Boolean(fromStorage.clockOut || fromStorage.clock_out)) {
         localStorage.removeItem(`hrm_confirmed_today_att_${userId}_${today}`);
         return undefined;
       }
@@ -3570,7 +3599,12 @@ export const hrmService = {
     const [inH, inM] = existing.clockIn.split(':').map(Number);
     const inTotalMins = inH * 60 + inM;
     const outTotalMins = now.getHours() * 60 + now.getMinutes();
-    const durationMins = Math.max(0, outTotalMins - inTotalMins);
+    let durationMins = outTotalMins - inTotalMins;
+    if (durationMins < 0) {
+      // Cross-midnight shift (misal masuk 22:30 WITA dan pulang 07:30 WITA)
+      durationMins = (outTotalMins + 1440) - inTotalMins;
+    }
+    durationMins = Math.max(0, durationMins);
 
     const all = hrmService.getAttendances();
     const idx = all.findIndex((a) => a.id === existing.id);
@@ -3836,7 +3870,12 @@ export const hrmService = {
     const [inH, inM] = existing.clockIn.split(':').map(Number);
     const inTotalMins = inH * 60 + inM;
     const outTotalMins = now.getHours() * 60 + now.getMinutes();
-    const durationMins = Math.max(0, outTotalMins - inTotalMins);
+    let durationMins = outTotalMins - inTotalMins;
+    if (durationMins < 0) {
+      // Cross-midnight shift (misal masuk 22:30 WITA dan pulang 07:30 WITA)
+      durationMins = (outTotalMins + 1440) - inTotalMins;
+    }
+    durationMins = Math.max(0, durationMins);
 
     const all = hrmService.getAttendances();
     const idx = all.findIndex((a) => a.id === existing.id);

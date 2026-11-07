@@ -5429,7 +5429,10 @@ app.post('/api/attendances/clock-out', async (req, res) => {
         [userId, date]
       );
       const attRes = await pool.query(
-        `SELECT clock_in, is_early_leave, early_leave_approved, is_remote_unlocked FROM hrm_attendances WHERE user_id = $1 AND attendance_date = $2 LIMIT 1`,
+        `SELECT clock_in, is_early_leave, early_leave_approved, is_remote_unlocked FROM hrm_attendances 
+         WHERE user_id = $1 AND (attendance_date = $2 OR attendance_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '1 day')
+           AND clock_out IS NULL
+         ORDER BY created_at DESC LIMIT 1`,
         [userId, date]
       );
 
@@ -6380,9 +6383,30 @@ app.get('/api/attendances/today', async (req, res) => {
       LEFT JOIN hrm_profiles p ON a.user_id = p.id
       LEFT JOIN hrm_divisions d ON p.division_id = d.id
       WHERE (a.user_id::text = $1 OR a.user_id::text = $3 OR LOWER(p.nip) = LOWER($3) OR LOWER(p.email) = LOWER($3)) 
-        AND a.attendance_date = COALESCE(NULLIF($2, '')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
+        AND (
+          -- 1. Sesi presensi pada tanggal target (hari ini)
+          a.attendance_date = COALESCE(NULLIF($2, '')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
+          -- 2. ATAU sesi shift malam lintas hari (cross-midnight shift / Shift III) dari kemarin yang masih terbuka (belum clock-out)
+          OR (
+            a.attendance_date = (COALESCE(NULLIF($2, '')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date) - INTERVAL '1 day')
+            AND a.clock_out IS NULL
+          )
+          -- 3. ATAU sesi shift malam kemarin yang baru saja selesai clock-out hari ini (pagi hari s/d 14:00 WITA) sebelum ada sesi baru
+          OR (
+            a.attendance_date = (COALESCE(NULLIF($2, '')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date) - INTERVAL '1 day')
+            AND a.clock_out IS NOT NULL
+            AND (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::time <= '14:00:00'::time
+            AND NOT EXISTS (
+              SELECT 1 FROM hrm_attendances a2 
+              WHERE a2.user_id = a.user_id 
+                AND a2.attendance_date = COALESCE(NULLIF($2, '')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
+            )
+          )
+        )
       ORDER BY 
+        -- Prioritaskan sesi yang masih aktif bertugas (clock_out IS NULL)
         CASE WHEN a.clock_out IS NULL THEN 0 ELSE 1 END,
+        a.attendance_date DESC,
         a.clock_in DESC NULLS LAST,
         a.created_at DESC
       LIMIT 1;
@@ -11771,33 +11795,7 @@ app.get('/api/payroll/slip/:userId', async (req, res) => {
     const isTabunganPesangon = row.severance_scheme === 'tabungan' || (seqNo > 0 && seqNo <= 33);
     const rawPesangon = Number(row.pesangon_amount || 0);
     const pesangonVal = isTabunganPesangon ? 0 : rawPesangon;
-    const savedPesangonVal = isTabunganPesangon ? rawPesangon : 0;
-
-    const upahVal = Number(row.base_salary || 4045050);
-    const lemburVal = Number(row.total_overtime_pay || 0);
-    const grossVal = upahVal + lemburVal + pesangonVal;
-
-    // BPJS: If standard Rp 4.045.050, BPJS 3% = 121.351, 1% = 40.450, total = 161.802
-    // If standard Rp 4.181.940, BPJS 3% = 125.458, 1% = 41.819, total = 167.277
-    const bpjsTkVal = upahVal === 4045050 ? 121351 : Math.round(upahVal * 0.03);
-    const bpjsKesVal = upahVal === 4045050 ? 40450 : Math.round(upahVal * 0.01);
-    const alpaVal = Number(row.absence_deduction || 0);
-    const totDeductVal = (upahVal === 4045050 ? 161802 : (bpjsTkVal + bpjsKesVal)) + alpaVal;
-    const netVal = grossVal - totDeductVal;
-
-    res.json({
-      success: true,
-      slip: {
-        id: row.id,
-        period: row.period_label || `${activeMonth} 2026`,
-        printedDate: row.printed_date ? new Date(row.printed_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }),
-        status: (row.status || 'paid').toUpperCase(),
-        employee: {
-          id: row.user_id,
-          name: row.employee_name,
-          nip: row.employee_nip || '-',
-          sequenceNo: seqNo,
-          severanceScheme: isTabunganPesangon ? 'tabungan' : 'cash_with_salary',
+    const savedPesa
           savedSeveranceBalance: Number(row.saved_severance_balance || 0),
           placementLocation: row.placement_location || '-',
           division: row.division_name || 'Dept. of Distribution Management',
