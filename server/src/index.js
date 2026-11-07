@@ -10543,13 +10543,13 @@ app.put('/api/overtime/:id', async (req, res) => {
 
     const updateRes = await pool.query(`
       UPDATE hrm_overtime_records SET
-        date = $1,
-        start_time = $2,
-        end_time = $3,
-        scheduled_end_time = $3,
-        duration_hours = $4,
-        approved_hours = CASE WHEN $5 = 'approved' THEN $4 ELSE 0 END,
-        compensation_amount = $6,
+        date = $1::date,
+        start_time = $2::time,
+        end_time = $3::time,
+        scheduled_end_time = $3::text,
+        duration_hours = $4::numeric,
+        approved_hours = CASE WHEN $5 = 'approved' THEN $4::numeric ELSE 0 END,
+        compensation_amount = $6::numeric,
         task_description = $7,
         status = $5,
         approval_notes = COALESCE($8, approval_notes),

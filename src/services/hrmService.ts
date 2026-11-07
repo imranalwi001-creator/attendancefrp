@@ -5206,7 +5206,7 @@ export const hrmService = {
 
     // Sync to PostgreSQL Backend API
     try {
-      await api.put(`/overtime/${id}`, {
+      const apiRes = await api.put<any>(`/overtime/${id}`, {
         date: finalDate,
         startTime: finalStart,
         endTime: finalEnd,
@@ -5215,8 +5215,12 @@ export const hrmService = {
         status: finalStatus,
         approvalNotes: data.approvalNotes || current.approvalNotes,
       });
+      if (apiRes && (apiRes.success === false || (apiRes as any).error)) {
+        throw new Error(apiRes.error || 'Gagal menyimpan perubahan ke server database');
+      }
     } catch (err: any) {
-      console.warn('[HRM] Warning syncing overtime edit to backend:', err.message || err);
+      console.error('[HRM] Error syncing overtime edit to backend:', err);
+      throw new Error(err.message || 'Gagal memperbarui data lembur di database server');
     }
 
     const updated: OvertimeRecord = {
