@@ -25,6 +25,38 @@ export function extractTimesFromShiftName(name?: string): { startTime?: string; 
 }
 
 /**
+ * Helper untuk mendeteksi apakah suatu shift adalah hari libur (OFF / Bebas Tugas)
+ */
+export function isShiftOffDay(shift?: Shift | null): boolean {
+  if (!shift) return false;
+  return Boolean(
+    shift.isOff ||
+    shift.code === 'OFF' ||
+    (shift.startTime === '00:00' && shift.endTime === '00:00') ||
+    (shift.name && (shift.name.toLowerCase().includes('libur') || shift.name.toLowerCase().includes('off')))
+  );
+}
+
+/**
+ * Format label nama shift secara global (mencegah teks janggal seperti '00:00 - 00:00 WITA')
+ */
+export function formatShiftLabel(shift?: Shift | null): string {
+  if (!shift) return 'Memuat Jadwal...';
+  if (isShiftOffDay(shift)) return 'Libur / OFF (Bebas Tugas)';
+  if (shift.name && shift.name.includes('(')) return shift.name;
+  return `${shift.name || 'Reguler'} (${shift.startTime || '08:00'} - ${shift.endTime || '17:00'} WITA)`;
+}
+
+/**
+ * Format jam dinas shift secara global (mencegah teks janggal seperti '00:00 - 00:00 WITA')
+ */
+export function formatShiftHours(shift?: Shift | null): string {
+  if (!shift) return '-';
+  if (isShiftOffDay(shift)) return 'Libur / OFF (Bebas Tugas)';
+  return `${shift.startTime} - ${shift.endTime} WITA`;
+}
+
+/**
  * Smart Bulletproof Shift Resolver:
  * Menentukan shift aktif karyawan secara global dan mencegah fallback salah ke Day Shift (07:30 - 16:30)
  */
@@ -37,7 +69,7 @@ export function resolveEffectiveShift(
   // Sesuai Instruksi Mutlak Pimpinan: Jam Masuk Baku 08:00 WITA dengan Toleransi 15 Menit (Batas Akhir Toleransi: 08:15 WITA) dan Jam Pulang 16:00 WITA!
   const isSpecialLeadership = isLeadershipSpecialFieldOfficer(user);
   if (isSpecialLeadership) {
-    if (dailySchedule && (dailySchedule.isOff || dailySchedule.shiftCode === 'OFF')) {
+    if (dailySchedule && (dailySchedule.isOff || dailySchedule.shiftCode === 'OFF' || dailySchedule.shiftName?.toLowerCase().includes('libur') || dailySchedule.shiftName?.toLowerCase().includes('off'))) {
       return {
         id: 'shift-off',
         code: 'OFF',
@@ -47,6 +79,7 @@ export function resolveEffectiveShift(
         lateToleranceMinutes: 0,
         earliestClockInMinutes: 0,
         isCrossDay: false,
+        isOff: true,
         colorTag: '#64748b',
       };
     }
@@ -82,11 +115,11 @@ export function resolveEffectiveShift(
   }
 
   // 1. Jadwal Roster Harian: Jika jadwal hari ini adalah OFF (Libur / Hari Bebas Tugas)
-  if (dailySchedule && (dailySchedule.isOff || dailySchedule.shiftCode === 'OFF' || dailySchedule.shiftName?.toLowerCase().includes('libur'))) {
+  if (dailySchedule && (dailySchedule.isOff || dailySchedule.shiftCode === 'OFF' || dailySchedule.shiftName?.toLowerCase().includes('libur') || dailySchedule.shiftName?.toLowerCase().includes('off'))) {
     return {
       id: dailySchedule.shiftId || 'shift-off',
       code: 'OFF',
-      name: dailySchedule.shiftName || 'Libur / Off',
+      name: 'Libur / OFF (Bebas Tugas)',
       startTime: '00:00',
       endTime: '00:00',
       lateToleranceMinutes: 0,

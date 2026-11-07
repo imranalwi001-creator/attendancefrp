@@ -78,7 +78,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import defaultAvatar from '@/assets/logo.png';
-import { resolveEffectiveShift, checkShiftClockInWindow, checkShiftClockOutWindow, determineNextContinuousShift, NextContinuousShiftInfo, calculateAttendanceLateness } from '@/lib/hrmShiftResolver';
+import { resolveEffectiveShift, checkShiftClockInWindow, checkShiftClockOutWindow, determineNextContinuousShift, NextContinuousShiftInfo, calculateAttendanceLateness, isShiftOffDay, formatShiftLabel, formatShiftHours } from '@/lib/hrmShiftResolver';
 import { compressImageFile } from '@/lib/imageCompressor';
 import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
@@ -3398,8 +3398,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const isEmployeeOffToday = useMemo(() => {
     if (!user) return false;
     const sched = hrmService.getEmployeeTodaySchedule(user.id, todayDateStr);
-    return Boolean(sched?.isOff);
-  }, [user, todayDateStr]);
+    return Boolean(
+      sched?.isOff ||
+      sched?.shiftCode === 'OFF' ||
+      sched?.shiftName?.toLowerCase().includes('libur') ||
+      sched?.shiftName?.toLowerCase().includes('off') ||
+      isShiftOffDay(userShift)
+    );
+  }, [user, todayDateStr, userShift]);
 
   // 2. Siklus Kontinu Pergantian Shift:
   // Shift I (Pagi: 07:30 - 15:30) -> Berakhir Shift I -> Tombol check-in Shift II (15:30 - 22:30) otomatis aktif
@@ -3615,6 +3621,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     if (user?.isImpersonated) {
       toast.info(`Mode Pantau Aktif: Anda sedang mengamati akun ${user.fullName}. Presensi nyata dinonaktifkan untuk menjaga keamanan data & audit presensi karyawan.`, {
         duration: 4500,
+      });
+      return;
+    }
+    if ((isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday) {
+      toast.info('Hari ini adalah jadwal Libur / Off Duty Anda. Selamat beristirahat!', {
+        icon: '☕',
       });
       return;
     }
@@ -4142,6 +4154,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     ? 'Shift: Menghubungkan jadwal...'
                     : userShift?.id === 'unassigned' || !userShift?.startTime
                     ? 'Shift: Belum Memiliki Shift (Hubungi Admin / Korlap)'
+                    : (isShiftOffDay(userShift) || isEmployeeOffToday)
+                    ? 'Shift: Libur / OFF (Hari Bebas Tugas)'
                     : userShift?.name?.includes('(')
                     ? `Shift: ${userShift.name}`
                     : `Shift: ${userShift?.name || 'Reguler'} (${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA)`}
@@ -4447,6 +4461,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     }
                     triggerClockOutFlow();
                   } else if (!hasClockedIn) {
+                    if ((isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday) {
+                      toast.info('Hari ini adalah jadwal Libur / Off Duty Anda. Selamat beristirahat!', {
+                        icon: '☕',
+                      });
+                      return;
+                    }
                     if (!isClockInAllowed) {
                       toast.error(clockInDisabledReason || 'Presensi masuk belum memenuhi syarat lokasi/shift.');
                       return;
@@ -4456,17 +4476,27 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 }}
                 className="relative w-[210px] h-[210px] shrink-0 aspect-square rounded-full p-2 flex items-center justify-center cursor-pointer transition-transform hover:scale-[1.02] active:scale-95 group select-none"
                 style={{ width: '210px', height: '210px', minWidth: '210px', minHeight: '210px', maxWidth: '210px', maxHeight: '210px' }}
-                title="Ketuk untuk Ambil Foto Absen"
+                title={(isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday ? "Hari Ini Libur / Bebas Tugas" : "Ketuk untuk Ambil Foto Absen"}
               >
                 {/* Outer Ring Border */}
-                <div className="absolute inset-0 rounded-full border-2 border-emerald-500/40 group-hover:border-emerald-500/70 transition-colors pointer-events-none" />
+                <div className={`absolute inset-0 rounded-full border-2 transition-colors pointer-events-none ${
+                  (isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+                    ? 'border-indigo-400/30'
+                    : 'border-emerald-500/40 group-hover:border-emerald-500/70'
+                }`} />
 
                 {/* Curved Text Arc "AMBIL FOTO UNTUK ABSEN" */}
                 <svg className="absolute inset-0 w-[210px] h-[210px] pointer-events-none" viewBox="0 0 200 200">
                   <path id="circlePath" d="M 28,100 A 72,72 0 0,1 172,100" fill="none" />
                   <text className="text-[9.5px] font-bold tracking-[0.15em] fill-slate-700 dark:fill-slate-300 uppercase">
                     <textPath href="#circlePath" startOffset="50%" textAnchor="middle">
-                      AMBIL FOTO UNTUK ABSEN
+                      {(isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+                        ? 'HARI INI LIBUR / OFF'
+                        : hasClockedIn && !hasClockedOut
+                        ? 'KETUK UNTUK ABSEN PULANG'
+                        : hasClockedOut
+                        ? 'PRESENSI HARI INI SELESAI'
+                        : 'AMBIL FOTO UNTUK ABSEN'}
                     </textPath>
                   </text>
                 </svg>
@@ -4557,11 +4587,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <Badge className={
                   !userShift
                     ? "bg-slate-500/20 text-slate-300 border border-slate-500/40 text-[10px] font-bold py-0.5 px-2"
+                    : (isShiftOffDay(userShift) || isEmployeeOffToday)
+                    ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-[10px] font-bold py-0.5 px-2"
                     : userShift?.id === 'unassigned' || !userShift?.startTime
                     ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold py-0.5 px-2"
                     : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold py-0.5 px-2"
                 }>
-                  {!userShift ? 'Memuat Shift...' : userShift?.id === 'unassigned' || !userShift?.startTime ? 'Belum Ada Shift' : (userShift?.name || 'Shift Operasional')}
+                  {!userShift ? 'Memuat Shift...' : (isShiftOffDay(userShift) || isEmployeeOffToday) ? 'Libur / Off' : userShift?.id === 'unassigned' || !userShift?.startTime ? 'Belum Ada Shift' : (userShift?.name || 'Shift Operasional')}
                 </Badge>
               </div>
 
@@ -4588,25 +4620,37 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                         <span>Lembur: {approvedOvertimeToday.startTime?.substring(0, 5)} - {approvedOvertimeToday.endTime?.substring(0, 5)} WITA</span>
                       </p>
                       <p className="font-bold text-white font-mono text-[10.5px]">
-                        Lanjut Shift: {userShift?.startTime} - {userShift?.endTime} WITA
+                        {(isShiftOffDay(userShift) || isEmployeeOffToday) ? 'Hari Libur (Penugasan Lembur)' : `Lanjut Shift: ${userShift?.startTime} - ${userShift?.endTime} WITA`}
+                      </p>
+                    </div>
+                  ) : (isShiftOffDay(userShift) || isEmployeeOffToday) ? (
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-emerald-400 font-mono text-[11px] flex items-center gap-1">
+                        <Coffee className="w-3.5 h-3.5" />
+                        <span>Libur / OFF (Bebas Tugas)</span>
+                      </p>
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        Tidak Ada Jam Dinas Hari Ini
                       </p>
                     </div>
                   ) : (
-                    <p className="font-bold text-white font-mono text-[11px]">
-                      {!userShift
-                        ? 'Memuat Jadwal...'
-                        : userShift?.id === 'unassigned' || !userShift?.startTime
-                        ? 'Belum Ditentukan'
-                        : `${userShift.startTime} - ${userShift.endTime} WITA`}
-                    </p>
+                    <>
+                      <p className="font-bold text-white font-mono text-[11px]">
+                        {!userShift
+                          ? 'Memuat Jadwal...'
+                          : userShift?.id === 'unassigned' || !userShift?.startTime
+                          ? 'Belum Ditentukan'
+                          : `${userShift.startTime} - ${userShift.endTime} WITA`}
+                      </p>
+                      <p className="text-[10px] text-amber-300 font-medium">
+                        {!userShift
+                          ? 'Sinkronisasi server...'
+                          : userShift?.id === 'unassigned' || !userShift?.startTime
+                          ? 'Hubungi HRD/Admin'
+                          : `Toleransi: ${userShift?.lateToleranceMinutes || 15} Menit`}
+                      </p>
+                    </>
                   )}
-                  <p className="text-[10px] text-amber-300 font-medium">
-                    {!userShift
-                      ? 'Sinkronisasi server...'
-                      : userShift?.id === 'unassigned' || !userShift?.startTime
-                      ? 'Hubungi HRD/Admin'
-                      : `Toleransi: ${userShift?.lateToleranceMinutes || 15} Menit`}
-                  </p>
                 </div>
 
                 <div className="space-y-0.5">
@@ -5987,14 +6031,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             type="button"
             onClick={handleCenterAttendanceClick}
             className={`relative w-14 h-14 rounded-full flex flex-col items-center justify-center text-white shadow-xl transition-all duration-300 active:scale-90 border-4 border-white dark:border-slate-950 ${
-              !hasClockedIn
+              (isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+                ? 'bg-gradient-to-tr from-slate-600 via-indigo-700 to-slate-800 shadow-indigo-500/30 ring-4 ring-indigo-500/20 hover:scale-105'
+                : !hasClockedIn
                 ? 'bg-gradient-to-tr from-emerald-600 via-teal-600 to-emerald-500 shadow-emerald-500/40 ring-4 ring-emerald-500/20 hover:scale-105'
                 : !hasClockedOut
                 ? 'bg-gradient-to-tr from-rose-600 via-orange-600 to-amber-600 shadow-rose-500/40 ring-4 ring-rose-500/20 hover:scale-105'
                 : 'bg-gradient-to-tr from-slate-700 via-slate-800 to-slate-900 shadow-slate-900/40 border-slate-700 hover:scale-105'
             }`}
             title={
-              !hasClockedIn
+              (isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+                ? 'Hari Ini Libur / Bebas Tugas'
+                : !hasClockedIn
                 ? 'Presensi Masuk Sekarang'
                 : !hasClockedOut
                 ? 'Presensi Pulang Sekarang'
@@ -6002,13 +6050,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             }
           >
             {/* Animasi Halo Glow jika belum absen masuk, atau sedang bertugas, atau siap masuk shift berikutnya */}
-            {(!isCurrentlyOnDuty && (!isCurrentSessionClosed || nextShiftInfo?.isNextShiftAvailable)) && (
+            {(!isEmployeeOffToday && !isCurrentlyOnDuty && (!isCurrentSessionClosed || nextShiftInfo?.isNextShiftAvailable)) && (
               <span className={`absolute inset-0 rounded-full animate-ping opacity-25 pointer-events-none ${
                 !isCurrentlyOnDuty ? 'bg-emerald-400' : 'bg-rose-400'
               }`} />
             )}
 
-            {!isCurrentlyOnDuty && !isCurrentSessionClosed ? (
+            {(isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday ? (
+              <Coffee className="w-6 h-6 drop-shadow-sm text-indigo-200" />
+            ) : !isCurrentlyOnDuty && !isCurrentSessionClosed ? (
               <Clock className="w-6 h-6 drop-shadow-sm text-white" />
             ) : isCurrentlyOnDuty ? (
               <LogOut className="w-6 h-6 drop-shadow-sm text-white" />
@@ -6020,13 +6070,17 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           </button>
           
           <span className={`text-[9.5px] font-black tracking-wider uppercase mt-1 drop-shadow-xs ${
-            !isCurrentlyOnDuty && (!isCurrentSessionClosed || nextShiftInfo?.isNextShiftAvailable)
+            (isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+              ? 'text-indigo-600 dark:text-indigo-400 font-extrabold'
+              : !isCurrentlyOnDuty && (!isCurrentSessionClosed || nextShiftInfo?.isNextShiftAvailable)
               ? 'text-emerald-700 dark:text-emerald-400'
               : isCurrentlyOnDuty
               ? 'text-rose-600 dark:text-rose-400'
               : 'text-slate-500 dark:text-slate-400'
           }`}>
-            {!isCurrentlyOnDuty && !isCurrentSessionClosed
+            {(isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+              ? 'LIBUR'
+              : !isCurrentlyOnDuty && !isCurrentSessionClosed
               ? 'MASUK'
               : isCurrentlyOnDuty
               ? 'PULANG'
