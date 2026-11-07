@@ -68,6 +68,7 @@ import { livenessEngine } from '@/services/livenessEngine';
 import { geofenceService, GeofenceEvaluation } from '@/services/geofenceService';
 import { fieldSentinelService } from '@/services/fieldSentinelService';
 import { emergencyAlertService } from '@/services/emergencyAlertAudioService';
+import { hrmHolidayService } from '@/services/hrmHolidayService';
 import { HrmFieldAuthorityMobileModal } from '@/components/hrm/HrmFieldAuthorityMobileModal';
 import { HrmPwaPersonalCalendarView } from '@/components/hrm/HrmPwaPersonalCalendarView';
 import { HrmPwaSplashScreen } from '@/components/pwa/HrmPwaSplashScreen';
@@ -213,6 +214,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return resolveEffectiveShift(user, shifts, dailySched);
   });
   const [attendancesHistory, setAttendancesHistory] = useState<AttendanceRecord[]>([]);
+  const [userSchedules, setUserSchedules] = useState<EmployeeSchedule[]>(() => {
+    if (!user) return [];
+    return hrmService.getEmployeeSchedules({ userId: user.id });
+  });
 
   // Instant Shift Sync whenever user profile changes in memory
   useEffect(() => {
@@ -1392,6 +1397,27 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const myLeaves = hrmService.getUserLeaves(user.id);
       setUserLeaves(myLeaves);
 
+      // 2B-2. Roster Jadwal Kerja & Libur Saya (Sinkron Realtime PostgreSQL Server)
+      api.get<{ success: boolean; data?: any[] }>(`/employee-schedules?userId=${encodeURIComponent(user.id)}`)
+        .then((schedRes) => {
+          if (schedRes?.success && Array.isArray(schedRes.data) && schedRes.data.length > 0) {
+            setUserSchedules(schedRes.data);
+            try {
+              const existingScheds = hrmService.getEmployeeSchedules();
+              const otherScheds = existingScheds.filter((s) => s.userId !== user.id);
+              const merged = [...otherScheds, ...schedRes.data];
+              localStorage.setItem('hrm_employee_schedules', JSON.stringify(merged));
+            } catch (_) {}
+          }
+        })
+        .catch(() => {
+          const localScheds = hrmService.getEmployeeSchedules({ userId: user.id });
+          if (localScheds.length > 0) setUserSchedules(localScheds);
+        });
+
+      // Warm-up cache hari libur nasional
+      hrmHolidayService.fetchHolidays().catch(() => null);
+
       // 2C. Data Permohonan Lembur Saya (Sinkron Realtime PostgreSQL Server)
       api.get<{ success: boolean; data?: any[] }>(`/overtime?userId=${encodeURIComponent(user.id)}`)
         .then((otRes) => {
@@ -1742,7 +1768,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     loadRealData();
     evaluateRealLocation();
 
-    const handleUpdate = () => loadRealData();
+    const handleUpdate = () => {
+      loadRealData();
+      if (user) {
+        setUserSchedules(hrmService.getEmployeeSchedules({ userId: user.id }));
+      }
+    };
     window.addEventListener('hrm_attendance_updated', handleUpdate);
     window.addEventListener('hrm_settings_updated', handleUpdate);
     window.addEventListener('hrm_users_updated', handleUpdate);
@@ -2225,7 +2256,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         ? 'Cukup (B)'
         : 'Perlu Evaluasi (C)';
 
-    // Weekly 7 Days Streak (Senin - Minggu) SINKRON DENGAN DATABASE
+    // Weekly 7 Days Streak (Senin - Minggu) SINKRON DENGAN DATABASE & ROSTER
     const now = new Date();
     const currentDayOfWeek = (now.getDay() + 6) % 7; // 0 = Senin, ..., 6 = Minggu
     const monday = new Date(now);
@@ -2238,39 +2269,134 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const dateStr = d.toLocaleDateString('en-CA');
       const dayNum = d.getDate();
 
-      if (idx > currentDayOfWeek) {
-        return { day, status: 'upcoming', date: dateStr, label: `${dayNum}` };
-      }
+      // Cari jadwal spesifik pada tanggal ini (dari userSchedules, fallback ke localStorage / hrmService)
+      const daySched = userSchedules.find((s) => (s.scheduleDate || '').split('T')[0] === dateStr) ||
+        hrmService.getEmployeeTodaySchedule(user?.id || '', dateStr);
 
-      if (idx === currentDayOfWeek) {
-        if (todayAttendance?.clockIn) {
-          const isLate = todayAttendance.status === 'terlambat' || ((todayAttendance.lateMinutes || 0) > 0);
-          return { day, status: isLate ? 'late' : 'present', date: dateStr, label: isLate ? '!' : '✓' };
-        }
-        return { day, status: 'current', date: dateStr, label: `${dayNum}` };
-      }
-
-      // Past days: cari record riil di database attendancesHistory
-      const pastRecord = attendancesHistory.find(
-        (a) => (a.date === dateStr || a.attendanceDate === dateStr)
+      const sCode = (daySched?.shiftCode || '').toUpperCase();
+      const sName = (daySched?.shiftName || '').toLowerCase();
+      const isRosterOff = Boolean(
+        daySched && (
+          daySched.isOff ||
+          sCode === 'OFF' ||
+          sName.includes('libur') ||
+          sName.includes('off')
+        )
       );
 
-      if (pastRecord && pastRecord.clockIn) {
-        const isLate = pastRecord.status === 'terlambat' || ((pastRecord.lateMinutes || 0) > 0);
-        return { day, status: isLate ? 'late' : 'present', date: dateStr, label: isLate ? '!' : '✓' };
+      const holidayInfo = hrmHolidayService.isNationalHoliday(dateStr);
+      const isNationalHoliday = holidayInfo.isHoliday;
+      const isSunday = idx === 6;
+
+      // Hari Libur Resmi: Roster OFF, atau jika tidak ada jadwal khusus -> Hari Minggu / Libur Nasional
+      const isDayOff = isRosterOff || (!daySched && (isSunday || isNationalHoliday));
+      const offHolidayTitle = daySched?.shiftName || (isNationalHoliday ? (holidayInfo.holiday?.name || 'Libur Nasional') : isSunday ? 'Libur Hari Minggu' : 'Libur / OFF');
+
+      // 1. Cek riwayat kehadiran riil (Past or Today)
+      let attRecord: AttendanceRecord | undefined;
+      if (idx === currentDayOfWeek) {
+        attRecord = todayAttendance && (todayAttendance.clockIn || (todayAttendance as any).clock_in) ? todayAttendance : undefined;
+      }
+      if (!attRecord) {
+        attRecord = attendancesHistory.find(
+          (a) => (a.date === dateStr || a.attendanceDate === dateStr) && (a.clockIn || (a as any).clock_in)
+        );
       }
 
-      // Cek apakah ada permohonan cuti/izin yang disetujui pada tanggal tersebut
+      // Jika ada clock-in riil -> Tampilkan Tepat Waktu (✓) atau Terlambat (!)
+      if (attRecord && (attRecord.clockIn || (attRecord as any).clock_in)) {
+        const isLate = attRecord.status === 'terlambat' || ((attRecord.lateMinutes || 0) > 0);
+        return {
+          day,
+          status: isLate ? 'late' : 'present',
+          date: dateStr,
+          label: isLate ? '!' : '✓',
+          isOff: isDayOff,
+          shiftName: daySched?.shiftName || (isDayOff ? 'Hadir di Hari Libur' : 'Shift Kerja'),
+        };
+      }
+
+      // 2. Cek apakah ada permohonan cuti / izin yang disetujui
       const isApprovedLeave = userLeaves.some(
         (l) => l.status === 'approved' && dateStr >= l.startDate && dateStr <= l.endDate
       );
       if (isApprovedLeave) {
-        return { day, status: 'leave', date: dateStr, label: 'I' };
+        return {
+          day,
+          status: 'leave',
+          date: dateStr,
+          label: 'I',
+          isOff: false,
+          shiftName: 'Izin / Cuti Disetujui',
+        };
       }
 
-      // Past day tanpa kehadiran
-      const isSunday = idx === 6;
-      return { day, status: isSunday ? 'off' : 'absent', date: dateStr, label: isSunday ? 'OFF' : '✕' };
+      // 3. Jika hari ini (Today)
+      if (idx === currentDayOfWeek) {
+        if (isDayOff) {
+          return {
+            day,
+            status: 'off',
+            date: dateStr,
+            label: 'OFF',
+            isOff: true,
+            shiftName: offHolidayTitle,
+          };
+        }
+        return {
+          day,
+          status: 'current',
+          date: dateStr,
+          label: `${dayNum}`,
+          isOff: false,
+          shiftName: daySched?.shiftName || 'Hari Ini (Belum Presensi)',
+        };
+      }
+
+      // 4. Jika hari mendatang (Upcoming / Future Days)
+      if (idx > currentDayOfWeek) {
+        if (isDayOff) {
+          return {
+            day,
+            status: 'upcoming_off',
+            date: dateStr,
+            label: `${dayNum}`,
+            isOff: true,
+            shiftName: offHolidayTitle,
+          };
+        }
+        return {
+          day,
+          status: 'upcoming',
+          date: dateStr,
+          label: `${dayNum}`,
+          isOff: false,
+          shiftName: daySched?.shiftName || 'Jadwal Kerja Mendatang',
+        };
+      }
+
+      // 5. Hari kemarin / lampau (Past Days)
+      // Jika jadwalnya libur / off, maka BUKAN Mangkir! Statusnya 'off'!
+      if (isDayOff) {
+        return {
+          day,
+          status: 'off',
+          date: dateStr,
+          label: 'OFF',
+          isOff: true,
+          shiftName: offHolidayTitle,
+        };
+      }
+
+      // Past day tanpa kehadiran & tanpa izin di hari kerja resmi -> Mangkir / Alpa (✕)
+      return {
+        day,
+        status: 'absent',
+        date: dateStr,
+        label: '✕',
+        isOff: false,
+        shiftName: 'Mangkir / Alpa',
+      };
     });
 
     return {
@@ -2289,7 +2415,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       disciplineScore,
       disciplineGrade,
     };
-  }, [attendancesHistory, user, todayAttendance, userLeaves, userOvertimeList, currentMonthStr]);
+  }, [attendancesHistory, user, todayAttendance, userLeaves, userOvertimeList, userSchedules, currentMonthStr]);
 
   // ─── PENGENDALIAN OPERASIONAL PELABUHAN MACCINI BAJI (DUAL BUTTONS) ───
   const handleToggleVesselStatus = (target: 'docking' | 'idle') => {
@@ -5383,35 +5509,85 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
                 <div className="grid grid-cols-7 gap-1 text-center">
                   {analyticsData.weeklyStreak.map((item, idx) => (
-                    <div key={idx} className="flex flex-col items-center gap-1">
-                      <span className="text-[9px] font-medium text-slate-400">{item.day}</span>
+                    <div
+                      key={idx}
+                      className="flex flex-col items-center gap-1 group relative cursor-pointer"
+                      title={`${item.day} (${item.date}): ${item.shiftName || item.status}`}
+                    >
+                      <span
+                        className={`text-[9.5px] font-semibold ${
+                          item.status === 'current'
+                            ? 'text-emerald-600 dark:text-emerald-400 font-bold'
+                            : item.status === 'off' || item.status === 'upcoming_off'
+                            ? 'text-indigo-600 dark:text-indigo-400 font-medium'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        {item.day}
+                      </span>
                       <div
-                        className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-all ${
                           item.status === 'present'
                             ? 'bg-emerald-500 text-white shadow-xs'
                             : item.status === 'late'
-                            ? 'bg-amber-500 text-white'
+                            ? 'bg-amber-500 text-white shadow-xs'
                             : item.status === 'current'
-                            ? 'border-2 border-emerald-500 text-emerald-600 animate-pulse'
+                            ? 'border-2 border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 animate-pulse ring-2 ring-emerald-500/20'
                             : item.status === 'leave'
-                            ? 'bg-blue-500 text-white'
+                            ? 'bg-blue-500 text-white shadow-xs'
+                            : item.status === 'off'
+                            ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/70 shadow-2xs'
+                            : item.status === 'upcoming_off'
+                            ? 'bg-indigo-50/40 dark:bg-indigo-950/20 text-indigo-400 border border-dashed border-indigo-300/70 dark:border-indigo-700/50'
                             : item.status === 'absent'
                             ? 'bg-rose-500/20 text-rose-500 border border-rose-500/40'
                             : 'bg-slate-200 dark:bg-slate-800 text-slate-400'
                         }`}
                       >
-                        {item.status === 'present'
-                          ? '✓'
-                          : item.status === 'late'
-                          ? '!'
-                          : item.status === 'leave'
-                          ? 'I'
-                          : item.status === 'absent'
-                          ? '✕'
-                          : item.label || (idx + 1)}
+                        {item.status === 'present' ? (
+                          '✓'
+                        ) : item.status === 'late' ? (
+                          '!'
+                        ) : item.status === 'leave' ? (
+                          'I'
+                        ) : item.status === 'absent' ? (
+                          '✕'
+                        ) : item.status === 'off' ? (
+                          <Coffee className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
+                        ) : item.status === 'upcoming_off' ? (
+                          <Coffee className="w-2.5 h-2.5 text-indigo-400 dark:text-indigo-500 opacity-70" />
+                        ) : (
+                          item.label || (idx + 1)
+                        )}
                       </div>
                     </div>
                   ))}
+                </div>
+
+                {/* Micro Legend Status Kehadiran Mingguan */}
+                <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 pt-2 mt-1 border-t border-slate-200/60 dark:border-slate-800/60 text-[9px] text-slate-500 dark:text-slate-400">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-3.5 h-3.5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[8px] font-bold leading-none">✓</span>
+                    <span>Tepat Waktu</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-3.5 h-3.5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[8px] font-bold leading-none">!</span>
+                    <span>Terlambat</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-3.5 h-3.5 rounded-full bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                      <Coffee className="w-2 h-2" />
+                    </span>
+                    <span>Libur / OFF</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-3.5 h-3.5 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-500 flex items-center justify-center text-[8px] font-bold leading-none">✕</span>
+                    <span>Mangkir</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-3.5 h-3.5 rounded-full bg-blue-500 text-white flex items-center justify-center text-[8px] font-bold leading-none">I</span>
+                    <span>Izin / Cuti</span>
+                  </span>
                 </div>
               </div>
             </div>
