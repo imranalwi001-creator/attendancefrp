@@ -390,7 +390,24 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       .then((r) => r.json())
       .then((res) => {
         if (res.success && Array.isArray(res.data)) {
-          setOvertimes(res.data);
+          const mapped = res.data.map((o: any) => ({
+            ...o,
+            userId: o.userId || o.user_id,
+            userNip: o.userNip || o.user_nip,
+            userName: o.userName || o.user_name,
+            divisionName: o.divisionName || o.division_name,
+            date: String(o.date || o.overtimeDate || o.overtime_date || '').slice(0, 10),
+            startTime: o.startTime || o.start_time,
+            endTime: o.endTime || o.end_time,
+            durationHours: Number(o.durationHours || o.duration_hours || 0),
+            approvedHours: Number(o.approvedHours || o.approved_hours || o.durationHours || o.duration_hours || 0),
+            compensationAmount: Number(o.compensationAmount || o.compensation_amount || o.totalPay || o.total_pay || 0),
+            totalPay: Number(o.compensationAmount || o.compensation_amount || o.totalPay || o.total_pay || 0),
+            taskDescription: o.taskDescription || o.task_description || '',
+            status: o.status || 'pending',
+            supervisorName: o.supervisorName || o.supervisor_name || o.approvedByName || o.approved_by_name || o.approver_name || '',
+          }));
+          setOvertimes(mapped);
         }
       })
       .catch(() => {});
@@ -470,6 +487,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     };
     const handlePing = () => loadFieldAgents();
     window.addEventListener('hrm_data_updated', handleUpdated);
+    window.addEventListener('hrm_overtime_updated', handleUpdated);
     window.addEventListener('hrm_attendance_updated', handleUpdated);
     window.addEventListener('hrm_users_updated', handleUpdated);
     window.addEventListener('hrm_field_ping_received', handlePing);
@@ -916,19 +934,24 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       }
 
       // Hitung lembur live hari target & lembur bulan berjalan untuk karyawan
-      const dayOt = overtimes.find((o) =>
-        (o.userId === u.id || o.userNip === u.nip || (o as any).employeeNip === u.nip) &&
-        o.date === targetDayDate &&
-        (o.status === 'approved' || (o as any).status === 'completed')
-      );
-      const userMonthOts = overtimes.filter((o) => {
-        const d = o.date || (o as any).createdAt || '';
-        return (o.userId === u.id || o.userNip === u.nip || (o as any).employeeNip === u.nip) &&
-          d.startsWith(currentMonthStr) &&
-          (o.status === 'approved' || (o as any).status === 'completed');
+      const dayOt = overtimes.find((o) => {
+        const oUserId = o.userId || (o as any).user_id;
+        const oUserNip = o.userNip || (o as any).user_nip || (o as any).employeeNip;
+        const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || '').slice(0, 10);
+        const matchUser = oUserId === u.id || oUserNip === u.nip || (u.email && (o as any).email === u.email);
+        const isApproved = o.status === 'approved' || (o as any).status === 'completed';
+        return matchUser && oDate === targetDayDate && isApproved;
       });
-      const userMonthOtHours = userMonthOts.reduce((sum, o) => sum + Number(o.approvedHours || o.durationHours || 0), 0);
-      const userMonthOtPay = userMonthOts.reduce((sum, o) => sum + Number(o.compensationAmount || o.totalPay || 0), 0);
+      const userMonthOts = overtimes.filter((o) => {
+        const oUserId = o.userId || (o as any).user_id;
+        const oUserNip = o.userNip || (o as any).user_nip || (o as any).employeeNip;
+        const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || (o as any).createdAt || (o as any).created_at || '').slice(0, 10);
+        const matchUser = oUserId === u.id || oUserNip === u.nip || (u.email && (o as any).email === u.email);
+        const isApproved = o.status === 'approved' || (o as any).status === 'completed';
+        return matchUser && oDate.startsWith(currentMonthStr) && isApproved;
+      });
+      const userMonthOtHours = userMonthOts.reduce((sum, o) => sum + Number(o.approvedHours || (o as any).approved_hours || o.durationHours || (o as any).duration_hours || 0), 0);
+      const userMonthOtPay = userMonthOts.reduce((sum, o) => sum + Number(o.compensationAmount || (o as any).compensation_amount || o.totalPay || (o as any).total_pay || 0), 0);
 
       return {
         user: u,
@@ -999,14 +1022,16 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       const sched = hrmService.getEmployeeTodaySchedule(u.id, getTodayDateStr());
       const uShift = resolveEffectiveShift(u, allShifts, sched);
       const userPeriodOts = overtimes.filter((o) => {
-        const d = o.date || (o as any).createdAt || '';
-        const matchPeriod = periodScope === 'month' ? d.startsWith(selectedMonth) : d.startsWith(currentYearStr);
-        return (o.userId === u.id || o.userNip === u.nip || (o as any).employeeNip === u.nip) &&
-          matchPeriod &&
-          (o.status === 'approved' || (o as any).status === 'completed');
+        const oUserId = o.userId || (o as any).user_id;
+        const oUserNip = o.userNip || (o as any).user_nip || (o as any).employeeNip;
+        const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || (o as any).createdAt || (o as any).created_at || '').slice(0, 10);
+        const matchPeriod = periodScope === 'month' ? oDate.startsWith(selectedMonth) : oDate.startsWith(currentYearStr);
+        const matchUser = oUserId === u.id || oUserNip === u.nip || (u.email && (o as any).email === u.email);
+        const isApproved = o.status === 'approved' || (o as any).status === 'completed';
+        return matchUser && matchPeriod && isApproved;
       });
-      const periodOtHours = userPeriodOts.reduce((sum, o) => sum + Number(o.approvedHours || o.durationHours || 0), 0);
-      const periodOtPay = userPeriodOts.reduce((sum, o) => sum + Number(o.compensationAmount || o.totalPay || 0), 0);
+      const periodOtHours = userPeriodOts.reduce((sum, o) => sum + Number(o.approvedHours || (o as any).approved_hours || o.durationHours || (o as any).duration_hours || 0), 0);
+      const periodOtPay = userPeriodOts.reduce((sum, o) => sum + Number(o.compensationAmount || (o as any).compensation_amount || o.totalPay || (o as any).total_pay || 0), 0);
 
       return {
         user: u,
@@ -2723,6 +2748,18 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                   </Badge>
                                   <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 font-mono mt-0.5" title="Kompensasi lembur hari ini">
                                     Rp {todayOvertimePay?.toLocaleString('id-ID')}
+                                  </span>
+                                  {monthlyOvertimeHours > todayOvertimeHours && (
+                                    <span className="text-[9px] text-muted-foreground font-mono" title="Total akumulasi lembur bulan berjalan">
+                                      Bln: {monthlyOvertimeHours}J (Rp {monthlyOvertimePay?.toLocaleString('id-ID')})
+                                    </span>
+                                  )}
+                                </div>
+                              ) : monthlyOvertimeHours && monthlyOvertimeHours > 0 ? (
+                                <div className="inline-flex flex-col items-center">
+                                  <span className="text-xs text-muted-foreground/60 font-mono">0 Jam (-)</span>
+                                  <span className="text-[9.5px] font-bold text-amber-600 dark:text-amber-400 font-mono mt-0.5" title={`Akumulasi lembur bulan ini: ${monthlyOvertimeHours} jam (${monthlyOvertimeCount}x SPKL)`}>
+                                    Bln: {monthlyOvertimeHours}J (Rp {monthlyOvertimePay?.toLocaleString('id-ID')})
                                   </span>
                                 </div>
                               ) : (
