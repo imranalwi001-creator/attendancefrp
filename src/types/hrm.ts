@@ -380,39 +380,54 @@ export const isSpecialDutyOfficer = (userOrNipOrEmail: any): boolean => {
 
 export const isMacciniBajiOfficer = (userOrNipOrEmail: any): boolean => {
   if (!userOrNipOrEmail) return false;
+
+  // ⚡ GUARD UTAMA: 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) BUKAN Petugas Pelabuhan Maccini Baji!
+  // Mereka beroperasi murni menggunakan Bank Pos Lapangan Multi-Titik (hrm_field_assigned_posts).
+  if (isLeadershipSpecialFieldOfficer(userOrNipOrEmail)) return false;
+
+  // Petugas Resmi Pelabuhan Maccini Baji (Divisi MMB) HANYA 4 ORANG:
+  // 1. Irfan Dg Ronrong (NIP: FR07073, Email: fr07073@fawwazreski.co.id)
+  // 2. Muh Ikram (NIP: FR07074, Email: fr07074@fawwazreski.co.id)
+  // 3. Rahmatan (NIP: FR07075, Email: fr07075@fawwazreski.co.id)
+  // 4. Muh. Adam (NIP: FR07076, Email: fr07076@fawwazreski.co.id)
+  const OFFICIAL_MACCINI_NIPS = ['FR07073', 'FR07074', 'FR07075', 'FR07076'];
+  const OFFICIAL_MACCINI_EMAILS = [
+    'fr07073@fawwazreski.co.id',
+    'fr07074@fawwazreski.co.id',
+    'fr07075@fawwazreski.co.id',
+    'fr07076@fawwazreski.co.id',
+  ];
+  const OFFICIAL_MACCINI_NAMES = [
+    'irfan dg ronrong',
+    'muh ikram',
+    'rahmatan',
+    'muh. adam',
+    'muh adam',
+  ];
+
   if (typeof userOrNipOrEmail === 'string') {
     const s = userOrNipOrEmail.toUpperCase().replace(/[\s.]/g, '');
-    if (['FR07073', 'FR07074', 'FR07075', 'FR07076'].includes(s)) return true;
-    const lower = userOrNipOrEmail.toLowerCase();
-    if (['fr07073@fawwazreski.co.id', 'fr07074@fawwazreski.co.id', 'fr07075@fawwazreski.co.id', 'fr07076@fawwazreski.co.id'].includes(lower)) return true;
-    if (['irfan dg ronrong', 'muh ikram', 'rahmatan', 'muh. adam', 'muh adam'].some(n => lower.includes(n))) return true;
-    if (s.includes('MACCINI') || s.includes('MCBAJI')) return true;
+    if (OFFICIAL_MACCINI_NIPS.includes(s)) return true;
+    const lower = userOrNipOrEmail.toLowerCase().trim();
+    if (OFFICIAL_MACCINI_EMAILS.includes(lower)) return true;
+    if (OFFICIAL_MACCINI_NAMES.some(n => lower.includes(n))) return true;
     return false;
   }
+
   const u = userOrNipOrEmail;
-  const nip = (u.nip || u.userNip || '').toUpperCase().trim().replace(/[\s.]/g, '');
-  if (['FR07073', 'FR07074', 'FR07075', 'FR07076'].includes(nip)) return true;
+  const nip = (u.nip || u.userNip || u.employeeNip || u.employee_nip || u.user_nip || '').toUpperCase().trim().replace(/[\s.]/g, '');
+  if (OFFICIAL_MACCINI_NIPS.includes(nip)) return true;
 
   const email = (u.email || '').toLowerCase().trim();
-  if (['fr07073@fawwazreski.co.id', 'fr07074@fawwazreski.co.id', 'fr07075@fawwazreski.co.id', 'fr07076@fawwazreski.co.id'].includes(email)) return true;
+  if (OFFICIAL_MACCINI_EMAILS.includes(email)) return true;
 
   const fullName = (u.fullName || u.full_name || u.name || '').toLowerCase().trim();
-  if (['irfan dg ronrong', 'muh ikram', 'rahmatan', 'muh. adam', 'muh adam'].some(n => fullName.includes(n))) return true;
+  if (OFFICIAL_MACCINI_NAMES.some(n => fullName.includes(n))) return true;
 
+  // Verifikasi khusus Divisi MMB (hanya jika memang ditugaskan resmi dan BUKAN petugas khusus pimpinan)
   const divCode = (u.divisionCode || u.division_code || '').trim().toUpperCase();
   if (divCode === 'MMB') return true;
 
-  const divName = (u.divisionName || u.division_name || '').toLowerCase();
-  if (divName.includes('maccini') || divName.includes('biringkassi')) return true;
-
-  const locName = (u.assignedLocationName || u.assigned_location_name || u.divisionLocationName || u.locationName || '').toLowerCase();
-  if (locName.includes('maccini') || locName.includes('biringkassi')) return true;
-
-  if (Array.isArray(u.assignedPosts)) {
-    if (u.assignedPosts.some((p: any) => (p.postCode || p.post_code || p.name || p.postName || '').toLowerCase().includes('maccini'))) {
-      return true;
-    }
-  }
   return false;
 };
 
