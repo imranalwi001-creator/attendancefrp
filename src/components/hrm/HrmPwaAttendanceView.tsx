@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
-import { hrmService, getTodayDateStr, normalizeAttendanceRecord, normalizeDateString } from '@/services/hrmService';
+import { hrmService, getTodayDateStr, getYesterdayDateStr, normalizeAttendanceRecord, normalizeDateString } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
 import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, EmployeeSchedule, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isFieldOperationalWorker, isMacciniBajiOfficer } from '@/types/hrm';
 import {
@@ -164,9 +164,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord | undefined>(() => {
     if (!user) return undefined;
     const todayStr = getTodayDateStr();
-    const dY = new Date();
-    dY.setDate(dY.getDate() - 1);
-    const yesterdayStr = dY.toISOString().split('T')[0];
+    const yesterdayStr = getYesterdayDateStr();
     try {
       const cached = localStorage.getItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
       if (cached) {
@@ -1057,9 +1055,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     if (!user) return;
     try {
       const todayStr = getTodayDateStr();
-      const dY = new Date();
-      dY.setDate(dY.getDate() - 1);
-      const yesterdayStr = dY.toISOString().split('T')[0];
+      const yesterdayStr = getYesterdayDateStr();
 
       // ─── TAHAP 1: INSTANT LOCAL CONFIRMATION LOCK (0ms Latency) ───
       // Kunci tampilan presensi hari ini seketika (sub-millisecond) jika karyawan telah absen masuk
@@ -1077,11 +1073,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           const isYestActive = cachedDate === yesterdayStr && (!parsedConf.clockOut && !parsedConf.clock_out);
           if (parsedConf && (parsedConf.clockIn || parsedConf.clock_in) && (!cachedDate || cachedDate === todayStr || isYestActive)) {
             todayAtt = normalizeAttendanceRecord(parsedConf);
-            // MONOTONIC CLOCK-OUT GUARD: Hanya pertahankan jika state memori saat ini benar-benar tanggal hari ini / shift kemarin
+            // MONOTONIC CLOCK-OUT GUARD: Hanya pertahankan jika ada bukti foto clock-out lokal nyata
             const memDate = normalizeDateString(todayAttendance?.attendanceDate || todayAttendance?.date);
             if (todayAttendance?.clockOut && !todayAtt.clockOut && (!memDate || memDate === todayStr || memDate === yesterdayStr)) {
-              todayAtt.clockOut = todayAttendance.clockOut;
-              todayAtt.clock_out = todayAttendance.clock_out || todayAttendance.clockOut;
+              if (todayAttendance.clockOutPhoto || todayAttendance.photoOut) {
+                todayAtt.clockOut = todayAttendance.clockOut;
+                todayAtt.clock_out = todayAttendance.clock_out || todayAttendance.clockOut;
+              }
             }
             setTodayAttendance(todayAtt);
           } else if (cachedDate && cachedDate !== todayStr && cachedDate !== yesterdayStr) {
@@ -1328,11 +1326,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       // KONSISTENSI TOTAL: Kunci status presensi hari ini jika sudah absen masuk & absen pulang
       if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
-        // MONOTONIC CLOCK-OUT GUARD: Sekali karyawan clock-out pada hari ini / sesi aktif, kunci permanen!
+        // MONOTONIC CLOCK-OUT GUARD: Sekali karyawan clock-out pada hari ini / sesi aktif, kunci permanen jika ada foto!
         const memDate = normalizeDateString(todayAttendance?.attendanceDate || todayAttendance?.date);
         if (todayAttendance?.clockOut && !todayAtt.clockOut && (!memDate || memDate === todayStr || memDate === yesterdayStr)) {
-          todayAtt.clockOut = todayAttendance.clockOut;
-          todayAtt.clock_out = todayAttendance.clock_out || todayAttendance.clockOut;
+          if (todayAttendance.clockOutPhoto || todayAttendance.photoOut) {
+            todayAtt.clockOut = todayAttendance.clockOut;
+            todayAtt.clock_out = todayAttendance.clock_out || todayAttendance.clockOut;
+          }
         }
         const finalNormalized = normalizeAttendanceRecord(todayAtt);
         setTodayAttendance(finalNormalized);
@@ -1788,8 +1788,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         if (user) {
           const todayStr = getTodayDateStr();
           try {
+            const yesterdayStr = getYesterdayDateStr();
             const cached = localStorage.getItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`) ||
-              (user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`) : null);
+              (user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`) : null) ||
+              localStorage.getItem(`hrm_confirmed_today_att_${user.id}_${yesterdayStr}`) ||
+              (user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${user.nip}_${yesterdayStr}`) : null);
             if (cached) {
               const parsed = JSON.parse(cached);
               if (parsed && (parsed.clockIn || parsed.clock_in)) {
