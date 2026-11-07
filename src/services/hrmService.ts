@@ -5166,6 +5166,103 @@ export const hrmService = {
     return { success: true, record: newRecord };
   },
 
+  updateManualOvertimeRequest: async (
+    id: string,
+    data: {
+      date?: string;
+      startTime?: string;
+      endTime?: string;
+      durationHours?: number;
+      taskDescription?: string;
+      status?: OvertimeStatus;
+      approvalNotes?: string;
+      isWeekendHoliday?: boolean;
+    }
+  ): Promise<{ success: boolean; record: OvertimeRecord }> => {
+    hrmService.init();
+    const records = hrmService.getOvertimeRecords();
+    const index = records.findIndex((r) => r.id === id);
+    if (index === -1) throw new Error('Catatan lembur tidak ditemukan.');
+
+    const current = records[index];
+    const user = hrmService.getUsers().find((u) => u.id === current.userId);
+    const finalDate = data.date || current.date;
+    const finalStart = data.startTime || current.startTime;
+    const finalEnd = data.endTime || current.endTime;
+    const finalHours = data.durationHours !== undefined ? Number(data.durationHours) : Number(current.durationHours || 2.0);
+    const finalDesc = data.taskDescription !== undefined ? data.taskDescription.trim() : current.taskDescription;
+    const finalStatus = data.status || current.status;
+
+    const dateObj = new Date(finalDate);
+    const day = dateObj.getDay();
+    const isWeekend = data.isWeekendHoliday !== undefined
+      ? data.isWeekendHoliday
+      : ((day === 0 || day === 6) || hrmHolidayService.isWeekendOrHoliday(finalDate).isWeekendOrHoliday);
+
+    const calc = hrmService.calculateOvertime(finalStart, finalEnd, isWeekend);
+    const hourlyRate = user?.overtimeRateOverride || current.hourlyRate || calc.hourlyRate || 23381.79;
+    const rateMultiplier = calc.rateMultiplier;
+    const totalPay = Math.round(finalHours * hourlyRate * rateMultiplier);
+
+    // Sync to PostgreSQL Backend API
+    try {
+      await api.put(`/overtime/${id}`, {
+        date: finalDate,
+        startTime: finalStart,
+        endTime: finalEnd,
+        durationHours: finalHours,
+        taskDescription: finalDesc,
+        status: finalStatus,
+        approvalNotes: data.approvalNotes || current.approvalNotes,
+      });
+    } catch (err: any) {
+      console.warn('[HRM] Warning syncing overtime edit to backend:', err.message || err);
+    }
+
+    const updated: OvertimeRecord = {
+      ...current,
+      date: finalDate,
+      startTime: finalStart,
+      endTime: finalEnd,
+      durationHours: finalHours,
+      durationMinutes: Math.round(finalHours * 60),
+      requestedHours: finalHours,
+      approvedHours: finalStatus === 'approved' ? finalHours : 0,
+      hourlyRate,
+      rateMultiplier,
+      totalPay,
+      compensationAmount: totalPay,
+      taskDescription: finalDesc,
+      status: finalStatus,
+      isWeekendHoliday: isWeekend,
+      approvalNotes: data.approvalNotes || current.approvalNotes,
+      updatedAt: new Date().toISOString(),
+    };
+
+    records[index] = updated;
+    safeSetJson(STORAGE_KEYS.OVERTIME_RECORDS, records);
+    window.dispatchEvent(new Event('hrm_overtime_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+
+    return { success: true, record: updated };
+  },
+
+  deleteOvertimeRequest: async (id: string): Promise<{ success: boolean }> => {
+    hrmService.init();
+    const records = hrmService.getOvertimeRecords().filter((r) => r.id !== id);
+    safeSetJson(STORAGE_KEYS.OVERTIME_RECORDS, records);
+
+    try {
+      await api.delete(`/overtime/${id}`);
+    } catch (err: any) {
+      console.warn('[HRM] Warning deleting overtime from backend:', err.message || err);
+    }
+
+    window.dispatchEvent(new Event('hrm_overtime_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+    return { success: true };
+  },
+
   // Employee Overtime Request (dengan Paraf & Nama Kepala Regu)
   requestOvertime: (data: {
     userId: string;

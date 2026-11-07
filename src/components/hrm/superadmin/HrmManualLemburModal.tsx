@@ -49,8 +49,8 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
   // Form Fields
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [shiftPreset, setShiftPreset] = useState<'shift1' | 'shift2' | 'shift3' | 'dayshift' | 'darurat' | 'custom'>('shift1');
-  const [startTime, setStartTime] = useState<string>('16:30');
-  const [endTime, setEndTime] = useState<string>('00:30');
+  const [startTime, setStartTime] = useState<string>('07:30');
+  const [endTime, setEndTime] = useState<string>('15:30');
   const [durationHours, setDurationHours] = useState<number>(8.0);
   const [isWeekendHoliday, setIsWeekendHoliday] = useState<boolean>(false);
   const [holidayDetail, setHolidayDetail] = useState<{ isHoliday: boolean; holidayName?: string }>({ isHoliday: false });
@@ -79,23 +79,23 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
     }
   }, [open, preselectedUser]);
 
-  // Handle Preset Change
+  // Handle Preset Change Sesuai Jam Dinas Baku PT FRP
   const applyPreset = (preset: 'shift1' | 'shift2' | 'shift3' | 'dayshift' | 'darurat' | 'custom') => {
     setShiftPreset(preset);
     switch (preset) {
       case 'shift1':
-        setStartTime('16:30');
-        setEndTime('00:30');
+        setStartTime('07:30');
+        setEndTime('15:30');
         setDurationHours(8.0);
         break;
       case 'shift2':
-        setStartTime('00:30');
-        setEndTime('07:30');
+        setStartTime('15:30');
+        setEndTime('22:30');
         setDurationHours(7.0);
         break;
       case 'shift3':
-        setStartTime('07:30');
-        setEndTime('16:30');
+        setStartTime('22:30');
+        setEndTime('07:30');
         setDurationHours(9.0);
         break;
       case 'dayshift':
@@ -104,8 +104,8 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
         setDurationHours(8.0);
         break;
       case 'darurat':
-        setStartTime('17:00');
-        setEndTime('20:00');
+        setStartTime('16:30');
+        setEndTime('19:30');
         setDurationHours(3.0); // Strict limit max 3 jam
         break;
       case 'custom':

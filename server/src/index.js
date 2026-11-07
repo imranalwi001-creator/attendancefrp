@@ -10473,6 +10473,113 @@ app.put('/api/overtime/:id/status', async (req, res) => {
   }
 });
 
+// PUT /api/overtime/:id - Edit / Koreksi Detail SPKL Lembur (Superadmin / Admin)
+app.put('/api/overtime/:id', async (req, res) => {
+  const { id } = req.params;
+  const {
+    date,
+    startTime,
+    endTime,
+    durationHours,
+    taskDescription,
+    status: newStatus,
+    approvalNotes,
+  } = req.body;
+
+  try {
+    const oRes = await pool.query(`
+      SELECT o.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name, p.phone as user_phone
+      FROM hrm_overtime_records o
+      JOIN hrm_profiles p ON o.user_id = p.id
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      WHERE o.id = $1 LIMIT 1
+    `, [id]);
+    if (oRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Pengajuan lembur tidak ditemukan' });
+    }
+    const ot = oRes.rows[0];
+
+    const finalDate = date || ot.date;
+    const finalStart = startTime || ot.start_time;
+    const finalEnd = endTime || ot.end_time;
+    const finalDesc = taskDescription !== undefined ? taskDescription.trim() : ot.task_description;
+    const finalStatus = newStatus || ot.status || 'approved';
+    const finalHours = durationHours !== undefined ? Number(durationHours) : Number(ot.duration_hours);
+    const officialRate = Number(ot.rate_applied || 23381.79);
+
+    // Hitung ulang kompensasi sesuai Kepmenakertrans No. 102/2004 & PP 35/2021
+    const otDateObj = new Date(finalDate);
+    const dayOfWeek = otDateObj.getDay();
+    let isHolidayOrWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    if (!isHolidayOrWeekend) {
+      const holCheck = await pool.query(`SELECT id FROM hrm_national_holidays WHERE holiday_date = $1 LIMIT 1`, [finalDate]).catch(() => ({ rows: [] }));
+      if (holCheck.rows.length > 0) isHolidayOrWeekend = true;
+    }
+
+    let compensation = 0;
+    if (!isHolidayOrWeekend) {
+      if (finalHours <= 1) {
+        compensation = Math.round(finalHours * 1.5 * officialRate);
+      } else {
+        compensation = Math.round((1 * 1.5 * officialRate) + ((finalHours - 1) * 2.0 * officialRate));
+      }
+    } else {
+      if (finalHours <= 7) {
+        compensation = Math.round(finalHours * 2.0 * officialRate);
+      } else if (finalHours <= 8) {
+        compensation = Math.round((7 * 2.0 * officialRate) + ((finalHours - 7) * 3.0 * officialRate));
+      } else {
+        compensation = Math.round((7 * 2.0 * officialRate) + (1 * 3.0 * officialRate) + ((finalHours - 8) * 4.0 * officialRate));
+      }
+    }
+
+    // Verifikasi Budget Guardrail jika disetujui
+    if (finalStatus === 'approved') {
+      const budgetGuard = await verifyOvertimeBudgetGuardrail(pool, ot.user_id, finalDate, compensation, ot.id);
+      if (!budgetGuard.allowed) {
+        return res.status(403).json({ success: false, error: budgetGuard.reason });
+      }
+    }
+
+    const updateRes = await pool.query(`
+      UPDATE hrm_overtime_records SET
+        date = $1,
+        start_time = $2,
+        end_time = $3,
+        scheduled_end_time = $3,
+        duration_hours = $4,
+        approved_hours = CASE WHEN $5 = 'approved' THEN $4 ELSE 0 END,
+        compensation_amount = $6,
+        task_description = $7,
+        status = $5,
+        approval_notes = COALESCE($8, approval_notes),
+        updated_at = NOW()
+      WHERE id = $9
+      RETURNING *;
+    `, [finalDate, finalStart, finalEnd, finalHours, finalStatus, compensation, finalDesc, approvalNotes || null, id]);
+
+    res.json({ success: true, data: updateRes.rows[0], message: 'Data SPKL lembur berhasil diperbarui' });
+  } catch (err) {
+    console.error('Error updating overtime record:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/overtime/:id - Hapus / Batalkan SPKL Lembur (Superadmin / Admin)
+app.delete('/api/overtime/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const delRes = await pool.query('DELETE FROM hrm_overtime_records WHERE id = $1 RETURNING *', [id]);
+    if (delRes.rowCount === 0) {
+      return res.status(404).json({ success: false, error: 'Pengajuan lembur tidak ditemukan' });
+    }
+    res.json({ success: true, message: 'SPKL Lembur berhasil dihapus' });
+  } catch (err) {
+    console.error('Error deleting overtime record:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── ENDPOINTS REKAPAN KINERJA LAPANGAN (KORLAP, ADMIN, K3) ─────────────────
 app.get('/api/analytics/field-recap', async (req, res) => {
   const { period = 'current_month', divisionId, startDate, endDate } = req.query;
@@ -11795,7 +11902,34 @@ app.get('/api/payroll/slip/:userId', async (req, res) => {
     const isTabunganPesangon = row.severance_scheme === 'tabungan' || (seqNo > 0 && seqNo <= 33);
     const rawPesangon = Number(row.pesangon_amount || 0);
     const pesangonVal = isTabunganPesangon ? 0 : rawPesangon;
-    const savedPesa
+    const savedPesangonVal = isTabunganPesangon ? rawPesangon : 0;
+
+    const upahVal = Number(row.base_salary || 4045050);
+    const lemburVal = Number(row.total_overtime_pay || 0);
+    const grossVal = upahVal + lemburVal + pesangonVal;
+
+    let bpjsTkVal = Number(row.bpjs_ketenagakerjaan_deduction);
+    let bpjsKesVal = Number(row.bpjs_kesehatan_deduction);
+    if (!bpjsTkVal || bpjsTkVal === 121351) bpjsTkVal = Math.round(upahVal * 0.03);
+    if (!bpjsKesVal || bpjsKesVal === 40450) bpjsKesVal = Math.round(upahVal * 0.01);
+
+    const alpaVal = Number(row.absence_deduction || 0);
+    const totDeductVal = bpjsTkVal + bpjsKesVal + alpaVal;
+    const netVal = grossVal - totDeductVal;
+
+    res.json({
+      success: true,
+      data: {
+        id: row.id,
+        period: row.period_label || 'Oktober 2026',
+        printedDate: row.printed_date ? new Date(row.printed_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : new Date().toLocaleDateString('id-ID'),
+        status: (row.status || 'paid').toUpperCase(),
+        employee: {
+          id: row.user_id,
+          name: row.employee_name,
+          nip: row.employee_nip,
+          sequenceNo: seqNo,
+          severanceScheme: row.severance_scheme || (isTabunganPesangon ? 'tabungan' : 'cash_with_salary'),
           savedSeveranceBalance: Number(row.saved_severance_balance || 0),
           placementLocation: row.placement_location || '-',
           division: row.division_name || 'Dept. of Distribution Management',

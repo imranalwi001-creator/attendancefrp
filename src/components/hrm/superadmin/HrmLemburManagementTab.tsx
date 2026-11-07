@@ -21,8 +21,11 @@ import {
   AlertCircle,
   Briefcase,
   Plus,
+  Pencil,
 } from 'lucide-react';
 import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
+import { HrmEditLemburModal } from '@/components/hrm/superadmin/HrmEditLemburModal';
+import { api } from '@/lib/api';
 
 export const HrmLemburManagementTab: React.FC = () => {
   const [records, setRecords] = useState<OvertimeRecord[]>([]);
@@ -40,19 +43,64 @@ export const HrmLemburManagementTab: React.FC = () => {
   const [actionNotes, setActionNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Edit Overtime Modal State
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingOt, setEditingOt] = useState<OvertimeRecord | null>(null);
+
   // Photo Preview Modal
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
   // Manual Overtime Modal
   const [manualModalOpen, setManualModalOpen] = useState(false);
 
-  const loadData = () => {
+  const loadData = async () => {
     setIsLoading(true);
     setUsers(hrmService.getUsers());
     setDivisions(hrmService.getDivisions());
     const otList = hrmService.getOvertimeRecords();
     setRecords(otList);
-    setIsLoading(false);
+
+    try {
+      const res = await api.get<{ success: boolean; data: any[] }>('/overtime');
+      if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+        const usersList = hrmService.getUsers();
+        const remoteOts: OvertimeRecord[] = res.data.map((r: any) => {
+          const u = usersList.find((usr) => usr.id === r.user_id || usr.nip === r.user_nip);
+          const compensation = Number(r.compensation_amount || 0);
+          return {
+            id: r.id,
+            userId: r.user_id,
+            userName: r.user_name || u?.fullName || 'Karyawan',
+            userNip: r.user_nip || u?.nip || '',
+            divisionId: r.user_division_id || u?.divisionId,
+            divisionName: r.division_name || u?.divisionName || '-',
+            date: r.date ? (typeof r.date === 'string' ? r.date.split('T')[0] : new Date(r.date).toISOString().split('T')[0]) : '',
+            startTime: r.start_time ? String(r.start_time).substring(0, 5) : '07:30',
+            endTime: r.end_time ? String(r.end_time).substring(0, 5) : '15:30',
+            durationHours: Number(r.duration_hours || 8),
+            approvedHours: Number(r.approved_hours || r.duration_hours || 8),
+            hourlyRate: Number(r.rate_applied || 23381.79),
+            compensationAmount: compensation,
+            totalPay: compensation,
+            taskDescription: r.task_description || '',
+            status: r.status || 'approved',
+            paymentStatus: r.payment_status || 'unpaid',
+            approvedBy: r.approved_by,
+            approvedByName: r.approver_name || 'Super Administrator',
+            approvalNotes: r.approval_notes,
+            taskPhotoUrl: r.task_photo_url,
+            isWeekendHoliday: Boolean(r.is_weekend_holiday),
+            createdAt: r.created_at,
+          };
+        });
+        setRecords(remoteOts);
+        localStorage.setItem('hrm_overtime_records', JSON.stringify(remoteOts));
+      }
+    } catch (e) {
+      console.warn('[HrmLemburManagementTab] Sync remote overtime note:', e);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -95,6 +143,11 @@ export const HrmLemburManagementTab: React.FC = () => {
   const totalPayEstimate = records
     .filter((r) => r.status === 'approved' || r.status === 'completed')
     .reduce((acc, curr) => acc + (Number(curr.compensationAmount ?? curr.totalPay) || 0), 0);
+
+  const handleOpenEdit = (rec: OvertimeRecord) => {
+    setEditingOt(rec);
+    setEditModalOpen(true);
+  };
 
   const handleOpenAction = (rec: OvertimeRecord, type: 'approve' | 'reject') => {
     setSelectedOt(rec);
@@ -445,27 +498,37 @@ export const HrmLemburManagementTab: React.FC = () => {
                             {comp > 0 ? `Rp ${comp.toLocaleString('id-ID')}` : '-'}
                           </td>
                           <td className="py-3 px-4 text-right whitespace-nowrap">
-                            {r.status === 'pending' ? (
-                              <div className="flex items-center justify-end gap-1.5">
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleOpenAction(r, 'approve')}
-                                  className="h-7 text-[11px] rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-2"
-                                >
-                                  Setujui
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleOpenAction(r, 'reject')}
-                                  className="h-7 text-[11px] rounded-lg border-rose-300 text-rose-600 hover:bg-rose-50 px-2"
-                                >
-                                  Tolak
-                                </Button>
-                              </div>
-                            ) : (
-                              <span className="text-[11px] text-muted-foreground">Telah Diproses</span>
-                            )}
+                            <div className="flex items-center justify-end gap-1.5">
+                              {r.status === 'pending' && (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleOpenAction(r, 'approve')}
+                                    className="h-7 text-[11px] rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-2"
+                                  >
+                                    Setujui
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleOpenAction(r, 'reject')}
+                                    className="h-7 text-[11px] rounded-lg border-rose-300 text-rose-600 hover:bg-rose-50 px-2"
+                                  >
+                                    Tolak
+                                  </Button>
+                                </>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleOpenEdit(r)}
+                                className="h-7 text-[11px] rounded-lg border-blue-200 dark:border-blue-900 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/50 font-semibold px-2 flex items-center gap-1 shadow-2xs"
+                                title="Edit / Koreksi Jam & SPKL Lembur"
+                              >
+                                <Pencil className="w-3 h-3" />
+                                <span>Edit</span>
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -572,6 +635,17 @@ export const HrmLemburManagementTab: React.FC = () => {
       <HrmManualLemburModal
         open={manualModalOpen}
         onClose={() => setManualModalOpen(false)}
+        onSuccess={() => loadData()}
+      />
+
+      {/* Modal Koreksi / Edit SPKL Lembur */}
+      <HrmEditLemburModal
+        open={editModalOpen}
+        onClose={() => {
+          setEditModalOpen(false);
+          setEditingOt(null);
+        }}
+        record={editingOt}
         onSuccess={() => loadData()}
       />
     </div>

@@ -809,6 +809,14 @@ export async function initDb() {
       CREATE INDEX IF NOT EXISTS idx_leave_daily_sub_leave ON hrm_leave_daily_substitutes(leave_request_id);
       CREATE INDEX IF NOT EXISTS idx_leave_daily_sub_user_date ON hrm_leave_daily_substitutes(substitute_id, duty_date);
       CREATE INDEX IF NOT EXISTS idx_leave_daily_sub_token ON hrm_leave_daily_substitutes(confirm_token);
+
+      -- Koreksi Otomatis Jam Lembur Pengganti Shift 1 Rusli (FR07066) dari kesalahan preset
+      UPDATE hrm_overtime_records
+      SET start_time = '07:30', end_time = '15:30', scheduled_end_time = '15:30', updated_at = NOW()
+      WHERE user_id IN (SELECT id FROM hrm_profiles WHERE nip = 'FR07066' OR LOWER(full_name) LIKE '%rusli%')
+        AND date = '2026-11-04'
+        AND start_time = '16:30'
+        AND (task_description ILIKE '%shift 1%' OR task_description ILIKE '%shift I%');
     `);
 
     console.log('[Database] Schema verification, Biometric, Geofence, Field Sentinel Multi-Posts & Notifications extensions completed.');
