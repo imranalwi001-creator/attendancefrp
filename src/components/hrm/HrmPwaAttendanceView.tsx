@@ -4374,6 +4374,28 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             )}
 
+            {/* Banner Penugasan Lembur Resmi (SPKL Sambung Shift / Tugas Pengganti) */}
+            {approvedOvertimeToday && (
+              <div className="p-3 bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-transparent border border-emerald-500/30 rounded-2xl flex items-center gap-2.5 text-xs shadow-xs">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                  <Zap className="w-4 h-4 text-emerald-600 fill-emerald-600" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between">
+                    <p className="font-extrabold text-emerald-950 dark:text-emerald-200 flex items-center gap-1.5">
+                      <span>⚡ SPKL Lembur Resmi ({approvedOvertimeToday.startTime?.substring(0, 5)} - {approvedOvertimeToday.endTime?.substring(0, 5)} WITA)</span>
+                    </p>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200">
+                      {approvedOvertimeToday.durationHours || (approvedOvertimeToday as any).duration_hours || 0} Jam
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-emerald-900/80 dark:text-emerald-300/80 mt-0.5 line-clamp-2">
+                    {approvedOvertimeToday.taskDescription || (approvedOvertimeToday as any).task_description || 'Penugasan lembur resmi disahkan. Akses presensi dinas aktif.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Banner Cuti Resmi untuk Karyawan Yang Sedang Cuti */}
             {hasActiveLeaveToday && (
               <div className="p-3 bg-gradient-to-r from-sky-500/15 via-blue-500/10 to-transparent border border-sky-500/30 rounded-2xl flex items-center gap-2.5 text-xs shadow-xs">

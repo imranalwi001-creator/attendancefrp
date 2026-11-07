@@ -11,6 +11,7 @@ import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService } from '@/services/hrmService';
 import { hrmHolidayService } from '@/services/hrmHolidayService';
 import { UserProfile, OvertimeStatus } from '@/types/hrm';
+import { resolveEffectiveShift } from '@/lib/hrmShiftResolver';
 import {
   Clock,
   Briefcase,
@@ -156,6 +157,107 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
   const nipUpper = (selectedUser?.nip || '').toUpperCase();
   const isShipment = nipUpper >= 'FR07034' && nipUpper <= 'FR07080';
   const isRumahTangga = nipUpper >= 'FR07001' && nipUpper <= 'FR07033';
+
+  // Deteksi Shift Karyawan Terpilih Pada Tanggal Terpilih
+  const userCurrentShift = React.useMemo(() => {
+    if (!selectedUser) return null;
+    const allShifts = hrmService.getShifts();
+    const dailySched = hrmService.getEmployeeTodaySchedule(selectedUser.id, date);
+    return resolveEffectiveShift(selectedUser, allShifts, dailySched);
+  }, [selectedUser, date]);
+
+  const applySambungShift = (direction: 'maju' | 'mundur') => {
+    if (!selectedUser) {
+      toast.error('Pilih karyawan terlebih dahulu.');
+      return;
+    }
+    const sStart = (userCurrentShift?.startTime || '07:30').substring(0, 5);
+    const sEnd = (userCurrentShift?.endTime || '15:30').substring(0, 5);
+    const shiftNameUpper = (userCurrentShift?.name || '').toUpperCase();
+    const shiftCodeUpper = (userCurrentShift?.code || '').toUpperCase();
+
+    const isShift1 = shiftCodeUpper.includes('SHF-I') || shiftNameUpper.includes('SHIFT 1') || shiftNameUpper.includes('SHIFT I ') || (sStart === '07:30' && sEnd === '15:30');
+    const isShift2 = shiftCodeUpper.includes('SHF-II') || shiftNameUpper.includes('SHIFT 2') || shiftNameUpper.includes('SHIFT II') || (sStart === '15:30' && sEnd === '22:30');
+    const isShift3 = shiftCodeUpper.includes('SHF-III') || shiftNameUpper.includes('SHIFT 3') || shiftNameUpper.includes('SHIFT III') || (sStart === '22:30' && sEnd === '07:30');
+
+    if (direction === 'maju') {
+      if (isShift1) {
+        setStartTime('15:30');
+        setEndTime('22:30');
+        setDurationHours(7.0);
+        setShiftPreset('shift2');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
+          setTaskDescription('Sambung Shift Maju ke Shift 2 (Tugas Pengganti Pos)');
+        }
+        toast.success(`Preset Sambung Maju Aktif: Shift 2 (15:30 - 22:30 WITA, 7 Jam) untuk ${selectedUser.fullName}`);
+      } else if (isShift2) {
+        setStartTime('22:30');
+        setEndTime('07:30');
+        setDurationHours(9.0);
+        setShiftPreset('shift3');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
+          setTaskDescription('Sambung Shift Maju ke Shift 3 (Tugas Pengganti Pos)');
+        }
+        toast.success(`Preset Sambung Maju Aktif: Shift 3 (22:30 - 07:30 WITA, 9 Jam) untuk ${selectedUser.fullName}`);
+      } else if (isShift3) {
+        setStartTime('07:30');
+        setEndTime('15:30');
+        setDurationHours(8.0);
+        setShiftPreset('shift1');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
+          setTaskDescription('Sambung Shift Maju ke Shift 1 (Tugas Pengganti Pos)');
+        }
+        toast.success(`Preset Sambung Maju Aktif: Shift 1 (07:30 - 15:30 WITA, 8 Jam) untuk ${selectedUser.fullName}`);
+      } else {
+        setStartTime('16:30');
+        setEndTime('22:30');
+        setDurationHours(6.0);
+        setShiftPreset('custom');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
+          setTaskDescription('Lembur Sambung Pasca Day Shift (Tugas Pengganti Pos)');
+        }
+        toast.success(`Preset Sambung Maju Aktif: 16:30 - 22:30 WITA (6 Jam) untuk ${selectedUser.fullName}`);
+      }
+    } else {
+      if (isShift2) {
+        setStartTime('07:30');
+        setEndTime('15:30');
+        setDurationHours(8.0);
+        setShiftPreset('shift1');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
+          setTaskDescription('Sambung Shift Mundur mengisi Shift 1 (Tugas Pengganti Pos)');
+        }
+        toast.success(`Preset Sambung Mundur Aktif: Mengisi Shift 1 (07:30 - 15:30 WITA, 8 Jam) untuk ${selectedUser.fullName}`);
+      } else if (isShift3) {
+        setStartTime('15:30');
+        setEndTime('22:30');
+        setDurationHours(7.0);
+        setShiftPreset('shift2');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
+          setTaskDescription('Sambung Shift Mundur mengisi Shift 2 (Tugas Pengganti Pos)');
+        }
+        toast.success(`Preset Sambung Mundur Aktif: Mengisi Shift 2 (15:30 - 22:30 WITA, 7 Jam) untuk ${selectedUser.fullName}`);
+      } else if (isShift1) {
+        setStartTime('22:30');
+        setEndTime('07:30');
+        setDurationHours(9.0);
+        setShiftPreset('shift3');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
+          setTaskDescription('Sambung Shift Mundur mengisi Shift 3 Malam (Tugas Pengganti Pos)');
+        }
+        toast.success(`Preset Sambung Mundur Aktif: Mengisi Shift 3 (22:30 - 07:30 WITA, 9 Jam) untuk ${selectedUser.fullName}`);
+      } else {
+        setStartTime('05:30');
+        setEndTime('07:30');
+        setDurationHours(2.0);
+        setShiftPreset('custom');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
+          setTaskDescription('Lembur Sambung Datang Lebih Awal Pre-Day Shift');
+        }
+        toast.success(`Preset Sambung Mundur Aktif: 05:30 - 07:30 WITA (2 Jam) untuk ${selectedUser.fullName}`);
+      }
+    }
+  };
 
   // Calculate Overtime Estimate for Superadmin Dashboard
   const hourlyRate = selectedUser?.overtimeRateOverride || 23381.79;
@@ -355,8 +457,45 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
           </div>
 
           {/* 3. Preset Pilihan Durasi Lembur Sesuai Aturan Pimpinan */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold flex items-center justify-between">
+          <div className="space-y-2">
+            {/* Quick Actions: Sambung Shift Maju & Mundur */}
+            <div className="p-2.5 rounded-xl border border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-950/30 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600" />
+                  <span>Fitur Pintar: Sambung Shift Pengganti Pos (Anti-Kekosongan)</span>
+                </span>
+                {selectedUser && (
+                  <Badge variant="outline" className="text-[10px] font-mono border-indigo-400 text-indigo-700 dark:text-indigo-300">
+                    Jadwal Reguler: {userCurrentShift?.name || 'Shift 1'}
+                  </Badge>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => applySambungShift('maju')}
+                  className="h-9 text-xs font-bold border-indigo-400 dark:border-indigo-600 hover:bg-indigo-600 hover:text-white text-indigo-800 dark:text-indigo-200 flex items-center justify-center gap-1.5 rounded-lg shadow-2xs"
+                >
+                  <span>⏩ Sambung Shift Maju</span>
+                  <span className="text-[10px] font-normal opacity-80">(Lanjut Pasca Shift)</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => applySambungShift('mundur')}
+                  className="h-9 text-xs font-bold border-indigo-400 dark:border-indigo-600 hover:bg-indigo-600 hover:text-white text-indigo-800 dark:text-indigo-200 flex items-center justify-center gap-1.5 rounded-lg shadow-2xs"
+                >
+                  <span>⏪ Sambung Shift Mundur</span>
+                  <span className="text-[10px] font-normal opacity-80">(Datang Lebih Awal)</span>
+                </Button>
+              </div>
+            </div>
+
+            <Label className="text-xs font-semibold flex items-center justify-between pt-1">
               <span>Preset Standar Durasi Lembur FRP</span>
               <span className="text-primary font-bold">{durationHours} Jam Lembur</span>
             </Label>
