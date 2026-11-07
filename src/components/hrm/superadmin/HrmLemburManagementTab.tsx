@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
 import { HrmEditLemburModal } from '@/components/hrm/superadmin/HrmEditLemburModal';
-import { api } from '@/lib/api';
+import { api } from '@/services/apiClient';
 
 export const HrmLemburManagementTab: React.FC = () => {
   const [records, setRecords] = useState<OvertimeRecord[]>([]);
