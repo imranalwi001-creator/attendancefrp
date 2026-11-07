@@ -1196,6 +1196,24 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             setTodayAttendance(undefined);
             localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
             if (user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`);
+          } else if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in) && localAttDate === todayStr) {
+            // ⚡ RESILIENT AUTO-SYNC: Karyawan telah presensi di HP saat sinyal sempat lemah/drop, tapi belum masuk server.
+            // Segera sinkronkan record kehadiran tersebut ke PostgreSQL server secara otomatis!
+            api.post('/attendances/clock-in', {
+              userId: user.id,
+              date: todayStr,
+              time: todayAtt.clockIn || todayAtt.clock_in,
+              photo: todayAtt.photoIn || todayAtt.clockInPhoto,
+              latitude: todayAtt.latIn || (todayAtt as any).clockInLat,
+              longitude: todayAtt.longIn || (todayAtt as any).clockInLong,
+              status: todayAtt.status || 'hadir',
+              notes: (todayAtt.notes || '') ? `${todayAtt.notes} [Auto-Synced PWA]` : 'Presensi Masuk Tepat Waktu (Auto-Synced PWA)',
+            }).then((syncRes: any) => {
+              const syncedAtt = syncRes?.attendance || syncRes?.data;
+              if (syncedAtt?.id) {
+                console.log('[PWA Sync] Berhasil menyinkronkan presensi offline ke database server.');
+              }
+            }).catch(() => null);
           }
         }
       } catch (err) {
