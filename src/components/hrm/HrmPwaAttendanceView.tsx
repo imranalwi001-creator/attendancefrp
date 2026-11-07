@@ -4871,6 +4871,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   </Button>
                 </div>
 
+                <div className="text-[9.5px] bg-indigo-50/80 dark:bg-indigo-950/40 p-2 rounded-xl border border-indigo-200/60 dark:border-indigo-800/60 text-indigo-900 dark:text-indigo-200 leading-tight space-y-1">
+                  <p>💡 <b>Panduan On-Call:</b> Saat Nihil Kapal / Menunggu SO, cukup klik <b>[Standby On-Call]</b>. Anda bebas keluar radius dan jam kerja <u>TIDAK BERHENTI / JANGAN KLIK PULANG</u>.</p>
+                  <p>⚓ Cek-Out kepulangan tetap wajib dilakukan di akhir jam dinas shift ({userShift?.endTime?.substring(0, 5) || '15:30'} WITA) dengan kembali ke lokasi Dermaga Pelabuhan.</p>
+                </div>
+
                 <div className="text-[9px] text-muted-foreground flex items-center justify-between px-1 pt-0.5">
                   <span>*Cek-In & Cek-Out tetap wajib 100% di lokasi dermaga</span>
                   {macciniVesselStatus.updatedAt && (
@@ -5031,7 +5036,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             )}
 
             {/* Banner Peringatan Keluar Area Tugas Tanpa Laporan */}
-            {hasClockedIn && !hasClockedOut && (!isInsideCoordinates || todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached) && (
+            {hasClockedIn && !hasClockedOut && (!isInsideCoordinates || todayAttendance?.isLocked || todayAttendance?.isPerimeterBreached) && !(isMacciniBajiOfficer(user) && macciniVesselStatus.status === 'idle') && (
               <div className="bg-gradient-to-r from-rose-500/10 via-rose-500/15 to-rose-500/10 border border-rose-300 dark:border-rose-800 rounded-2xl p-3 flex items-center justify-between gap-2.5 animate-pulse">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
@@ -5056,6 +5061,24 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             )}
 
+            {/* Banner Status Khusus Petugas Maccini Baji saat Standby On-Call */}
+            {isMacciniBajiOfficer(user) && hasClockedIn && !hasClockedOut && macciniVesselStatus.status === 'idle' && (
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-2.5 flex items-center justify-between gap-2 text-[11px] text-emerald-800 dark:text-emerald-300">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-base">🌊</span>
+                  <div className="min-w-0 text-left">
+                    <p className="font-bold">Standby On-Call Aktif (Dinas Tetap Berjalan)</p>
+                    <p className="text-[10px] opacity-90 truncate">
+                      Anda sah istirahat bebas koordinat. Kembali ke Pelabuhan saat jam pulang (pk <b>{userShift?.endTime?.substring(0, 5) || '15:30'} WITA</b>) atau saat kapal sandar.
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[9px] font-mono font-bold bg-emerald-600 text-white px-2 py-0.5 rounded-full shrink-0">
+                  DINAS AKTIF
+                </span>
+              </div>
+            )}
+
             {/* Status Kunci Absen Pulang & Jam Istirahat Otomatis */}
             {isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut && isInsideCoordinates && (
               <div className="bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl p-2.5 flex items-center justify-between gap-2 text-[10.5px] text-amber-800 dark:text-amber-200">
@@ -5065,13 +5088,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     Absen Pulang terkunci s/d pk <b>{userShift?.endTime?.substring(0, 5) || '16:30'} WITA</b>
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setEmergencyModalOpen(true)}
-                  className="px-2 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] shrink-0 active:scale-95"
-                >
-                  Izin Darurat
-                </button>
+                {!isMacciniBajiOfficer(user) ? (
+                  <button
+                    type="button"
+                    onClick={() => setEmergencyModalOpen(true)}
+                    className="px-2 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] shrink-0 active:scale-95"
+                  >
+                    Izin Darurat
+                  </button>
+                ) : (
+                  <span className="text-[9.5px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md border border-indigo-200">
+                    ⚓ Petugas MMB
+                  </span>
+                )}
               </div>
             )}
 
