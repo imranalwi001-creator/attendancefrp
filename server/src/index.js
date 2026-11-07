@@ -14146,7 +14146,7 @@ async function runAutoCloseCompliantAttendance() {
       SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.notes,
              COALESCE(es.end_time::text, p.custom_end_time::text, s.end_time::text, '16:30') as shift_end_time,
              COALESCE(es.start_time::text, p.custom_start_time::text, s.start_time::text, '07:30') as shift_start_time,
-             COALESCE(s.is_cross_day, false) as is_cross_day,
+             COALESCE(es.is_night_shift, s.is_cross_day, false) as is_cross_day,
              p.full_name, p.nip, p.phone, p.is_out_of_bounds,
              (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date as today_wita
       FROM hrm_attendances a
@@ -14161,47 +14161,54 @@ async function runAutoCloseCompliantAttendance() {
 
     if (candidates.rows.length === 0) return;
 
-    const nowWitaDate = new Date(Date.now() + 8 * 60 * 60 * 1000);
-    const nowH = nowWitaDate.getUTCHours();
-    const nowM = nowWitaDate.getUTCMinutes();
-    const nowTotalMins = nowH * 60 + nowM;
+    const nowUtcMs = Date.now();
 
     for (const row of candidates.rows) {
-      const shiftEndStr = (row.shift_end_time || '16:30').substring(0, 5);
-      const [endH, endM] = shiftEndStr.split(':').map(Number);
-      const shiftEndTotalMins = endH * 60 + endM;
+      const attDateStr = typeof row.attendance_date === 'string'
+        ? row.attendance_date.substring(0, 10)
+        : (row.attendance_date.toISOString ? row.attendance_date.toISOString().split('T')[0] : String(row.attendance_date).substring(0, 10));
 
-      let effectiveNowMins = nowTotalMins;
-      if (row.is_cross_day && effectiveNowMins < 720 && shiftEndTotalMins >= 720) {
-        effectiveNowMins += 1440;
+      const shiftStartStr = (row.shift_start_time || '07:30').substring(0, 5);
+      const shiftEndStr = (row.shift_end_time || '16:30').substring(0, 5);
+      const [startH, startM] = shiftStartStr.split(':').map(Number);
+      const [endH, endM] = shiftEndStr.split(':').map(Number);
+
+      const isCrossDay = Boolean(
+        row.is_cross_day || 
+        (startH * 60 + startM) > (endH * 60 + endM)
+      );
+
+      // Hitung waktu awal dan akhir shift sebagai timestamp absolut UTC+8 (WITA)
+      const [attY, attM, attD] = attDateStr.split('-').map(Number);
+      const shiftStartUtcMs = Date.UTC(attY, attM - 1, attD, startH - 8, startM, 0);
+      const endDayOffset = isCrossDay ? 1 : 0;
+      const shiftEndUtcMs = Date.UTC(attY, attM - 1, attD + endDayOffset, endH - 8, endM, 0);
+
+      // Waktu clock-in riil karyawan
+      const [inH, inM] = (row.clock_in || shiftStartStr).split(':').map(Number);
+      const clockInUtcMs = Date.UTC(attY, attM - 1, attD, inH - 8, inM, 0);
+
+      const diffMinsFromEnd = Math.floor((nowUtcMs - shiftEndUtcMs) / 60000);
+      const clockInAgeMins = Math.floor((nowUtcMs - clockInUtcMs) / 60000);
+
+      // GUARD MUTLAK 1: Jika waktu shift belum usai (diffMinsFromEnd < 0), DILARANG KERAS auto-close!
+      // Khususnya Shift III (Malam s/d Pagi berikutnya) yang masih aktif bertugas di lapangan.
+      if (diffMinsFromEnd < 0) {
+        continue;
       }
 
-      const diffMins = effectiveNowMins - shiftEndTotalMins;
-      const isPastDate = row.attendance_date < row.today_wita;
-
-      // GUARD MUTLAK: Dilarang keras auto-close presensi karyawan yang baru clock-in kurang dari 120 menit (2 jam)!
-      const [inH, inM] = (row.clock_in || '08:00:00').split(':').map(Number);
-      const clockInTotalMins = (Number.isFinite(inH) ? inH : 8) * 60 + (Number.isFinite(inM) ? inM : 0);
-      let clockInAgeMins = effectiveNowMins - clockInTotalMins;
-      if (clockInAgeMins < 0 && row.is_cross_day) clockInAgeMins += 1440;
-
-      if (!isPastDate && clockInAgeMins < 120) {
-        // Karyawan baru saja clock in (misal baru 20 menit), biarkan tetap aktif bekerja!
+      // GUARD MUTLAK 2: Dilarang keras auto-close presensi karyawan yang baru clock-in kurang dari 120 menit (2 jam)!
+      if (clockInAgeMins < 120) {
         continue;
       }
 
       // Kondisi Opsi 2 (Auto-Clock Out Otomatis):
-      // 1. Sudah berganti hari (kemarin belum clock-out)
-      // 2. Karyawan sudah keluar radius area kerja setelah jam shift berakhir
-      // 3. Jam shift sudah berakhir lebih dari 2 jam (120 menit)
-      const shouldAutoClose = isPastDate || 
-                              (row.is_out_of_bounds && diffMins >= 0) || 
-                              (diffMins >= 120);
+      // 1. Shift sudah usai (diffMinsFromEnd >= 0) DAN karyawan terdeteksi berada di luar perimeter tugas (is_out_of_bounds)
+      // 2. ATAU jam shift sudah berakhir lebih dari 2 jam (diffMinsFromEnd >= 120)
+      const shouldAutoClose = (row.is_out_of_bounds && diffMinsFromEnd >= 0) || (diffMinsFromEnd >= 120);
 
       if (shouldAutoClose) {
-        const [inH, inM] = (row.clock_in || '08:00:00').split(':').map(Number);
-        let workDur = shiftEndTotalMins - (inH * 60 + inM);
-        if (row.is_cross_day && workDur < 0) workDur += 24 * 60;
+        let workDur = Math.round((shiftEndUtcMs - clockInUtcMs) / 60000);
         workDur = Math.max(0, workDur);
 
         const autoCloseNote = `[AUTO-CLOSED: JAM SHIFT USAI (${shiftEndStr} WITA) & TINGGALKAN AREA]`;
@@ -14225,7 +14232,7 @@ async function runAutoCloseCompliantAttendance() {
 
         // Kirim WhatsApp pemberitahuan santun
         if (row.phone) {
-          const dateLabel = row.attendance_date.toISOString ? row.attendance_date.toISOString().split('T')[0] : row.attendance_date;
+          const dateLabel = attDateStr;
           const waAutoMsg = `✅ *NOTIFIKASI ABSEN PULANG OTOMATIS (HRM FRP)*\n\nHalo *${row.full_name}*,\nSistem mendeteksi Anda telah menyelesaikan jam kerja shift (${shiftEndStr} WITA) dan telah meninggalkan lokasi penugasan.\n\nPresensi pulang Anda untuk tanggal *${dateLabel}* telah **otomatis ditutup resmi pada pk ${shiftEndStr} WITA**. Jam kerja dan hak kehadiran Anda aman.\n\nSelamat beristirahat!\n_Sistem Absensi Cerdas PT Fawwaz Reski Perwira_`;
           sendWhatsAppAlert({ phone: row.phone, message: waAutoMsg }).catch(() => null);
         }
