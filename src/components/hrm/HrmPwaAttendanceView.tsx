@@ -104,20 +104,39 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return () => clearInterval(timer);
   }, []);
 
-  // Location & Geofence (Cached restoration for instant lock)
+  // Location & Geofence (Cached restoration for instant lock & anti-flapping)
   const [currentCoords, setCurrentCoords] = useState<{ lat: number; lng: number } | null>(() => {
     try {
       const cached = sessionStorage.getItem('hrm_last_valid_coords');
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (parsed?.coords?.lat && parsed?.coords?.lng) return parsed.coords;
+        if (parsed?.coords?.lat && parsed?.coords?.lng && (Date.now() - (parsed.time || 0) < 180000)) {
+          return parsed.coords;
+        }
       }
     } catch (_) {}
     return null;
   });
-  const [coordsAccuracy, setCoordsAccuracy] = useState<number | null>(null);
+  const [coordsAccuracy, setCoordsAccuracy] = useState<number | null>(() => {
+    try {
+      const cached = sessionStorage.getItem('hrm_last_valid_coords');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (typeof parsed?.accuracy === 'number') return parsed.accuracy;
+      }
+    } catch (_) {}
+    return null;
+  });
   const [distanceToOffice, setDistanceToOffice] = useState<number | null>(null);
-  const [locationStatus, setLocationStatus] = useState<'checking' | 'inside' | 'outside' | 'error'>('checking');
+  const [locationStatus, setLocationStatus] = useState<'checking' | 'inside' | 'outside' | 'error'>(() => {
+    try {
+      const lastInsideRaw = sessionStorage.getItem('hrm_last_inside_post_timestamp');
+      if (lastInsideRaw && Date.now() - Number(lastInsideRaw) < 90000) {
+        return 'inside';
+      }
+    } catch (_) {}
+    return 'checking';
+  });
   const [assignedOffice, setAssignedOffice] = useState<OfficeLocation | null>(() => {
     if (isMacciniBajiOfficer(user)) {
       return {
@@ -1550,21 +1569,38 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       return;
     }
 
-    // Dynamic GPS Accuracy buffer (toleransi radius saat sinyal GPS melar di dalam ruangan)
-    const accuracyBuffer = Math.min(Math.max(0, (accuracy - 20) * 0.6), 80);
-    // Hysteresis buffer: Jika sebelumnya sudah terdeteksi di lokasi ('inside'), beri toleransi ekstra 35m agar tidak flapping
-    const hysteresisBonus = locationStatus === 'inside' ? 35 : 0;
+    // ─── ACCURACY-AWARE TOLERANCE & PERSISTENT HYSTERESIS ───
+    // 1. Dynamic accuracy buffer: Sensor error discount (mengakomodasi deviasi sensor HP di lapangan)
+    const accuracyBuffer = Math.min(Math.max(accuracy * 0.5, (accuracy - 15) * 0.6), 45);
+
+    // 2. Persistent Hysteresis: Jika user baru saja terverifikasi 'inside' dalam 90 detik terakhir, pertahankan toleransi +35m (mencegah flapping saat refresh PWA)
+    const nowTs = Date.now();
+    let isRecentInside = locationStatus === 'inside';
+    if (!isRecentInside) {
+      try {
+        const lastInsideRaw = sessionStorage.getItem('hrm_last_inside_post_timestamp');
+        if (lastInsideRaw && (nowTs - Number(lastInsideRaw)) < 90000) {
+          isRecentInside = true;
+        }
+      } catch (_) {}
+    }
+    const hysteresisBonus = isRecentInside ? 35 : 0;
 
     if (activePosts && activePosts.length > 0) {
       // Multi-Titik Bank Pos evaluation (Titik A, B, C, ...)
+      // Standar radius minimum operasional lapangan industri: minimal 100m
       const postsWithDist = activePosts.map((p) => {
         const d = geofenceService.calculateDistance(coords, { latitude: p.latitude, longitude: p.longitude });
-        const r = (p.radiusMeters || 250) + accuracyBuffer + hysteresisBonus;
+        const baseR = Math.max(p.radiusMeters || 100, 100);
+        const r = baseR + accuracyBuffer + hysteresisBonus;
         return { ...p, distance: d, radius: r, isInside: d <= r };
       });
 
       const insidePost = postsWithDist.find((p) => p.isInside);
       if (insidePost) {
+        try {
+          sessionStorage.setItem('hrm_last_inside_post_timestamp', String(nowTs));
+        } catch (_) {}
         setDistanceToOffice(Math.round(insidePost.distance));
         setLocationStatus('inside');
         setAssignedPostName(`${insidePost.postName} [${insidePost.postCode}]`);
@@ -1600,7 +1636,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         name: user.divisionLocationName || user.divisionName || 'Gedung Divisi',
         latitude: Number(user.divisionLatitude),
         longitude: Number(user.divisionLongitude),
-        radiusMeters: Number(user.divisionRadiusMeters) || 50,
+        radiusMeters: Math.max(Number(user.divisionRadiusMeters) || 100, 100),
         locationName: user.divisionLocationName || user.divisionName || 'Gedung Divisi',
         address: user.divisionAddress || user.address || user.divisionLocationName || 'Area Lokasi Divisi',
         allowedPosts: Array.isArray(user.divisionAllowedPosts) ? user.divisionAllowedPosts : [],
@@ -1612,7 +1648,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         name: targetOffice.name,
         lat: targetOffice.latitude,
         lng: targetOffice.longitude,
-        radius: targetOffice.radiusMeters || 50,
+        radius: Math.max(targetOffice.radiusMeters || 100, 100),
         address: targetOffice.address,
         isPrimary: true,
       });
@@ -1625,7 +1661,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               name: ap.name,
               lat: ap.latitude,
               lng: ap.longitude,
-              radius: ap.radiusMeters || 50,
+              radius: Math.max(ap.radiusMeters || 100, 100),
               address: ap.description || targetOffice.address,
             });
           }
@@ -1645,7 +1681,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             name: preset.name,
             lat: preset.latitude,
             lng: preset.longitude,
-            radius: preset.radiusMeters || 50,
+            radius: Math.max(preset.radiusMeters || 100, 100),
           });
         }
       }
@@ -1673,13 +1709,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     if (candidateOffices.length > 0) {
       const officeChecks = candidateOffices.map((cand) => {
         const d = geofenceService.calculateDistance(coords, { latitude: cand.lat, longitude: cand.lng });
-        const allowedR = cand.radius + accuracyBuffer + hysteresisBonus;
+        const allowedR = Math.max(cand.radius || 100, 100) + accuracyBuffer + hysteresisBonus;
         return { ...cand, distance: d, isInside: d <= allowedR };
       });
 
       // 🟢 Jika pegawai berada di dalam salah satu pos resmi / divisi
       const matchedInside = officeChecks.find((c) => c.isInside);
       if (matchedInside) {
+        try {
+          sessionStorage.setItem('hrm_last_inside_post_timestamp', String(nowTs));
+        } catch (_) {}
         setDistanceToOffice(Math.round(matchedInside.distance));
         setLocationStatus('inside');
         setAssignedPostName(matchedInside.name);
@@ -1835,7 +1874,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const watchId = navigator.geolocation.watchPosition(
       handlePos,
       (err) => console.warn('[PWA Geolocation Watcher]', err),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
 
     // Heartbeat every 60 seconds
@@ -1933,7 +1972,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     };
   }, [user?.id, isCameraActive, isSpotCheckAction]);
 
-  // Real GPS Geofencing Evaluation with Fast Dual-Stage Resolver & Indoor Fallback
+  // Real GPS Geofencing Evaluation with Smart Satellite Lock & Anti-Flapping Cache
   const evaluateRealLocation = (isManualTrigger = false) => {
     if (!navigator.geolocation) {
       setLocationStatus('error');
@@ -1944,81 +1983,78 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
     let resolved = false;
 
-    // Fast fallback timer: if high-accuracy GPS doesn't resolve in 4s (common indoors/under metal roofs),
-    // immediately query standard network/wifi location which responds in <500ms
-    const fallbackTimer = setTimeout(() => {
+    // Timer proteksi: jika GPS satelit butuh waktu hingga 12 detik, cek cache satelit riil terakhir
+    const safetyTimeoutHandle = setTimeout(() => {
       if (!resolved) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            if (resolved) return;
-            resolved = true;
-            if (isManualTrigger) setIsRefreshingGps(false);
-            const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-            try {
-              sessionStorage.setItem('hrm_last_valid_coords', JSON.stringify({ coords, accuracy: pos.coords.accuracy || 25, time: Date.now() }));
-            } catch (_) {}
-            evaluateLocationCoords(coords, pos.coords.accuracy || 25);
-            if (isManualTrigger) toast.success(`Lokasi GPS diperbarui (±${Math.round(pos.coords.accuracy || 25)}m)`);
-          },
-          (err) => {
-            if (resolved) return;
-            resolved = true;
-            if (isManualTrigger) setIsRefreshingGps(false);
-            console.warn('[PWA GPS] Fallback check:', err);
-            if (assignedOffice) {
-              const fallbackCoords = { lat: assignedOffice.latitude, lng: assignedOffice.longitude };
-              setCurrentCoords(fallbackCoords);
-              setDistanceToOffice(0);
-              setLocationStatus('inside');
-            } else {
-              setLocationStatus('inside');
+        resolved = true;
+        if (isManualTrigger) setIsRefreshingGps(false);
+        try {
+          const cached = sessionStorage.getItem('hrm_last_valid_coords');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed?.coords && (Date.now() - (parsed.time || 0) < 120000)) {
+              evaluateLocationCoords(parsed.coords, parsed.accuracy || 20);
+              if (isManualTrigger) toast.info('Menggunakan koordinat satelit terakhir yang tersimpan.');
+              return;
             }
-          },
-          { enableHighAccuracy: false, timeout: 4000, maximumAge: 30000 }
-        );
+          }
+        } catch (_) {}
+        if (isManualTrigger) toast.warning('Sinyal satelit GPS lambat. Silakan melangkah ke dekat pintu/area terbuka.');
       }
-    }, 4000);
+    }, 12000);
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         if (resolved) return;
         resolved = true;
-        clearTimeout(fallbackTimer);
+        clearTimeout(safetyTimeoutHandle);
         if (isManualTrigger) setIsRefreshingGps(false);
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        const acc = pos.coords.accuracy || 10;
         try {
-          sessionStorage.setItem('hrm_last_valid_coords', JSON.stringify({ coords, accuracy: pos.coords.accuracy || 10, time: Date.now() }));
+          sessionStorage.setItem('hrm_last_valid_coords', JSON.stringify({ coords, accuracy: acc, time: Date.now() }));
         } catch (_) {}
-        evaluateLocationCoords(coords, pos.coords.accuracy || 10);
-        if (isManualTrigger) toast.success(`Lokasi Presisi Terkunci (±${Math.round(pos.coords.accuracy || 10)}m)`);
-      },
-      (err) => {
-        if (!resolved) {
-          clearTimeout(fallbackTimer);
-          resolved = true;
-          if (isManualTrigger) setIsRefreshingGps(false);
-          // Try network location fallback
-          navigator.geolocation.getCurrentPosition(
-            (pos) => {
-              const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-              evaluateLocationCoords(coords, pos.coords.accuracy || 30);
-              if (isManualTrigger) toast.success(`Lokasi Terdeteksi (±${Math.round(pos.coords.accuracy || 30)}m)`);
-            },
-            () => {
-              if (assignedOffice) {
-                const fallbackCoords = { lat: assignedOffice.latitude, lng: assignedOffice.longitude };
-                setCurrentCoords(fallbackCoords);
-                setDistanceToOffice(0);
-                setLocationStatus('inside');
-              } else {
-                setLocationStatus('inside');
-              }
-            },
-            { enableHighAccuracy: false, timeout: 4000, maximumAge: 60000 }
-          );
+        evaluateLocationCoords(coords, acc);
+        if (isManualTrigger) {
+          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+            try { navigator.vibrate([40, 30, 40]); } catch (_) {}
+          }
+          toast.success(`Lokasi GPS Terkunci Presisi (±${Math.round(acc)}m)`);
         }
       },
-      { enableHighAccuracy: true, timeout: 4000, maximumAge: 10000 }
+      (err) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(safetyTimeoutHandle);
+        if (isManualTrigger) setIsRefreshingGps(false);
+        console.warn('[PWA GPS]', err);
+
+        // Cek cache satelit sebelum menyerah (mencegah flapping)
+        try {
+          const cached = sessionStorage.getItem('hrm_last_valid_coords');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed?.coords && (Date.now() - (parsed.time || 0) < 180000)) {
+              evaluateLocationCoords(parsed.coords, parsed.accuracy || 25);
+              return;
+            }
+          }
+        } catch (_) {}
+
+        if (assignedOffice) {
+          const fallbackCoords = { lat: assignedOffice.latitude, lng: assignedOffice.longitude };
+          setCurrentCoords(fallbackCoords);
+          setDistanceToOffice(0);
+          setLocationStatus('inside');
+        } else {
+          setLocationStatus('inside');
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 11000,
+        maximumAge: isManualTrigger ? 0 : 15000,
+      }
     );
   };
 
