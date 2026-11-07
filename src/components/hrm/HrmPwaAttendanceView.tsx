@@ -2099,11 +2099,52 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return userNotifications.filter((n) => !n.isRead).length;
   }, [userNotifications]);
 
+  const isCurrentlyOnDuty = Boolean((todayAttendance?.clockIn || todayAttendance?.clock_in) && (!todayAttendance?.clockOut && !todayAttendance?.clock_out));
+  const isCurrentSessionClosed = Boolean((todayAttendance?.clockIn || todayAttendance?.clock_in) && (todayAttendance?.clockOut || todayAttendance?.clock_out));
+  const hasClockedIn = Boolean(todayAttendance?.clockIn || todayAttendance?.clock_in);
+  const hasClockedOut = Boolean(todayAttendance?.clockOut || todayAttendance?.clock_out);
+  const isFieldSpecial = isSpecialDutyOfficer(user);
+  const todayDateStr = getTodayDateStr();
+
+  // Shift Aktif yang Sedang Berjalan (Memperhitungkan Shift Malam Lintas Hari dari Kemarin)
+  const effectiveDisplayShift = useMemo<Shift | null>(() => {
+    if (isCurrentlyOnDuty && todayAttendance) {
+      const attDate = normalizeDateString(todayAttendance.attendanceDate || todayAttendance.date);
+      const shifts = hrmService.getShifts();
+      if (attDate && attDate !== todayDateStr) {
+        const yestSched = hrmService.getEmployeeTodaySchedule(user?.id || '', attDate);
+        if (yestSched && !yestSched.isOff && yestSched.shiftCode !== 'OFF') {
+          const resYest = resolveEffectiveShift(user, shifts, yestSched);
+          if (resYest && !isShiftOffDay(resYest)) return resYest;
+        }
+      }
+      if (todayAttendance.shiftName || todayAttendance.shiftId) {
+        const matched = shifts.find((s) => s.id === todayAttendance.shiftId || s.name === todayAttendance.shiftName);
+        if (matched) return matched;
+      }
+      if (userShift && !isShiftOffDay(userShift)) {
+        return userShift;
+      }
+      const defaultNightShift = shifts.find((s) => s.isCrossDay || s.code === 'M' || (s.name || '').toLowerCase().includes('shift iii'));
+      if (defaultNightShift) return defaultNightShift;
+      return {
+        id: 'shift-iii',
+        name: 'Shift III (22:30 - 07:30 WITA)',
+        code: 'M',
+        startTime: '22:30',
+        endTime: '07:30',
+        isCrossDay: true,
+        isDefault: false,
+      } as Shift;
+    }
+    return userShift;
+  }, [isCurrentlyOnDuty, todayAttendance, todayDateStr, user, userShift]);
+
   // Absen Pulang (Clock-Out) Guard:
   // Harus tidak aktif sebelum shift endTime, kecuali ada izin darurat yang disetujui!
   const clockOutWindow = useMemo(() => {
-    return checkShiftClockOutWindow(userShift, todayAttendance?.clockIn, currentTime);
-  }, [userShift, todayAttendance?.clockIn, currentTime]);
+    return checkShiftClockOutWindow(effectiveDisplayShift || userShift, todayAttendance?.clockIn, currentTime);
+  }, [effectiveDisplayShift, userShift, todayAttendance?.clockIn, currentTime]);
 
   const isBeforeShiftEndTime = clockOutWindow.isBeforeEndTime;
 
@@ -3553,14 +3594,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return 'Selamat Malam';
   }, [currentTime]);
 
-  const isCurrentlyOnDuty = Boolean((todayAttendance?.clockIn || todayAttendance?.clock_in) && (!todayAttendance?.clockOut && !todayAttendance?.clock_out));
-  const isCurrentSessionClosed = Boolean((todayAttendance?.clockIn || todayAttendance?.clock_in) && (todayAttendance?.clockOut || todayAttendance?.clock_out));
-  const hasClockedIn = Boolean(todayAttendance?.clockIn || todayAttendance?.clock_in);
-  const hasClockedOut = Boolean(todayAttendance?.clockOut || todayAttendance?.clock_out);
-  const isFieldSpecial = isSpecialDutyOfficer(user);
-
   // 1. Cuti / Izin / Sakit yang Disetujui Hari Ini
-  const todayDateStr = getTodayDateStr();
   const activeLeaveToday = useMemo(() => {
     return userLeaves.find((l) => {
       if (l.status !== 'approved') return false;
@@ -3573,6 +3607,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   // Jadwal Libur (Off Duty) Hari Ini dari Roster
   const isEmployeeOffToday = useMemo(() => {
+    // INVARIANT MUTLAK: Jika karyawan sedang aktif bertugas (sedang on-duty),
+    // status mereka adalah SEDANG BERTUGAS, BUKAN LIBUR!
+    if (isCurrentlyOnDuty) return false;
     if (!user) return false;
     const sched = hrmService.getEmployeeTodaySchedule(user.id, todayDateStr);
     return Boolean(
@@ -3580,9 +3617,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       sched?.shiftCode === 'OFF' ||
       sched?.shiftName?.toLowerCase().includes('libur') ||
       sched?.shiftName?.toLowerCase().includes('off') ||
-      isShiftOffDay(userShift)
+      isShiftOffDay(effectiveDisplayShift)
     );
-  }, [user, todayDateStr, userShift]);
+  }, [user, todayDateStr, effectiveDisplayShift, isCurrentlyOnDuty]);
 
   // 2. Siklus Kontinu Pergantian Shift:
   // Shift I (Pagi: 07:30 - 15:30) -> Berakhir Shift I -> Tombol check-in Shift II (15:30 - 22:30) otomatis aktif
@@ -3801,30 +3838,30 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       });
       return;
     }
-    if ((isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday) {
-      toast.info('Hari ini adalah jadwal Libur / Off Duty Anda. Selamat beristirahat!', {
-        icon: '☕',
-      });
-      return;
-    }
     if (isCurrentlyOnDuty) {
       if (!isClockOutAllowed) {
         if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
-          toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
+          toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${effectiveDisplayShift?.endTime?.substring(0, 5) || '07:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
         } else {
           toast.error(clockOutDisabledReason || 'Belum memenuhi syarat untuk absen pulang.');
         }
         return;
       }
       triggerClockOutFlow();
-    } else {
-      // Belum absen masuk ATAU shift sebelumnya sudah selesai dan berlanjut ke shift berikutnya
-      if (!isClockInAllowed) {
-        toast.error(clockInDisabledReason || 'Presensi masuk belum memenuhi syarat lokasi/shift.');
-        return;
-      }
-      openLiveCamera('clock_in');
+      return;
     }
+    if ((isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday) {
+      toast.info('Hari ini adalah jadwal Libur / Off Duty Anda. Selamat beristirahat!', {
+        icon: '☕',
+      });
+      return;
+    }
+    // Belum absen masuk ATAU shift sebelumnya sudah selesai dan berlanjut ke shift berikutnya
+    if (!isClockInAllowed) {
+      toast.error(clockInDisabledReason || 'Presensi masuk belum memenuhi syarat lokasi/shift.');
+      return;
+    }
+    openLiveCamera('clock_in');
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -3975,9 +4012,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   size="sm"
                   variant="outline"
                   onClick={() => openLiveCamera(actionType)}
-                  className="rounded-xl text-xs border-white/20 text-white hover:bg-white/10"
+                  className="rounded-xl text-xs bg-slate-800/90 border border-slate-600 text-slate-100 hover:bg-slate-700 shadow-md py-2 font-medium"
                 >
-                  Coba Akses Kamera Web Lagi
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                  <span>Coba Akses Kamera Web Lagi</span>
                 </Button>
               </div>
             </div>
@@ -4326,15 +4364,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <span className="text-slate-700 dark:text-slate-200">{user?.divisionName || 'Operasional'}</span>
                 </p>
                 <p className="text-[10px] text-slate-400 dark:text-slate-500">
-                  {!userShift
+                  {isCurrentlyOnDuty
+                    ? (effectiveDisplayShift?.name?.includes('(')
+                        ? `Shift: ${effectiveDisplayShift.name}`
+                        : `Shift: ${effectiveDisplayShift?.name || 'Shift Operasional'} (${effectiveDisplayShift?.startTime || '22:30'} - ${effectiveDisplayShift?.endTime || '07:30'} WITA)`)
+                    : !effectiveDisplayShift
                     ? 'Shift: Menghubungkan jadwal...'
-                    : userShift?.id === 'unassigned' || !userShift?.startTime
+                    : effectiveDisplayShift?.id === 'unassigned' || !effectiveDisplayShift?.startTime
                     ? 'Shift: Belum Memiliki Shift (Hubungi Admin / Korlap)'
-                    : (isShiftOffDay(userShift) || isEmployeeOffToday)
+                    : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday)
                     ? 'Shift: Libur / OFF (Hari Bebas Tugas)'
-                    : userShift?.name?.includes('(')
-                    ? `Shift: ${userShift.name}`
-                    : `Shift: ${userShift?.name || 'Reguler'} (${userShift?.startTime || '08:00'} - ${userShift?.endTime || '17:00'} WITA)`}
+                    : effectiveDisplayShift?.name?.includes('(')
+                    ? `Shift: ${effectiveDisplayShift.name}`
+                    : `Shift: ${effectiveDisplayShift?.name || 'Reguler'} (${effectiveDisplayShift?.startTime || '08:00'} - ${effectiveDisplayShift?.endTime || '17:00'} WITA)`}
                 </p>
               </div>
 
@@ -4629,7 +4671,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   if (hasClockedIn && !hasClockedOut) {
                     if (!isClockOutAllowed) {
                       if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
-                        toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
+                        toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${effectiveDisplayShift?.endTime?.substring(0, 5) || '07:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
                         return;
                       }
                       toast.error(clockOutDisabledReason || 'Presensi pulang belum dibuka.');
@@ -4637,7 +4679,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     }
                     triggerClockOutFlow();
                   } else if (!hasClockedIn) {
-                    if ((isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday) {
+                    if ((isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday) {
                       toast.info('Hari ini adalah jadwal Libur / Off Duty Anda. Selamat beristirahat!', {
                         icon: '☕',
                       });
@@ -4652,11 +4694,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 }}
                 className="relative w-[210px] h-[210px] shrink-0 aspect-square rounded-full p-2 flex items-center justify-center cursor-pointer transition-transform hover:scale-[1.02] active:scale-95 group select-none"
                 style={{ width: '210px', height: '210px', minWidth: '210px', minHeight: '210px', maxWidth: '210px', maxHeight: '210px' }}
-                title={(isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday ? "Hari Ini Libur / Bebas Tugas" : "Ketuk untuk Ambil Foto Absen"}
+                title={isCurrentlyOnDuty ? "Ketuk untuk Presensi Pulang" : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday ? "Hari Ini Libur / Bebas Tugas" : "Ketuk untuk Ambil Foto Absen"}
               >
                 {/* Outer Ring Border */}
                 <div className={`absolute inset-0 rounded-full border-2 transition-colors pointer-events-none ${
-                  (isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+                  isCurrentlyOnDuty
+                    ? 'border-rose-500/50 group-hover:border-rose-500/80'
+                    : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
                     ? 'border-indigo-400/30'
                     : 'border-emerald-500/40 group-hover:border-emerald-500/70'
                 }`} />
@@ -4666,12 +4710,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <path id="circlePath" d="M 28,100 A 72,72 0 0,1 172,100" fill="none" />
                   <text className="text-[9.5px] font-bold tracking-[0.15em] fill-slate-700 dark:fill-slate-300 uppercase">
                     <textPath href="#circlePath" startOffset="50%" textAnchor="middle">
-                      {(isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
-                        ? 'HARI INI LIBUR / OFF'
-                        : hasClockedIn && !hasClockedOut
+                      {hasClockedIn && !hasClockedOut
                         ? 'KETUK UNTUK ABSEN PULANG'
                         : hasClockedOut
                         ? 'PRESENSI HARI INI SELESAI'
+                        : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+                        ? 'HARI INI LIBUR / OFF'
                         : 'AMBIL FOTO UNTUK ABSEN'}
                     </textPath>
                   </text>
@@ -4761,15 +4805,25 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
 
                 <Badge className={
-                  !userShift
+                  isCurrentlyOnDuty
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold py-0.5 px-2"
+                    : !effectiveDisplayShift
                     ? "bg-slate-500/20 text-slate-300 border border-slate-500/40 text-[10px] font-bold py-0.5 px-2"
-                    : (isShiftOffDay(userShift) || isEmployeeOffToday)
+                    : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday)
                     ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-[10px] font-bold py-0.5 px-2"
-                    : userShift?.id === 'unassigned' || !userShift?.startTime
+                    : effectiveDisplayShift?.id === 'unassigned' || !effectiveDisplayShift?.startTime
                     ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold py-0.5 px-2"
                     : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold py-0.5 px-2"
                 }>
-                  {!userShift ? 'Memuat Shift...' : (isShiftOffDay(userShift) || isEmployeeOffToday) ? 'Libur / Off' : userShift?.id === 'unassigned' || !userShift?.startTime ? 'Belum Ada Shift' : (userShift?.name || 'Shift Operasional')}
+                  {isCurrentlyOnDuty
+                    ? (effectiveDisplayShift?.name || 'Shift III (22:30 - 07:30 WITA)')
+                    : !effectiveDisplayShift
+                    ? 'Memuat Shift...'
+                    : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday)
+                    ? 'Libur / Off'
+                    : effectiveDisplayShift?.id === 'unassigned' || !effectiveDisplayShift?.startTime
+                    ? 'Belum Ada Shift'
+                    : (effectiveDisplayShift?.name || 'Shift Operasional')}
                 </Badge>
               </div>
 
@@ -4789,17 +4843,27 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
                 <div className="space-y-0.5">
                   <span className="text-[10px] text-slate-400 font-medium">Jadwal Masuk & Pulang:</span>
-                  {approvedOvertimeToday ? (
+                  {isCurrentlyOnDuty ? (
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-emerald-300 font-mono text-[11px] flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>{effectiveDisplayShift?.startTime || '22:30'} - {effectiveDisplayShift?.endTime || '07:30'} WITA</span>
+                      </p>
+                      <p className="text-[10px] text-emerald-400 font-medium">
+                        Sedang Berdinas Aktif (Sesi Berjalan)
+                      </p>
+                    </div>
+                  ) : approvedOvertimeToday ? (
                     <div className="space-y-0.5">
                       <p className="font-bold text-amber-300 font-mono text-[11px] flex items-center gap-1">
                         <Zap className="w-3 h-3 fill-amber-300" />
                         <span>Lembur: {approvedOvertimeToday.startTime?.substring(0, 5)} - {approvedOvertimeToday.endTime?.substring(0, 5)} WITA</span>
                       </p>
                       <p className="font-bold text-white font-mono text-[10.5px]">
-                        {(isShiftOffDay(userShift) || isEmployeeOffToday) ? 'Hari Libur (Penugasan Lembur)' : `Lanjut Shift: ${userShift?.startTime} - ${userShift?.endTime} WITA`}
+                        {(isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) ? 'Hari Libur (Penugasan Lembur)' : `Lanjut Shift: ${effectiveDisplayShift?.startTime} - ${effectiveDisplayShift?.endTime} WITA`}
                       </p>
                     </div>
-                  ) : (isShiftOffDay(userShift) || isEmployeeOffToday) ? (
+                  ) : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) ? (
                     <div className="space-y-0.5">
                       <p className="font-bold text-emerald-400 font-mono text-[11px] flex items-center gap-1">
                         <Coffee className="w-3.5 h-3.5" />
@@ -4812,18 +4876,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   ) : (
                     <>
                       <p className="font-bold text-white font-mono text-[11px]">
-                        {!userShift
+                        {!effectiveDisplayShift
                           ? 'Memuat Jadwal...'
-                          : userShift?.id === 'unassigned' || !userShift?.startTime
+                          : effectiveDisplayShift?.id === 'unassigned' || !effectiveDisplayShift?.startTime
                           ? 'Belum Ditentukan'
-                          : `${userShift.startTime} - ${userShift.endTime} WITA`}
+                          : `${effectiveDisplayShift.startTime} - ${effectiveDisplayShift.endTime} WITA`}
                       </p>
                       <p className="text-[10px] text-amber-300 font-medium">
-                        {!userShift
+                        {!effectiveDisplayShift
                           ? 'Sinkronisasi server...'
-                          : userShift?.id === 'unassigned' || !userShift?.startTime
+                          : effectiveDisplayShift?.id === 'unassigned' || !effectiveDisplayShift?.startTime
                           ? 'Hubungi HRD/Admin'
-                          : `Toleransi: ${userShift?.lateToleranceMinutes || 15} Menit`}
+                          : `Toleransi: ${effectiveDisplayShift?.lateToleranceMinutes || 15} Menit`}
                       </p>
                     </>
                   )}
@@ -6257,7 +6321,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             type="button"
             onClick={handleCenterAttendanceClick}
             className={`relative w-14 h-14 rounded-full flex flex-col items-center justify-center text-white shadow-xl transition-all duration-300 active:scale-90 border-4 border-white dark:border-slate-950 ${
-              (isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+              isCurrentlyOnDuty
+                ? 'bg-gradient-to-tr from-rose-600 via-orange-600 to-amber-600 shadow-rose-500/40 ring-4 ring-rose-500/20 hover:scale-105'
+                : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
                 ? 'bg-gradient-to-tr from-slate-600 via-indigo-700 to-slate-800 shadow-indigo-500/30 ring-4 ring-indigo-500/20 hover:scale-105'
                 : !hasClockedIn
                 ? 'bg-gradient-to-tr from-emerald-600 via-teal-600 to-emerald-500 shadow-emerald-500/40 ring-4 ring-emerald-500/20 hover:scale-105'
@@ -6266,7 +6332,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 : 'bg-gradient-to-tr from-slate-700 via-slate-800 to-slate-900 shadow-slate-900/40 border-slate-700 hover:scale-105'
             }`}
             title={
-              (isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+              isCurrentlyOnDuty
+                ? 'Presensi Pulang Sekarang'
+                : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
                 ? 'Hari Ini Libur / Bebas Tugas'
                 : !hasClockedIn
                 ? 'Presensi Masuk Sekarang'
@@ -6282,12 +6350,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               }`} />
             )}
 
-            {(isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday ? (
-              <Coffee className="w-6 h-6 drop-shadow-sm text-indigo-200" />
-            ) : !isCurrentlyOnDuty && !isCurrentSessionClosed ? (
-              <Clock className="w-6 h-6 drop-shadow-sm text-white" />
-            ) : isCurrentlyOnDuty ? (
+            {isCurrentlyOnDuty ? (
               <LogOut className="w-6 h-6 drop-shadow-sm text-white" />
+            ) : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday ? (
+              <Coffee className="w-6 h-6 drop-shadow-sm text-indigo-200" />
+            ) : !isCurrentSessionClosed ? (
+              <Clock className="w-6 h-6 drop-shadow-sm text-white" />
             ) : nextShiftInfo?.isNextShiftAvailable ? (
               <Clock className="w-6 h-6 drop-shadow-sm text-white" />
             ) : (
@@ -6296,20 +6364,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           </button>
           
           <span className={`text-[9.5px] font-black tracking-wider uppercase mt-1 drop-shadow-xs ${
-            (isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+            isCurrentlyOnDuty
+              ? 'text-rose-600 dark:text-rose-400 font-extrabold'
+              : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
               ? 'text-indigo-600 dark:text-indigo-400 font-extrabold'
               : !isCurrentlyOnDuty && (!isCurrentSessionClosed || nextShiftInfo?.isNextShiftAvailable)
               ? 'text-emerald-700 dark:text-emerald-400'
-              : isCurrentlyOnDuty
-              ? 'text-rose-600 dark:text-rose-400'
               : 'text-slate-500 dark:text-slate-400'
           }`}>
-            {(isShiftOffDay(userShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+            {isCurrentlyOnDuty
+              ? 'PULANG'
+              : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
               ? 'LIBUR'
               : !isCurrentlyOnDuty && !isCurrentSessionClosed
               ? 'MASUK'
-              : isCurrentlyOnDuty
-              ? 'PULANG'
               : nextShiftInfo?.isNextShiftAvailable
               ? `MASUK ${nextShiftInfo.nextShiftCode.replace('SHF-', '')}`
               : 'SELESAI'}

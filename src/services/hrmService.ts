@@ -2842,9 +2842,7 @@ export const hrmService = {
 
   getUserTodayAttendance: (userId: string): AttendanceRecord | undefined => {
     const today = getTodayDateStr();
-    const dYest = new Date();
-    dYest.setDate(dYest.getDate() - 1);
-    const yesterday = dYest.toISOString().split('T')[0];
+    const yesterday = getYesterdayDateStr();
 
     // 1. Cek dedicated persistent key first untuk kepastian tanpa race condition
     let fromStorage: AttendanceRecord | undefined = undefined;
