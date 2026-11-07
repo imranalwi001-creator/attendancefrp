@@ -249,6 +249,7 @@ export const HrmPwaPersonalCalendarView: React.FC<HrmPwaPersonalCalendarViewProp
     let totalOffDays = 0;
     let attendedDays = 0;
     let approvedOtHours = 0;
+    let approvedOtCount = 0;
 
     calendarDays.forEach((d) => {
       if (!d.isCurrentMonth) return;
@@ -277,6 +278,7 @@ export const HrmPwaPersonalCalendarView: React.FC<HrmPwaPersonalCalendarViewProp
       otList.forEach((o) => {
         if (o.status === 'approved') {
           approvedOtHours += Number(o.duration_hours || o.durationHours || 0);
+          approvedOtCount++;
         }
       });
     });
@@ -286,6 +288,7 @@ export const HrmPwaPersonalCalendarView: React.FC<HrmPwaPersonalCalendarViewProp
       totalOffDays,
       attendedDays,
       approvedOtHours: parseFloat(approvedOtHours.toFixed(1)),
+      approvedOtCount,
     };
   }, [calendarDays, schedulesMap, attendancesMap, overtimesMap]);
 
@@ -414,9 +417,11 @@ export const HrmPwaPersonalCalendarView: React.FC<HrmPwaPersonalCalendarViewProp
               Lembur Sah
             </span>
             <span className="text-sm font-black font-mono text-purple-700 dark:text-purple-400">
-              {monthlyMetrics.approvedOtHours}
+              {monthlyMetrics.approvedOtHours} <span className="text-[10px] font-normal">Jam</span>
             </span>
-            <span className="text-[9px] text-muted-foreground block">Jam</span>
+            <span className="text-[9px] text-purple-700 dark:text-purple-300 font-semibold block">
+              {monthlyMetrics.approvedOtCount}x Lembur
+            </span>
           </div>
         </div>
       </div>
@@ -589,7 +594,11 @@ export const HrmPwaPersonalCalendarView: React.FC<HrmPwaPersonalCalendarViewProp
               <Briefcase className="w-3.5 h-3.5 text-emerald-600" />
               <span>Jadwal Roster Resmi:</span>
             </span>
-            {selectedDateData.sched ? (
+            {selectedDateData.otList.length > 0 && selectedDateData.sched && !selectedDateData.sched.isOff ? (
+              <Badge className="bg-purple-600 text-white text-[10px] font-bold shadow-xs">
+                ⚡ Shift {selectedDateData.sched.shiftCode} + Lembur Sambung
+              </Badge>
+            ) : selectedDateData.sched ? (
               selectedDateData.sched.isOff || selectedDateData.sched.shiftCode === 'OFF' ? (
                 <Badge variant="outline" className="text-[10px] text-slate-500 bg-slate-100 dark:bg-slate-800">
                   <Coffee className="w-3 h-3 mr-1" /> Libur Rotasi (OFF)
@@ -610,22 +619,33 @@ export const HrmPwaPersonalCalendarView: React.FC<HrmPwaPersonalCalendarViewProp
             )}
           </div>
 
-          <p className="text-[11px] text-muted-foreground">
+          <div className="text-[11px] text-muted-foreground space-y-1">
             {selectedDateData.sched && !selectedDateData.sched.isOff ? (
-              <>
-                Jam Dinas:{' '}
+              <div>
+                Jam Dinas Reguler:{' '}
                 <strong className="text-foreground font-mono">
                   {selectedDateData.sched.startTime?.substring(0, 5) || '07:30'} -{' '}
                   {selectedDateData.sched.endTime?.substring(0, 5) || '15:30'} WITA
                 </strong>
-                {selectedDateData.sched.isNightShift && ' (Shift Malam Melintasi Hari)'}
-              </>
+                {' '}({selectedDateData.sched.shiftName})
+                {selectedDateData.sched.isNightShift && ' • (Melintasi Hari)'}
+              </div>
             ) : selectedDateData.sched?.isOff ? (
-              'Bebas tugas rotasi shift operasional sesuai Matriks Penjadwalan Roster.'
+              <div>Bebas tugas rotasi shift operasional sesuai Matriks Penjadwalan Roster.</div>
             ) : (
-              'Mengikuti jadwal penugasan kerja reguler PT FRP.'
+              <div>Mengikuti jadwal penugasan kerja reguler PT FRP.</div>
             )}
-          </p>
+
+            {selectedDateData.otList.map((ot: any, idx: number) => (
+              <div key={idx} className="p-1.5 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-900 dark:text-purple-200">
+                ⚡ Penugasan Lembur:{' '}
+                <strong className="font-mono font-bold">
+                  {(ot.start_time || ot.startTime || '').substring(0, 5)} - {(ot.end_time || ot.endTime || '').substring(0, 5)} WITA
+                </strong>
+                {' '}({ot.duration_hours || ot.durationHours} Jam) • {ot.task_description || ot.taskDescription}
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* 2. Hari Libur Nasional SKB 3 Menteri (Jika ada) */}
@@ -695,25 +715,34 @@ export const HrmPwaPersonalCalendarView: React.FC<HrmPwaPersonalCalendarViewProp
 
         {/* 4. Surat Perintah Kerja Lembur (SPKL) - TANPA NOMINAL RUPIAH */}
         {selectedDateData.otList.length > 0 && (
-          <div className="p-3 rounded-2xl bg-purple-500/10 border border-purple-500/25 space-y-1.5">
+          <div className="p-3 rounded-2xl bg-purple-500/10 border border-purple-500/25 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-purple-900 dark:text-purple-300 flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                <span>Surat Perintah Lembur (SPL)</span>
+                <span>Surat Perintah Lembur (SPKL Digital)</span>
               </span>
               <Badge className="bg-purple-600 text-white text-[10px]">
                 {selectedDateData.otList.length} Penugasan
               </Badge>
             </div>
 
-            {selectedDateData.otList.map((ot, idx) => (
+            {selectedDateData.otList.map((ot: any, idx: number) => (
               <div
                 key={ot.id || idx}
-                className="p-2 rounded-xl bg-card border border-border/70 text-[11px] space-y-1"
+                className="p-2.5 rounded-xl bg-card border border-border/70 text-[11px] space-y-1.5 shadow-2xs"
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-foreground">
-                    Durasi: {ot.duration_hours || ot.durationHours} Jam
+                  <span className="font-bold text-foreground flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-purple-600" />
+                    <span>Jam: {(ot.start_time || ot.startTime || '').substring(0, 5)} - {(ot.end_time || ot.endTime || '').substring(0, 5)} WITA</span>
+                  </span>
+                  <Badge variant="outline" className="text-[10px] font-mono border-purple-400 text-purple-700 dark:text-purple-300 font-bold">
+                    {ot.duration_hours || ot.durationHours} Jam
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-muted-foreground">
+                    Kategori: {ot.is_weekend_holiday ? 'Hari Libur / Weekend (2x)' : 'Hari Kerja Normal'}
                   </span>
                   <span
                     className={`font-bold ${
@@ -727,7 +756,7 @@ export const HrmPwaPersonalCalendarView: React.FC<HrmPwaPersonalCalendarViewProp
                     {ot.status === 'approved' ? '✓ Disetujui' : ot.status === 'rejected' ? '✗ Ditolak' : 'Menunggu Approval'}
                   </span>
                 </div>
-                <p className="text-muted-foreground italic truncate">
+                <p className="text-muted-foreground italic">
                   "{ot.task_description || ot.taskDescription || 'Tugas operasional lapangan'}"
                 </p>
               </div>

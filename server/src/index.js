@@ -13175,19 +13175,19 @@ app.get('/api/employee-schedules', async (req, res) => {
         s.shift_id as "shiftId",
         s.shift_code as "shiftCode",
         CASE
-          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)'
+          WHEN p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632') AND s.shift_code != 'OFF' THEN 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)'
           ELSE s.shift_name
         END as "shiftName",
         CASE
-          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_start_time
+          WHEN p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632') AND s.shift_code != 'OFF' THEN '08:00'
           ELSE s.start_time
         END as "startTime",
         CASE
-          WHEN p.custom_end_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_end_time
+          WHEN p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632') AND s.shift_code != 'OFF' THEN '16:00'
           ELSE s.end_time
         END as "endTime",
         CASE
-          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 8.0
+          WHEN p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632') AND s.shift_code != 'OFF' THEN 8.0
           ELSE s.duration_hours
         END as "durationHours",
         s.is_night_shift as "isNightShift",
@@ -13253,19 +13253,19 @@ app.get('/api/employee-schedules/today/:userId', async (req, res) => {
         s.shift_id as "shiftId",
         s.shift_code as "shiftCode",
         CASE
-          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)'
+          WHEN p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632') AND s.shift_code != 'OFF' THEN 'Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)'
           ELSE s.shift_name
         END as "shiftName",
         CASE
-          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_start_time
+          WHEN p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632') AND s.shift_code != 'OFF' THEN '08:00'
           ELSE s.start_time
         END as "startTime",
         CASE
-          WHEN p.custom_end_time IS NOT NULL AND s.shift_code != 'OFF' THEN p.custom_end_time
+          WHEN p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632') AND s.shift_code != 'OFF' THEN '16:00'
           ELSE s.end_time
         END as "endTime",
         CASE
-          WHEN p.custom_start_time IS NOT NULL AND s.shift_code != 'OFF' THEN 8.0
+          WHEN p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632') AND s.shift_code != 'OFF' THEN 8.0
           ELSE s.duration_hours
         END as "durationHours",
         s.is_night_shift as "isNightShift",

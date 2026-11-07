@@ -2130,8 +2130,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const monthlyLeaves = userLeaves.filter((l) => (l.startDate || l.createdAt || '').startsWith(currentMonthStr));
     const monthlyIzinCount = monthlyLeaves.length;
 
-    const monthlyOts = userOvertimeList.filter((o) => (o.date || o.createdAt || '').startsWith(currentMonthStr));
-    const monthlyLemburHours = monthlyOts.reduce((acc, o) => acc + (Number(o.durationHours) || 0), 0);
+    const monthlyOts = userOvertimeList.filter(
+      (o) => (o.date || o.createdAt || '').startsWith(currentMonthStr) && (o.status === 'approved' || !o.status)
+    );
+    const monthlyLemburHours = monthlyOts.reduce((acc, o) => acc + (Number(o.durationHours || (o as any).duration_hours) || 0), 0);
+    const monthlyLemburCount = monthlyOts.length;
 
     // Dynamic Realistic Discipline Score (Base 100)
     let penalties = 0;
@@ -2222,6 +2225,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       weeklyStreak,
       monthlyIzinCount,
       monthlyLemburHours,
+      monthlyLemburCount,
       disciplineScore,
       disciplineGrade,
     };
@@ -4562,13 +4566,25 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
                 <div className="space-y-0.5">
                   <span className="text-[10px] text-slate-400 font-medium">Jadwal Masuk & Pulang:</span>
-                  <p className="font-bold text-white font-mono text-[11px]">
-                    {!userShift
-                      ? 'Memuat Jadwal...'
-                      : userShift?.id === 'unassigned' || !userShift?.startTime
-                      ? 'Belum Ditentukan'
-                      : `${userShift.startTime} - ${userShift.endTime} WITA`}
-                  </p>
+                  {approvedOvertimeToday ? (
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-amber-300 font-mono text-[11px] flex items-center gap-1">
+                        <Zap className="w-3 h-3 fill-amber-300" />
+                        <span>Lembur: {approvedOvertimeToday.startTime?.substring(0, 5)} - {approvedOvertimeToday.endTime?.substring(0, 5)} WITA</span>
+                      </p>
+                      <p className="font-bold text-white font-mono text-[10.5px]">
+                        Lanjut Shift: {userShift?.startTime} - {userShift?.endTime} WITA
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="font-bold text-white font-mono text-[11px]">
+                      {!userShift
+                        ? 'Memuat Jadwal...'
+                        : userShift?.id === 'unassigned' || !userShift?.startTime
+                        ? 'Belum Ditentukan'
+                        : `${userShift.startTime} - ${userShift.endTime} WITA`}
+                    </p>
+                  )}
                   <p className="text-[10px] text-amber-300 font-medium">
                     {!userShift
                       ? 'Sinkronisasi server...'
@@ -5193,6 +5209,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <p className="text-[9.5px] text-slate-500 dark:text-slate-400">Lembur Bulan Ini</p>
                   <p className="text-sm font-bold text-purple-600 dark:text-purple-400 mt-0.5">
                     {analyticsData.monthlyLemburHours} <span className="text-[9.5px] font-normal text-slate-400">Jam</span>
+                  </p>
+                  <p className="text-[9px] text-purple-700 dark:text-purple-300 font-semibold mt-0.5">
+                    {analyticsData.monthlyLemburCount}x Penugasan
                   </p>
                 </div>
 

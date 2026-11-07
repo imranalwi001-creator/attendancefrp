@@ -142,6 +142,30 @@ export const HrmEditLemburModal: React.FC<HrmEditLemburModalProps> = ({
     setIsWeekendHoliday(holCheck.isWeekendOrHoliday);
   };
 
+  const [serverSchedule, setServerSchedule] = useState<any | null>(null);
+
+  // Live fetch schedule for target user and date directly from server API
+  useEffect(() => {
+    if (!open || !record?.userId || !date) return;
+    let isMounted = true;
+    fetch(`/api/employee-schedules/today/${encodeURIComponent(record.userId)}?date=${encodeURIComponent(date)}`)
+      .then((r) => r.json())
+      .then((res) => {
+        if (isMounted && res.success && res.data) {
+          setServerSchedule(res.data);
+          const isOff = Boolean(res.data.isOff || res.data.shiftCode === 'OFF');
+          const holCheck = hrmHolidayService.isWeekendOrHoliday(date);
+          if (isOff || holCheck.isNationalHoliday) {
+            setIsWeekendHoliday(true);
+          } else {
+            setIsWeekendHoliday(false);
+          }
+        }
+      })
+      .catch(() => {});
+    return () => { isMounted = false; };
+  }, [open, record?.userId, date]);
+
   const targetUser = useMemo(() => {
     if (!record?.userId) return null;
     return hrmService.getUsers().find((u) => u.id === record.userId);
@@ -149,10 +173,22 @@ export const HrmEditLemburModal: React.FC<HrmEditLemburModalProps> = ({
 
   const userCurrentShift = useMemo(() => {
     if (!targetUser) return null;
+    if (serverSchedule) {
+      return {
+        id: serverSchedule.shiftId || `sched-${serverSchedule.shiftCode}`,
+        code: serverSchedule.shiftCode || 'REG',
+        name: serverSchedule.shiftName || 'Shift Reguler',
+        startTime: (serverSchedule.startTime || '07:30').substring(0, 5),
+        endTime: (serverSchedule.endTime || '15:30').substring(0, 5),
+        isCrossDay: Boolean(serverSchedule.isNightShift),
+        isOff: Boolean(serverSchedule.isOff),
+        lateToleranceMinutes: 15,
+      };
+    }
     const allShifts = hrmService.getShifts();
     const dailySched = hrmService.getEmployeeTodaySchedule(targetUser.id, date);
     return resolveEffectiveShift(targetUser, allShifts, dailySched);
-  }, [targetUser, date]);
+  }, [targetUser, date, serverSchedule]);
 
   const applySambungShift = (direction: 'maju' | 'mundur') => {
     const sStart = (userCurrentShift?.startTime || '07:30').substring(0, 5);
@@ -160,9 +196,15 @@ export const HrmEditLemburModal: React.FC<HrmEditLemburModalProps> = ({
     const shiftNameUpper = (userCurrentShift?.name || '').toUpperCase();
     const shiftCodeUpper = (userCurrentShift?.code || '').toUpperCase();
 
-    const isShift1 = shiftCodeUpper.includes('SHF-I') || shiftNameUpper.includes('SHIFT 1') || shiftNameUpper.includes('SHIFT I ') || (sStart === '07:30' && sEnd === '15:30');
-    const isShift2 = shiftCodeUpper.includes('SHF-II') || shiftNameUpper.includes('SHIFT 2') || shiftNameUpper.includes('SHIFT II') || (sStart === '15:30' && sEnd === '22:30');
-    const isShift3 = shiftCodeUpper.includes('SHF-III') || shiftNameUpper.includes('SHIFT 3') || shiftNameUpper.includes('SHIFT III') || (sStart === '22:30' && sEnd === '07:30');
+    const isShift1 = shiftCodeUpper.includes('SHF-I') || shiftCodeUpper === 'P' || shiftNameUpper.includes('SHIFT 1') || shiftNameUpper.includes('SHIFT I ') || (sStart === '07:30' && sEnd === '15:30');
+    const isShift2 = shiftCodeUpper.includes('SHF-II') || shiftCodeUpper === 'S' || shiftNameUpper.includes('SHIFT 2') || shiftNameUpper.includes('SHIFT II') || (sStart === '15:30' && sEnd === '22:30');
+    const isShift3 = shiftCodeUpper.includes('SHF-III') || shiftCodeUpper === 'M' || shiftNameUpper.includes('SHIFT 3') || shiftNameUpper.includes('SHIFT III') || (sStart === '22:30' && sEnd === '07:30');
+    const isOff = userCurrentShift?.isOff || shiftCodeUpper === 'OFF';
+
+    if (isOff) {
+      toast.info(`Karyawan terjadwal LIBUR/OFF pada ${date}. Silakan pilih shift penugasan lembur pengganti pos.`);
+      return;
+    }
 
     if (direction === 'maju') {
       if (isShift1) {
@@ -203,24 +245,24 @@ export const HrmEditLemburModal: React.FC<HrmEditLemburModalProps> = ({
         toast.success(`Preset Sambung Maju Aktif: 16:30 - 22:30 WITA (6 Jam)`);
       }
     } else {
-      if (isShift2) {
-        setStartTime('07:30');
-        setEndTime('15:30');
-        setDurationHours(8.0);
-        setShiftPreset('shift1');
-        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
-          setTaskDescription('Sambung Shift Mundur mengisi Shift 1 (Tugas Pengganti Pos)');
-        }
-        toast.success(`Preset Sambung Mundur Aktif: Mengisi Shift 1 (07:30 - 15:30 WITA, 8 Jam)`);
-      } else if (isShift3) {
+      if (isShift3) {
         setStartTime('15:30');
         setEndTime('22:30');
         setDurationHours(7.0);
         setShiftPreset('shift2');
         if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
-          setTaskDescription('Sambung Shift Mundur mengisi Shift 2 (Tugas Pengganti Pos)');
+          setTaskDescription('Sambung Shift Mundur mengisi Shift 2 sebelum Shift 3 (Tugas Pengganti Pos)');
         }
         toast.success(`Preset Sambung Mundur Aktif: Mengisi Shift 2 (15:30 - 22:30 WITA, 7 Jam)`);
+      } else if (isShift2) {
+        setStartTime('07:30');
+        setEndTime('15:30');
+        setDurationHours(8.0);
+        setShiftPreset('shift1');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
+          setTaskDescription('Sambung Shift Mundur mengisi Shift 1 sebelum Shift 2 (Tugas Pengganti Pos)');
+        }
+        toast.success(`Preset Sambung Mundur Aktif: Mengisi Shift 1 (07:30 - 15:30 WITA, 8 Jam)`);
       } else if (isShift1) {
         setStartTime('22:30');
         setEndTime('07:30');

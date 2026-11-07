@@ -350,28 +350,53 @@ export const isLeadershipSpecialFieldOfficer = (userOrNipOrEmail: any): boolean 
   let id = '';
   let name = '';
   if (typeof userOrNipOrEmail === 'string') {
-    email = userOrNipOrEmail.toLowerCase();
+    const s = userOrNipOrEmail.trim().toLowerCase();
+    email = s;
+    id = s;
     nip = userOrNipOrEmail.toUpperCase().replace(/[\s.]/g, '');
-    id = userOrNipOrEmail.toLowerCase();
   } else {
     email = (userOrNipOrEmail.email || '').toLowerCase().trim();
     nip = (userOrNipOrEmail.nip || '').toUpperCase().trim().replace(/[\s.]/g, '');
     id = (userOrNipOrEmail.id || '').toLowerCase();
     name = (userOrNipOrEmail.fullName || userOrNipOrEmail.name || '').toLowerCase().trim();
   }
-  // Rusli bukan petugas khusus pimpinan
-  if (name.includes('rusli') && !name.includes('samsi')) {
+
+  // Guard mutlak: Karyawan operasional regu ini BUKAN 3 Petugas Lapangan Khusus Pimpinan!
+  if (
+    name.includes('rusli') ||
+    name.includes('honnes') ||
+    name.includes('rusdi') ||
+    email.includes('fr07066') ||
+    email.includes('fr07065') ||
+    email.includes('fr07046') ||
+    id === '5dcb6ce4-2812-494f-bf84-2260e5207a1c' ||
+    id === 'c323bc67-21ef-455b-bade-68e2337da062' ||
+    id === 'f0aaf721-203c-4b45-b610-213204bc7ffe'
+  ) {
     return false;
   }
-  return (
-    ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes(email) ||
-    ['ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632'].includes(id) ||
-    nip.includes('07065') || nip.includes('07066') || nip.includes('07046') ||
-    name.includes('aslam') ||
-    name.includes('unga samsi') ||
-    name.includes('samsi') ||
-    name.includes('takdir')
-  );
+
+  // 1. Cek UUID Resmi 3 Petugas Lapangan Khusus Pimpinan
+  if (['ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632'].includes(id)) {
+    return true;
+  }
+
+  // 2. Cek Email Resmi
+  if (['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes(email)) {
+    return true;
+  }
+
+  // 3. Cek Nama Resmi
+  if (name.includes('aslam') || name.includes('samsi') || (name.includes('takdir') && !name.includes('rusdi'))) {
+    return true;
+  }
+
+  // 4. Cek NIP Lengkap Mutlak (HANYA jika format NIP lengkap sesuai)
+  if (nip === 'FRP07065' || (nip === 'FR07066' && email === 'abangelsamsi@gmail.com') || nip === 'FRP07046') {
+    return true;
+  }
+
+  return false;
 };
 
 export const isSpecialDutyOfficer = (userOrNipOrEmail: any): boolean => {
