@@ -142,6 +142,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
   const [isLoadingMonth, setIsLoadingMonth] = useState<boolean>(false);
   const [monthSchedules, setMonthSchedules] = useState<Map<string, any>>(new Map());
   const [monthLeaves, setMonthLeaves] = useState<Map<string, any>>(new Map());
+  const [monthOvertimes, setMonthOvertimes] = useState<Map<string, any[]>>(new Map());
   const [nationalHolidays, setNationalHolidays] = useState<Map<string, NationalHoliday>>(new Map());
 
   // State Dialog Koreksi Presensi Langsung
@@ -210,6 +211,24 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
         }
       })
       .catch((err) => console.warn('[CalendarModal] Leaves fetch warning:', err));
+
+    // 3B. Ambil SPKL Lembur Resmi yang Disetujui dari PostgreSQL
+    fetch(`/api/overtime?userId=${encodeURIComponent(targetUserId)}`)
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.success && Array.isArray(json.data)) {
+          const otMap = new Map<string, any[]>();
+          json.data.forEach((ot: any) => {
+            const dStr = String(ot.date || ot.overtimeDate || ot.overtime_date || '').substring(0, 10);
+            if (dStr) {
+              if (!otMap.has(dStr)) otMap.set(dStr, []);
+              otMap.get(dStr)!.push(ot);
+            }
+          });
+          setMonthOvertimes(otMap);
+        }
+      })
+      .catch((err) => console.warn('[CalendarModal] Overtime fetch warning:', err));
 
     // 4. Ambil dan Sinkronkan Hari Libur Nasional (SKB 3 Menteri)
     hrmHolidayService.fetchHolidays(yearNum).then((hols) => {
@@ -463,7 +482,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
     return days;
   }, [yearNum, monthNum, attendanceMap]);
 
-  // Agregasi KPI Bulanan
+  // Agregasi KPI Bulanan (Realtime Sinkron Jam Kerja + Lembur SPKL)
   const kpiSummary = useMemo(() => {
     let presentCount = 0;
     let lateCount = 0;
@@ -476,9 +495,43 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
         lateCount++;
         totalLateMinutes += a.lateMinutes || 0;
       }
-      totalWorkMinutes += a.workDurationMinutes || 0;
+
+      let dayMins = a.workDurationMinutes || 0;
+      if (dayMins === 0 && a.clockIn) {
+        if (a.clockOut) {
+          const inP = String(a.clockIn).split(':').map(Number);
+          const outP = String(a.clockOut).split(':').map(Number);
+          if (inP.length >= 2 && outP.length >= 2) {
+            const inM = inP[0] * 60 + inP[1];
+            let outM = outP[0] * 60 + outP[1];
+            if (outM < inM) outM += 1440; // Lintas hari / malam
+            const gross = Math.max(0, outM - inM);
+            dayMins = gross >= 240 ? Math.max(0, gross - 60) : gross;
+          }
+        } else {
+          // Sedang bertugas / hari ini (8 jam standar)
+          dayMins = 8 * 60;
+        }
+      }
+      totalWorkMinutes += dayMins;
     });
 
+    // Akumulasi jam lembur resmi bulan ini
+    let totalOvertimeHours = 0;
+    let totalOvertimeCount = 0;
+    monthOvertimes.forEach((otArr, dStr) => {
+      if (dStr.startsWith(selectedMonth)) {
+        otArr.forEach((ot: any) => {
+          if (ot.status === 'approved' || !ot.status) {
+            const h = Number(ot.approvedHours ?? ot.approved_hours ?? ot.durationHours ?? ot.duration_hours ?? 0);
+            totalOvertimeHours += h;
+            totalOvertimeCount++;
+          }
+        });
+      }
+    });
+
+    const netWorkHours = ((totalWorkMinutes / 60) + totalOvertimeHours).toFixed(1);
     const totalDays = userMonthAttendances.length;
     const disciplineRate = totalDays > 0 ? Math.round((presentCount / totalDays) * 100) : 100;
     const estimatedDeduction = totalLateMinutes * 1000;
@@ -487,12 +540,14 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
       presentCount,
       lateCount,
       totalLateMinutes,
-      totalWorkHours: (totalWorkMinutes / 60).toFixed(1),
+      totalWorkHours: netWorkHours,
+      totalOvertimeHours,
+      totalOvertimeCount,
       disciplineRate,
       estimatedDeduction,
       totalDays,
     };
-  }, [userMonthAttendances]);
+  }, [userMonthAttendances, monthOvertimes, selectedMonth]);
 
   // Detail Presensi Tanggal yang Dipilih
   const selectedRecord = useMemo(() => {
@@ -506,6 +561,10 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
   const selectedSched = useMemo(() => {
     return monthSchedules.get(selectedDateStr) || null;
   }, [monthSchedules, selectedDateStr]);
+
+  const selectedDateOts = useMemo(() => {
+    return monthOvertimes.get(selectedDateStr) || [];
+  }, [monthOvertimes, selectedDateStr]);
 
   const selectedLeave = useMemo(() => {
     return monthLeaves.get(selectedDateStr) || null;
@@ -771,6 +830,8 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                     statusBg = isSelected
                       ? 'bg-emerald-500/15 ring-2 ring-emerald-500'
                       : 'bg-emerald-500/5 hover:bg-emerald-500/10';
+                    const dayOts = monthOvertimes.get(d.dateStr) || [];
+                    const approvedOt = dayOts.find((o) => o.status === 'approved' || !o.status);
                     statusBadge = (
                       <div className="mt-1 flex flex-col gap-0.5">
                         <span className="text-[10px] font-mono font-bold text-emerald-700 dark:text-emerald-300">
@@ -779,6 +840,11 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                         {att.clockOut && (
                           <span className="text-[9px] font-mono text-muted-foreground">
                             s/d {att.clockOut.substring(0, 5)}
+                          </span>
+                        )}
+                        {approvedOt && (
+                          <span className="text-[7.5px] font-black px-1 py-0.2 rounded bg-orange-500/20 text-orange-700 dark:text-orange-300 border border-orange-500/30 w-fit">
+                            +SPL {Number(approvedOt.approved_hours ?? approvedOt.approvedHours ?? approvedOt.duration_hours ?? approvedOt.durationHours ?? 0)}J
                           </span>
                         )}
                       </div>
@@ -870,10 +936,19 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                 } else if (sched) {
                   // Jadwal resmi dari Matriks Penjadwalan Roster Karyawan (tersinkron database)
                   if (sched.isOff || sched.shiftCode === 'OFF') {
+                    const dayOts = monthOvertimes.get(d.dateStr) || [];
+                    const approvedOt = dayOts.find((o) => o.status === 'approved' || !o.status);
                     statusBadge = (
-                      <span className="mt-1 text-[9px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded w-fit">
-                        OFF (Libur)
-                      </span>
+                      <div className="mt-1 flex flex-col gap-0.5">
+                        <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded w-fit">
+                          OFF (Libur)
+                        </span>
+                        {approvedOt && (
+                          <span className="text-[7.5px] font-black px-1 py-0.2 rounded bg-orange-500/20 text-orange-700 dark:text-orange-300 border border-orange-500/30 w-fit">
+                            +SPL {Number(approvedOt.approved_hours ?? approvedOt.approvedHours ?? approvedOt.duration_hours ?? approvedOt.durationHours ?? 0)}J
+                          </span>
+                        )}
+                      </div>
                     );
                   } else {
                     const sCode = (sched.shiftCode || 'Shift').toUpperCase();
@@ -897,11 +972,19 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                       (sched.shiftName && sched.shiftName.toLowerCase().includes('pengganti'))
                     );
 
+                    const dayOts = monthOvertimes.get(d.dateStr) || [];
+                    const approvedOt = dayOts.find((o) => o.status === 'approved' || !o.status);
+
                     statusBadge = (
                       <div className="mt-1 flex flex-col gap-0.5">
                         <span className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded border w-fit font-mono ${badgeStyle}`}>
                           {sCode === 'DAY' ? 'DAY' : `Shift ${sCode}`}
                         </span>
+                        {approvedOt && (
+                          <span className="text-[7.5px] font-black px-1 py-0.2 rounded bg-orange-500/20 text-orange-700 dark:text-orange-300 border border-orange-500/30 w-fit">
+                            +SPL {Number(approvedOt.approved_hours ?? approvedOt.approvedHours ?? approvedOt.duration_hours ?? approvedOt.durationHours ?? 0)}J
+                          </span>
+                        )}
                         {isReliefSub ? (
                           <span className="text-[8px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/15 border border-amber-500/30 rounded px-1 py-0.2 truncate max-w-[85px]" title={sched.notes || sched.shiftName}>
                             👑 Pengganti
@@ -1268,6 +1351,34 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
                 Tidak ada data presensi yang tercatat untuk tanggal {selectedDateFormatted}. Karyawan
                 mungkin sedang libur roster (OFF) atau belum melakukan presensi.
               </p>
+            )}
+
+            {/* Rekaman SPKL Lembur Resmi (Tersinkron Realtime dari PostgreSQL) */}
+            {selectedDateOts.length > 0 && (
+              <div className="p-3.5 rounded-xl bg-orange-500/10 border border-orange-500/30 space-y-2 mt-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-orange-600 hover:bg-orange-700 text-white text-[10px] rounded-full">
+                      🔥 SPKL Lembur Disetujui
+                    </Badge>
+                    <span className="text-xs font-bold text-orange-700 dark:text-orange-300">
+                      {selectedDateOts[0].overtime_phase === 'completed' ? 'Selesai Dilaksanakan' : 'Disetujui'}
+                    </span>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-orange-600 dark:text-orange-400">
+                    {String(selectedDateOts[0].start_time || selectedDateOts[0].startTime).substring(0, 5)} - {String(selectedDateOts[0].end_time || selectedDateOts[0].endTime).substring(0, 5)} WITA ({Number(selectedDateOts[0].approved_hours ?? selectedDateOts[0].approvedHours ?? selectedDateOts[0].duration_hours ?? selectedDateOts[0].durationHours ?? 0)} Jam)
+                  </span>
+                </div>
+                <div className="text-xs space-y-1">
+                  <p className="font-semibold text-foreground">
+                    Tugas: <span className="font-normal">{selectedDateOts[0].task_description || selectedDateOts[0].taskDescription || '-'}</span>
+                  </p>
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 border-t border-orange-500/20">
+                    <span>Pemberi Perintah: <b>{selectedDateOts[0].supervisor_name || selectedDateOts[0].supervisorName || selectedDateOts[0].approver_name || 'Kaur'}</b></span>
+                    <span>Kompensasi: <b className="font-mono text-emerald-600">Rp {Number(selectedDateOts[0].compensation_amount || selectedDateOts[0].compensationAmount || 0).toLocaleString('id-ID')}</b></span>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </div>

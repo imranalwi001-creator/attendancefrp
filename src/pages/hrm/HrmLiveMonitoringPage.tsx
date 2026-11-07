@@ -386,6 +386,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     setAllAttendances(all);
     setAttendances(hrmService.getAttendances(today).filter((a) => isOfficialFrEmployee(a.userNip)));
     setOvertimes(hrmService.getOvertimeRecords().filter((o) => isOfficialFrEmployee(o.userNip)));
+    fetch('/api/overtime')
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) {
+          setOvertimes(res.data);
+        }
+      })
+      .catch(() => {});
     setPerimeterViolations(hrmService.getPerimeterViolations().filter((v) => isOfficialFrEmployee(v.userNip)));
     loadFieldAgents();
     fetchLiveUsersFast();

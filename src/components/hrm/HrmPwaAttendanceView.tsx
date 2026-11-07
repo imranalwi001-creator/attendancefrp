@@ -1144,9 +1144,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               ? String(normRemote.clockOut).substring(0, 5) 
               : (normRemote.clock_out ? String(normRemote.clock_out).substring(0, 5) : undefined);
             const remoteClockOutFull = normRemote.clock_out || normRemote.clockOut;
-            const effectiveClockOut = remoteClockOut || todayAtt?.clockOut;
-            const effectiveClockOutFull = remoteClockOutFull || todayAtt?.clock_out || effectiveClockOut;
-            const preservedPhotoOut = normRemote.photoOut || normRemote.clockOutPhoto || todayAtt?.photoOut;
+            // SSOT: Jika server mengonfirmasi ada clockIn tetapi clockOut kosong (null), maka karyawan sedang dinas (clockOut = undefined)
+            const effectiveClockOut = remoteClockOut !== undefined ? remoteClockOut : (normRemote.clockIn || normRemote.clock_in ? undefined : todayAtt?.clockOut);
+            const effectiveClockOutFull = remoteClockOutFull !== undefined ? remoteClockOutFull : (normRemote.clockIn || normRemote.clock_in ? undefined : todayAtt?.clock_out);
+            const preservedPhotoOut = normRemote.photoOut || normRemote.clockOutPhoto;
 
             const finalAttDate = normRemote.attendanceDate || remoteAttDate || (isYesterdayActive || isYesterdayRecentOut ? yesterdayStr : todayStr);
 
@@ -1360,9 +1361,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const myLeaves = hrmService.getUserLeaves(user.id);
       setUserLeaves(myLeaves);
 
-      // 2C. Data Permohonan Lembur Saya
-      const myOts = hrmService.getOvertimeRecords().filter((o) => o.userId === user.id);
-      setUserOvertimeList(myOts);
+      // 2C. Data Permohonan Lembur Saya (Sinkron Realtime PostgreSQL Server)
+      api.get<{ success: boolean; data?: any[] }>(`/overtime?userId=${encodeURIComponent(user.id)}`)
+        .then((otRes) => {
+          if (otRes?.success && Array.isArray(otRes.data)) {
+            setUserOvertimeList(otRes.data);
+          } else {
+            const myOts = hrmService.getOvertimeRecords().filter((o) => o.userId === user.id);
+            setUserOvertimeList(myOts);
+          }
+        })
+        .catch(() => {
+          const myOts = hrmService.getOvertimeRecords().filter((o) => o.userId === user.id);
+          setUserOvertimeList(myOts);
+        });
 
       // 2C-2. Data Penugasan Pengganti Karyawan Saya (Relief Duties yang Disetujui)
       const mySwaps = (typeof hrmService.getShiftSwaps === 'function' ? hrmService.getShiftSwaps() : []).filter(
@@ -3398,8 +3410,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const allMasterShifts = useMemo(() => hrmService.getShifts(), []);
   const nextShiftInfo = useMemo(() => {
     if (!isCurrentSessionClosed) return null;
+    if (isMacciniBajiOfficer(user) && macciniVesselStatus?.status === 'idle') {
+      return null;
+    }
     return determineNextContinuousShift(userShift, todayAttendance, currentTime, allMasterShifts);
-  }, [isCurrentSessionClosed, userShift, todayAttendance, currentTime, allMasterShifts]);
+  }, [isCurrentSessionClosed, user, macciniVesselStatus?.status, userShift, todayAttendance, currentTime, allMasterShifts]);
 
   // Kesesuaian Jam Shift Karyawan (Pagi, Siang, Malam & Lintas Hari)
   const isShiftWindowActive = useMemo(() => {

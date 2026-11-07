@@ -177,7 +177,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       setEmployeeSeksi(user.divisionName ? `Sec. of ${user.divisionName}` : 'Sec. of Shipment Management 2');
       setEmployeeUnit('Unit of Outbond Inventory I & IV');
       setEmployeeDept('kantor pusat semen tonasa');
-      setEmployeeShiftPattern(shift?.name || user.shiftName || 'SIFT NORMAL ( 2/1/3)');
+      setEmployeeShiftPattern('Shift Bergilir 3 Regu (P/S/M)');
       setEmployeeKaur(user.kepalaReguName || 'Kaur Sec. of Shipment Management');
     } else if (isWisma) {
       setEmployeeSeksi(user.divisionName ? `Seksi ${user.divisionName}` : 'Seksi Pengelolaan Wisma');
@@ -312,9 +312,9 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   const combinedOvertimes = useMemo(() => {
     if (!user) return [];
     const localOt = hrmService.getOvertimeRecords().filter((o) => o.userId === user.id || o.userNip === user.nip);
-    const map = new Map<string, OvertimeRecord>();
-    localOt.forEach((o) => map.set(o.id || o.date, o));
-    serverOvertimes.forEach((o) => map.set(o.id || o.date, o));
+    const map = new Map<string, any>();
+    localOt.forEach((o) => map.set(o.id || o.date || (o as any).overtime_date, o));
+    serverOvertimes.forEach((o) => map.set(o.id || o.date || (o as any).overtime_date, o));
     return Array.from(map.values());
   }, [serverOvertimes, user]);
 
@@ -370,10 +370,11 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         (a) => (a.attendanceDate || (a as any).date || '').slice(0, 10) === dateStr
       );
 
-      // 4. Cari lembur pada tanggal ini
-      const ot = combinedOvertimes.find(
-        (o) => (o.date || o.overtimeDate || '').slice(0, 10) === dateStr
-      );
+      // 4. Cari lembur pada tanggal ini (sinkron PostgreSQL snake_case & camelCase)
+      const ot = combinedOvertimes.find((o) => {
+        const oDate = String(o.date || o.overtimeDate || o.overtime_date || '').slice(0, 10);
+        return oDate === dateStr;
+      });
 
       let absenMasuk = '-';
       let absenPulang = '-';
@@ -469,22 +470,35 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         memerintahkanKaur = '-';
       }
 
-      // Lembur / SPKL
+      // Lembur / SPKL Realtime Sync (Mendukung snake_case dari PostgreSQL & camelCase dari Frontend)
       if (ot) {
-        lemburMulai = ot.startTime ? ot.startTime.substring(0, 5) : '-';
-        lemburSelesai = ot.endTime ? ot.endTime.substring(0, 5) : '-';
-        const hours = Number(ot.approvedHours || ot.durationHours || 0);
+        const rawStart = ot.startTime || ot.start_time || '';
+        const rawEnd = ot.endTime || ot.end_time || '';
+        lemburMulai = rawStart ? String(rawStart).substring(0, 5) : '-';
+        lemburSelesai = rawEnd ? String(rawEnd).substring(0, 5) : '-';
+        const hours = Number(ot.approvedHours ?? ot.approved_hours ?? ot.durationHours ?? ot.duration_hours ?? 0);
         realisasiJamLembur = hours > 0 ? String(hours) : '-';
-        if (ot.taskDescription) {
-          uraianPekerjaan = ot.taskDescription;
+        const taskDesc = ot.taskDescription || ot.task_description || '';
+        if (taskDesc) {
+          uraianPekerjaan = uraianPekerjaan && uraianPekerjaan !== '-' && !uraianPekerjaan.includes(taskDesc)
+            ? `${uraianPekerjaan} • Lembur: ${taskDesc}`
+            : taskDesc;
         }
-        memerintahkanKaur = ot.supervisorName || ot.approvedByName || employeeKaur || '-';
+        const otSupervisor = ot.supervisorName || ot.supervisor_name || ot.approvedByName || ot.approved_by_name || ot.approver_name;
+        if (otSupervisor) {
+          memerintahkanKaur = otSupervisor;
+        } else if (employeeKaur) {
+          memerintahkanKaur = employeeKaur;
+        }
         if (ket === '-' || ket === 'OFF') {
           ket = 'LEMBUR';
+        } else if (ket === 'HADIR') {
+          ket = 'HADIR + LEMBUR';
         }
       } else if (att && (att as any).overtimeHours) {
         realisasiJamLembur = String((att as any).overtimeHours);
         if (ket === '-' || ket === 'OFF') ket = 'LEMBUR';
+        else if (ket === 'HADIR') ket = 'HADIR + LEMBUR';
       }
 
       // Bersihkan uraian pekerjaan jika ada tag teknis sistem
@@ -566,16 +580,19 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
     monthlyRows.forEach((r) => {
       // HANYA hitung Hadir jika benar-benar HADIR atau TELAT atau LEMBUR (Bukan Cuti/Sakit/Izin/Off/Alpa)
-      if (r.ket === 'HADIR' || r.ket === 'TELAT' || r.ket === 'LEMBUR') {
+      if (r.ket.includes('HADIR') || r.ket === 'TELAT' || r.ket.includes('LEMBUR')) {
         totalHadir++;
 
         let dayNetMins = 0;
-        if (r.absenMasuk && r.absenPulang && r.absenMasuk !== '-' && r.absenPulang !== '-') {
+        if (r.absenMasuk && r.absenPulang && r.absenMasuk !== '-' && r.absenPulang !== '-' && r.absenMasuk !== 'OFF' && r.absenPulang !== 'OFF') {
           const inParts = r.absenMasuk.split(':').map(Number);
           const outParts = r.absenPulang.split(':').map(Number);
           if (inParts.length >= 2 && outParts.length >= 2) {
             const inMins = inParts[0] * 60 + inParts[1];
-            const outMins = outParts[0] * 60 + outParts[1];
+            let outMins = outParts[0] * 60 + outParts[1];
+            if (outMins < inMins) {
+              outMins += 1440; // Lintas hari / shift malam (Shift III)
+            }
             const grossMins = Math.max(0, outMins - inMins);
             // Sesuai UU Ketenagakerjaan & Kebijakan PT FRP: Istirahat 1 jam (60 mnt) tidak termasuk jam kerja jika durasi >= 4 jam
             dayNetMins = grossMins >= 240 ? Math.max(0, grossMins - 60) : grossMins;
@@ -584,7 +601,9 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         if (dayNetMins === 0 && r.attRecord?.workDurationMinutes) {
           dayNetMins = r.attRecord.workDurationMinutes;
         }
-        totalJamKerjaBersih += dayNetMins / 60;
+        // Tambahkan durasi lembur riil ke jam kerja
+        const otHours = r.realisasiJamLembur !== '-' ? parseFloat(r.realisasiJamLembur) || 0 : 0;
+        totalJamKerjaBersih += (dayNetMins / 60) + otHours;
       }
       if (r.telatMnt !== '-') {
         totalTelatKali++;

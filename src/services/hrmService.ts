@@ -1091,13 +1091,16 @@ export const hrmService = {
             } else if (typeof o.completion_photos === 'string' && o.completion_photos.trim().startsWith('[')) {
               try { parsedPhotos = JSON.parse(o.completion_photos); } catch { parsedPhotos = []; }
             }
+            const safeOtDate = typeof o.date === 'string' 
+              ? o.date.split('T')[0] 
+              : o.date ? `${new Date(o.date).getFullYear()}-${String(new Date(o.date).getMonth() + 1).padStart(2, '0')}-${String(new Date(o.date).getDate()).padStart(2, '0')}` : '';
             return {
               id: o.id,
               userId: o.user_id,
               userName: o.user_name || (user ? (user.fullName || user.name) : 'Karyawan'),
               userNip: o.user_nip || (user ? user.nip : ''),
               divisionName: o.division_name || (user ? (user.division || user.divisionName) : '-'),
-              date: o.date ? new Date(o.date).toISOString().split('T')[0] : '',
+              date: safeOtDate,
               startTime: o.start_time ? o.start_time.substring(0, 5) : '17:00',
               endTime: o.end_time ? o.end_time.substring(0, 5) : '19:00',
               scheduledEndTime: o.scheduled_end_time || o.scheduledEndTime || (o.end_time ? o.end_time.substring(0, 5) : '19:00'),
