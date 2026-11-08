@@ -22,9 +22,15 @@ import {
   Briefcase,
   Plus,
   Pencil,
+  FileSpreadsheet,
+  TrendingUp,
+  Coins,
+  BarChart3,
+  Layers,
 } from 'lucide-react';
 import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
 import { HrmEditLemburModal } from '@/components/hrm/superadmin/HrmEditLemburModal';
+import { HrmMonthlyFinancialRecapModal } from '@/components/hrm/HrmMonthlyFinancialRecapModal';
 import { api } from '@/services/apiClient';
 
 export const HrmLemburManagementTab: React.FC = () => {
@@ -35,6 +41,9 @@ export const HrmLemburManagementTab: React.FC = () => {
   const [selectedDivision, setSelectedDivision] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  // Financial & Quota Report Modal State
+  const [reportModalOpen, setReportModalOpen] = useState<boolean>(false);
 
   // Approval Modal State
   const [actionModalOpen, setActionModalOpen] = useState(false);
@@ -144,6 +153,74 @@ export const HrmLemburManagementTab: React.FC = () => {
     .filter((r) => r.status === 'approved' || r.status === 'completed')
     .reduce((acc, curr) => acc + (Number(curr.compensationAmount ?? curr.totalPay) || 0), 0);
 
+  // ─── PERHITUNGAN REALTIME KUOTA & PLAFON ANGGARAN LEMBUR PIMPINAN (RP 76 JT) ───
+  const TOTAL_BUDGET_CAP = 76000000;
+  const SHIPMENT_BUDGET_CAP = 72000000;
+  const WISMA_BUDGET_CAP = 4000000;
+
+  const budgetMetrics = React.useMemo(() => {
+    let shipmentSpent = 0;
+    let shipmentHours = 0;
+    let shipmentSpklCount = 0;
+    let wismaSpent = 0;
+    let wismaHours = 0;
+    let wismaSpklCount = 0;
+
+    const approvedOts = records.filter(
+      (r) => r.status === 'approved' || r.status === 'completed'
+    );
+
+    approvedOts.forEach((r) => {
+      const user = users.find((u) => u.id === r.userId || u.nip === r.userNip);
+      const isWisma =
+        (user?.operationalGroup || '').toUpperCase().includes('RUMAH TANGGA') ||
+        (r.divisionName && r.divisionName.toLowerCase().includes('wisma')) ||
+        (r.divisionName && r.divisionName.toLowerCase().includes('rumah tangga')) ||
+        (r.userNip && parseInt(r.userNip.replace(/\D/g, ''), 10) <= 33);
+
+      const pay = Number(r.compensationAmount ?? r.totalPay ?? 0) || (Number(r.approvedHours || r.durationHours || 0) * 23381.79);
+      const hours = Number(r.approvedHours || r.durationHours || 0);
+
+      if (isWisma) {
+        wismaSpent += pay;
+        wismaHours += hours;
+        wismaSpklCount += 1;
+      } else {
+        shipmentSpent += pay;
+        shipmentHours += hours;
+        shipmentSpklCount += 1;
+      }
+    });
+
+    const totalSpent = shipmentSpent + wismaSpent;
+    const totalRemaining = Math.max(0, TOTAL_BUDGET_CAP - totalSpent);
+    const shipmentRemaining = Math.max(0, SHIPMENT_BUDGET_CAP - shipmentSpent);
+    const wismaRemaining = Math.max(0, WISMA_BUDGET_CAP - wismaSpent);
+
+    const totalBurnPct = Math.min(100, (totalSpent / TOTAL_BUDGET_CAP) * 100);
+    const shipmentBurnPct = Math.min(100, (shipmentSpent / SHIPMENT_BUDGET_CAP) * 100);
+    const wismaBurnPct = Math.min(100, (wismaSpent / WISMA_BUDGET_CAP) * 100);
+
+    return {
+      TOTAL_BUDGET_CAP,
+      SHIPMENT_BUDGET_CAP,
+      WISMA_BUDGET_CAP,
+      totalSpent: Math.round(totalSpent),
+      totalRemaining: Math.round(totalRemaining),
+      totalBurnPct,
+      shipmentSpent: Math.round(shipmentSpent),
+      shipmentRemaining: Math.round(shipmentRemaining),
+      shipmentBurnPct,
+      shipmentHours,
+      shipmentSpklCount,
+      wismaSpent: Math.round(wismaSpent),
+      wismaRemaining: Math.round(wismaRemaining),
+      wismaBurnPct,
+      wismaHours,
+      wismaSpklCount,
+    };
+  }, [records, users]);
+
   const handleOpenEdit = (rec: OvertimeRecord) => {
     setEditingOt(rec);
     setEditModalOpen(true);
@@ -203,7 +280,7 @@ export const HrmLemburManagementTab: React.FC = () => {
       {/* ═══ RADAR PLAFON & ANGGARAN LEMBUR PIMPINAN (STRICT BUDGET CAPS) ═══ */}
       <Card className="border-border bg-gradient-to-br from-card via-card to-blue-500/5 rounded-2xl shadow-xs overflow-hidden border-blue-500/30">
         <CardHeader className="pb-3 border-b border-border/80 bg-blue-500/5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
                 <Briefcase className="w-4 h-4" />
@@ -220,19 +297,109 @@ export const HrmLemburManagementTab: React.FC = () => {
                 </CardDescription>
               </div>
             </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => setReportModalOpen(true)}
+                className="h-8 text-xs rounded-xl gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                Laporan Rekap &amp; Kuota Realtime
+              </Button>
+            </div>
           </div>
         </CardHeader>
-        <CardContent className="p-4">
+        <CardContent className="p-4 space-y-3.5">
+          {/* Live Overall Quota Meter (Plafon Rp 76 Jt Gabungan 80 Personil) */}
+          <div className="p-3.5 sm:p-4 rounded-xl bg-gradient-to-r from-slate-950 via-slate-900 to-blue-950 text-white border border-blue-500/30 shadow-md space-y-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-blue-200 uppercase tracking-wider">
+                    Plafon Lembur Sah Perusahaan (Total Rp 76 Jt)
+                  </span>
+                  <Badge
+                    className={
+                      budgetMetrics.totalBurnPct > 90
+                        ? 'bg-rose-500 text-white text-[10px]'
+                        : budgetMetrics.totalBurnPct > 70
+                        ? 'bg-amber-500 text-white text-[10px]'
+                        : 'bg-emerald-600 text-white text-[10px]'
+                    }
+                  >
+                    {budgetMetrics.totalBurnPct > 90
+                      ? '⚠️ Mendekati Plafon'
+                      : budgetMetrics.totalBurnPct > 70
+                      ? '⚡ Serapan Aktif'
+                      : '✅ Kuota Aman'}
+                  </Badge>
+                </div>
+                <div className="flex items-baseline gap-2 mt-1">
+                  <span className="text-2xl font-extrabold font-mono text-white">
+                    Rp {budgetMetrics.totalSpent.toLocaleString('id-ID')}
+                  </span>
+                  <span className="text-xs text-blue-200/80 font-mono">
+                    / Rp {TOTAL_BUDGET_CAP.toLocaleString('id-ID')} ({budgetMetrics.totalBurnPct.toFixed(1)}% Terpakai)
+                  </span>
+                </div>
+              </div>
+
+              <div className="text-left sm:text-right sm:border-l sm:border-white/10 sm:pl-4">
+                <span className="text-[11px] text-blue-200">Sisa Kuota Anggaran Tersedia:</span>
+                <p className="text-lg font-bold font-mono text-emerald-400">
+                  Rp {budgetMetrics.totalRemaining.toLocaleString('id-ID')}
+                </p>
+                <p className="text-[10px] text-blue-300 font-mono">
+                  {totalHours.toFixed(1)} Jam Realisasi ({approvedCount} SPKL Disetujui)
+                </p>
+              </div>
+            </div>
+
+            {/* Dynamic Multi-color Progress Bar */}
+            <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden border border-white/10">
+              <div
+                className={`h-full transition-all duration-500 ${
+                  budgetMetrics.totalBurnPct > 90
+                    ? 'bg-gradient-to-r from-amber-500 to-rose-500'
+                    : budgetMetrics.totalBurnPct > 70
+                    ? 'bg-gradient-to-r from-blue-500 to-amber-500'
+                    : 'bg-gradient-to-r from-teal-400 to-emerald-500'
+                }`}
+                style={{ width: `${Math.max(2, budgetMetrics.totalBurnPct)}%` }}
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
             {/* Box 1: Shiftman Total */}
-            <div className="p-3.5 rounded-xl border border-blue-500/30 bg-blue-500/5 space-y-1.5 md:col-span-1">
+            <div className="p-3.5 rounded-xl border border-blue-500/30 bg-blue-500/5 space-y-2 md:col-span-1">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-blue-900 dark:text-blue-300">Total Shiftman FRP</span>
                 <Badge className="bg-blue-600 text-white text-[10px]">47 Karyawan</Badge>
               </div>
-              <p className="text-xl font-extrabold text-foreground font-mono">Rp 72.000.000</p>
-              <p className="text-[11px] text-muted-foreground leading-tight">
-                Plafon maksimal gabungan untuk <strong>47 orang</strong> (44 Shift Normal + 3 Day Shift). Realisasi tidak boleh melebihi 72jt.
+              <div>
+                <p className="text-lg font-extrabold text-foreground font-mono">Rp 72.000.000</p>
+                <div className="space-y-1 mt-1 text-[11px] font-mono">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Terpakai:</span>
+                    <strong className="text-blue-600 dark:text-blue-400">
+                      Rp {budgetMetrics.shipmentSpent.toLocaleString('id-ID')} ({budgetMetrics.shipmentHours.toFixed(1)}J)
+                    </strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Tersisa:</span>
+                    <strong className="text-emerald-600 dark:text-emerald-400">
+                      Rp {budgetMetrics.shipmentRemaining.toLocaleString('id-ID')}
+                    </strong>
+                  </div>
+                </div>
+                <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden mt-1.5">
+                  <div className="h-full bg-blue-600" style={{ width: `${budgetMetrics.shipmentBurnPct}%` }} />
+                </div>
+              </div>
+              <p className="text-[10px] text-muted-foreground leading-tight pt-1 border-t border-border/60">
+                Plafon gabungan 47 orang (44 Shift Normal + 3 Day Shift). Realisasi tidak boleh melebihi 72jt.
               </p>
             </div>
 
@@ -261,13 +428,32 @@ export const HrmLemburManagementTab: React.FC = () => {
             </div>
 
             {/* Box 4: Wisma Biring Ere */}
-            <div className="p-3.5 rounded-xl border border-amber-500/20 bg-card/60 space-y-1.5">
+            <div className="p-3.5 rounded-xl border border-amber-500/20 bg-card/60 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-amber-900 dark:text-amber-300">Petugas Wisma Biring Ere</span>
                 <Badge className="bg-amber-600 text-white text-[10px]">33 Karyawan</Badge>
               </div>
-              <p className="text-lg font-extrabold text-amber-600 font-mono">Rp 4.000.000 (Rata)</p>
-              <p className="text-[11px] text-muted-foreground leading-tight">
+              <div>
+                <p className="text-lg font-extrabold text-amber-600 font-mono">Rp 4.000.000</p>
+                <div className="space-y-1 mt-1 text-[11px] font-mono">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Terpakai:</span>
+                    <strong className="text-amber-600 dark:text-amber-400">
+                      Rp {budgetMetrics.wismaSpent.toLocaleString('id-ID')} ({budgetMetrics.wismaHours.toFixed(1)}J)
+                    </strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Tersisa:</span>
+                    <strong className="text-emerald-600 dark:text-emerald-400">
+                      Rp {budgetMetrics.wismaRemaining.toLocaleString('id-ID')}
+                    </strong>
+                  </div>
+                </div>
+                <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden mt-1.5">
+                  <div className="h-full bg-amber-500" style={{ width: `${budgetMetrics.wismaBurnPct}%` }} />
+                </div>
+              </div>
+              <p className="text-[10px] text-muted-foreground leading-tight pt-1 border-t border-border/60">
                 Budget 4jt <strong>dibagi rata 33 orang</strong>. Kelebihan jam jadi <strong>Flexytime (Libur)</strong> bulan berjalan, tidak diambil = <strong>HANGUS</strong>.
               </p>
             </div>
@@ -354,7 +540,15 @@ export const HrmLemburManagementTab: React.FC = () => {
               </CardDescription>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => setReportModalOpen(true)}
+                className="h-8 text-xs rounded-xl gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                Laporan Rekap &amp; Kuota Lembur
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -647,6 +841,14 @@ export const HrmLemburManagementTab: React.FC = () => {
         }}
         record={editingOt}
         onSuccess={() => loadData()}
+      />
+
+      {/* Modal Laporan Rekapitulasi Realtime & Kuota Anggaran Lembur Sah PT FRP */}
+      <HrmMonthlyFinancialRecapModal
+        isOpen={reportModalOpen}
+        onClose={() => setReportModalOpen(false)}
+        users={users}
+        overtimes={records}
       />
     </div>
   );
