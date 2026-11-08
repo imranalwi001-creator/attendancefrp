@@ -766,7 +766,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
   const allShifts = React.useMemo(() => hrmService.getShifts(), []);
 
-  // Perhitungan Realtime Finansial & Kuota Anggaran Lembur Sah (Shipment Rp 72 Jt, Wisma Rp 4 Jt, Total Rp 76 Jt)
+  // Perhitungan Realtime Finansial & Kuota Anggaran Lembur Sah (Shipment Rp 65 Jt, Wisma Rp 4 Jt, Total Rp 69 Jt)
   const financialStats = React.useMemo(() => {
     const curMonth = currentMonthStr; // 'YYYY-MM'
     const officialUsers = users.filter((u) => isOfficialFrEmployee(u));
@@ -804,8 +804,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
     const totalOvertimeSpent = shipmentSpent + wismaSpent;
     const totalOvertimeHours = shipmentHours + wismaHours;
-    const TOTAL_BUDGET = 76000000;
-    const SHIPMENT_BUDGET = 72000000;
+    const TOTAL_BUDGET = 69000000;
+    const SHIPMENT_BUDGET = 65000000;
     const WISMA_BUDGET = 4000000;
 
     const remainingBudget = Math.max(0, TOTAL_BUDGET - totalOvertimeSpent);
@@ -930,12 +930,27 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           if (uShift && uShift.startTime && uShift.endTime && uShift.startTime !== '00:00' && uShift.code !== 'OFF' && !uShift.isOff) {
             const shiftEnd = uShift.endTime.slice(0, 5);
             const shiftStart = uShift.startTime.slice(0, 5);
-            if (nowWita < shiftStart) {
-              absentSubtype = 'pending_shift';
-            } else if (nowWita >= shiftEnd) {
-              absentSubtype = 'mangkir';
+            const isCrossDay = Boolean(uShift.isCrossDay || shiftEnd < shiftStart);
+
+            if (isCrossDay) {
+              // Shift Lintas Hari / Malam (misal 22:30 - 07:30 WITA):
+              // Pukul 12:00 s/d 22:29: pending_shift (menunggu shift malam)
+              // Pukul 22:30 s/d 23:59 & 00:00 s/d 07:30: in_progress (shift sedang berlangsung)
+              // Pada hari H, shift malam TIDAK BOLEH ditandai mangkir karena baru selesai besok pagi (H+1 pk 07:30 WITA)
+              if (nowWita < shiftStart && nowWita >= '12:00') {
+                absentSubtype = 'pending_shift';
+              } else {
+                absentSubtype = 'in_progress';
+              }
             } else {
-              absentSubtype = 'in_progress';
+              // Shift Reguler Hari Sama (misal 07:30 - 15:30 atau 15:30 - 22:30)
+              if (nowWita < shiftStart) {
+                absentSubtype = 'pending_shift';
+              } else if (nowWita >= shiftEnd) {
+                absentSubtype = 'mangkir';
+              } else {
+                absentSubtype = 'in_progress';
+              }
             }
           } else {
             absentSubtype = nowWita >= '17:00' ? 'mangkir' : 'in_progress';
@@ -1294,8 +1309,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 pt-4 border-t border-border/60 text-xs">
             <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
               <span className="text-[11px] text-muted-foreground block">Plafon Sah Lembur (Total)</span>
-              <span className="text-base font-bold text-foreground font-mono">Rp 76.000.000</span>
-              <span className="text-[10px] text-muted-foreground block mt-0.5">Shipment: Rp 72 Jt • Wisma: Rp 4 Jt</span>
+              <span className="text-base font-bold text-foreground font-mono">Rp 69.000.000</span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">Shipment: Rp 65 Jt • Wisma: Rp 4 Jt</span>
             </div>
 
             <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
@@ -1682,7 +1697,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 variant="outline"
                 onClick={() => setFinancialRecapModalOpen(true)}
                 className="h-9 px-3.5 text-xs rounded-xl gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 font-bold shadow-xs transition-all"
-                title="Buka Rekapitulasi Bulanan Lengkap (Presensi, Kedisiplinan, Plafon Lembur Rp 76 Jt & Gaji Bersih)"
+                title="Buka Rekapitulasi Bulanan Lengkap (Presensi, Kedisiplinan, Plafon Lembur Rp 69 Jt & Gaji Bersih)"
               >
                 <CalendarDays size={13} className="text-emerald-600 dark:text-emerald-400" />
                 <span>Rekapan Bulanan Lengkap</span>

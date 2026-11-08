@@ -112,7 +112,7 @@ export const HrmEmployeeQuickProfileModal: React.FC<HrmEmployeeQuickProfileModal
     (u.nip && u.nip.replace(/\D/g, '').length >= 5 && parseInt(u.nip.replace(/\D/g, '').slice(-3), 10) <= 33);
 
   const groupLabel = isShipmentGroup
-    ? 'Grup SHIPMENT (Plafon Lembur Rp 72 Jt)'
+    ? 'Grup SHIPMENT (Plafon Lembur Rp 65 Jt)'
     : isRumahTanggaGroup
     ? 'Grup RUMAH TANGGA (Plafon Lembur Rp 4 Jt)'
     : 'Staf / Operasional Non-Lembur';

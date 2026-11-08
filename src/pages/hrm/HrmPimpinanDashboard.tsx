@@ -288,9 +288,9 @@ export const HrmPimpinanDashboard: React.FC = () => {
   const attendanceRate = radarData?.kpis?.todayAttendanceRate ?? (totalEmployees > 0 ? Math.round((todayHadir / totalEmployees) * 100) : 0);
   const onTimeRateToday = radarData?.kpis?.todayPunctualityRate ?? (todayHadir > 0 ? Math.round((todayTepat / todayHadir) * 100) : 100);
 
-  // Overtime Statutory Rules (PT FRP Standard: Total Rp 76.000.000 / month)
-  const CAP_TOTAL = 76000000;
-  const CAP_SHIFTMAN = 72000000;
+  // Overtime Statutory Rules (PT FRP Standard: Total Rp 69.000.000 / month)
+  const CAP_TOTAL = 69000000;
+  const CAP_SHIFTMAN = 65000000;
   const CAP_BIRING_ERE = 4000000;
 
   const approvedOvertimeBudget = overtimeAnalytics.approvedPay || 0;
@@ -392,7 +392,7 @@ export const HrmPimpinanDashboard: React.FC = () => {
               Dashboard Eksekutif &amp; Radar Real-Time
             </h1>
             <p className="text-muted-foreground text-xs md:text-sm max-w-2xl leading-relaxed">
-              Pusat kendali komprehensif PT. FAWWAZ RESKI PERWIRA. Memantau kehadiran real-time, bank pos lapangan, batasan anggaran lembur sah Rp 76 jt, dan persetujuan kebijakan direksi secara instan.
+              Pusat kendali komprehensif PT. FAWWAZ RESKI PERWIRA. Memantau kehadiran real-time, bank pos lapangan, batasan anggaran lembur sah Rp 69 jt, dan persetujuan kebijakan direksi secara instan.
             </p>
           </div>
 
@@ -557,7 +557,7 @@ export const HrmPimpinanDashboard: React.FC = () => {
             </div>
             <p className="text-2xl font-extrabold text-purple-600 font-mono mt-1.5">{overtimeProgressPct}%</p>
             <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
-              {fmtRp(approvedOvertimeBudget)} / 76jt
+              {fmtRp(approvedOvertimeBudget)} / 69jt
             </p>
           </CardContent>
         </Card>
@@ -779,9 +779,9 @@ export const HrmPimpinanDashboard: React.FC = () => {
                 <span className="font-bold text-blue-900 dark:text-blue-300">Shiftman Lapangan FRP</span>
                 <Badge className="bg-blue-600 text-white text-[10px]">47 Karyawan</Badge>
               </div>
-              <p className="text-xl font-extrabold text-foreground font-mono">Rp 72.000.000</p>
+              <p className="text-xl font-extrabold text-foreground font-mono">Rp 65.000.000</p>
               <p className="text-[11px] text-muted-foreground leading-tight">
-                Plafon maksimal gabungan 47 personil (44 Shift Normal + 3 Day Shift). Realisasi tidak boleh melebihi 72jt.
+                Plafon maksimal gabungan 47 personil (44 Shift Normal + 3 Day Shift). Realisasi tidak boleh melebihi 65jt.
               </p>
             </div>
 

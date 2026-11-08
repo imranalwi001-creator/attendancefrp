@@ -112,18 +112,18 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
   // Overtime Settings & Budget Caps (Baku SK Direksi FRP: Total Plafon Rp 76.000.000 untuk 80 personil)
   const [otSettings, setOtSettings] = useState<OvertimeSettings>(() => {
     const s = hrmService.getOvertimeSettings();
-    if (s.monthlyOvertimeBudgetCap === 88000000 || !s.monthlyOvertimeBudgetCap) {
-      s.monthlyOvertimeBudgetCap = 76000000;
+    if (s.monthlyOvertimeBudgetCap === 88000000 || s.monthlyOvertimeBudgetCap === 76000000 || !s.monthlyOvertimeBudgetCap) {
+      s.monthlyOvertimeBudgetCap = 69000000;
     }
     return s;
   });
   const [tempBudgetCap, setTempBudgetCap] = useState<number>(() => {
     const cap = otSettings.monthlyOvertimeBudgetCap;
-    return (cap === 88000000 || !cap) ? 76000000 : cap;
+    return (cap === 88000000 || cap === 76000000 || !cap) ? 69000000 : cap;
   });
   const [tempDivisionCaps, setTempDivisionCaps] = useState<Record<string, number>>(() => ({
-    'Shiftman Lapangan': 72000000,
-    'Shiftman': 72000000,
+    'Shiftman Lapangan': 65000000,
+    'Shiftman': 65000000,
     'Wisma Biring Ere': 4000000,
     'Wisma': 4000000,
     'Rumah Tangga': 4000000,
@@ -369,8 +369,8 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
     });
 
     const divisionCaps = otSettings.divisionBudgetCaps || {};
-    const globalCap = (otSettings.monthlyOvertimeBudgetCap === 88000000 || !otSettings.monthlyOvertimeBudgetCap) 
-      ? 76000000 
+    const globalCap = (otSettings.monthlyOvertimeBudgetCap === 88000000 || otSettings.monthlyOvertimeBudgetCap === 76000000 || !otSettings.monthlyOvertimeBudgetCap) 
+      ? 69000000 
       : otSettings.monthlyOvertimeBudgetCap;
 
     const totalShiftmanStaff = Array.from(map.values())
@@ -388,7 +388,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
       .reduce((sum, d) => sum + d.employeeCount, 0) || 33;
 
     return Array.from(map.values()).map((d) => {
-      // Tentukan alokasi plafon divisi (HANYA BERLAKU UNTUK 80 ORANG SAH: SHIFTMAN LAPANGAN Rp 72jt & WISMA BIRING ERE Rp 4jt)
+      // Tentukan alokasi plafon divisi (HANYA BERLAKU UNTUK 80 ORANG SAH: SHIFTMAN LAPANGAN Rp 65jt & WISMA BIRING ERE Rp 4jt)
       let allocatedBudgetRp = divisionCaps[d.divisionName];
       if (allocatedBudgetRp === undefined) {
         const dName = d.divisionName.toLowerCase();
@@ -396,7 +396,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         const isWismaGroup = dName.includes('wisma') || dName.includes('biring');
 
         if (isShiftmanGroup) {
-          allocatedBudgetRp = Math.round((d.employeeCount / totalShiftmanStaff) * 72000000);
+          allocatedBudgetRp = Math.round((d.employeeCount / totalShiftmanStaff) * 65000000);
         } else if (isWismaGroup) {
           allocatedBudgetRp = Math.round((d.employeeCount / totalWismaStaff) * 4000000);
         } else {
@@ -428,8 +428,8 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
 
   // ─── Company-wide Grand Totals ──────────────────────────────────────────────
   const grandTotal = useMemo(() => {
-    const totalBudgetCap = (otSettings.monthlyOvertimeBudgetCap === 88000000 || !otSettings.monthlyOvertimeBudgetCap) 
-      ? 76000000 
+    const totalBudgetCap = (otSettings.monthlyOvertimeBudgetCap === 88000000 || otSettings.monthlyOvertimeBudgetCap === 76000000 || !otSettings.monthlyOvertimeBudgetCap) 
+      ? 69000000 
       : otSettings.monthlyOvertimeBudgetCap;
     const eligibleEmployeesCount = employeeLiabilityData.filter((e) => e.isOvertimeEligible).length;
 
@@ -543,7 +543,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
         { Parameter: 'Jam Lembur BELUM DICAIRKAN (TERTUNDA)', Nilai: `${grandTotal.unpaidOtHours} Jam (${100 - grandTotal.otRealizationPercent}%)` },
         { Parameter: '----------------------------------------', Nilai: '----------------------------------------' },
         { Parameter: 'FINANSIAL & PAGU ANGGARAN LEMBUR SAH', Nilai: '' },
-        { Parameter: '1. Nominal Lembur yang TERSEDIA (Pagu Sah 80 Personil)', Nilai: `Rp ${grandTotal.totalBudgetCap.toLocaleString('id-ID')} (Shiftman Rp 72jt + Wisma Rp 4jt)` },
+        { Parameter: '1. Nominal Lembur yang TERSEDIA (Pagu Sah 80 Personil)', Nilai: `Rp ${grandTotal.totalBudgetCap.toLocaleString('id-ID')} (Shiftman Rp 65jt + Wisma Rp 4jt)` },
         { Parameter: '2. Nominal Lembur yang TELAH DIGUNAKAN (Cair)', Nilai: `Rp ${grandTotal.usedBudgetRp.toLocaleString('id-ID')}` },
         { Parameter: '3. Nominal Lembur Tertunda (Belum Dicairkan)', Nilai: `Rp ${grandTotal.pendingBudgetRp.toLocaleString('id-ID')}` },
         { Parameter: '4. Nominal Lembur yang TERSISA (Sisa Pagu Bebas)', Nilai: `Rp ${grandTotal.remainingBudgetRp.toLocaleString('id-ID')}` },
@@ -1251,7 +1251,7 @@ export const HrmLeaveOvertimeLiabilityView: React.FC = () => {
                   <span className="font-medium text-foreground">Shiftman Lapangan (47 Orang):</span>
                   <Input
                     type="number"
-                    value={tempDivisionCaps['Shiftman Lapangan'] ?? 72000000}
+                    value={tempDivisionCaps['Shiftman Lapangan'] ?? 65000000}
                     onChange={(e) => setTempDivisionCaps({ ...tempDivisionCaps, 'Shiftman Lapangan': Number(e.target.value), 'Shiftman': Number(e.target.value) })}
                     className="w-36 text-xs font-mono font-bold text-right h-8"
                   />
