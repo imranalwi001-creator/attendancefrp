@@ -2851,7 +2851,8 @@ export const hrmService = {
       if (cached) {
         const parsed = JSON.parse(cached);
         const parsedDate = normalizeDateString(parsed?.attendanceDate || parsed?.date || (parsed as any)?.attendance_date);
-        if (parsed && (parsed.clockIn || parsed.clock_in) && (!parsedDate || parsedDate === today || parsedDate === yesterday)) {
+        const isValidDate = !parsedDate || parsedDate === today || (parsedDate === yesterday && !parsed.clockOut && !parsed.clock_out);
+        if (parsed && (parsed.clockIn || parsed.clock_in) && isValidDate) {
           fromStorage = normalizeAttendanceRecord(parsed);
         } else {
           localStorage.removeItem(`hrm_confirmed_today_att_${userId}_${today}`);

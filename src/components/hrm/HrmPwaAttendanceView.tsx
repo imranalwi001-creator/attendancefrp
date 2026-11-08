@@ -1227,16 +1227,24 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             if (user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`);
           }
         } else if (todayData && todayData.success && !todayData.attendance) {
-          // Server mengonfirmasi belum ada presensi untuk hari ini
+          // Server mengonfirmasi belum ada rekaman presensi sah di PostgreSQL untuk hari ini
           const localAttDate = normalizeDateString(todayAtt?.attendanceDate || todayAtt?.date || todayAttendance?.attendanceDate || todayAttendance?.date);
-          const isYestActive = localAttDate === yesterdayStr && todayAtt && !todayAtt.clockOut;
-          if (localAttDate && localAttDate !== todayStr && !isYestActive) {
+          const isYestActive = localAttDate === yesterdayStr && todayAtt && !todayAtt.clockOut && !todayAtt.clock_out;
+          const hasLocalClockOut = Boolean(todayAtt?.clockOut || todayAtt?.clock_out);
+
+          // Jika lokal punya data yang sudah clockOut (padahal di server null), ATAU tanggalnya bukan hari ini:
+          // Ini adalah ghost cache / residu sesi lama. HAPUS BERSIH agar tombol MASUK aktif!
+          if (!isYestActive && (hasLocalClockOut || (localAttDate && localAttDate !== todayStr))) {
+            console.log('[PWA Clean] Menghapus ghost attendance cache lokal karena database server menyatakan belum ada presensi hari ini.');
             setTodayAttendance(undefined);
-            localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
-            if (user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`);
-          } else if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in) && localAttDate === todayStr) {
-            // ⚡ RESILIENT AUTO-SYNC: Karyawan telah presensi di HP saat sinyal sempat lemah/drop, tapi belum masuk server.
-            // Segera sinkronkan record kehadiran tersebut ke PostgreSQL server secara otomatis!
+            todayAtt = undefined;
+            try {
+              localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
+              if (user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${user.nip}_${todayStr}`);
+            } catch (_) {}
+          } else if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in) && !hasLocalClockOut && localAttDate === todayStr) {
+            // ⚡ RESILIENT AUTO-SYNC: Karyawan telah presensi MASUK di HP saat sinyal sempat lemah/drop, tapi belum masuk server.
+            // Hanya jalankan jika murni clock-in yang belum clock-out!
             api.post('/attendances/clock-in', {
               userId: user.id,
               date: todayStr,
