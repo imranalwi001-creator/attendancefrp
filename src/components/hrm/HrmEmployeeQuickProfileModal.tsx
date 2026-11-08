@@ -518,3 +518,4 @@ export const HrmEmployeeQuickProfileModal: React.FC<HrmEmployeeQuickProfileModal
     </>
   );
 };
+
