@@ -170,7 +170,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       if (cached) {
         const parsed = JSON.parse(cached);
         const parsedDate = normalizeDateString(parsed?.attendanceDate || parsed?.date || (parsed as any)?.attendance_date);
-        if (parsed && (parsed.clockIn || parsed.clock_in) && (!parsedDate || parsedDate === todayStr || parsedDate === yesterdayStr)) {
+        const isValidToday = !parsedDate || parsedDate === todayStr;
+        const isValidYesterdayActive = parsedDate === yesterdayStr && !parsed.clockOut && !parsed.clock_out;
+        if (parsed && (parsed.clockIn || parsed.clock_in) && (isValidToday || isValidYesterdayActive)) {
           return normalizeAttendanceRecord(parsed);
         } else {
           localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${todayStr}`);
@@ -188,7 +190,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const existing = hrmService.getUserTodayAttendance(user.id);
     if (existing) {
       const existDate = normalizeDateString(existing.attendanceDate || existing.date || (existing as any)?.attendance_date);
-      if (!existDate || existDate === todayStr || existDate === yesterdayStr) {
+      const isExistToday = !existDate || existDate === todayStr;
+      const isExistYesterdayActive = existDate === yesterdayStr && !existing.clockOut && !existing.clock_out;
+      if (isExistToday || isExistYesterdayActive) {
         return normalizeAttendanceRecord(existing);
       }
     }
@@ -1162,12 +1166,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           const normRemote = normalizeAttendanceRecord(todayData.attendance);
           const remoteAttDate = normalizeDateString(normRemote.attendanceDate || normRemote.date || (normRemote as any)?.attendance_date);
 
-          // VALIDASI TANGGAL: Terima jika hari ini ATAU sesi aktif shift malam (kemarin belum clock-out atau baru saja clock-out)
+          // VALIDASI TANGGAL: Terima jika hari ini ATAU sesi aktif shift malam yang BELUM clock-out
           const isToday = !remoteAttDate || remoteAttDate === todayStr;
           const isYesterdayActive = remoteAttDate === yesterdayStr && (!normRemote.clockOut && !normRemote.clock_out);
-          const isYesterdayRecentOut = remoteAttDate === yesterdayStr && Boolean(normRemote.clockOut || normRemote.clock_out);
 
-          if (isToday || isYesterdayActive || isYesterdayRecentOut) {
+          if (isToday || isYesterdayActive) {
             // PostgreSQL Server adalah Single Source of Truth (SSOT).
             const remoteClockIn = normRemote.clockIn ? String(normRemote.clockIn).substring(0, 5) : undefined;
             const remoteClockInFull = normRemote.clock_in || normRemote.clockIn;
@@ -1183,7 +1186,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             const effectiveClockOutFull = remoteClockOutFull !== undefined ? remoteClockOutFull : (normRemote.clockIn || normRemote.clock_in ? undefined : todayAtt?.clock_out);
             const preservedPhotoOut = normRemote.photoOut || normRemote.clockOutPhoto;
 
-            const finalAttDate = normRemote.attendanceDate || remoteAttDate || (isYesterdayActive || isYesterdayRecentOut ? yesterdayStr : todayStr);
+            const finalAttDate = normRemote.attendanceDate || remoteAttDate || (isYesterdayActive ? yesterdayStr : todayStr);
 
             todayAtt = {
               ...todayAtt,

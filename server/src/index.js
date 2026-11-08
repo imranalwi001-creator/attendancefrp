@@ -6390,17 +6390,7 @@ app.get('/api/attendances/today', async (req, res) => {
           OR (
             a.attendance_date = (COALESCE(NULLIF($2, '')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date) - INTERVAL '1 day')
             AND a.clock_out IS NULL
-          )
-          -- 3. ATAU sesi shift malam kemarin yang baru saja selesai clock-out hari ini (pagi hari s/d 14:00 WITA) sebelum ada sesi baru
-          OR (
-            a.attendance_date = (COALESCE(NULLIF($2, '')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date) - INTERVAL '1 day')
-            AND a.clock_out IS NOT NULL
-            AND (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::time <= '14:00:00'::time
-            AND NOT EXISTS (
-              SELECT 1 FROM hrm_attendances a2 
-              WHERE a2.user_id = a.user_id 
-                AND a2.attendance_date = COALESCE(NULLIF($2, '')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date)
-            )
+            AND (a.clock_in >= '18:00:00'::time OR a.shift_name ILIKE '%shift iii%' OR a.shift_name ILIKE '%malam%')
           )
         )
       ORDER BY 
