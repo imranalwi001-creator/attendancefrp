@@ -1681,10 +1681,11 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 size="sm"
                 variant="outline"
                 onClick={() => setFinancialRecapModalOpen(true)}
-                className="h-9 px-3 text-xs rounded-xl gap-1.5 border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 font-semibold shadow-xs"
-                title="Buka Rekapan Gaji & Lembur Realtime Seluruh Karyawan (Plafon Rp 76 Jt)"
+                className="h-9 px-3.5 text-xs rounded-xl gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 font-bold shadow-xs transition-all"
+                title="Buka Rekapitulasi Bulanan Lengkap (Presensi, Kedisiplinan, Plafon Lembur Rp 76 Jt & Gaji Bersih)"
               >
-                <Coins size={13} /> Rekap Gaji &amp; Lembur
+                <CalendarDays size={13} className="text-emerald-600 dark:text-emerald-400" />
+                <span>Rekapan Bulanan Lengkap</span>
               </Button>
 
               <Button
@@ -3713,6 +3714,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         overtimes={overtimes}
         attendances={allAttendances}
         schedules={todaySchedules}
+        leaves={approvedLeaves}
       />
 
       {/* Modal Pop-up Foto Profil & Detail Lengkap (Jadwal Live, Lembur, Cuti, dsb) */}
