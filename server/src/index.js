@@ -341,34 +341,74 @@ function parseDescriptorRow(raw) {
   return null;
 }
 
-// Helper: 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) yang 100% Bebas Aturan Divisi & Pos OGS
-function isExemptFieldOfficer(user) {
+// Helper: 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir)
+export function isLeadershipSpecialFieldOfficer(user) {
   if (!user) return false;
-  const email = (user.email || '').toLowerCase().trim();
-  const rawNip = (user.nip || '').trim().toUpperCase();
-  const cleanNip = rawNip.replace(/[\s.]/g, '');
-  const id = (user.id || user.userId || '').toString().toLowerCase();
-  const name = (user.full_name || user.fullName || user.name || '').toLowerCase().trim();
+  let email = '';
+  let rawNip = '';
+  let id = '';
+  let name = '';
+  if (typeof user === 'string') {
+    const s = user.trim().toLowerCase();
+    email = s;
+    id = s;
+    rawNip = user.toUpperCase().trim();
+  } else {
+    email = (user.email || '').toLowerCase().trim();
+    rawNip = (user.nip || '').toUpperCase().trim();
+    id = (user.id || user.userId || user.user_id || '').toString().toLowerCase();
+    name = (user.full_name || user.fullName || user.name || '').toLowerCase().trim();
+  }
 
-  // Rusli (Matching Bontoa & Wisma Makassar) bukan petugas pimpinan
-  if (name.includes('rusli') && !name.includes('samsi')) {
+  // Guard eksklusif: Rusli, Honnes, Rusdi BUKAN 3 Petugas Lapangan Khusus Pimpinan!
+  if (
+    name.includes('rusli') ||
+    name.includes('honnes') ||
+    name.includes('rusdi') ||
+    email.includes('fr07066') ||
+    email.includes('fr07065') ||
+    email.includes('fr07046') ||
+    id === '5dcb6ce4-2812-494f-bf84-2260e5207a1c' ||
+    id === '0ad737f8-97f1-4a9e-bdd2-b0cc50ae1075' ||
+    id === 'c323bc67-21ef-455b-bade-68e2337da062' ||
+    id === 'f0aaf721-203c-4b45-b610-213204bc7ffe'
+  ) {
     return false;
   }
 
-  const exemptEmails = ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'];
+  // 1. Cek UUID Resmi 3 Petugas Lapangan Khusus Pimpinan
   const exemptIds = [
-    'ebf10b16-ab2f-4b53-ab22-b3ffc00694db',
-    '2ce41a19-0c65-45d3-913e-a68a02203fe2',
-    '0a49f92e-5733-4b72-947c-7361f9490632'
+    'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
+    '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI, S.K.M
+    '0a49f92e-5733-4b72-947c-7361f9490632'  // TAKDIR
   ];
+  if (exemptIds.includes(id)) return true;
 
-  if (exemptEmails.includes(email) || exemptIds.includes(id)) return true;
-  if (cleanNip.includes('07065') || cleanNip.includes('07066') || cleanNip.includes('07046')) return true;
-  if (name.includes('aslam') || name.includes('samsi') || name.includes('unga') || name.includes('takdir')) {
+  // 2. Cek Email Resmi
+  const exemptEmails = [
+    'aslamfaisal10okt@gmail.com',
+    'abangelsamsi@gmail.com',
+    'mtakdir46@gmail.com'
+  ];
+  if (exemptEmails.includes(email)) return true;
+
+  // 3. Cek Nama Resmi
+  if (name.includes('aslam') || name.includes('samsi') || name.includes('unga') || (name.includes('takdir') && !name.includes('rusdi'))) {
+    return true;
+  }
+
+  // 4. Cek NIP Lengkap Mutlak (HANYA jika format NIP lengkap sesuai dan milik Samsi)
+  const cleanNip = rawNip.replace(/[\s.]/g, '');
+  if (cleanNip === 'FRP07065' || (cleanNip === 'FR07066' && (email === 'abangelsamsi@gmail.com' || name.includes('samsi'))) || cleanNip === 'FRP07046') {
     return true;
   }
 
   return false;
+}
+
+// Helper: 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) yang 100% Bebas Aturan Divisi & Pos OGS
+function isExemptFieldOfficer(user) {
+  return isLeadershipSpecialFieldOfficer(user);
 }
 
 // Helper: Memeriksa apakah karyawan merupakan personil resmi PT FRP (NIP berawalan FR)
@@ -2530,13 +2570,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     }
 
     // 📲 MANDAT PIMPINAN: Laporan Notifikasi WhatsApp Instan saat Aslam, Samsi, atau Takdir Clock-In
-    const isLeadershipSpecial = [
-      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
-      '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
-      '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
-    ].includes(validUserId)
-    || ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes((userProfile?.email || '').toLowerCase())
-    || ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FRP07065', 'FR07066', 'FRP07046'].includes((userProfile?.nip || '').trim());
+    const isLeadershipSpecial = isLeadershipSpecialFieldOfficer(userProfile || { id: validUserId });
 
     if (isLeadershipSpecial) {
       const witaTimeStr = new Date().toLocaleTimeString('id-ID', {
@@ -3612,13 +3646,7 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
 
         // Check if just arrived at this post or re-entered after exiting
         if (prof.current_active_post_id !== insidePost.id || prof.is_out_of_bounds) {
-          const isSpecialDutyOfficer = [
-            'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
-            '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
-            '0a49f92e-5733-4b72-947c-7361f9490632', // TAKDIR
-          ].includes(validUserId)
-          || ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes((prof.email || '').toLowerCase())
-          || ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FRP07065', 'FR07066', 'FRP07046'].includes((prof.nip || '').trim());
+          const isSpecialDutyOfficer = isLeadershipSpecialFieldOfficer(prof || { id: validUserId });
 
           shouldPromptSelfie = isSpecialDutyOfficer;
 
@@ -3650,10 +3678,10 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
 
           shouldPromptSelfie = isSpecialDutyOfficer && isWorkingHoursNow;
 
-          // HANYA kirimkan notifikasi jika saat ini adalah JAM KERJA RESMI
-          const shouldSendArrivalAlert = isWorkingHoursNow;
+          // HANYA kirimkan notifikasi radar pos jika saat ini JAM KERJA RESMI & HANYA untuk 3 Petugas Lapangan Khusus Pimpinan
+          const shouldSendArrivalAlert = isSpecialDutyOfficer && isWorkingHoursNow;
           if (shouldSendArrivalAlert) {
-            if (isSpecialDutyOfficer && prof.phone) {
+            if (prof.phone) {
               const officerArrivalWa =
 `📍 *NOTIFIKASI TUGAS LAPANGAN PT FRP*
 
@@ -3781,10 +3809,12 @@ Silakan segera buka aplikasi presensi dan lakukan *FOTO SELFIE VERIFIKASI WAJAH 
                 [excessDist, validUserId]
               );
 
-              const breachTitle = `🚨 ${prof.full_name} Bergerak Keluar Perimeter`;
-              const breachSystemMsg = `Petugas ${prof.full_name} (${prof.nip || 'FRP'}) terdeteksi bergerak keluar dari area ${prof.current_active_post_name || targetLocationName} sejauh ${excessDist} meter!`;
+              // 📲 Alert WhatsApp & Sistem ke Pimpinan HANYA untuk 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir)
+              if (isLeadershipSpecialFieldOfficer(prof || { id: validUserId })) {
+                const breachTitle = `🚨 ${prof.full_name} Bergerak Keluar Perimeter`;
+                const breachSystemMsg = `Petugas ${prof.full_name} (${prof.nip || 'FRP'}) terdeteksi bergerak keluar dari area ${prof.current_active_post_name || targetLocationName} sejauh ${excessDist} meter!`;
 
-              const breachWaMsg =
+                const breachWaMsg =
 `🚨 *PERINGATAN RADAR LAPANGAN PT. FAWWAZ RESKI PERWIRA*
 
 👤 Petugas: *${prof.full_name}* (${prof.nip || 'FRP-FIELD'})
@@ -3796,19 +3826,20 @@ Silakan segera buka aplikasi presensi dan lakukan *FOTO SELFIE VERIFIKASI WAJAH 
 
 Mohon segera pantau posisi petugas melalui menu Live Monitoring HRM.`;
 
-              await alertLeadershipViaWhatsAppAndSystem({
-                title: breachTitle,
-                message: breachSystemMsg,
-                waMessage: breachWaMsg,
-                link: '/admin/monitoring',
-                metadata: {
-                  type: 'perimeter_breach',
-                  userId: validUserId,
-                  excessDistance: excessDist,
-                  latitude: userLat,
-                  longitude: userLon
-                }
-              });
+                await alertLeadershipViaWhatsAppAndSystem({
+                  title: breachTitle,
+                  message: breachSystemMsg,
+                  waMessage: breachWaMsg,
+                  link: '/admin/monitoring',
+                  metadata: {
+                    type: 'perimeter_breach',
+                    userId: validUserId,
+                    excessDistance: excessDist,
+                    latitude: userLat,
+                    longitude: userLon
+                  }
+                });
+              }
             }
           }
         }

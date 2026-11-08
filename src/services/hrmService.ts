@@ -3344,12 +3344,7 @@ export const hrmService = {
     }
 
     // Pengecualian 3 Petugas Lapangan Khusus (Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI)
-    const isExemptFieldOfficer = [
-      'aslamfaisal10okt@gmail.com',
-      'abangelsamsi@gmail.com',
-      'mtakdir46@gmail.com'
-    ].includes((user.email || '').toLowerCase()) ||
-    ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes((user.nip || '').trim());
+    const isExemptFieldOfficer = isLeadershipSpecialFieldOfficer(user);
 
     // Validasi Pos OGS (Khusus Ceklok Pulang bagi karyawan biasa / divisi yang ditentukan)
     // Radius OGS disesuaikan ke 60m agar tidak bertabrakan dengan Segel 4/5 (jarak 207m) atau Timbangan 4/5 (jarak 205m)
