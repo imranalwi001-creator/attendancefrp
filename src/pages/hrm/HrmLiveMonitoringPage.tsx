@@ -78,6 +78,7 @@ import { HrmPatrolWatermarkPreviewModal } from '@/components/hrm/HrmPatrolWaterm
 import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMonthlyCalendarModal';
 import { HrmEmployeeRealtimeReportModal } from '@/components/hrm/HrmEmployeeRealtimeReportModal';
 import { HrmMonthlyFinancialRecapModal } from '@/components/hrm/HrmMonthlyFinancialRecapModal';
+import { HrmEmployeeQuickProfileModal } from '@/components/hrm/HrmEmployeeQuickProfileModal';
 
 export const HrmLiveMonitoringPage: React.FC = () => {
   const { user } = useHrmAuth();
@@ -210,6 +211,41 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [selectedReportAttendance, setSelectedReportAttendance] = useState<AttendanceRecord | null>(null);
   const [selectedReportShift, setSelectedReportShift] = useState<any>(null);
   const [financialRecapModalOpen, setFinancialRecapModalOpen] = useState<boolean>(false);
+  const [quickProfileModalOpen, setQuickProfileModalOpen] = useState<boolean>(false);
+  const [selectedQuickProfile, setSelectedQuickProfile] = useState<{
+    user: UserProfile;
+    attendance?: AttendanceRecord | null;
+    shift?: any;
+    status?: string;
+    absentSubtype?: string;
+    monthlyOvertimeHours?: number;
+    monthlyOvertimeCount?: number;
+    todayOvertimeHours?: number;
+    todayOvertimePay?: number;
+    monthlyOvertimePay?: number;
+    totalLateMinutes?: number;
+    lateCount?: number;
+    anomaly?: any;
+  } | null>(null);
+
+  const handleOpenQuickProfile = (payload: {
+    user: UserProfile;
+    attendance?: AttendanceRecord | null;
+    shift?: any;
+    status?: string;
+    absentSubtype?: string;
+    monthlyOvertimeHours?: number;
+    monthlyOvertimeCount?: number;
+    todayOvertimeHours?: number;
+    todayOvertimePay?: number;
+    monthlyOvertimePay?: number;
+    totalLateMinutes?: number;
+    lateCount?: number;
+    anomaly?: any;
+  }) => {
+    setSelectedQuickProfile(payload);
+    setQuickProfileModalOpen(true);
+  };
 
   const handleOpenRealtimeReport = (u: UserProfile, att?: AttendanceRecord | null, sft?: any) => {
     setSelectedReportUser(u);
@@ -2575,35 +2611,58 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2.5">
-                            {(() => {
-                              const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
-                              const photo = (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/')))
-                                ? rawPhoto
-                                : null;
-                              return photo ? (
-                                <img
-                                  src={photo}
-                                  alt={u.fullName}
-                                  className="w-8 h-8 rounded-full object-cover border border-primary/20 shrink-0 shadow-xs"
-                                  onError={(e) => {
-                                    const target = e.currentTarget;
-                                    target.style.display = 'none';
-                                    const fallback = target.nextElementSibling;
-                                    if (fallback) (fallback as HTMLElement).style.display = 'flex';
-                                  }}
-                                />
-                              ) : null;
-                            })()}
                             <div
-                              className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0"
-                              style={{
-                                display: (() => {
-                                  const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
-                                  return (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/'))) ? 'none' : 'flex';
-                                })(),
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenQuickProfile({
+                                  user: u,
+                                  attendance: att,
+                                  shift,
+                                  status,
+                                  absentSubtype,
+                                  monthlyOvertimeHours,
+                                  monthlyOvertimeCount,
+                                  todayOvertimeHours,
+                                  todayOvertimePay,
+                                  monthlyOvertimePay,
+                                  totalLateMinutes,
+                                  lateCount,
+                                  anomaly: userAnomaly,
+                                });
                               }}
+                              className="relative cursor-pointer group/avatar hover:scale-110 active:scale-95 transition-all duration-200 shrink-0"
+                              title="Klik untuk melihat foto profil & info lengkap"
                             >
-                              {u.fullName.charAt(0)}
+                              {(() => {
+                                const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
+                                const photo = (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/')))
+                                  ? rawPhoto
+                                  : null;
+                                return photo ? (
+                                  <img
+                                    src={photo}
+                                    alt={u.fullName}
+                                    className="w-8 h-8 rounded-full object-cover border-2 border-primary/30 group-hover/avatar:border-primary shrink-0 shadow-xs ring-1 ring-transparent group-hover/avatar:ring-primary/40 transition-all"
+                                    onError={(e) => {
+                                      const target = e.currentTarget;
+                                      target.style.display = 'none';
+                                      const fallback = target.nextElementSibling;
+                                      if (fallback) (fallback as HTMLElement).style.display = 'flex';
+                                    }}
+                                  />
+                                ) : null;
+                              })()}
+                              <div
+                                className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0 border border-primary/20 group-hover/avatar:bg-primary/20 group-hover/avatar:border-primary/50 transition-all"
+                                style={{
+                                  display: (() => {
+                                    const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
+                                    return (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/'))) ? 'none' : 'flex';
+                                  })(),
+                                }}
+                              >
+                                {u.fullName.charAt(0)}
+                              </div>
                             </div>
                             <div className="min-w-0">
                               <div className="flex items-center gap-1.5">
@@ -3017,35 +3076,58 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 <CardContent className="p-4 space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2.5">
-                      {(() => {
-                        const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
-                        const photo = (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/')))
-                          ? rawPhoto
-                          : null;
-                        return photo ? (
-                          <img
-                            src={photo}
-                            alt={u.fullName}
-                            className="w-9 h-9 rounded-full object-cover border border-primary/20 shrink-0 shadow-xs"
-                            onError={(e) => {
-                              const target = e.currentTarget;
-                              target.style.display = 'none';
-                              const fallback = target.nextElementSibling;
-                              if (fallback) (fallback as HTMLElement).style.display = 'flex';
-                            }}
-                          />
-                        ) : null;
-                      })()}
                       <div
-                        className="w-9 h-9 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0"
-                        style={{
-                          display: (() => {
-                            const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
-                            return (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/'))) ? 'none' : 'flex';
-                          })(),
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenQuickProfile({
+                            user: u,
+                            attendance: att,
+                            shift,
+                            status,
+                            absentSubtype,
+                            monthlyOvertimeHours,
+                            monthlyOvertimeCount,
+                            todayOvertimeHours,
+                            todayOvertimePay,
+                            monthlyOvertimePay,
+                            totalLateMinutes,
+                            lateCount,
+                            anomaly: userAnomaly,
+                          });
                         }}
+                        className="relative cursor-pointer group/avatar hover:scale-110 active:scale-95 transition-all duration-200 shrink-0"
+                        title="Klik untuk melihat foto profil & info lengkap"
                       >
-                        {u.fullName.charAt(0)}
+                        {(() => {
+                          const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
+                          const photo = (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/')))
+                            ? rawPhoto
+                            : null;
+                          return photo ? (
+                            <img
+                              src={photo}
+                              alt={u.fullName}
+                              className="w-9 h-9 rounded-full object-cover border-2 border-primary/30 group-hover/avatar:border-primary shrink-0 shadow-xs ring-1 ring-transparent group-hover/avatar:ring-primary/40 transition-all"
+                              onError={(e) => {
+                                const target = e.currentTarget;
+                                target.style.display = 'none';
+                                const fallback = target.nextElementSibling;
+                                if (fallback) (fallback as HTMLElement).style.display = 'flex';
+                              }}
+                            />
+                          ) : null;
+                        })()}
+                        <div
+                          className="w-9 h-9 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0 border border-primary/20 group-hover/avatar:bg-primary/20 group-hover/avatar:border-primary/50 transition-all"
+                          style={{
+                            display: (() => {
+                              const rawPhoto = u.avatarUrl || u.faceEnrolledPhoto || (u as any).face_enrolled_photo || (u as any).face_photo_url || (u as any).facePhotoUrl || att?.clockInPhoto || att?.photoIn;
+                              return (typeof rawPhoto === 'string' && (rawPhoto.startsWith('data:image/') || rawPhoto.startsWith('http') || rawPhoto.startsWith('/'))) ? 'none' : 'flex';
+                            })(),
+                          }}
+                        >
+                          {u.fullName.charAt(0)}
+                        </div>
                       </div>
                       <div>
                         <div className="flex items-center gap-1.5">
@@ -3625,6 +3707,30 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         overtimes={overtimes}
         attendances={allAttendances}
         schedules={todaySchedules}
+      />
+
+      {/* Modal Pop-up Foto Profil & Detail Lengkap (Jadwal Live, Lembur, Cuti, dsb) */}
+      <HrmEmployeeQuickProfileModal
+        isOpen={quickProfileModalOpen}
+        onClose={() => setQuickProfileModalOpen(false)}
+        data={selectedQuickProfile}
+        onOpenCalendar={(targetUser) => {
+          setSelectedCalendarUser(targetUser);
+          setCalendarModalOpen(true);
+        }}
+        onOpenRealtimeReport={(targetUser, targetAtt, targetShift) => {
+          handleOpenRealtimeReport(targetUser, targetAtt, targetShift);
+        }}
+        onOpenPhotoPreview={(photoData) => {
+          setPreviewForensic({
+            url: photoData.url,
+            name: photoData.userName,
+            nip: photoData.userNip,
+            time: photoData.time,
+            biometricScore: photoData.biometricScore,
+            geofenceDistance: photoData.geofenceDistance,
+          });
+        }}
       />
     </div>
   );
