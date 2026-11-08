@@ -303,91 +303,97 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   };
 
   const handleExportAllRealtimePdf = () => {
-    if (filtered.length === 0) {
-      toast.error('Tidak ada data karyawan untuk diekspor.');
-      return;
-    }
-
-    const exportDateStr = targetDayDate || getTodayDateStr();
-    const doc = new jsPDF({
-      orientation: 'landscape',
-      unit: 'mm',
-      format: 'a4',
-    });
-
-    // Header Laporan
-    doc.setFontSize(13);
-    doc.setFont('helvetica', 'bold');
-    doc.text('PT. FAWWAZ RESKI PERWIRA', 14, 12);
-    doc.setFontSize(9.5);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`LAPORAN MONITORING PRESENSI & OPERASIONAL REALTIME - ${exportDateStr} (WITA)`, 14, 17);
-    doc.setFontSize(7.5);
-    doc.text(`Total Karyawan: ${filtered.length} Orang | Server: fawwazreskiperwira.com | Dicetak: ${new Date().toLocaleString('id-ID')}`, 14, 21);
-
-    const tableHead = [
-      ['No', 'NIP', 'Nama Karyawan', 'Divisi', 'Shift', 'Status Kehadiran', 'Masuk', 'Pulang', 'Telat', 'Skor Wajah', 'Jarak Pos', 'Lokasi']
-    ];
-
-    const tableBody = filtered.map(({ user: u, attendance: att, status, absentSubtype, shift }, idx) => {
-      const isLate = status === 'terlambat' || (att?.lateMinutes && att.lateMinutes > 0);
-      let statusText = 'BELUM HADIR';
-      if (isLate) {
-        statusText = `TERLAMBAT (${att?.lateMinutes || 0}m)`;
-      } else if (att?.clockIn) {
-        statusText = 'HADIR';
-      } else if (status === 'alfa' || absentSubtype === 'mangkir') {
-        statusText = 'ALPA / MANGKIR';
-      } else if (absentSubtype === 'off') {
-        statusText = 'LIBUR / OFF';
-      } else if (absentSubtype === 'unregistered') {
-        statusText = 'BELUM REGISTRASI WAJAH';
-      } else if (absentSubtype === 'cuti') {
-        statusText = 'CUTI TAHUNAN';
-      } else if (absentSubtype === 'sakit') {
-        statusText = 'IZIN SAKIT';
-      } else if (absentSubtype === 'izin') {
-        statusText = 'IZIN RESMI';
+    try {
+      if (!filtered || filtered.length === 0) {
+        toast.error('Tidak ada data karyawan untuk diekspor.');
+        return;
       }
 
-      return [
-        idx + 1,
-        u.nip,
-        u.fullName,
-        u.divisionName || '-',
-        shift?.name || u.shiftName || 'Day Shift',
-        statusText,
-        att?.clockIn ? att.clockIn.substring(0, 5) : '-',
-        att?.clockOut ? att.clockOut.substring(0, 5) : (att?.clockIn ? 'Aktif' : '-'),
-        att?.lateMinutes ? `${att.lateMinutes}m` : '-',
-        att?.biometricScore ? `${att.biometricScore}%` : '-',
-        att?.geofenceDistance != null ? `${Math.round(att.geofenceDistance)}m` : '-',
-        att?.notes || u.assignedLocationName || '-'
+      const exportDateStr = targetDayDate || getTodayDateStr();
+      const doc = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      // Header Laporan
+      doc.setFontSize(13);
+      doc.setFont('helvetica', 'bold');
+      doc.text('PT. FAWWAZ RESKI PERWIRA', 14, 12);
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`LAPORAN MONITORING PRESENSI & OPERASIONAL REALTIME - ${exportDateStr} (WITA)`, 14, 17);
+      doc.setFontSize(7.5);
+      doc.text(`Total Karyawan: ${filtered.length} Orang | Server: fawwazreskiperwira.com | Dicetak: ${new Date().toLocaleString('id-ID')}`, 14, 21);
+
+      const tableHead = [
+        ['No', 'NIP', 'Nama Karyawan', 'Divisi', 'Shift', 'Status Kehadiran', 'Masuk', 'Pulang', 'Telat', 'Skor Wajah', 'Jarak Pos', 'Lokasi']
       ];
-    });
 
-    autoTable(doc, {
-      startY: 24,
-      head: tableHead,
-      body: tableBody,
-      theme: 'grid',
-      styles: { fontSize: 7, cellPadding: 1.5, halign: 'center' },
-      headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold' },
-      columnStyles: {
-        2: { halign: 'left', fontStyle: 'bold' }, // Nama Karyawan
-        3: { halign: 'left' }, // Divisi
-        11: { halign: 'left' } // Lokasi
-      },
-      didDrawPage: (data) => {
-        const pageCount = (doc.internal as any).getNumberOfPages();
-        doc.setFontSize(7);
-        doc.text(`Halaman ${data.pageNumber} dari ${pageCount}`, doc.internal.pageSize.getWidth() - 30, doc.internal.pageSize.getHeight() - 5);
-      }
-    });
+      const tableBody = filtered.map(({ user: u, attendance: att, status, absentSubtype, shift }, idx) => {
+        const isLate = status === 'terlambat' || (att?.lateMinutes && att.lateMinutes > 0);
+        let statusText = 'BELUM HADIR';
+        if (isLate) {
+          statusText = `TERLAMBAT (${att?.lateMinutes || 0}m)`;
+        } else if (att?.clockIn) {
+          statusText = 'HADIR';
+        } else if (status === 'alfa' || absentSubtype === 'mangkir') {
+          statusText = 'ALPA / MANGKIR';
+        } else if (absentSubtype === 'off') {
+          statusText = 'LIBUR / OFF';
+        } else if (absentSubtype === 'unregistered') {
+          statusText = 'BELUM REGISTRASI WAJAH';
+        } else if (absentSubtype === 'cuti') {
+          statusText = 'CUTI TAHUNAN';
+        } else if (absentSubtype === 'sakit') {
+          statusText = 'IZIN SAKIT';
+        } else if (absentSubtype === 'izin') {
+          statusText = 'IZIN RESMI';
+        }
 
-    const filename = `Monitoring_Realtime_Semua_Karyawan_${todayStr}.pdf`;
-    doc.save(filename);
-    toast.success(`Laporan PDF monitoring ${filtered.length} karyawan berhasil diunduh: ${filename}`);
+        return [
+          idx + 1,
+          u?.nip || '-',
+          u?.fullName || '-',
+          u?.divisionName || '-',
+          shift?.name || u?.shiftName || 'Day Shift',
+          statusText,
+          att?.clockIn ? att.clockIn.substring(0, 5) : '-',
+          att?.clockOut ? att.clockOut.substring(0, 5) : (att?.clockIn ? 'Aktif' : '-'),
+          att?.lateMinutes ? `${att.lateMinutes}m` : '-',
+          att?.biometricScore ? `${att.biometricScore}%` : '-',
+          att?.geofenceDistance != null ? `${Math.round(att.geofenceDistance)}m` : '-',
+          att?.notes || u?.assignedLocationName || '-'
+        ];
+      });
+
+      const runAutoTable = (typeof autoTable === 'function' ? autoTable : (autoTable as any)?.default) || (doc as any).autoTable;
+      runAutoTable(doc, {
+        startY: 24,
+        head: tableHead,
+        body: tableBody,
+        theme: 'grid',
+        styles: { fontSize: 7, cellPadding: 1.5, halign: 'center' },
+        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold' },
+        columnStyles: {
+          2: { halign: 'left', fontStyle: 'bold' }, // Nama Karyawan
+          3: { halign: 'left' }, // Divisi
+          11: { halign: 'left' } // Lokasi
+        },
+        didDrawPage: (data: any) => {
+          const totalPages = doc.getNumberOfPages ? doc.getNumberOfPages() : (doc.internal as any)?.getNumberOfPages?.() || 1;
+          doc.setFontSize(7);
+          doc.text(`Halaman ${data.pageNumber} dari ${totalPages}`, doc.internal.pageSize.getWidth() - 30, doc.internal.pageSize.getHeight() - 5);
+        }
+      });
+
+      const filename = `Monitoring_Realtime_Semua_Karyawan_${exportDateStr}.pdf`;
+      doc.save(filename);
+      toast.success(`Laporan PDF monitoring ${filtered.length} karyawan berhasil diunduh: ${filename}`);
+    } catch (err: any) {
+      console.error('Export PDF error:', err);
+      toast.error('Gagal mengekspor PDF: ' + (err?.message || 'Terjadi kesalahan sistem'));
+    }
   };
 
   const loadFieldAgents = async () => {
