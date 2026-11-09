@@ -212,8 +212,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const nativeCameraInputRef = useRef<HTMLInputElement | null>(null);
   const lastUserRefreshRef = useRef<number>(0);
 
-  // Scan Mode: 'auto' (AI automatic 750ms lock) vs 'manual' (Employee shutter tap anytime)
-  const [scanMode, setScanMode] = useState<'auto' | 'manual'>('auto');
+  // Scan Mode: 'manual' (100% Jepret Manual Penuh oleh Karyawan)
+  const [scanMode, setScanMode] = useState<'auto' | 'manual'>('manual');
   const [isFlashlightOn, setIsFlashlightOn] = useState<boolean>(false);
 
   // Field Authority Modal State (Approval Hub & Rekap Tim Mobile)
@@ -737,6 +737,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   };
 
   // Active Real-time Face Detection Loop on Camera Stream with Fast Friendly Smile Guidance
+  // ─── 100% MANUAL SHUTTER CAMERA (KARYAWAN MEMILIKI KENDALI PENUH UNTUK JEPRET) ───
   useEffect(() => {
     if (!isCameraActive || !cameraStream) {
       setLiveFaceStatus({
@@ -744,8 +745,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         isGreen: false,
         confidence: 0,
         message: actionType === 'clock_out'
-          ? '🏁 Posisikan wajah • Siap Absen Pulang'
-          : '😊 Posisikan wajah (Silakan senyum santai) • Siap Absen Masuk',
+          ? '🏁 Posisikan wajah • Ketuk tombol bulat di bawah untuk pulang'
+          : '😊 Posisikan wajah (Silakan senyum) • Ketuk tombol bulat di bawah',
       });
       setAutoCaptureProgress(0);
       greenSinceRef.current = null;
@@ -783,8 +784,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             isGreen: false,
             confidence: 0,
             message: actionType === 'clock_out'
-              ? '🏁 Posisikan wajah di dalam bingkai untuk absen pulang'
-              : '😊 Posisikan wajah menghadap kamera (Silakan senyum santai)',
+              ? 'Posisikan wajah di dalam bingkai • Lalu ketuk tombol bulat di bawah'
+              : 'Posisikan wajah di dalam bingkai • Lalu ketuk tombol bulat di bawah',
           });
         } else {
           const vw = videoRef.current.videoWidth || 640;
@@ -825,62 +826,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               greenSinceRef.current = now;
             }
 
-            if (now < autoCaptureCooldownUntilRef.current) {
-              setAutoCaptureProgress(0);
-              return;
-            }
-
-            const elapsed = now - greenSinceRef.current;
             const isSmiling = typeof detail.smileScore === 'number' && detail.smileScore >= 0.20;
-            const targetDuration = isSmiling ? 300 : 650; // Jika tersenyum, auto-capture lebih cepat!
 
-            if (scanMode === 'auto') {
-              const progress = Math.min(100, Math.round((elapsed / targetDuration) * 100));
-              setAutoCaptureProgress(progress);
-
-              let statusText = '';
-              if (actionType === 'clock_out') {
-                statusText = progress >= 100
-                  ? '✓ Mengambil foto absen pulang...'
-                  : isSmiling
-                  ? '🏁 Senyum Terdeteksi! Menjepret Absen Pulang...'
-                  : '🏁 Wajah Pas • Menjepret Absen Pulang...';
-              } else {
-                statusText = progress >= 100
-                  ? '✓ Mengambil foto presensi masuk...'
-                  : isSmiling
-                  ? '😊 Senyum Manis Terdeteksi! Menjepret Presensi...'
-                  : '😊 Wajah Pas (Silakan Senyum) • Menjepret Presensi...';
-              }
-
-              setLiveFaceStatus({
-                detected: true,
-                isGreen: true,
-                confidence: masterDescriptor ? 98 : 95,
-                message: statusText,
-              });
-
-              // Auto-capture cepat setelah wajah terpusat
-              if (elapsed >= targetDuration && !isCapturingRef.current && !isTriggeringAutoRef.current && now >= autoCaptureCooldownUntilRef.current) {
-                isTriggeringAutoRef.current = true;
-                greenSinceRef.current = null;
-                setAutoCaptureProgress(100);
-                if (handleShutterCaptureRef.current) {
-                  handleShutterCaptureRef.current();
-                }
-              }
-            } else {
-              // Mode Manual: Indikator hijau aktif seketika, tombol kamera siap ditekan!
-              setAutoCaptureProgress(0);
-              setLiveFaceStatus({
-                detected: true,
-                isGreen: true,
-                confidence: masterDescriptor ? 98 : 95,
-                message: actionType === 'clock_out'
-                  ? '🏁 Wajah Siap • Ketuk Tombol Kamera untuk Pulang'
-                  : '😊 Wajah Siap (Silakan Senyum) • Ketuk Tombol Kamera',
-              });
-            }
+            // 100% Mode Manual: Tidak ada countdown otomatis, karyawan menekan tombol sendiri saat siap!
+            setAutoCaptureProgress(0);
+            setLiveFaceStatus({
+              detected: true,
+              isGreen: true,
+              confidence: masterDescriptor ? 98 : 95,
+              message: actionType === 'clock_out'
+                ? '🏁 Wajah Pas • TEKAN TOMBOL BULAT DI BAWAH UNTUK PULANG'
+                : isSmiling
+                ? '😊 Senyum Terdeteksi! TEKAN TOMBOL BULAT DI BAWAH'
+                : '😊 Wajah Pas (Silakan Senyum) • TEKAN TOMBOL BULAT DI BAWAH',
+            });
           }
         }
       } catch (e) {
@@ -894,7 +853,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       isMounted = false;
       clearInterval(interval);
     };
-  }, [isCameraActive, cameraStream, scanMode, masterDescriptor, actionType]);
+  }, [isCameraActive, cameraStream, masterDescriptor, actionType]);
 
   // Load Real Data from PostgreSQL & hrmService
   // Load Real Data from PostgreSQL & hrmService (Zero-Delay Instant Lock Architecture)
@@ -3651,42 +3610,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             </button>
 
-            {/* Segmented Mode Switch: Auto vs Manual */}
-            <div className="flex items-center bg-black/70 p-1 rounded-xl border border-white/20 backdrop-blur-md shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setScanMode('auto');
-                  setAutoCaptureProgress(0);
-                }}
-                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  scanMode === 'auto'
-                    ? 'bg-emerald-500 text-white shadow-md'
-                    : 'text-white/70 hover:text-white'
-                }`}
-                title="Scan Otomatis saat Wajah Terkunci"
-              >
-                <Zap className="w-3.5 h-3.5" />
-                <span>Auto</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setScanMode('manual');
-                  setAutoCaptureProgress(0);
-                  greenSinceRef.current = null;
-                  isTriggeringAutoRef.current = false;
-                }}
-                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  scanMode === 'manual'
-                    ? 'bg-emerald-500 text-white shadow-md'
-                    : 'text-white/70 hover:text-white'
-                }`}
-                title="Jepret Manual Kapan Saja"
-              >
-                <Camera className="w-3.5 h-3.5" />
-                <span>Manual</span>
-              </button>
+            {/* Mode Indikator: 100% Jepret Manual Penuh */}
+            <div className="flex items-center bg-emerald-950/85 px-3 py-1.5 rounded-xl border border-emerald-400/50 backdrop-blur-md shrink-0 shadow-md text-emerald-300 text-xs font-bold gap-1.5">
+              <Camera className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Jepret Manual</span>
             </div>
           </div>
         </div>
@@ -3842,16 +3769,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             )}
           </div>
 
-          {/* Micro-Progress bar for Auto Mode */}
-          {scanMode === 'auto' && liveFaceStatus.isGreen && (
-            <div className="w-48 bg-slate-800/80 h-1.5 rounded-full overflow-hidden border border-emerald-500/30">
-              <div
-                className="bg-emerald-400 h-full transition-all duration-100 ease-linear rounded-full shadow-[0_0_8px_#34d399]"
-                style={{ width: `${autoCaptureProgress}%` }}
-              />
-            </div>
-          )}
-
           {/* Ergonomic Shutter Deck */}
           <div className="w-full flex items-center justify-between px-6 max-w-xs">
             {/* Left: Switch Camera */}
@@ -3864,34 +3781,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               <SwitchCamera className="w-5 h-5" />
             </button>
 
-            {/* Center: Precision Shutter Button with Aligned SVG Countdown Ring */}
-            <div className="relative flex items-center justify-center">
-              {/* Progress Ring for Auto Capture */}
-              {scanMode === 'auto' && liveFaceStatus.isGreen && (
-                <svg className="absolute w-20 h-20 -rotate-90 pointer-events-none z-10" viewBox="0 0 100 100">
-                  <circle
-                    cx="50"
-                    cy="50"
-                    r="44"
-                    className="stroke-emerald-500/30"
-                    strokeWidth="4"
-                    fill="none"
-                  />
-                  <circle
-                    cx="50"
-                    cy="50"
-                    r="44"
-                    className="stroke-emerald-400 drop-shadow-[0_0_8px_#34d399] transition-all duration-100"
-                    strokeWidth="5"
-                    strokeDasharray="276"
-                    strokeDashoffset={276 - (276 * autoCaptureProgress) / 100}
-                    strokeLinecap="round"
-                    fill="none"
-                  />
-                </svg>
-              )}
-
-              {/* Shutter Trigger Button (Tactile 64x64px) */}
+            {/* Center: Precision Manual Shutter Button with Tactile Glow & Clear Call-To-Action */}
+            <div className="relative flex flex-col items-center justify-center">
               <button
                 type="button"
                 onClick={() => {
@@ -3902,23 +3793,26 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     handleShutterCapture();
                   }
                 }}
-                className={`w-16 h-16 rounded-full p-1.5 flex items-center justify-center transition-all cursor-pointer active:scale-90 border-2 ${
+                className={`w-20 h-20 rounded-full p-2 flex items-center justify-center transition-all cursor-pointer active:scale-90 border-4 shadow-2xl ${
                   liveFaceStatus.isGreen || liveFaceStatus.detected
-                    ? 'border-emerald-400 bg-emerald-500/20 shadow-[0_0_20px_rgba(16,185,129,0.5)]'
-                    : 'border-white/70 bg-white/10 hover:border-white shadow-[0_0_12px_rgba(255,255,255,0.25)]'
+                    ? 'border-emerald-400 bg-emerald-500/30 shadow-[0_0_30px_rgba(16,185,129,0.8)] animate-pulse'
+                    : 'border-white/90 bg-white/20 hover:border-white shadow-[0_0_18px_rgba(255,255,255,0.4)]'
                 }`}
-                title={scanMode === 'auto' ? 'Ambil Foto Sekarang (Bypass Auto)' : 'Jepret Foto Presensi'}
+                title="Ketuk Tombol Ini untuk Ambil Foto Presensi"
               >
                 <div
-                  className={`w-full h-full rounded-full flex items-center justify-center transition-colors shadow-inner ${
+                  className={`w-full h-full rounded-full flex flex-col items-center justify-center transition-colors shadow-inner ${
                     liveFaceStatus.isGreen
                       ? 'bg-emerald-500 hover:bg-emerald-400 text-white'
                       : 'bg-white hover:bg-slate-100 text-slate-900'
                   }`}
                 >
-                  <Camera className="w-6 h-6" />
+                  <Camera className="w-8 h-8" />
                 </div>
               </button>
+              <span className="text-[10px] sm:text-[11px] font-black text-white tracking-wider uppercase mt-1.5 px-3 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-400/70 shadow-lg whitespace-nowrap">
+                👆 KETUK DI SINI
+              </span>
             </div>
 
             {/* Right: Screen Light Boost / Flash Toggle */}
