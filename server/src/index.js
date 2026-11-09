@@ -2331,16 +2331,28 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     let resolvedShiftId = null;
     let resolvedShiftName = shiftName || null;
 
-    if (shiftId && UUID_REGEX.test(shiftId)) {
-      resolvedShiftId = shiftId;
-    } else if (activeShiftId && UUID_REGEX.test(activeShiftId)) {
-      resolvedShiftId = activeShiftId;
-      if (!resolvedShiftName) resolvedShiftName = activeShiftName;
-    } else if (userProfile && userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) {
-      resolvedShiftId = userProfile.shift_id;
-      if (!resolvedShiftName) resolvedShiftName = userProfile.shift_name;
-    } else {
-      resolvedShiftId = await resolveShiftId(shiftId);
+    if (resolvedShiftName) {
+      if (resolvedShiftName.includes('Shift III') || resolvedShiftName.includes('Shift 3')) {
+        resolvedShiftId = 'c394c927-d6b1-4376-9739-84c78aa8477d';
+      } else if (resolvedShiftName.includes('Shift II') || resolvedShiftName.includes('Shift 2')) {
+        resolvedShiftId = 'd61c9fd6-d93e-406e-8781-0bfe8189dbfa';
+      } else if (resolvedShiftName.includes('Shift I') || resolvedShiftName.includes('Shift 1')) {
+        resolvedShiftId = '6203b9f0-b42d-40e2-8e8d-fd5767e0ef4b';
+      }
+    }
+
+    if (!resolvedShiftId) {
+      if (shiftId && UUID_REGEX.test(shiftId)) {
+        resolvedShiftId = shiftId;
+      } else if (activeShiftId && UUID_REGEX.test(activeShiftId)) {
+        resolvedShiftId = activeShiftId;
+        if (!resolvedShiftName) resolvedShiftName = activeShiftName;
+      } else if (userProfile && userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) {
+        resolvedShiftId = userProfile.shift_id;
+        if (!resolvedShiftName) resolvedShiftName = userProfile.shift_name;
+      } else {
+        resolvedShiftId = await resolveShiftId(shiftId);
+      }
     }
 
     if (resolvedShiftId && !resolvedShiftName) {
@@ -5477,7 +5489,7 @@ app.post('/api/attendances/clock-out', async (req, res) => {
 
         // Prioritas 1: Ambil jam shift resmi dari rekaman presensi masuk aktif yang sedang ditutup (Shift 1, 2, 3, atau Day)
         const openAttForShift = await pool.query(
-          `SELECT a.shift_id, a.shift_name, a.clock_in, s.start_time, s.end_time, s.is_cross_day
+          `SELECT a.id, a.shift_id, a.shift_name, a.clock_in, a.attendance_date, s.start_time, s.end_time, s.is_cross_day
            FROM hrm_attendances a
            LEFT JOIN hrm_shifts s ON a.shift_id = s.id
            WHERE a.user_id = $1 AND (a.attendance_date = $2 OR a.attendance_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '1 day')
@@ -5487,12 +5499,40 @@ app.post('/api/attendances/clock-out', async (req, res) => {
           [validUserId, date]
         ).catch(() => ({ rows: [] }));
 
-        if (openAttForShift.rows.length > 0 && openAttForShift.rows[0].start_time) {
+        let shiftDetectedFromAtt = false;
+        if (openAttForShift.rows.length > 0) {
           const row = openAttForShift.rows[0];
-          shiftStartTime = row.start_time.substring(0, 5);
-          shiftEndTime = row.end_time.substring(0, 5);
-          isCrossDay = Boolean(row.is_cross_day);
-        } else {
+          // 1.1 Ekstraksi langsung dari nama shift (misal: "Shift III (22:30 - 07:30 WITA)")
+          const timeMatch = (row.shift_name || '').match(/(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/);
+          if (timeMatch) {
+            shiftStartTime = timeMatch[1];
+            shiftEndTime = timeMatch[2];
+            isCrossDay = shiftStartTime > shiftEndTime;
+            shiftDetectedFromAtt = true;
+          } else if ((row.shift_name || '').toLowerCase().includes('shift iii') || (row.shift_name || '').toLowerCase().includes('shift 3')) {
+            shiftStartTime = '22:30';
+            shiftEndTime = '07:30';
+            isCrossDay = true;
+            shiftDetectedFromAtt = true;
+          } else if ((row.shift_name || '').toLowerCase().includes('shift ii') || (row.shift_name || '').toLowerCase().includes('shift 2')) {
+            shiftStartTime = '15:30';
+            shiftEndTime = '22:30';
+            isCrossDay = false;
+            shiftDetectedFromAtt = true;
+          } else if ((row.shift_name || '').toLowerCase().includes('shift i') || (row.shift_name || '').toLowerCase().includes('shift 1')) {
+            shiftStartTime = '07:30';
+            shiftEndTime = '15:30';
+            isCrossDay = false;
+            shiftDetectedFromAtt = true;
+          } else if (row.start_time && row.end_time) {
+            shiftStartTime = row.start_time.substring(0, 5);
+            shiftEndTime = row.end_time.substring(0, 5);
+            isCrossDay = Boolean(row.is_cross_day);
+            shiftDetectedFromAtt = true;
+          }
+        }
+
+        if (!shiftDetectedFromAtt) {
           // Prioritas 2: Periksa Roster Jadwal Harian (hrm_employee_schedules)
           const schedRes = await pool.query(
             `SELECT es.*, s.is_cross_day as shift_is_cross_day FROM hrm_employee_schedules es

@@ -19,6 +19,7 @@ import {
   AlertOctagon,
   Coffee,
   RotateCw,
+  RefreshCw,
   Lock,
   ChevronRight,
   TrendingUp,
@@ -3664,11 +3665,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
           {/* Biometric Aperture Frame (Apple FaceID / Cyber Sentinel Style) */}
           <div className="relative z-20 w-[270px] h-[330px] sm:w-[290px] sm:h-[360px] pointer-events-none flex flex-col items-center justify-center">
-            {/* Dynamic Challenge Indicator Badge */}
+            {/* Dynamic Alignment Indicator Badge */}
             {!liveFaceStatus.isGreen && liveFaceStatus.detected && (
               <div className="absolute -top-12 z-30 px-3.5 py-1.5 rounded-full bg-black/85 border border-cyan-400 backdrop-blur-md text-cyan-200 text-xs font-bold shadow-lg flex items-center gap-1.5 animate-pulse">
-                {activeChallenge === 'blink' && <span>👁️ KEDIPKAN MATA SANTAI</span>}
-                {activeChallenge === 'smile' && <span>😊 TERSENYUM WAJAR</span>}
+                <span>😊 Posisikan Wajah di Tengah Bingkai</span>
               </div>
             )}
             {/* Dynamic Outer Aura */}
