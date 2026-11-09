@@ -987,64 +987,9 @@ export const hrmService = {
         if (Array.isArray(attendances) && attendances.length > 0) {
           const mappedAtts: AttendanceRecord[] = attendances.map((a: any) => normalizeAttendanceRecord(a));
 
-          // Retain any active employee's verified clock-in & clock-out for today (Monotonic Attendance Lock)
-          const today = getTodayDateStr();
-          try {
-            const rawCurrent = sessionStorage.getItem('hrm_active_session_user') || localStorage.getItem('hrm_active_session_user');
-            if (rawCurrent) {
-              const u = JSON.parse(rawCurrent);
-              const uId = u?.id;
-              const uNip = u?.nip;
-              if (uId) {
-                const confKey = `hrm_confirmed_today_att_${uId}_${today}`;
-                const cachedConf = localStorage.getItem(confKey) || (uNip ? localStorage.getItem(`hrm_confirmed_today_att_${uNip}_${today}`) : null);
-                if (cachedConf) {
-                  const parsedConf = JSON.parse(cachedConf);
-                  const parsedConfDate = normalizeDateString(parsedConf?.attendanceDate || parsedConf?.date || (parsedConf as any)?.attendance_date);
-                  if (parsedConf && (parsedConf.clockIn || parsedConf.clock_in) && (!parsedConfDate || parsedConfDate === today)) {
-                    const normConf = normalizeAttendanceRecord(parsedConf);
-                    const idx = mappedAtts.findIndex((m) =>
-                      (m.userId === uId || m.user_id === uId || (uNip && (m.userNip === uNip || (m as any).user_nip === uNip))) &&
-                      (m.date === today || m.attendanceDate === today)
-                    );
-                    if (idx !== -1) {
-                      // PostgreSQL Server adalah otoritas tertinggi (SSOT):
-                      // Data server (mappedAtts[idx]) diutamakan di atas local cache yang mungkin stale/belum dikoreksi!
-                      const effectiveClockIn = mappedAtts[idx].clockIn || normConf.clockIn;
-                      const effectiveClockInFull = mappedAtts[idx].clock_in || normConf.clock_in || effectiveClockIn;
-                      const effectiveClockOut = mappedAtts[idx].clockOut || (mappedAtts[idx].clock_out ? String(mappedAtts[idx].clock_out).substring(0, 5) : undefined) || normConf.clockOut;
-                      const effectiveClockOutFull = mappedAtts[idx].clock_out || mappedAtts[idx].clockOut || normConf.clock_out || effectiveClockOut;
-                      const effectivePhotoOut = mappedAtts[idx].photoOut || mappedAtts[idx].clockOutPhoto || normConf.photoOut;
-
-                      mappedAtts[idx] = {
-                        ...normConf,
-                        ...mappedAtts[idx],
-                        clockIn: effectiveClockIn,
-                        clock_in: effectiveClockInFull,
-                        clockOut: effectiveClockOut,
-                        clock_out: effectiveClockOutFull,
-                        photoOut: effectivePhotoOut,
-                        clockOutPhoto: effectivePhotoOut,
-                      };
-
-                      // Sinkronkan kembali confirmed cache agar tidak tertinggal
-                      try {
-                        localStorage.setItem(confKey, JSON.stringify(mappedAtts[idx]));
-                        if (uNip) localStorage.setItem(`hrm_confirmed_today_att_${uNip}_${today}`, JSON.stringify(mappedAtts[idx]));
-                      } catch (_) {}
-                    } else {
-                      mappedAtts.unshift(normConf);
-                    }
-                  } else {
-                    // Stale cache from another date, purge immediately
-                    localStorage.removeItem(confKey);
-                    if (uNip) localStorage.removeItem(`hrm_confirmed_today_att_${uNip}_${today}`);
-                  }
-                }
-              }
-            }
-          } catch (e) {}
-
+          // ⚡ STRICT SERVER-AUTHORITATIVE (SSOT):
+          // PostgreSQL Server adalah satu-satunya sumber kebenaran mutlak.
+          // Dilarang keras menyisipkan cache lokal phantom jika database server tidak memilikinya!
           inMemoryAttendances = mappedAtts;
           safeSetJson(STORAGE_KEYS.ATTENDANCE, mappedAtts);
           window.dispatchEvent(new Event('hrm_attendance_updated'));
@@ -2844,37 +2789,11 @@ export const hrmService = {
     const today = getTodayDateStr();
     const yesterday = getYesterdayDateStr();
 
-    // 1. Cek dedicated persistent key first untuk kepastian tanpa race condition
-    let fromStorage: AttendanceRecord | undefined = undefined;
-    try {
-      const cached = localStorage.getItem(`hrm_confirmed_today_att_${userId}_${today}`);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        const parsedDate = normalizeDateString(parsed?.attendanceDate || parsed?.date || (parsed as any)?.attendance_date);
-        const isValidDate = !parsedDate || parsedDate === today || (parsedDate === yesterday && !parsed.clockOut && !parsed.clock_out);
-        if (parsed && (parsed.clockIn || parsed.clock_in) && isValidDate) {
-          fromStorage = normalizeAttendanceRecord(parsed);
-        } else {
-          localStorage.removeItem(`hrm_confirmed_today_att_${userId}_${today}`);
-        }
-      }
-      // Jika di key today belum ada, cek key yesterday untuk sesi shift malam yang belum clock-out
-      if (!fromStorage) {
-        const cachedYest = localStorage.getItem(`hrm_confirmed_today_att_${userId}_${yesterday}`);
-        if (cachedYest) {
-          const parsedYest = JSON.parse(cachedYest);
-          if (parsedYest && (parsedYest.clockIn || parsedYest.clock_in) && !parsedYest.clockOut && !parsedYest.clock_out) {
-            fromStorage = normalizeAttendanceRecord(parsedYest);
-          }
-        }
-      }
-    } catch (e) {}
-
     const users = hrmService.getUsers();
     const u = users.find((x) => x.id === userId || x.email === userId || x.nip === userId);
     const validTargets = [userId, u?.id, u?.email, u?.nip].filter(Boolean);
 
-    // Cari di daftar presensi hari ini
+    // Cari di daftar presensi hari ini dari database server
     const listToday = hrmService.getAttendances(today);
     let found = listToday.find((a) => {
       const aUser = a.userId || (a as any).user_id;
@@ -2894,38 +2813,10 @@ export const hrmService = {
     }
 
     if (found && (found.clockIn || found.clock_in)) {
-      const normFound = normalizeAttendanceRecord(found);
-      const foundDate = normalizeDateString(normFound.attendanceDate || normFound.date);
-      if (foundDate && foundDate !== today && (normFound.clockOut || normFound.clock_out)) {
-        // Jika sudah selesai dan bukan hari ini, biarkan storage lokal yang menangani
-        if (!fromStorage) return undefined;
-      }
-      // Monotonic guard: jika di storage lokal sudah ada clockOut, pertahankan!
-      if (fromStorage?.clockOut && !normFound.clockOut) {
-        normFound.clockOut = fromStorage.clockOut;
-        normFound.clock_out = fromStorage.clock_out || fromStorage.clockOut;
-        if (fromStorage.photoOut && !normFound.photoOut) {
-          normFound.photoOut = fromStorage.photoOut;
-          normFound.clockOutPhoto = fromStorage.clockOutPhoto || fromStorage.photoOut;
-        }
-      }
-      try {
-        localStorage.setItem(`hrm_confirmed_today_att_${userId}_${today}`, JSON.stringify(normFound));
-        if (u?.nip) localStorage.setItem(`hrm_confirmed_today_att_${u.nip}_${today}`, JSON.stringify(normFound));
-      } catch (e) {}
-      return normFound;
+      return normalizeAttendanceRecord(found);
     }
 
-    if (fromStorage) {
-      const storageDate = normalizeDateString(fromStorage.attendanceDate || fromStorage.date);
-      // Izinkan jika tanggal storage adalah today ATAU yesterday yang masih aktif belum clock-out
-      if (storageDate && storageDate !== today && Boolean(fromStorage.clockOut || fromStorage.clock_out)) {
-        localStorage.removeItem(`hrm_confirmed_today_att_${userId}_${today}`);
-        return undefined;
-      }
-    }
-
-    return fromStorage;
+    return undefined;
   },
 
   saveAttendances: (attendances: AttendanceRecord[]): boolean => {
@@ -3433,45 +3324,6 @@ export const hrmService = {
       isMockLocation: data.isMockLocation,
     };
 
-    if (existing && !existing.clockOut) {
-      const idx = all.findIndex((a) => a.id === existing.id);
-      all[idx] = newRecord;
-    } else {
-      all.push(newRecord);
-    }
-
-    const memRec = {
-      ...newRecord,
-      photoIn: data.photoUrl,
-      clockInPhoto: data.photoUrl as any,
-    };
-    const memIdx = inMemoryAttendances.findIndex((m) => m.id === newRecord.id);
-    if (memIdx !== -1) inMemoryAttendances[memIdx] = memRec;
-    else inMemoryAttendances.unshift(memRec);
-
-    // Ephemeral Rolling Photo Replacement: Hapus foto check-in lama dari record sebelumnya milik karyawan ini
-    if (data.photoUrl) {
-      all.forEach((rec) => {
-        if (rec.userId === user.id && rec.id !== newRecord.id) {
-          rec.photoIn = undefined;
-          (rec as any).clockInPhoto = undefined;
-        }
-      });
-      inMemoryAttendances.forEach((rec) => {
-        if (rec.userId === user.id && rec.id !== newRecord.id) {
-          rec.photoIn = undefined;
-          (rec as any).clockInPhoto = undefined;
-        }
-      });
-    }
-
-    hrmService.saveAttendances(all);
-    try {
-      localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${today}`, JSON.stringify(memRec));
-    } catch (e) {}
-    window.dispatchEvent(new Event('hrm_attendance_updated'));
-    window.dispatchEvent(new Event('hrm_data_updated'));
-
     // Push clock-in to PostgreSQL backend API
     const clockInPayload = {
       userId: user.id,
@@ -3483,7 +3335,7 @@ export const hrmService = {
       longitude: data.longitude,
       status,
       lateMinutes,
-      notes: data.notes || '',
+      notes: notesText,
       biometricScore: data.biometricScore,
       biometricMatch: data.biometricMatch,
       geofenceDistance: data.geofenceDistance,
@@ -3506,44 +3358,42 @@ export const hrmService = {
       emergencyReason: data.emergencyReason,
     };
 
+    // ⚡ STRICT SERVER-AUTHORITATIVE (SSOT):
+    // Presensi HANYA diakui sah jika PostgreSQL Server merespons sukses (HTTP 200).
+    // Jika server gagal, lempar error seketika agar karyawan sadar presensi belum masuk!
+    let dbRecord: any = null;
     try {
       const response = await api.post<any>('/attendances/clock-in', clockInPayload);
-      const dbRecord = response?.data?.data || response?.data || response?.attendance;
-      if (dbRecord && dbRecord.id) {
-        memRec.id = dbRecord.id;
-        newRecord.id = dbRecord.id;
-        const idxAll = all.findIndex((a) => a.id === newRecord.id || (a.userId === user.id && a.date === today));
-        if (idxAll !== -1) all[idxAll].id = dbRecord.id;
-        hrmService.saveAttendances(all);
-        try {
-          localStorage.setItem(`hrm_confirmed_today_att_${user.id}_${today}`, JSON.stringify(memRec));
-          if (user.nip) {
-            localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${today}`, JSON.stringify(memRec));
-          }
-        } catch (e) {}
+      dbRecord = response?.data?.data || response?.data || response?.attendance;
+      if (!dbRecord || (!dbRecord.id && response?.success === false)) {
+        throw new Error(response?.data?.error || response?.error || 'Server tidak mengembalikan ID presensi yang sah');
       }
     } catch (err: any) {
-      console.warn('[Attendance] Backend clock-in warning:', err);
-      const serverErrMsg = err.data?.error || err.response?.data?.error;
-      const isBusinessValidationError = err.status === 400 || err.status === 403 || (serverErrMsg && !err.message?.includes('timeout') && !err.message?.includes('Gagal terhubung'));
-
-      if (isBusinessValidationError) {
-        const rollbackAll = hrmService.getAttendances().filter((a) => a.id !== newRecord.id && a.id !== memRec.id);
-        hrmService.saveAttendances(rollbackAll);
-        const memIdxRoll = inMemoryAttendances.findIndex((m) => m.id === newRecord.id || m.id === memRec.id);
-        if (memIdxRoll !== -1) inMemoryAttendances.splice(memIdxRoll, 1);
-        try {
-          localStorage.removeItem(`hrm_confirmed_today_att_${user.id}_${today}`);
-          if (user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${user.nip}_${today}`);
-        } catch (e) {}
-        window.dispatchEvent(new Event('hrm_attendance_updated'));
-        throw new Error(serverErrMsg || err.message || 'Presensi ditolak oleh server');
-      }
-
-      hrmService.enqueueOfflineSync('clock-in', clockInPayload);
+      console.error('[Attendance Server Error]', err);
+      const serverErrMsg = err.data?.error || err.response?.data?.error || err.message;
+      throw new Error(serverErrMsg || 'Gagal menyimpan presensi ke database server pusat. Silakan periksa koneksi internet Anda dan coba lagi.');
     }
 
-    return memRec;
+    const confirmedRecord = normalizeAttendanceRecord(dbRecord || newRecord);
+    confirmedRecord.photoIn = data.photoUrl || confirmedRecord.photoIn;
+    confirmedRecord.clockInPhoto = (data.photoUrl || confirmedRecord.clockInPhoto) as any;
+
+    const existingIdx = all.findIndex((a) => a.id === confirmedRecord.id || (a.userId === user.id && a.date === today));
+    if (existingIdx !== -1) {
+      all[existingIdx] = confirmedRecord;
+    } else {
+      all.unshift(confirmedRecord);
+    }
+
+    const memIdx = inMemoryAttendances.findIndex((m) => m.id === confirmedRecord.id || (m.userId === user.id && m.date === today));
+    if (memIdx !== -1) inMemoryAttendances[memIdx] = confirmedRecord;
+    else inMemoryAttendances.unshift(confirmedRecord);
+
+    hrmService.saveAttendances(all);
+    window.dispatchEvent(new Event('hrm_attendance_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+
+    return confirmedRecord;
   },
 
   recordClockOut: async (data: {
@@ -3631,44 +3481,6 @@ export const hrmService = {
     if (data.geofenceValid != null) existing.geofenceValid = data.geofenceValid;
     if (data.isMockLocation != null) existing.isMockLocation = data.isMockLocation;
 
-    all[idx] = existing;
-
-    const memRec = {
-      ...existing,
-      photoOut: data.photoUrl,
-      clockOutPhoto: data.photoUrl as any,
-    };
-    const memIdx = inMemoryAttendances.findIndex((m) => m.id === existing.id);
-    if (memIdx !== -1) inMemoryAttendances[memIdx] = memRec;
-    else inMemoryAttendances.unshift(memRec);
-
-    // Ephemeral Rolling Photo Replacement: Hapus foto check-out lama dari record sebelumnya milik karyawan ini
-    if (data.photoUrl) {
-      all.forEach((rec) => {
-        if (rec.userId === data.userId && rec.id !== existing.id) {
-          rec.photoOut = undefined;
-          (rec as any).clockOutPhoto = undefined;
-        }
-      });
-      inMemoryAttendances.forEach((rec) => {
-        if (rec.userId === data.userId && rec.id !== existing.id) {
-          rec.photoOut = undefined;
-          (rec as any).clockOutPhoto = undefined;
-        }
-      });
-    }
-
-    hrmService.saveAttendances(all);
-    try {
-      const attDay = existing.attendanceDate || todayStr;
-      localStorage.setItem(`hrm_confirmed_today_att_${existing.userId}_${attDay}`, JSON.stringify(memRec));
-      if (user?.nip) {
-        localStorage.setItem(`hrm_confirmed_today_att_${user.nip}_${attDay}`, JSON.stringify(memRec));
-      }
-    } catch (e) {}
-    window.dispatchEvent(new Event('hrm_attendance_updated'));
-    window.dispatchEvent(new Event('hrm_data_updated'));
-
     // Push clock-out to PostgreSQL backend API
     const clockOutPayload = {
       userId: existing.userId,
@@ -3693,19 +3505,49 @@ export const hrmService = {
       emergencyOvertimeReason: data.emergencyOvertimeReason,
     };
 
+    // ⚡ STRICT SERVER-AUTHORITATIVE (SSOT):
+    // Presensi Pulang HANYA sah jika PostgreSQL Server merespons sukses (HTTP 200).
+    let dbRecord: any = null;
     try {
-      await api.post('/attendances/clock-out', clockOutPayload);
-    } catch (err: any) {
-      console.warn('[Attendance] Backend clock-out warning:', err);
-      const serverErrMsg = err.data?.error || err.response?.data?.error;
-      const isBusinessValidationError = err.status === 400 || err.status === 403 || (serverErrMsg && !err.message?.includes('timeout') && !err.message?.includes('Gagal terhubung'));
-      if (isBusinessValidationError) {
-        throw new Error(serverErrMsg || err.message || 'Presensi pulang ditolak oleh server');
+      const response = await api.post<any>('/attendances/clock-out', clockOutPayload);
+      dbRecord = response?.data?.data || response?.data || response?.attendance;
+      if (!dbRecord && response?.success === false) {
+        throw new Error(response?.data?.error || response?.error || 'Server menolak presensi pulang');
       }
-      hrmService.enqueueOfflineSync('clock-out', clockOutPayload);
+    } catch (err: any) {
+      console.error('[Attendance Clock-Out Server Error]', err);
+      const serverErrMsg = err.data?.error || err.response?.data?.error || err.message;
+      throw new Error(serverErrMsg || 'Gagal menyimpan presensi pulang ke database server pusat. Silakan periksa koneksi internet Anda dan coba lagi.');
     }
 
-    return memRec;
+    const confirmedRecord = normalizeAttendanceRecord(dbRecord || {
+      ...existing,
+      clockOut: clockOutStr,
+      photoOut: data.photoUrl,
+      clockOutPhoto: data.photoUrl as any,
+      workDurationMinutes: durationMins,
+    });
+    if (data.photoUrl) {
+      confirmedRecord.photoOut = data.photoUrl;
+      confirmedRecord.clockOutPhoto = data.photoUrl as any;
+    }
+
+    const existingIdx = all.findIndex((a) => a.id === confirmedRecord.id || (a.userId === existing.userId && a.date === existing.attendanceDate));
+    if (existingIdx !== -1) {
+      all[existingIdx] = confirmedRecord;
+    } else {
+      all.unshift(confirmedRecord);
+    }
+
+    const memIdx = inMemoryAttendances.findIndex((m) => m.id === confirmedRecord.id || (m.userId === existing.userId && m.date === existing.attendanceDate));
+    if (memIdx !== -1) inMemoryAttendances[memIdx] = confirmedRecord;
+    else inMemoryAttendances.unshift(confirmedRecord);
+
+    hrmService.saveAttendances(all);
+    window.dispatchEvent(new Event('hrm_attendance_updated'));
+    window.dispatchEvent(new Event('hrm_data_updated'));
+
+    return confirmedRecord;
   },
 
   // ─── PWA & FIELD SENTINEL REAL-TIME ATTENDANCE ENGINE ───

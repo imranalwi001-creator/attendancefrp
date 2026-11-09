@@ -156,61 +156,6 @@ export const HrmAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
         sessionStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(res.user));
         localStorage.setItem(CURRENT_USER_SESSION_KEY, JSON.stringify(res.user));
 
-        // Prefetch today's confirmed attendance immediately so PWA lock is 0ms on next page load
-        const todayStr = new Date().toLocaleDateString('en-CA');
-        api.get<{ success: boolean; attendance?: any }>(
-          `/attendances/today?userId=${encodeURIComponent(res.user.id)}&nip=${encodeURIComponent(res.user.nip || '')}&date=${todayStr}`
-        ).then((attRes) => {
-          if (attRes && attRes.success && attRes.attendance) {
-            const att = attRes.attendance;
-            const attDate = att.attendanceDate || att.date || (att as any).attendance_date;
-            const normDate = attDate ? String(attDate).substring(0, 10) : '';
-            if ((att.clockIn || att.clock_in) && (!normDate || normDate === todayStr)) {
-              const existingLocal =
-                localStorage.getItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`) ||
-                (res.user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`) : null);
-              let toSave = att;
-              if (existingLocal) {
-                try {
-                  const parsed = JSON.parse(existingLocal);
-                  if (parsed.clockOut && !toSave.clockOut) {
-                    toSave = {
-                      ...toSave,
-                      clockOut: parsed.clockOut,
-                      clock_out: parsed.clock_out || parsed.clockOut,
-                      photoOut: parsed.photoOut || toSave.photoOut,
-                      clockOutPhoto: parsed.clockOutPhoto || toSave.clockOutPhoto,
-                    };
-                  }
-                } catch (_) {}
-              }
-              localStorage.setItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`, JSON.stringify(toSave));
-              if (res.user.nip) {
-                localStorage.setItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`, JSON.stringify(toSave));
-              }
-            } else {
-              // Remote returned data from another date, clean up any stale cache
-              localStorage.removeItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`);
-              if (res.user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`);
-            }
-          } else if (attRes && attRes.success && !attRes.attendance) {
-            // Server explicitly states no attendance today, check and purge if local cache was dirty with another date
-            const existingLocal =
-              localStorage.getItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`) ||
-              (res.user.nip ? localStorage.getItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`) : null);
-            if (existingLocal) {
-              try {
-                const parsed = JSON.parse(existingLocal);
-                const pDate = parsed?.attendanceDate || parsed?.date || parsed?.attendance_date;
-                if (pDate && String(pDate).substring(0, 10) !== todayStr) {
-                  localStorage.removeItem(`hrm_confirmed_today_att_${res.user.id}_${todayStr}`);
-                  if (res.user.nip) localStorage.removeItem(`hrm_confirmed_today_att_${res.user.nip}_${todayStr}`);
-                }
-              } catch (_) {}
-            }
-          }
-        }).catch(() => null);
-
         // Refresh local cache with latest backend state in background
         hrmService.syncWithBackend().catch(() => null);
         return { success: true };
