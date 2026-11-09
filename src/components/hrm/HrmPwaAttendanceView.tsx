@@ -2855,20 +2855,6 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       try { navigator.vibrate([70, 35, 70]); } catch (e) {}
     }
 
-    // ─── ANTI-SPOOFING & ANTI-FOTO STATIS: LIVENESS VERIFICATION GUARD ───
-    if (!livenessPassedRef.current && !isSpotCheckAction) {
-      toast.dismiss(toastLoadingId);
-      toast.error(
-        'Verifikasi keaktifan wajah belum selesai. Silakan kedipkan mata santai atau tersenyum wajar ke kamera (bukan foto/layar HP).',
-        { id: 'liveness-guard', duration: 4500 }
-      );
-      isCapturingRef.current = false;
-      setIsCapturing(false);
-      isTriggeringAutoRef.current = false;
-      setAutoCaptureProgress(0);
-      return;
-    }
-
     try {
       // Pengecualian Petugas Lapangan Khusus Pimpinan & Petugas Distribusi Online Mobile
       const isExemptOfficer = isSpecialDutyOfficer(user);
