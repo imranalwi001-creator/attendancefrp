@@ -736,21 +736,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     }
   };
 
-  // Active Real-time Face Detection Loop on Camera Stream with Active Liveness Verification
+  // Active Real-time Face Detection Loop on Camera Stream with Fast Friendly Smile Guidance
   useEffect(() => {
     if (!isCameraActive || !cameraStream) {
       setLiveFaceStatus({
         detected: false,
         isGreen: false,
         confidence: 0,
-        message: 'Arahkan wajah Anda ke dalam bingkai',
+        message: actionType === 'clock_out'
+          ? '🏁 Posisikan wajah • Siap Absen Pulang'
+          : '😊 Posisikan wajah (Silakan senyum santai) • Siap Absen Masuk',
       });
       setAutoCaptureProgress(0);
       greenSinceRef.current = null;
       isTriggeringAutoRef.current = false;
-      livenessPassedRef.current = false;
-      setIsLivenessPassed(false);
-      pickRandomChallenge();
+      livenessPassedRef.current = true;
+      setIsLivenessPassed(true);
       staticFaceDetectedSinceRef.current = null;
       earHistoryRef.current = [];
       return;
@@ -765,7 +766,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       isProcessing = true;
       try {
-        // Fast real-time landmark & EAR tracking (< 35ms)
+        // Fast real-time face tracking (< 35ms)
         const detail = await biometricService.detectFaceWithLandmarks(videoRef.current);
 
         if (!isMounted) return;
@@ -775,26 +776,24 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           isTriggeringAutoRef.current = false;
           setAutoCaptureProgress(0);
           staticFaceDetectedSinceRef.current = null;
-          earHistoryRef.current = [];
-          if (!livenessPassedRef.current) {
-            blinkStateRef.current = 'waiting_blink';
-            blinkClosedAtRef.current = null;
-          }
+          livenessPassedRef.current = true;
+          setIsLivenessPassed(true);
           setLiveFaceStatus({
             detected: false,
             isGreen: false,
             confidence: 0,
-            message: scanMode === 'manual' ? 'Posisikan wajah di dalam bingkai' : 'Posisikan wajah Anda tepat di dalam bingkai',
+            message: actionType === 'clock_out'
+              ? '🏁 Posisikan wajah di dalam bingkai untuk absen pulang'
+              : '😊 Posisikan wajah menghadap kamera (Silakan senyum santai)',
           });
         } else {
           const vw = videoRef.current.videoWidth || 640;
           const boxCenterX = detail.box.x + detail.box.width / 2;
           const isCentered = Math.abs(boxCenterX - vw / 2) < vw * 0.40;
           const scaleRatio = detail.box.width / vw;
-          // Lapisan 1: Realistis Scale Guard (Wajah 18% - 88% dari frame video agar nyaman di jarak selfie lengan)
-          const isGoodScale = scaleRatio >= 0.18 && scaleRatio <= 0.88;
+          const isGoodScale = scaleRatio >= 0.16 && scaleRatio <= 0.90;
 
-          if (!isGoodScale && scaleRatio < 0.18) {
+          if (!isGoodScale && scaleRatio < 0.16) {
             greenSinceRef.current = null;
             isTriggeringAutoRef.current = false;
             setAutoCaptureProgress(0);
@@ -802,7 +801,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               detected: true,
               isGreen: false,
               confidence: 50,
-              message: '⚠️ Dekatkan wajah sedikit ke kamera (Posisikan di dalam lingkaran)',
+              message: '⚠️ Dekatkan wajah sedikit ke kamera',
             });
             return;
           } else if (!isCentered) {
@@ -817,152 +816,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             });
             return;
           } else {
-            // Wajah terdeteksi tepat di tengah & ukuran pas
+            // Wajah terdeteksi tepat di tengah & ukuran pas!
             const now = Date.now();
-            if (!staticFaceDetectedSinceRef.current) {
-              staticFaceDetectedSinceRef.current = now;
-            }
+            livenessPassedRef.current = true;
+            setIsLivenessPassed(true);
 
-            // ─── ACTIVE LIVENESS VERIFICATION (ANTI-FOTO STATIS / REKAMAN VIDEO / VIDEO CALL) ───
-            if (!livenessPassedRef.current) {
-              if (flashStateRef.current === 'flashing') {
-                return;
-              }
-
-              // Jika challenge melebihi 4.5 detik tanpa tuntas, ganti tantangan acak (kedip <-> senyum)
-              if (now - challengeStartedAtRef.current > 4500) {
-                pickRandomChallenge();
-              }
-
-              const currentChallenge = activeChallengeRef.current;
-              let isChallengeMet = false;
-
-              if (currentChallenge === 'blink') {
-                const ear = typeof detail.ear === 'number' && !isNaN(detail.ear) ? detail.ear : null;
-                if (ear !== null) {
-                  earHistoryRef.current.push(ear);
-                  if (earHistoryRef.current.length > 20) earHistoryRef.current.shift();
-
-                  // ─── BASELINE DETECTION ADAPTIF (RAMAH HELM PROYEK & OUTDOOR) ───
-                  // Pekerja outdoor / berhelm sering memiliki EAR terbuka antara 0.14 - 0.22 akibat bayangan topi/mata menyipit
-                  if (!hasEstablishedBaselineRef.current) {
-                    if (ear >= 0.135) {
-                      openFramesCountRef.current += 1;
-                      if (openFramesCountRef.current >= 2) {
-                        hasEstablishedBaselineRef.current = true;
-                        baselineOpenEarRef.current = Math.max(ear, 0.18);
-                      }
-                    } else if (earHistoryRef.current.length >= 3) {
-                      const maxObserved = Math.max(...earHistoryRef.current);
-                      if (maxObserved >= 0.135) {
-                        hasEstablishedBaselineRef.current = true;
-                        baselineOpenEarRef.current = Math.max(maxObserved, 0.17);
-                      }
-                    }
-                  }
-
-                  if (hasEstablishedBaselineRef.current) {
-                    // Update baseline secara dinamis jika mata terbuka lebih lebar
-                    if (ear > baselineOpenEarRef.current && ear <= 0.40) {
-                      baselineOpenEarRef.current = baselineOpenEarRef.current * 0.7 + ear * 0.3;
-                    }
-
-                    if (blinkStateRef.current === 'waiting_blink') {
-                      // Mata tertutup: EAR drop di bawah 0.145 ATAU drop 18% dari baseline terbuka
-                      const isClosed = ear <= 0.145 || (baselineOpenEarRef.current - ear >= 0.025) || (ear < baselineOpenEarRef.current * 0.82);
-                      if (isClosed) {
-                        blinkClosedAtRef.current = now;
-                        blinkStateRef.current = 'blink_closed';
-                      }
-                    } else if (blinkStateRef.current === 'blink_closed') {
-                      const closedDuration = now - (blinkClosedAtRef.current || now);
-                      if (closedDuration > 2200) {
-                        // Terlalu lama pejam mata, reset ke waiting
-                        blinkStateRef.current = 'waiting_blink';
-                        blinkClosedAtRef.current = null;
-                      } else {
-                        // Mata kembali terbuka setelah kedipan (antara 40ms hingga 2000ms)
-                        const isOpenAgain =
-                          ear >= baselineOpenEarRef.current * 0.88 ||
-                          (ear - (baselineOpenEarRef.current - 0.025) >= 0.012) ||
-                          ear >= 0.155;
-                        if (isOpenAgain && closedDuration >= 40) {
-                          blinkStateRef.current = 'verified';
-                          isChallengeMet = true;
-                        }
-                      }
-                    }
-                  }
-                }
-              } else if (currentChallenge === 'smile') {
-                // Senyum wajar: ambang batas diturunkan dari 0.32 ke 0.24 agar senyum santai langsung terbaca
-                if (typeof detail.smileScore === 'number' && detail.smileScore >= 0.24) {
-                  isChallengeMet = true;
-                }
-              }
-
-              // Tantangan Gerakan Terpenuhi! Uji Pantulan Cahaya 3D (Chromatic Flash Reflection)
-              if (isChallengeMet) {
-                if (flashStateRef.current === 'idle') {
-                  flashStateRef.current = 'flashing';
-                  const s0 = sampleSkinPatch(detail.box);
-                  setIsChromaticFlashing(true);
-
-                  setTimeout(() => {
-                    if (!isMounted || !videoRef.current) return;
-                    const s1 = sampleSkinPatch(detail.box);
-                    setIsChromaticFlashing(false);
-
-                    const deltaCyan = (s1.g + s1.b) - (s0.g + s0.b);
-                    const deltaLum = s1.lum - s0.lum;
-                    const isOutdoorBright = s0.lum >= 120; // Kondisi pencahayaan tinggi / outdoor
-
-                    // Kulit manusia 3D memantulkan cahaya cyan layar HP secara terukur
-                    // Pada siang hari / pencahayaan tinggi, respons delta lebih halus
-                    const isReflectionVerified = deltaCyan >= 0.7 || deltaLum >= 0.5 || (isOutdoorBright && (deltaCyan >= 0.2 || deltaLum >= 0.2 || s1.lum !== s0.lum));
-
-                    if (isReflectionVerified) {
-                      flashStateRef.current = 'verified';
-                      livenessPassedRef.current = true;
-                      setIsLivenessPassed(true);
-                    } else {
-                      flashStateRef.current = 'idle';
-                      autoCaptureCooldownUntilRef.current = Date.now() + 2500;
-                      toast.error('⚠️ Terdeteksi Rekaman Layar HP / Video Call! (Tidak terdeteksi pantulan cahaya 3D kulit asli). Silakan ikuti instruksi.', {
-                        id: 'anti-screen-spoof',
-                        duration: 3500
-                      });
-                      pickRandomChallenge();
-                    }
-                  }, 180);
-                  return;
-                }
-              }
-
-              // Jika Liveness BELUM Lulus:
-              setAutoCaptureProgress(0);
-              greenSinceRef.current = null;
-              isTriggeringAutoRef.current = false;
-
-              let statusMsg = '';
-              if (currentChallenge === 'blink') {
-                statusMsg = blinkStateRef.current === 'blink_closed'
-                  ? '👁️ Kedipan terdeteksi! Silakan BUKA MATA Anda...'
-                  : '👁️ Silakan KEDIPKAN MATA santai untuk verifikasi presensi...';
-              } else if (currentChallenge === 'smile') {
-                statusMsg = '😊 Silakan TERSENYUM WAJAR di depan kamera...';
-              }
-
-              setLiveFaceStatus({
-                detected: true,
-                isGreen: false,
-                confidence: 65,
-                message: statusMsg,
-              });
-              return;
-            }
-
-            // ─── LIVENESS LULUS (MANUSIA ASLI & AKTIF) - INDIKATOR HIJAU NYALA! ───
             if (!greenSinceRef.current) {
               greenSinceRef.current = now;
             }
@@ -973,22 +831,37 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             }
 
             const elapsed = now - greenSinceRef.current;
+            const isSmiling = typeof detail.smileScore === 'number' && detail.smileScore >= 0.20;
+            const targetDuration = isSmiling ? 300 : 650; // Jika tersenyum, auto-capture lebih cepat!
 
             if (scanMode === 'auto') {
-              const progress = Math.min(100, Math.round((elapsed / 280) * 100));
+              const progress = Math.min(100, Math.round((elapsed / targetDuration) * 100));
               setAutoCaptureProgress(progress);
+
+              let statusText = '';
+              if (actionType === 'clock_out') {
+                statusText = progress >= 100
+                  ? '✓ Mengambil foto absen pulang...'
+                  : isSmiling
+                  ? '🏁 Senyum Terdeteksi! Menjepret Absen Pulang...'
+                  : '🏁 Wajah Pas • Menjepret Absen Pulang...';
+              } else {
+                statusText = progress >= 100
+                  ? '✓ Mengambil foto presensi masuk...'
+                  : isSmiling
+                  ? '😊 Senyum Manis Terdeteksi! Menjepret Presensi...'
+                  : '😊 Wajah Pas (Silakan Senyum) • Menjepret Presensi...';
+              }
 
               setLiveFaceStatus({
                 detected: true,
                 isGreen: true,
                 confidence: masterDescriptor ? 98 : 95,
-                message: progress >= 100
-                  ? '✓ Mengambil foto presensi...'
-                  : '✓ Wajah Asli Terverifikasi • Menjepret...',
+                message: statusText,
               });
 
-              // Auto-capture cepat (280ms) setelah liveness verification lulus
-              if (elapsed >= 280 && !isCapturingRef.current && !isTriggeringAutoRef.current && now >= autoCaptureCooldownUntilRef.current) {
+              // Auto-capture cepat setelah wajah terpusat
+              if (elapsed >= targetDuration && !isCapturingRef.current && !isTriggeringAutoRef.current && now >= autoCaptureCooldownUntilRef.current) {
                 isTriggeringAutoRef.current = true;
                 greenSinceRef.current = null;
                 setAutoCaptureProgress(100);
@@ -997,13 +870,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 }
               }
             } else {
-              // Mode Manual: Indikator hijau aktif tanpa auto-trigger!
+              // Mode Manual: Indikator hijau aktif seketika, tombol kamera siap ditekan!
               setAutoCaptureProgress(0);
               setLiveFaceStatus({
                 detected: true,
                 isGreen: true,
                 confidence: masterDescriptor ? 98 : 95,
-                message: '✓ Liveness Terverifikasi • Ketuk Tombol Kamera',
+                message: actionType === 'clock_out'
+                  ? '🏁 Wajah Siap • Ketuk Tombol Kamera untuk Pulang'
+                  : '😊 Wajah Siap (Silakan Senyum) • Ketuk Tombol Kamera',
               });
             }
           }
@@ -1019,7 +894,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       isMounted = false;
       clearInterval(interval);
     };
-  }, [isCameraActive, cameraStream, scanMode, masterDescriptor]);
+  }, [isCameraActive, cameraStream, scanMode, masterDescriptor, actionType]);
 
   // Load Real Data from PostgreSQL & hrmService
   // Load Real Data from PostgreSQL & hrmService (Zero-Delay Instant Lock Architecture)
