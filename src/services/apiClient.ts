@@ -40,8 +40,8 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   let timeoutMs = 30000;
   if (endpoint.includes('/attendances/clock-in') || endpoint.includes('/attendances/clock-out') || endpoint.includes('/patrol-checks') || endpoint.includes('/face-recognition')) {
     timeoutMs = 90000; // 90 seconds for biometric/photo payloads on mobile cellular networks
-  } else if (endpoint.includes('/bootstrap') || endpoint.includes('/users')) {
-    timeoutMs = 45000;
+  } else if (endpoint.includes('/bootstrap') || endpoint.includes('/users') || endpoint.includes('/employee-schedules')) {
+    timeoutMs = 60000;
   }
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 

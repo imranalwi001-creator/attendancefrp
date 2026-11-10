@@ -851,6 +851,23 @@ export const safeSetJson = (key: string, data: any): boolean => {
       toStore = sanitizeLeaveRecords(data);
     } else if (key === STORAGE_KEYS.USERS && Array.isArray(data)) {
       toStore = sanitizeUserRecords(data);
+    } else if (key === STORAGE_KEYS.EMPLOYEE_SCHEDULES && Array.isArray(data)) {
+      toStore = data.slice(-400).map((s: any) => ({
+        id: s.id,
+        userId: s.userId,
+        userName: s.userName,
+        userNip: s.userNip,
+        divisionId: s.divisionId,
+        scheduleDate: s.scheduleDate,
+        shiftId: s.shiftId,
+        shiftCode: s.shiftCode,
+        shiftName: s.shiftName,
+        startTime: s.startTime,
+        endTime: s.endTime,
+        durationHours: s.durationHours,
+        isNightShift: s.isNightShift,
+        isOff: s.isOff,
+      }));
     } else if (typeof data === 'object' && data !== null) {
       toStore = stripLargeMedia(data);
     }
@@ -890,13 +907,26 @@ export const safeSetJson = (key: string, data: any): boolean => {
         }
       }
 
-      // 3. Remove temporary or non-critical storage items
+      // 3. Prune old employee schedules from localStorage
+      const rawSched = localStorage.getItem(STORAGE_KEYS.EMPLOYEE_SCHEDULES);
+      if (rawSched) {
+        try {
+          const parsedSched = JSON.parse(rawSched);
+          if (Array.isArray(parsedSched)) {
+            localStorage.setItem(STORAGE_KEYS.EMPLOYEE_SCHEDULES, JSON.stringify(parsedSched.slice(-150)));
+          }
+        } catch {
+          localStorage.removeItem(STORAGE_KEYS.EMPLOYEE_SCHEDULES);
+        }
+      }
+
+      // 4. Remove temporary or non-critical storage items
       try {
         localStorage.removeItem(STORAGE_KEYS.PERIMETER_VIOLATIONS);
         localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
       } catch {}
 
-      // 4. Retry saving lean payload
+      // 5. Retry saving lean payload
       let fallbackData = data;
       if (key === STORAGE_KEYS.ATTENDANCE && Array.isArray(data)) {
         fallbackData = sanitizeAttendanceRecords(data).slice(0, 15);
@@ -904,6 +934,8 @@ export const safeSetJson = (key: string, data: any): boolean => {
         fallbackData = sanitizeLeaveRecords(data);
       } else if (key === STORAGE_KEYS.USERS && Array.isArray(data)) {
         fallbackData = sanitizeUserRecords(data);
+      } else if (key === STORAGE_KEYS.EMPLOYEE_SCHEDULES && Array.isArray(data)) {
+        fallbackData = data.slice(-150);
       } else {
         fallbackData = stripLargeMedia(data);
       }
@@ -937,6 +969,7 @@ export const safeSetJson = (key: string, data: any): boolean => {
 // Cache memori lokal agar foto face review resolusi penuh & foto master biometrik tetap tersedia di RAM tanpa terpotong kuota 5MB localStorage HP
 let inMemoryAttendances: AttendanceRecord[] = [];
 let inMemoryUsers: UserProfile[] = [];
+let inMemorySchedules: EmployeeSchedule[] = [];
 let lastSyncTimestamp = 0;
 
 export const hrmService = {
@@ -1803,7 +1836,11 @@ export const hrmService = {
     divisionId?: string;
   }): EmployeeSchedule[] => {
     hrmService.init();
-    const all = safeGetJson<EmployeeSchedule[]>(STORAGE_KEYS.EMPLOYEE_SCHEDULES, []);
+    let all = inMemorySchedules;
+    if (!all || all.length === 0) {
+      all = safeGetJson<EmployeeSchedule[]>(STORAGE_KEYS.EMPLOYEE_SCHEDULES, []);
+      inMemorySchedules = all;
+    }
     return all.filter((s) => {
       if (filters?.userId && s.userId !== filters.userId) return false;
       if (filters?.divisionId && filters.divisionId !== 'all' && s.divisionId !== filters.divisionId) return false;
@@ -1826,15 +1863,25 @@ export const hrmService = {
     schedules: EmployeeSchedule[]
   ): Promise<{ success: boolean; count: number }> => {
     hrmService.init();
-    const existing = safeGetJson<EmployeeSchedule[]>(STORAGE_KEYS.EMPLOYEE_SCHEDULES, []);
-    
-    // Map existing by composite key userId_date
+
+    // 1. PRIORITAS UTAMA: Simpan langsung ke PostgreSQL Backend Database (SSOT)
+    try {
+      await api.post('/employee-schedules/batch', { schedules });
+    } catch (err: any) {
+      console.error('[HRM] Error syncing schedules to PostgreSQL backend:', err);
+      throw new Error('Gagal menyimpan jadwal ke database server PostgreSQL: ' + (err.message || 'Koneksi error'));
+    }
+
+    // 2. Simpan di In-Memory Cache agar matriks & UI tetap instan & lengkap tanpa batas quota
+    const current = inMemorySchedules && inMemorySchedules.length > 0
+      ? inMemorySchedules
+      : safeGetJson<EmployeeSchedule[]>(STORAGE_KEYS.EMPLOYEE_SCHEDULES, []);
+
     const map = new Map<string, EmployeeSchedule>();
-    existing.forEach((item) => {
+    current.forEach((item) => {
       map.set(`${item.userId}_${item.scheduleDate}`, item);
     });
 
-    // Upsert new ones
     schedules.forEach((item) => {
       map.set(`${item.userId}_${item.scheduleDate}`, {
         ...item,
@@ -1843,16 +1890,19 @@ export const hrmService = {
     });
 
     const merged = Array.from(map.values());
-    localStorage.setItem(STORAGE_KEYS.EMPLOYEE_SCHEDULES, JSON.stringify(merged));
-    window.dispatchEvent(new Event('hrm_schedules_updated'));
+    inMemorySchedules = merged;
 
-    // Attempt sync to PostgreSQL backend API
+    // 3. Simpan ringkas ke LocalStorage (hanya jendela aktif agar tidak melebihi kuota 5MB browser)
     try {
-      await api.post('/employee-schedules/batch', { schedules });
-    } catch (err: any) {
-      console.warn('[HRM] Syncing schedules to PostgreSQL backend notice:', err.message || err);
+      const cutoffPast = new Date(Date.now() - 15 * 86400000).toISOString().split('T')[0];
+      const cutoffFuture = new Date(Date.now() + 45 * 86400000).toISOString().split('T')[0];
+      const leanSchedules = merged.filter((s) => s.scheduleDate >= cutoffPast && s.scheduleDate <= cutoffFuture);
+      safeSetJson(STORAGE_KEYS.EMPLOYEE_SCHEDULES, leanSchedules.length > 0 ? leanSchedules : merged.slice(-300));
+    } catch (cacheErr) {
+      console.warn('[HRM Storage] Local cache notice for schedules (safely ignored, DB is authoritative):', cacheErr);
     }
 
+    window.dispatchEvent(new Event('hrm_schedules_updated'));
     return { success: true, count: schedules.length };
   },
 
@@ -2093,11 +2143,18 @@ export const hrmService = {
         }));
 
         hrmService.init();
-        const existing = safeGetJson<any[]>(STORAGE_KEYS.EMPLOYEE_SCHEDULES, []);
+        const current = inMemorySchedules && inMemorySchedules.length > 0
+          ? inMemorySchedules
+          : safeGetJson<any[]>(STORAGE_KEYS.EMPLOYEE_SCHEDULES, []);
         const map = new Map<string, any>();
-        existing.forEach((item) => map.set(`${item.userId}_${item.scheduleDate}`, item));
+        current.forEach((item) => map.set(`${item.userId}_${item.scheduleDate}`, item));
         rawSchedules.forEach((item) => map.set(`${item.userId}_${item.scheduleDate}`, item));
-        localStorage.setItem(STORAGE_KEYS.EMPLOYEE_SCHEDULES, JSON.stringify(Array.from(map.values())));
+        const merged = Array.from(map.values());
+        inMemorySchedules = merged;
+
+        try {
+          safeSetJson(STORAGE_KEYS.EMPLOYEE_SCHEDULES, merged.slice(-300));
+        } catch {}
 
         return hrmService.getSavedRosterResult(month, year, divisionId);
       }
@@ -2842,6 +2899,19 @@ export const hrmService = {
         if (Array.isArray(parsedUsers)) {
           const leanUsers = sanitizeUserRecords(parsedUsers);
           safeSetJson(STORAGE_KEYS.USERS, leanUsers);
+        }
+      }
+
+      const rawSched = localStorage.getItem(STORAGE_KEYS.EMPLOYEE_SCHEDULES);
+      if (rawSched && rawSched.length > 150000) {
+        console.info('[HRM Storage] Local schedules cache exceeds 150KB, trimming to active window...');
+        try {
+          const parsed = JSON.parse(rawSched);
+          if (Array.isArray(parsed)) {
+            safeSetJson(STORAGE_KEYS.EMPLOYEE_SCHEDULES, parsed.slice(-200));
+          }
+        } catch {
+          localStorage.removeItem(STORAGE_KEYS.EMPLOYEE_SCHEDULES);
         }
       }
     } catch (e) {
