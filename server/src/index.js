@@ -9646,6 +9646,7 @@ app.post('/api/leaves', async (req, res) => {
       estRemaining,
     };
 
+    let execToken = null;
     if (isSpecial3FieldOfficer) {
       execToken = crypto.randomBytes(16).toString('hex');
       await pool.query('UPDATE hrm_leave_requests SET executive_approval_token = $1 WHERE id = $2', [execToken, leaveRow.id]);
@@ -13672,6 +13673,39 @@ app.post('/api/attendances/manual-entry', async (req, res) => {
     if (!userId || !attendanceDate) {
       return res.status(400).json({ success: false, error: 'userId dan attendanceDate wajib diisi' });
     }
+
+    const rawStatus = (status || 'hadir').toLowerCase().trim();
+    const canonicalStatus = (rawStatus === 'annual_leave' ? 'cuti' : (rawStatus === 'libur' ? 'off' : (rawStatus === 'permission' ? 'izin' : (rawStatus === 'sick' ? 'sakit' : (rawStatus === 'alpha' ? 'alfa' : rawStatus)))));
+
+    const nonWorkingStatuses = ['off', 'libur', 'cuti', 'annual_leave', 'izin', 'permission', 'sakit', 'sick', 'alfa', 'alpha', 'mangkir'];
+    const isNonWorking = nonWorkingStatuses.includes(canonicalStatus);
+
+    let finalClockIn = null;
+    let finalClockOut = null;
+    let finalLateMinutes = 0;
+
+    if (isNonWorking) {
+      finalClockIn = null;
+      finalClockOut = null;
+      finalLateMinutes = 0;
+    } else {
+      finalClockIn = clockIn ? clockIn : '07:30:00';
+      finalClockOut = clockOut ? clockOut : null;
+      finalLateMinutes = canonicalStatus === 'terlambat' ? Number(lateMinutes || 0) : 0;
+    }
+
+    // Jika membuat / memperbarui record dengan clock_out IS NULL (shift berjalan),
+    // otomatis tutup / reconcile rekaman presensi masa lalu (< attendanceDate) yang masih menggantung
+    if (finalClockIn && !finalClockOut) {
+      await pool.query(`
+        UPDATE hrm_attendances
+        SET clock_out = COALESCE(clock_in + INTERVAL '8 hours', '16:30:00'::time),
+            auto_closed_type = 'AUTO_CLOCKOUT_RECONCILED',
+            updated_at = NOW()
+        WHERE user_id = $1 AND attendance_date < $2::date AND clock_out IS NULL;
+      `, [userId, attendanceDate]).catch(e => console.warn('[manual-entry Reconcile Warning]:', e.message));
+    }
+
     const query = `
       INSERT INTO hrm_attendances (user_id, attendance_date, status, clock_in, clock_out, notes, late_minutes, is_verified, is_locked, is_perimeter_breached, created_at, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, true, false, false, NOW(), NOW())
@@ -13690,11 +13724,11 @@ app.post('/api/attendances/manual-entry', async (req, res) => {
     const result = await pool.query(query, [
       userId,
       attendanceDate,
-      status || 'hadir',
-      clockIn || '07:30:00',
-      clockOut ? clockOut : null,
-      notes || 'Presensi manual divalidasi oleh Superadmin',
-      lateMinutes || 0,
+      canonicalStatus,
+      finalClockIn,
+      finalClockOut,
+      notes || (isNonWorking ? `Disahkan: ${canonicalStatus.toUpperCase()}` : 'Presensi manual divalidasi oleh Superadmin'),
+      finalLateMinutes,
     ]);
 
     // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime
