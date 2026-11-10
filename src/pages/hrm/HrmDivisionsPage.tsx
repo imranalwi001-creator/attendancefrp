@@ -194,7 +194,20 @@ export const HrmDivisionsPage: React.FC = () => {
         divisionId: u.divisionId,
       }));
     } else {
-      const emps = divisionEmployeesMap[divId] || allUsers.filter((u) => u.divisionId === divId);
+      const targetDiv = divisions.find((d) => d.id === divId);
+      const dId = (divId || '').trim();
+      const dName = targetDiv ? (targetDiv.name || '').trim().toLowerCase() : '';
+      const dCode = targetDiv ? (targetDiv.code || '').trim().toLowerCase() : '';
+
+      const emps = divisionEmployeesMap[divId] || allUsers.filter((u: any) => {
+        const uDivId = (u.divisionId || u.division_id || '').trim();
+        if (uDivId && dId && uDivId === dId) return true;
+        const uDivName = (u.divisionName || u.division_name || u.division || '').trim().toLowerCase();
+        if (uDivName && dName && (uDivName === dName || uDivName.replace(/\s+/g, ' ') === dName.replace(/\s+/g, ' '))) return true;
+        const uDivCode = (u.divisionCode || u.division_code || '').trim().toLowerCase();
+        if (uDivCode && dCode && uDivCode === dCode) return true;
+        return false;
+      });
       const sortedEmps = [...emps].sort(sortFn);
       return sortedEmps.map((u) => ({
         id: u.id,
@@ -800,27 +813,68 @@ export const HrmDivisionsPage: React.FC = () => {
     setImportModalOpen(false);
   };
 
-  const loadData = async () => {
-    const divs = hrmService.getDivisions();
-    setDivisions(divs);
-
-    let allUsers = hrmService.getUsers();
-    try {
-      const res = await api.get<{ success: boolean; data: UserProfile[] }>('/users');
-      if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
-        allUsers = res.data;
-        hrmService.setInMemoryUsers(res.data);
-      }
-    } catch {
-      // fallback to local users
-    }
-    setUsers(allUsers);
-
+  // Helper tangguh untuk pemetaan staf karyawan ke masing-masing divisi (by ID, by Name, by Code)
+  const buildDivisionEmployeesMap = (currentDivs: Division[], currentUsers: UserProfile[]) => {
     const map: Record<string, UserProfile[]> = {};
-    divs.forEach((d) => {
-      map[d.id] = allUsers.filter((u) => u.divisionId === d.id);
+    currentDivs.forEach((d) => {
+      const dId = (d.id || '').trim();
+      const dName = (d.name || '').trim().toLowerCase();
+      const dCode = (d.code || '').trim().toLowerCase();
+
+      map[d.id] = currentUsers.filter((u: any) => {
+        // 1. Direct ID match (PostgreSQL UUID atau ID lokal)
+        const uDivId = (u.divisionId || u.division_id || '').trim();
+        if (uDivId && dId && uDivId === dId) return true;
+
+        // 2. Division Name match (exact atau normalisasi spasi)
+        const uDivName = (u.divisionName || u.division_name || u.division || '').trim().toLowerCase();
+        if (uDivName && dName) {
+          if (uDivName === dName) return true;
+          if (uDivName.replace(/\s+/g, ' ') === dName.replace(/\s+/g, ' ')) return true;
+        }
+
+        // 3. Division Code match
+        const uDivCode = (u.divisionCode || u.division_code || '').trim().toLowerCase();
+        if (uDivCode && dCode && uDivCode === dCode) return true;
+
+        return false;
+      });
     });
-    setDivisionEmployeesMap(map);
+    return map;
+  };
+
+  const loadData = async () => {
+    // 1. Initial immediate paint dari memory / localStorage
+    let currentDivs = hrmService.getDivisions();
+    setDivisions(currentDivs);
+
+    let currentUsers = hrmService.getUsers();
+    setUsers(currentUsers);
+    setDivisionEmployeesMap(buildDivisionEmployeesMap(currentDivs, currentUsers));
+
+    // 2. Authoritative Fetch langsung dari PostgreSQL Backend secara serentak
+    try {
+      const [fetchedDivs, resUsers] = await Promise.all([
+        hrmService.fetchDivisions().catch(() => null),
+        api.get<{ success: boolean; data: UserProfile[] }>('/users').catch(() => null),
+      ]);
+
+      if (Array.isArray(fetchedDivs) && fetchedDivs.length > 0) {
+        currentDivs = fetchedDivs;
+        setDivisions(fetchedDivs);
+      }
+
+      if (resUsers && resUsers.success && Array.isArray(resUsers.data) && resUsers.data.length > 0) {
+        currentUsers = resUsers.data;
+        setUsers(resUsers.data);
+        hrmService.setInMemoryUsers(resUsers.data);
+      }
+
+      // Re-map karyawan ke divisi dengan data PostgreSQL teranyar
+      setDivisionEmployeesMap(buildDivisionEmployeesMap(currentDivs, currentUsers));
+    } catch (err) {
+      console.warn('[HrmDivisionsPage] Failed syncing live data from server:', err);
+    }
   };
 
   const loadPosts = async () => {
@@ -908,6 +962,16 @@ export const HrmDivisionsPage: React.FC = () => {
     loadData();
     loadPosts();
     loadSimulationStatus();
+
+    const handleUpdate = () => {
+      loadData();
+    };
+    window.addEventListener('hrm_users_updated', handleUpdate);
+    window.addEventListener('hrm_data_updated', handleUpdate);
+    return () => {
+      window.removeEventListener('hrm_users_updated', handleUpdate);
+      window.removeEventListener('hrm_data_updated', handleUpdate);
+    };
   }, []);
 
   // Update dynamic terminal barcode every second when terminal modal is open
@@ -2331,7 +2395,14 @@ export const HrmDivisionsPage: React.FC = () => {
               {/* List pilihan calon karyawan */}
               {(() => {
                 const candidates = users
-                  .filter((u) => u.divisionId !== viewEmployeesDiv.id)
+                  .filter((u: any) => {
+                    const uDivId = (u.divisionId || u.division_id || '').trim();
+                    if (uDivId && viewEmployeesDiv.id && uDivId === viewEmployeesDiv.id) return false;
+                    const uDivName = (u.divisionName || u.division_name || u.division || '').trim().toLowerCase();
+                    const vName = (viewEmployeesDiv.name || '').trim().toLowerCase();
+                    if (uDivName && vName && uDivName === vName) return false;
+                    return true;
+                  })
                   .filter((u) => {
                     if (!searchEmpToAdd.trim()) return true;
                     const q = searchEmpToAdd.toLowerCase();

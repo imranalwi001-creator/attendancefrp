@@ -1465,7 +1465,7 @@ export const hrmService = {
           address: d.address || '',
           latitude: typeof d.latitude === 'number' ? d.latitude : parseFloat(d.latitude),
           longitude: typeof d.longitude === 'number' ? d.longitude : parseFloat(d.longitude),
-          radiusMeters: d.radiusMeters || d.radius_meters || 50,
+          radiusMeters: d.radiusMeters || d.radius_meters || 150,
           allowedPosts: d.allowedPosts || d.allowed_posts || [],
           polygonCoords: d.polygonCoords || d.polygon_coords || null,
         }));
