@@ -501,6 +501,73 @@ export const isFieldOperationalWorker = (user: any): boolean => {
   );
 };
 
+export type EmployeeCategoryGroup = 'RUMAH TANGGA' | 'SHIPMENT' | 'KARYAWAN TETAP' | 'OTHER';
+
+export const getEmployeeCategoryGroup = (userOrNip: any): EmployeeCategoryGroup => {
+  if (!userOrNip) return 'OTHER';
+
+  // 1. Cek Karyawan Tetap Pimpinan (Takdir, Aslam, Samsi)
+  if (isLeadershipSpecialFieldOfficer(userOrNip)) {
+    return 'KARYAWAN TETAP';
+  }
+
+  let nip = '';
+  let email = '';
+  let name = '';
+  if (typeof userOrNip === 'string') {
+    nip = userOrNip.toUpperCase().trim().replace(/[\s.]/g, '');
+  } else {
+    nip = (userOrNip.nip || userOrNip.userNip || userOrNip.user_nip || userOrNip.employeeNip || '').toUpperCase().trim().replace(/[\s.]/g, '');
+    email = (userOrNip.email || '').toLowerCase().trim();
+    name = (userOrNip.fullName || userOrNip.userName || userOrNip.name || '').toLowerCase().trim();
+  }
+
+  if (
+    email.includes('aslamfaisal10okt') ||
+    email.includes('abangelsamsi') ||
+    email.includes('mtakdir46') ||
+    nip === 'FRP07065' ||
+    nip === 'FRP07046' ||
+    (nip === 'FR07066' && email === 'abangelsamsi@gmail.com') ||
+    name.includes('aslam faisal') ||
+    name.includes('unga samsi') ||
+    (name.includes('takdir') && !name.includes('rusdi'))
+  ) {
+    return 'KARYAWAN TETAP';
+  }
+
+  // 2. Ekstrak nomor urut NIP FR: FR07001-FR07033 (Rumah Tangga) vs FR07034-FR07080 (Shipment)
+  const m = nip.match(/^FR(?:07)?(\d{2,3})$/);
+  if (m) {
+    const num = parseInt(m[1], 10);
+    if (num >= 1 && num <= 33) {
+      return 'RUMAH TANGGA';
+    }
+    if (num >= 34 && num <= 80) {
+      return 'SHIPMENT';
+    }
+  }
+
+  const opGroup = typeof userOrNip === 'object' ? (userOrNip.operationalGroup || userOrNip.operational_group || '').toUpperCase() : '';
+  if (opGroup.includes('RUMAH TANGGA') || opGroup.includes('WISMA')) return 'RUMAH TANGGA';
+  if (opGroup.includes('SHIPMENT')) return 'SHIPMENT';
+
+  return 'OTHER';
+};
+
+export const getEmployeeCategoryLabel = (group: EmployeeCategoryGroup): string => {
+  switch (group) {
+    case 'RUMAH TANGGA':
+      return 'Rumah Tangga (FR07001–FR07033)';
+    case 'SHIPMENT':
+      return 'Shipment (FR07034–FR07080)';
+    case 'KARYAWAN TETAP':
+      return 'Karyawan Tetap (Takdir, Aslam, Samsi)';
+    default:
+      return 'Lainnya / Kantor Pusat';
+  }
+};
+
 
 export interface Division {
   id: string;

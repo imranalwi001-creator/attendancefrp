@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile, Shift, isOfficialFrEmployee, LeaveRequest } from '@/types/hrm';
+import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile, Shift, isOfficialFrEmployee, LeaveRequest, EmployeeCategoryGroup, getEmployeeCategoryGroup, getEmployeeCategoryLabel } from '@/types/hrm';
 import { HrmAbsenSplModal } from '@/components/hrm/HrmAbsenSplModal';
 import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMonthlyCalendarModal';
 import { HrmLeaveOvertimeLiabilityView } from '@/components/hrm/HrmLeaveOvertimeLiabilityView';
@@ -73,6 +73,7 @@ export const HrmReportsPage: React.FC = () => {
   const [selectedMonth, setSelectedMonth] = useState<string>(defaultFiscalMonthStr || currentMonthStr);
   const [attendanceViewMode, setAttendanceViewMode] = useState<'recap' | 'logs'>('recap');
   const [selectedDate, setSelectedDate] = useState<string>(''); // Default kosong agar menampilkan data bulan terpilih
+  const [filterCategory, setFilterCategory] = useState<'all' | EmployeeCategoryGroup>('all');
   const [filterDivision, setFilterDivision] = useState<string>('all');
   const [filterBiometrik, setFilterBiometrik] = useState<'all' | 'active' | 'unregistered'>('all');
   const [lastSyncTime, setLastSyncTime] = useState<string>(() => new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
@@ -85,6 +86,7 @@ export const HrmReportsPage: React.FC = () => {
 
   // Overtime Filters
   const [selectedOtDate, setSelectedOtDate] = useState<string>('');
+  const [filterOtCategory, setFilterOtCategory] = useState<'all' | EmployeeCategoryGroup>('all');
   const [filterOtDivision, setFilterOtDivision] = useState<string>('all');
   const [filterOtStatus, setFilterOtStatus] = useState<string>('all');
   const [filterOtPayment, setFilterOtPayment] = useState<string>('all');
@@ -297,10 +299,15 @@ export const HrmReportsPage: React.FC = () => {
       // Jika karyawan belum melakukan perekaman wajah biometrik (akun baru / proses pendaftaran):
       // Status biometrik: "Belum Aktif (Belum Registrasi Wajah)".
       // Sesuai mandat pimpinan: TIDAK BERLAKU akumulasi mangkir/alpa berjalan, denda, atau metrik kehadiran.
+      const categoryGroup = getEmployeeCategoryGroup(emp);
+      const categoryGroupLabel = getEmployeeCategoryLabel(categoryGroup);
+
       if (!isFaceEnrolled) {
         return {
           user: emp,
           isFaceEnrolled: false,
+          categoryGroup,
+          categoryGroupLabel,
           statusBiometrikLabel: 'Belum Aktif (Belum Registrasi Wajah)',
           statusBadge: 'Belum Registrasi',
           totalAttendances: 0,
@@ -361,6 +368,8 @@ export const HrmReportsPage: React.FC = () => {
       return {
         user: emp,
         isFaceEnrolled: true,
+        categoryGroup,
+        categoryGroupLabel,
         statusBiometrikLabel: 'Aktif (Wajah Terdaftar)',
         statusBadge: 'Aktif Terdaftar',
         totalAttendances: onTimeCount + lateCount,
@@ -380,22 +389,37 @@ export const HrmReportsPage: React.FC = () => {
       };
     });
 
-    // ── SMART PRIORITIZED SORTING ──
-    // Prioritaskan karyawan yang sudah aktif terdaftar wajah dan memiliki data presensi di ATAS (Halaman 1),
-    // baru kemudian diikuti oleh personil yang masih menunggu pendaftaran biometrik.
+    // ── SMART PRIORITIZED SORTING BERDASARKAN KELOMPOK OPERASIONAL RESMI ──
+    // 1. Rumah Tangga (FR07001–FR07033)
+    // 2. Shipment (FR07034–FR07080)
+    // 3. Karyawan Tetap (Takdir, Aslam, Samsi)
+    // 4. Lainnya
+    const getCategoryPriority = (grp: EmployeeCategoryGroup): number => {
+      if (grp === 'RUMAH TANGGA') return 1;
+      if (grp === 'SHIPMENT') return 2;
+      if (grp === 'KARYAWAN TETAP') return 3;
+      return 4;
+    };
+
+    const extractNipNumber = (nip: string): number => {
+      const m = (nip || '').replace(/[\s.]/g, '').toUpperCase().match(/FR(?:07)?(\d+)/);
+      return m ? parseInt(m[1], 10) : 9999;
+    };
+
     return recapList.sort((a, b) => {
-      if (a.isFaceEnrolled !== b.isFaceEnrolled) {
-        return a.isFaceEnrolled ? -1 : 1;
-      }
-      if (b.totalAttendances !== a.totalAttendances) {
-        return b.totalAttendances - a.totalAttendances;
-      }
+      const pA = getCategoryPriority(a.categoryGroup);
+      const pB = getCategoryPriority(b.categoryGroup);
+      if (pA !== pB) return pA - pB;
+      const numA = extractNipNumber(a.user.nip);
+      const numB = extractNipNumber(b.user.nip);
+      if (numA !== numB) return numA - numB;
       return a.user.nip.localeCompare(b.user.nip);
     });
   }, [employees, attendances, overtimes, leaves, selectedMonth]);
 
   const filteredMonthlyRecap = React.useMemo(() => {
     return monthlyEmployeeRecap.filter((item) => {
+      const matchCategory = filterCategory === 'all' || item.categoryGroup === filterCategory;
       const matchDiv = filterDivision === 'all' || (item.user.divisionName || '').toLowerCase() === filterDivision.toLowerCase() || item.user.divisionId === filterDivision;
       const matchBio =
         filterBiometrik === 'all' ||
@@ -404,38 +428,55 @@ export const HrmReportsPage: React.FC = () => {
       const matchSearch =
         item.user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.user.nip.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchDiv && matchBio && matchSearch;
+      return matchCategory && matchDiv && matchBio && matchSearch;
     });
-  }, [monthlyEmployeeRecap, filterDivision, filterBiometrik, searchQuery]);
+  }, [monthlyEmployeeRecap, filterCategory, filterDivision, filterBiometrik, searchQuery]);
 
-  // Export Rekapitulasi Bulanan Seluruh Karyawan ke Excel (.xlsx)
+  // Statistik Jumlah Karyawan Per Kelompok
+  const categoryCounts = React.useMemo(() => {
+    let rt = 0;
+    let ship = 0;
+    let tetap = 0;
+    monthlyEmployeeRecap.forEach((r) => {
+      if (r.categoryGroup === 'RUMAH TANGGA') rt++;
+      else if (r.categoryGroup === 'SHIPMENT') ship++;
+      else if (r.categoryGroup === 'KARYAWAN TETAP') tetap++;
+    });
+    return {
+      all: monthlyEmployeeRecap.length,
+      rumahTangga: rt,
+      shipment: ship,
+      karyawanTetap: tetap,
+    };
+  }, [monthlyEmployeeRecap]);
+
+  // Export Rekapitulasi Bulanan Seluruh Karyawan ke Excel (.xlsx) dengan Pemisahan Khusus Kelompok
   const exportMonthlyRecapToExcel = () => {
-    const dataToExport = filteredMonthlyRecap.map((r, idx) => ({
-      No: idx + 1,
-      'Periode Bulan': selectedMonthLabel,
-      NIP: r.user.nip,
-      'Nama Karyawan': r.user.fullName,
-      Divisi: r.user.divisionName || '-',
-      'Status Biometrik': r.statusBiometrikLabel,
-      'Total Kehadiran': r.isFaceEnrolled ? r.totalAttendances : '-',
-      'Hadir Tepat Waktu': r.isFaceEnrolled ? r.onTimeCount : '-',
-      'Hadir Terlambat': r.isFaceEnrolled ? r.lateCount : '-',
-      'Total Menit Terlambat': r.isFaceEnrolled ? r.totalLateMinutes : '-',
-      'Cuti (Hari)': r.isFaceEnrolled ? r.cutiCount : '-',
-      'Sakit (Hari)': r.isFaceEnrolled ? r.sakitCount : '-',
-      'Lembur (Jam SPKL)': r.isFaceEnrolled ? r.overtimeHours : '-',
-      'Akumulasi Jam Kerja (Jam)': r.isFaceEnrolled ? r.totalWorkHours : '-',
-      'Alpa / Mangkir (Hari)': r.isFaceEnrolled ? r.alpaCount : '-',
-      'Estimasi Denda Terlambat (Rp)': r.isFaceEnrolled ? r.lateDeduction : 0,
-      Keterangan: r.keterangan,
-    }));
+    const buildExportRows = (items: typeof monthlyEmployeeRecap) =>
+      items.map((r, idx) => ({
+        No: idx + 1,
+        'Kelompok / Kategori': r.categoryGroupLabel,
+        'Periode Bulan': selectedMonthLabel,
+        NIP: r.user.nip,
+        'Nama Karyawan': r.user.fullName,
+        Divisi: r.user.divisionName || '-',
+        'Status Biometrik': r.statusBiometrikLabel,
+        'Total Kehadiran': r.isFaceEnrolled ? r.totalAttendances : '-',
+        'Hadir Tepat Waktu': r.isFaceEnrolled ? r.onTimeCount : '-',
+        'Hadir Terlambat': r.isFaceEnrolled ? r.lateCount : '-',
+        'Total Menit Terlambat': r.isFaceEnrolled ? r.totalLateMinutes : '-',
+        'Cuti (Hari)': r.isFaceEnrolled ? r.cutiCount : '-',
+        'Sakit (Hari)': r.isFaceEnrolled ? r.sakitCount : '-',
+        'Lembur (Jam SPKL)': r.isFaceEnrolled ? r.overtimeHours : '-',
+        'Akumulasi Jam Kerja (Jam)': r.isFaceEnrolled ? r.totalWorkHours : '-',
+        'Alpa / Mangkir (Hari)': r.isFaceEnrolled ? r.alpaCount : '-',
+        'Estimasi Denda Terlambat (Rp)': r.isFaceEnrolled ? r.lateDeduction : 0,
+        Keterangan: r.keterangan,
+      }));
 
-    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, `Rekap ${selectedMonth}`);
-
-    worksheet['!cols'] = [
+    const colWidths = [
       { wch: 6 },
+      { wch: 34 },
       { wch: 18 },
       { wch: 14 },
       { wch: 26 },
@@ -454,7 +495,55 @@ export const HrmReportsPage: React.FC = () => {
       { wch: 32 },
     ];
 
-    XLSX.writeFile(workbook, `Rekapitulasi_Presensi_Bulanan_${selectedMonth}.xlsx`);
+    const workbook = XLSX.utils.book_new();
+
+    if (filterCategory === 'all') {
+      // 1. Sheet Semua Karyawan
+      const allWs = XLSX.utils.json_to_sheet(buildExportRows(filteredMonthlyRecap));
+      allWs['!cols'] = colWidths;
+      XLSX.utils.book_append_sheet(workbook, allWs, `Semua Personel (${filteredMonthlyRecap.length})`.slice(0, 31));
+
+      // 2. Sheet Khusus Rumah Tangga (FR07001–FR07033)
+      const rtItems = monthlyEmployeeRecap.filter((r) => r.categoryGroup === 'RUMAH TANGGA');
+      if (rtItems.length > 0) {
+        const rtWs = XLSX.utils.json_to_sheet(buildExportRows(rtItems));
+        rtWs['!cols'] = colWidths;
+        XLSX.utils.book_append_sheet(workbook, rtWs, `Rumah Tangga (${rtItems.length})`);
+      }
+
+      // 3. Sheet Khusus Shipment (FR07034–FR07080)
+      const shipItems = monthlyEmployeeRecap.filter((r) => r.categoryGroup === 'SHIPMENT');
+      if (shipItems.length > 0) {
+        const shipWs = XLSX.utils.json_to_sheet(buildExportRows(shipItems));
+        shipWs['!cols'] = colWidths;
+        XLSX.utils.book_append_sheet(workbook, shipWs, `Shipment (${shipItems.length})`);
+      }
+
+      // 4. Sheet Khusus Karyawan Tetap (Takdir, Aslam, Samsi)
+      const tetapItems = monthlyEmployeeRecap.filter((r) => r.categoryGroup === 'KARYAWAN TETAP');
+      if (tetapItems.length > 0) {
+        const tetapWs = XLSX.utils.json_to_sheet(buildExportRows(tetapItems));
+        tetapWs['!cols'] = colWidths;
+        XLSX.utils.book_append_sheet(workbook, tetapWs, `Karyawan Tetap (${tetapItems.length})`);
+      }
+
+      XLSX.writeFile(workbook, `Rekapitulasi_Presensi_Lengkap_Per_Kelompok_${selectedMonth}.xlsx`);
+    } else {
+      // Sheet Terfilter sesuai pilihan kategori
+      const sheetTitle =
+        filterCategory === 'RUMAH TANGGA'
+          ? 'Rumah Tangga FR07001-33'
+          : filterCategory === 'SHIPMENT'
+          ? 'Shipment FR07034-80'
+          : filterCategory === 'KARYAWAN TETAP'
+          ? 'Karyawan Tetap (Pimpinan)'
+          : `Rekap ${selectedMonth}`;
+
+      const ws = XLSX.utils.json_to_sheet(buildExportRows(filteredMonthlyRecap));
+      ws['!cols'] = colWidths;
+      XLSX.utils.book_append_sheet(workbook, ws, sheetTitle.slice(0, 31));
+      XLSX.writeFile(workbook, `Rekapitulasi_Presensi_${filterCategory}_${selectedMonth}.xlsx`);
+    }
   };
 
   // Unduh PDF Rekapitulasi Presensi, Keterlambatan, Cuti, Sakit, Jam Kerja & Lembur Bulanan
@@ -561,6 +650,15 @@ export const HrmReportsPage: React.FC = () => {
       doc.text('Bontoa, Minasatene, Pangkajene and Islands Regency, South Sulawesi • Web: fawwazreskiperwira.com', marginX + 16, 17.5);
 
       // Kanan Kop: Judul Dokumen & Periode
+      const categoryTitleLabel =
+        filterCategory === 'all'
+          ? 'SEMUA KELOMPOK (83 PERSONEL)'
+          : filterCategory === 'RUMAH TANGGA'
+          ? 'RUMAH TANGGA (FR07001–FR07033)'
+          : filterCategory === 'SHIPMENT'
+          ? 'SHIPMENT (FR07034–FR07080)'
+          : 'KARYAWAN TETAP (TAKDIR, ASLAM, SAMSI)';
+
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10);
       doc.setTextColor(15, 23, 42);
@@ -571,10 +669,10 @@ export const HrmReportsPage: React.FC = () => {
       doc.setTextColor(29, 78, 216); // blue-700
       doc.text(`PERIODE: ${selectedMonthLabel.toUpperCase()}`, pageWidth - marginX - 1, 14, { align: 'right' });
 
-      doc.setFont('helvetica', 'normal');
+      doc.setFont('helvetica', 'bold');
       doc.setFontSize(6.5);
-      doc.setTextColor(100, 116, 139);
-      doc.text('Laporan Resmi Eksekutif Perusahaan (Format Sah)', pageWidth - marginX - 1, 17.5, { align: 'right' });
+      doc.setTextColor(4, 120, 87); // emerald-700
+      doc.text(`KELOMPOK: ${categoryTitleLabel}`, pageWidth - marginX - 1, 17.5, { align: 'right' });
 
       // Garis Ganda Pembatas Kop Surat
       doc.setDrawColor(15, 23, 42);
@@ -607,7 +705,7 @@ export const HrmReportsPage: React.FC = () => {
         {
           label: 'TOTAL PERSONEL RESMI',
           val: `${totalEmployeesCount} Orang`,
-          sub: 'Personel PT. FRP Resmi',
+          sub: filterCategory === 'all' ? 'Seluruh Personel FRP' : categoryTitleLabel.split('(')[0].trim(),
           bg: [248, 250, 252],
           border: [203, 213, 225],
           valColor: [15, 23, 42],
@@ -674,6 +772,7 @@ export const HrmReportsPage: React.FC = () => {
           'NO',
           'NIP',
           'NAMA KARYAWAN',
+          'KELOMPOK',
           'DIVISI / PENUGASAN',
           'STATUS BIOMETRIK',
           'HADIR',
@@ -689,10 +788,20 @@ export const HrmReportsPage: React.FC = () => {
 
       const tableBody = filteredMonthlyRecap.map((r, idx) => {
         const isEnrolled = r.isFaceEnrolled;
+        const shortKelompok =
+          r.categoryGroup === 'RUMAH TANGGA'
+            ? 'Rumah Tangga'
+            : r.categoryGroup === 'SHIPMENT'
+            ? 'Shipment'
+            : r.categoryGroup === 'KARYAWAN TETAP'
+            ? 'Karyawan Tetap'
+            : 'Lainnya';
+
         return [
           String(idx + 1),
           r.user.nip,
           (r.user.fullName || '').toUpperCase(),
+          shortKelompok,
           r.user.divisionName || '-',
           isEnrolled ? 'Aktif (Terdaftar)' : 'Belum Registrasi Wajah',
           isEnrolled ? `${r.totalAttendances} Hari` : '-',
@@ -712,6 +821,7 @@ export const HrmReportsPage: React.FC = () => {
           'TOTAL',
           '',
           `TOTAL KESELURUHAN (${filteredMonthlyRecap.length} PERSONEL)`,
+          '',
           '',
           `${activeEnrolledCount} Aktif / ${pendingEnrollmentCount} Belum`,
           `${grandTotalHadir} Hari`,
@@ -757,23 +867,38 @@ export const HrmReportsPage: React.FC = () => {
           cellPadding: 2,
         },
         columnStyles: {
-          0: { cellWidth: 8, halign: 'center' }, // NO
-          1: { cellWidth: 22, halign: 'center', fontStyle: 'bold' }, // NIP
-          2: { cellWidth: 42, halign: 'left', fontStyle: 'bold' }, // NAMA
-          3: { cellWidth: 32, halign: 'left' }, // DIVISI
-          4: { cellWidth: 32, halign: 'center', fontStyle: 'bold' }, // STATUS BIOMETRIK
-          5: { cellWidth: 14, halign: 'center' }, // HADIR
-          6: { cellWidth: 20, halign: 'center' }, // TERLAMBAT
-          7: { cellWidth: 13, halign: 'center' }, // CUTI
-          8: { cellWidth: 13, halign: 'center' }, // SAKIT
-          9: { cellWidth: 16, halign: 'center' }, // LEMBUR
-          10: { cellWidth: 18, halign: 'center' }, // JAM KERJA
-          11: { cellWidth: 14, halign: 'center' }, // ALPA
-          12: { cellWidth: 33, halign: 'left' }, // KETERANGAN
+          0: { cellWidth: 7, halign: 'center' }, // NO
+          1: { cellWidth: 19, halign: 'center', fontStyle: 'bold' }, // NIP
+          2: { cellWidth: 38, halign: 'left', fontStyle: 'bold' }, // NAMA
+          3: { cellWidth: 25, halign: 'center', fontStyle: 'bold' }, // KELOMPOK
+          4: { cellWidth: 28, halign: 'left' }, // DIVISI
+          5: { cellWidth: 28, halign: 'center', fontStyle: 'bold' }, // STATUS BIOMETRIK
+          6: { cellWidth: 13, halign: 'center' }, // HADIR
+          7: { cellWidth: 18, halign: 'center' }, // TERLAMBAT
+          8: { cellWidth: 12, halign: 'center' }, // CUTI
+          9: { cellWidth: 12, halign: 'center' }, // SAKIT
+          10: { cellWidth: 15, halign: 'center' }, // LEMBUR
+          11: { cellWidth: 17, halign: 'center' }, // JAM KERJA
+          12: { cellWidth: 13, halign: 'center' }, // ALPA
+          13: { cellWidth: 32, halign: 'left' }, // KETERANGAN
         },
         didParseCell: (data) => {
-          // Highlight kolom status biometrik
-          if (data.section === 'body' && data.column.index === 4) {
+          // Highlight kolom kelompok (kolom index 3)
+          if (data.section === 'body' && data.column.index === 3) {
+            const rawVal = String(data.cell.raw || '');
+            if (rawVal.includes('Rumah Tangga')) {
+              data.cell.styles.textColor = [4, 120, 87]; // emerald-700
+              data.cell.styles.fillColor = [236, 253, 245]; // emerald-50
+            } else if (rawVal.includes('Shipment')) {
+              data.cell.styles.textColor = [3, 105, 161]; // sky-700
+              data.cell.styles.fillColor = [240, 249, 255]; // sky-50
+            } else if (rawVal.includes('Tetap')) {
+              data.cell.styles.textColor = [126, 34, 206]; // purple-700
+              data.cell.styles.fillColor = [250, 245, 255]; // purple-50
+            }
+          }
+          // Highlight kolom status biometrik (kolom index 5)
+          if (data.section === 'body' && data.column.index === 5) {
             const rawVal = String(data.cell.raw || '');
             if (rawVal.includes('Aktif')) {
               data.cell.styles.textColor = [22, 101, 52]; // green-800
@@ -787,21 +912,26 @@ export const HrmReportsPage: React.FC = () => {
           if (data.section === 'body') {
             const rowData = filteredMonthlyRecap[data.row.index];
             if (rowData && !rowData.isFaceEnrolled) {
-              if (data.column.index >= 5 && data.column.index <= 11) {
+              if (data.column.index >= 6 && data.column.index <= 12) {
                 data.cell.styles.textColor = [148, 163, 184]; // muted slate-400
               }
-              if (data.column.index === 12) {
+              if (data.column.index === 13) {
                 data.cell.styles.textColor = [194, 65, 12]; // amber note
                 data.cell.styles.fontStyle = 'italic';
               }
             } else if (rowData && rowData.isFaceEnrolled) {
-              // Jika ada keterlambatan
-              if (data.column.index === 6 && rowData.lateCount > 0) {
+              // Jika ada keterlambatan (kolom index 7)
+              if (data.column.index === 7 && rowData.lateCount > 0) {
                 data.cell.styles.textColor = [180, 83, 9];
                 data.cell.styles.fontStyle = 'bold';
               }
-              // Jika ada alpa
-              if (data.column.index === 11 && rowData.alpaCount > 0) {
+              // Jika ada lembur (kolom index 10)
+              if (data.column.index === 10 && rowData.overtimeHours > 0) {
+                data.cell.styles.textColor = [194, 65, 12];
+                data.cell.styles.fontStyle = 'bold';
+              }
+              // Jika ada alpa (kolom index 12)
+              if (data.column.index === 12 && rowData.alpaCount > 0) {
                 data.cell.styles.textColor = [225, 29, 72];
                 data.cell.styles.fontStyle = 'bold';
               }
@@ -1038,6 +1168,7 @@ export const HrmReportsPage: React.FC = () => {
   // OVERTIME DATA & EXPORT LOGIC
   // ==========================================
   const filteredOtList = overtimes.filter((o) => {
+    const matchCat = filterOtCategory === 'all' || getEmployeeCategoryGroup(o.userNip || o.userId) === filterOtCategory;
     const matchDate = !selectedOtDate || o.date === selectedOtDate;
     const matchDiv = filterOtDivision === 'all' || o.divisionName?.toLowerCase() === filterOtDivision.toLowerCase();
     const matchStatus = filterOtStatus === 'all' || o.status === filterOtStatus;
@@ -1046,7 +1177,7 @@ export const HrmReportsPage: React.FC = () => {
       (o.userName || '').toLowerCase().includes(otSearchQuery.toLowerCase()) ||
       (o.userNip || '').toLowerCase().includes(otSearchQuery.toLowerCase()) ||
       (o.taskDescription || '').toLowerCase().includes(otSearchQuery.toLowerCase());
-    return matchDate && matchDiv && matchStatus && matchPayment && matchSearch;
+    return matchCat && matchDate && matchDiv && matchStatus && matchPayment && matchSearch;
   });
 
   // Chart data for attendance
@@ -1120,6 +1251,7 @@ export const HrmReportsPage: React.FC = () => {
   const exportOtToExcel = () => {
     const dataToExport = filteredOtList.map((o, idx) => ({
       No: idx + 1,
+      'Kelompok / Kategori': getEmployeeCategoryLabel(getEmployeeCategoryGroup(o.userNip || o.userId)),
       Tanggal: o.date,
       NIP: o.userNip,
       'Nama Karyawan': o.userName,
@@ -1141,7 +1273,7 @@ export const HrmReportsPage: React.FC = () => {
     const worksheet = XLSX.utils.json_to_sheet(dataToExport);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Rekap Lembur');
-    XLSX.writeFile(workbook, `Rekap_Uang_Lembur_${selectedOtDate || 'Semua'}.xlsx`);
+    XLSX.writeFile(workbook, `Rekap_Uang_Lembur_${filterOtCategory}_${selectedOtDate || 'Semua'}.xlsx`);
   };
 
   const exportOtToCsv = () => {
@@ -1544,11 +1676,99 @@ export const HrmReportsPage: React.FC = () => {
           {/* ── SUB-VIEW 1: REKAPAN BULANAN PER KARYAWAN ── */}
           {attendanceViewMode === 'recap' ? (
             <div className="space-y-4">
+              {/* Quick Segmented Category Switcher Pills */}
+              <div className="flex flex-wrap items-center gap-2 p-1.5 bg-muted/60 rounded-2xl border border-border">
+                <button
+                  type="button"
+                  onClick={() => setFilterCategory('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    filterCategory === 'all'
+                      ? 'bg-primary text-primary-foreground shadow-xs'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-background/60'
+                  }`}
+                >
+                  <Users size={13} />
+                  <span>Semua Kelompok</span>
+                  <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4 ml-1">
+                    {categoryCounts.all}
+                  </Badge>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setFilterCategory('RUMAH TANGGA')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    filterCategory === 'RUMAH TANGGA'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10'
+                  }`}
+                >
+                  <span>🏠</span>
+                  <span>Rumah Tangga</span>
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] py-0 px-1.5 h-4 ml-1 ${
+                      filterCategory === 'RUMAH TANGGA'
+                        ? 'bg-white/20 text-white border-transparent'
+                        : 'border-emerald-300 text-emerald-700 dark:text-emerald-400'
+                    }`}
+                  >
+                    {categoryCounts.rumahTangga} (FR07001–FR07033)
+                  </Badge>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setFilterCategory('SHIPMENT')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    filterCategory === 'SHIPMENT'
+                      ? 'bg-sky-600 text-white shadow-xs'
+                      : 'text-muted-foreground hover:text-sky-600 hover:bg-sky-500/10'
+                  }`}
+                >
+                  <span>🚢</span>
+                  <span>Shipment</span>
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] py-0 px-1.5 h-4 ml-1 ${
+                      filterCategory === 'SHIPMENT'
+                        ? 'bg-white/20 text-white border-transparent'
+                        : 'border-sky-300 text-sky-700 dark:text-sky-400'
+                    }`}
+                  >
+                    {categoryCounts.shipment} (FR07034–FR07080)
+                  </Badge>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setFilterCategory('KARYAWAN TETAP')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    filterCategory === 'KARYAWAN TETAP'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-muted-foreground hover:text-purple-600 hover:bg-purple-500/10'
+                  }`}
+                >
+                  <span>⭐</span>
+                  <span>Karyawan Tetap</span>
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] py-0 px-1.5 h-4 ml-1 ${
+                      filterCategory === 'KARYAWAN TETAP'
+                        ? 'bg-white/20 text-white border-transparent'
+                        : 'border-purple-300 text-purple-700 dark:text-purple-400'
+                    }`}
+                  >
+                    {categoryCounts.karyawanTetap} (Takdir, Aslam, Samsi)
+                  </Badge>
+                </button>
+              </div>
+
               {/* Filter Bar Rekapan */}
               <Card className="border-border bg-card rounded-xl shadow-xs">
                 <CardContent className="p-3">
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-4 gap-2.5">
                       <div className="relative">
                         <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
                         <Input
@@ -1559,6 +1779,17 @@ export const HrmReportsPage: React.FC = () => {
                           className="pl-9 text-xs rounded-xl h-9"
                         />
                       </div>
+                      <Select value={filterCategory} onValueChange={(v: any) => setFilterCategory(v)}>
+                        <SelectTrigger className="text-xs rounded-xl h-9">
+                          <SelectValue placeholder="Semua Kelompok" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Semua Kelompok ({categoryCounts.all})</SelectItem>
+                          <SelectItem value="RUMAH TANGGA">🏠 Rumah Tangga ({categoryCounts.rumahTangga}) [FR07001-33]</SelectItem>
+                          <SelectItem value="SHIPMENT">🚢 Shipment ({categoryCounts.shipment}) [FR07034-80]</SelectItem>
+                          <SelectItem value="KARYAWAN TETAP">⭐ Karyawan Tetap ({categoryCounts.karyawanTetap}) [Takdir, Aslam, Samsi]</SelectItem>
+                        </SelectContent>
+                      </Select>
                       <Select value={filterDivision} onValueChange={setFilterDivision}>
                         <SelectTrigger className="text-xs rounded-xl h-9">
                           <SelectValue placeholder="Semua Divisi" />
@@ -1634,7 +1865,7 @@ export const HrmReportsPage: React.FC = () => {
                       Rekapitulasi Presensi Bulanan Karyawan ({selectedMonthLabel})
                     </h2>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Ringkasan kehadiran, status biometrik, frekuensi keterlambatan, cuti, sakit, lembur, dan audit disiplin seluruh personel aktif.
+                      Ringkasan kehadiran, status biometrik, frekuensi keterlambatan, cuti, sakit, lembur, dan audit disiplin seluruh personel aktif terbagi rapi per kelompok.
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1653,6 +1884,7 @@ export const HrmReportsPage: React.FC = () => {
                       <tr>
                         <th className="py-3 px-2 text-center font-semibold w-8">#</th>
                         <th className="py-3 px-3 font-semibold min-w-[180px]">Karyawan</th>
+                        <th className="py-3 px-3 font-semibold min-w-[140px]">Kelompok / Grup</th>
                         <th className="py-3 px-3 font-semibold min-w-[110px]">Divisi</th>
                         <th className="py-3 px-3 text-center font-semibold min-w-[130px]">Status Biometrik</th>
                         <th className="py-3 px-2 text-center font-semibold">Hadir</th>
@@ -1668,7 +1900,7 @@ export const HrmReportsPage: React.FC = () => {
                     <tbody className="divide-y divide-border">
                       {filteredMonthlyRecap.length === 0 ? (
                         <tr>
-                          <td colSpan={12} className="py-8 text-center text-muted-foreground">
+                          <td colSpan={13} className="py-8 text-center text-muted-foreground">
                             Tidak ada data karyawan yang cocok dengan kriteria pencarian.
                           </td>
                         </tr>
@@ -1686,6 +1918,28 @@ export const HrmReportsPage: React.FC = () => {
                                   <p className="text-[10px] text-muted-foreground font-mono">{r.user.nip}</p>
                                 </div>
                               </div>
+                            </td>
+                            <td className="py-3 px-3">
+                              {r.categoryGroup === 'RUMAH TANGGA' ? (
+                                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
+                                  <span>🏠</span>
+                                  <span>Rumah Tangga</span>
+                                </Badge>
+                              ) : r.categoryGroup === 'SHIPMENT' ? (
+                                <Badge variant="outline" className="bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-400 border-sky-200 dark:border-sky-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
+                                  <span>🚢</span>
+                                  <span>Shipment</span>
+                                </Badge>
+                              ) : r.categoryGroup === 'KARYAWAN TETAP' ? (
+                                <Badge variant="outline" className="bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400 border-purple-200 dark:border-purple-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
+                                  <span>⭐</span>
+                                  <span>Karyawan Tetap</span>
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-[10px] rounded-full text-muted-foreground">
+                                  Lainnya
+                                </Badge>
+                              )}
                             </td>
                             <td className="py-3 px-3 text-muted-foreground text-xs">
                               {r.user.divisionName || '-'}
@@ -2107,79 +2361,148 @@ export const HrmReportsPage: React.FC = () => {
           </div>
 
           {/* Overtime Filter Toolbar */}
-          <Card className="border-border bg-card rounded-xl shadow-sm">
-            <CardContent className="p-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
-                {/* Search */}
-                <div className="relative">
-                  <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-                  <Input
-                    type="text"
-                    placeholder="Cari karyawan, NIP, tugas..."
-                    value={otSearchQuery}
-                    onChange={(e) => setOtSearchQuery(e.target.value)}
-                    className="pl-9 text-xs rounded-xl h-9"
-                  />
-                </div>
+          <div className="space-y-3">
+            {/* Quick Segmented Category Switcher Pills untuk Lembur */}
+            <div className="flex flex-wrap items-center gap-2 p-1.5 bg-muted/60 rounded-2xl border border-border">
+              <button
+                type="button"
+                onClick={() => setFilterOtCategory('all')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                  filterOtCategory === 'all'
+                    ? 'bg-primary text-primary-foreground shadow-xs'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-background/60'
+                }`}
+              >
+                <Users size={13} />
+                <span>Semua Kelompok</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterOtCategory('RUMAH TANGGA')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                  filterOtCategory === 'RUMAH TANGGA'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10'
+                }`}
+              >
+                <span>🏠</span>
+                <span>Rumah Tangga (FR07001–FR07033)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterOtCategory('SHIPMENT')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                  filterOtCategory === 'SHIPMENT'
+                    ? 'bg-sky-600 text-white shadow-xs'
+                    : 'text-muted-foreground hover:text-sky-600 hover:bg-sky-500/10'
+                }`}
+              >
+                <span>🚢</span>
+                <span>Shipment (FR07034–FR07080)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterOtCategory('KARYAWAN TETAP')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                  filterOtCategory === 'KARYAWAN TETAP'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'text-muted-foreground hover:text-purple-600 hover:bg-purple-500/10'
+                }`}
+              >
+                <span>⭐</span>
+                <span>Karyawan Tetap (Takdir, Aslam, Samsi)</span>
+              </button>
+            </div>
 
-                {/* Filter Tanggal */}
-                <div>
-                  <DatePicker
-                    value={selectedOtDate}
-                    onChange={(v) => setSelectedOtDate(v)}
-                    placeholder="Filter tanggal..."
-                  />
-                </div>
+            <Card className="border-border bg-card rounded-xl shadow-sm">
+              <CardContent className="p-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3">
+                  {/* Search */}
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                    <Input
+                      type="text"
+                      placeholder="Cari karyawan, NIP, tugas..."
+                      value={otSearchQuery}
+                      onChange={(e) => setOtSearchQuery(e.target.value)}
+                      className="pl-9 text-xs rounded-xl h-9"
+                    />
+                  </div>
 
-                {/* Filter Divisi */}
-                <div>
-                  <Select value={filterOtDivision} onValueChange={setFilterOtDivision}>
-                    <SelectTrigger className="text-xs rounded-xl h-9">
-                      <SelectValue placeholder="Semua Divisi" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Semua Divisi</SelectItem>
-                      {divisions.map((d) => (
-                        <SelectItem key={d.id} value={d.name}>
-                          {d.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                  {/* Filter Kategori */}
+                  <div>
+                    <Select value={filterOtCategory} onValueChange={(v: any) => setFilterOtCategory(v)}>
+                      <SelectTrigger className="text-xs rounded-xl h-9">
+                        <SelectValue placeholder="Kelompok Karyawan" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Semua Kelompok</SelectItem>
+                        <SelectItem value="RUMAH TANGGA">🏠 Rumah Tangga (FR07001-33)</SelectItem>
+                        <SelectItem value="SHIPMENT">🚢 Shipment (FR07034-80)</SelectItem>
+                        <SelectItem value="KARYAWAN TETAP">⭐ Karyawan Tetap (Pimpinan)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                {/* Filter Status Approval */}
-                <div>
-                  <Select value={filterOtStatus} onValueChange={setFilterOtStatus}>
-                    <SelectTrigger className="text-xs rounded-xl h-9">
-                      <SelectValue placeholder="Status Persetujuan" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Semua Status Approval</SelectItem>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="approved">Disetujui</SelectItem>
-                      <SelectItem value="rejected">Ditolak</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                  {/* Filter Tanggal */}
+                  <div>
+                    <DatePicker
+                      value={selectedOtDate}
+                      onChange={(v) => setSelectedOtDate(v)}
+                      placeholder="Filter tanggal..."
+                    />
+                  </div>
 
-                {/* Filter Status Pembayaran */}
-                <div>
-                  <Select value={filterOtPayment} onValueChange={setFilterOtPayment}>
-                    <SelectTrigger className="text-xs rounded-xl h-9">
-                      <SelectValue placeholder="Status Pencairan" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Semua Pencairan</SelectItem>
-                      <SelectItem value="unpaid">Belum Cair</SelectItem>
-                      <SelectItem value="included_in_payroll">Masuk Slip Gaji</SelectItem>
-                      <SelectItem value="paid">Sudah Ditransfer</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  {/* Filter Divisi */}
+                  <div>
+                    <Select value={filterOtDivision} onValueChange={setFilterOtDivision}>
+                      <SelectTrigger className="text-xs rounded-xl h-9">
+                        <SelectValue placeholder="Semua Divisi" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Semua Divisi</SelectItem>
+                        {divisions.map((d) => (
+                          <SelectItem key={d.id} value={d.name}>
+                            {d.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Filter Status Approval */}
+                  <div>
+                    <Select value={filterOtStatus} onValueChange={setFilterOtStatus}>
+                      <SelectTrigger className="text-xs rounded-xl h-9">
+                        <SelectValue placeholder="Status Persetujuan" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Semua Status Approval</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Disetujui</SelectItem>
+                        <SelectItem value="rejected">Ditolak</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Filter Status Pembayaran */}
+                  <div>
+                    <Select value={filterOtPayment} onValueChange={setFilterOtPayment}>
+                      <SelectTrigger className="text-xs rounded-xl h-9">
+                        <SelectValue placeholder="Status Pencairan" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Semua Pencairan</SelectItem>
+                        <SelectItem value="unpaid">Belum Cair</SelectItem>
+                        <SelectItem value="included_in_payroll">Masuk Slip Gaji</SelectItem>
+                        <SelectItem value="paid">Sudah Ditransfer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </div>
 
           {/* Realtime Current Month Lateness Recap Card */}
           <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
@@ -2294,6 +2617,7 @@ export const HrmReportsPage: React.FC = () => {
                   <tr>
                     <th className="py-3 px-4 font-semibold">Tanggal & Hari</th>
                     <th className="py-3 px-4 font-semibold">Karyawan</th>
+                    <th className="py-3 px-4 font-semibold">Kelompok</th>
                     <th className="py-3 px-4 font-semibold">Divisi</th>
                     <th className="py-3 px-4 font-semibold">Waktu & Durasi</th>
                     <th className="py-3 px-4 font-semibold">Tarif / Jam</th>
@@ -2306,12 +2630,14 @@ export const HrmReportsPage: React.FC = () => {
                 <tbody className="divide-y divide-border">
                   {filteredOtList.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="py-8 text-center text-muted-foreground">
+                      <td colSpan={10} className="py-8 text-center text-muted-foreground">
                         Tidak ada catatan lembur yang sesuai dengan kriteria filter.
                       </td>
                     </tr>
                   ) : (
-                    filteredOtList.map((o) => (
+                    filteredOtList.map((o) => {
+                      const otCat = getEmployeeCategoryGroup(o.userNip || o.userId);
+                      return (
                       <tr key={o.id} className="hover:bg-muted/30 transition-colors">
                         <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">
                           <div>{o.date}</div>
@@ -2326,6 +2652,28 @@ export const HrmReportsPage: React.FC = () => {
                         <td className="py-3 px-4">
                           <p className="font-semibold text-foreground">{o.userName}</p>
                           <p className="text-[10px] text-muted-foreground font-mono">{o.userNip}</p>
+                        </td>
+                        <td className="py-3 px-4">
+                          {otCat === 'RUMAH TANGGA' ? (
+                            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
+                              <span>🏠</span>
+                              <span>Rumah Tangga</span>
+                            </Badge>
+                          ) : otCat === 'SHIPMENT' ? (
+                            <Badge variant="outline" className="bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-400 border-sky-200 dark:border-sky-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
+                              <span>🚢</span>
+                              <span>Shipment</span>
+                            </Badge>
+                          ) : otCat === 'KARYAWAN TETAP' ? (
+                            <Badge variant="outline" className="bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400 border-purple-200 dark:border-purple-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
+                              <span>⭐</span>
+                              <span>Karyawan Tetap</span>
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                              Lainnya
+                            </Badge>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-muted-foreground">{o.divisionName || '-'}</td>
                         <td className="py-3 px-4 whitespace-nowrap">
@@ -2373,9 +2721,10 @@ export const HrmReportsPage: React.FC = () => {
                           )}
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
+                    );
+                  })
+                )}
+              </tbody>
               </table>
             </div>
           </Card>

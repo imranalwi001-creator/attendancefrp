@@ -1,5 +1,14 @@
 import React, { useState, useMemo, useRef } from 'react';
-import { UserProfile, AttendanceRecord, OvertimeRecord, Shift, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
+import {
+  UserProfile,
+  AttendanceRecord,
+  OvertimeRecord,
+  Shift,
+  isLeadershipSpecialFieldOfficer,
+  EmployeeCategoryGroup,
+  getEmployeeCategoryGroup,
+  getEmployeeCategoryLabel,
+} from '@/types/hrm';
 import { hrmService } from '@/services/hrmService';
 import {
   Printer,
@@ -62,12 +71,44 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
   // Selection States
   const [selectedUserId, setSelectedUserId] = useState<string>(initialUserId || employees[0]?.id || '');
   const [selectedMonth, setSelectedMonth] = useState<string>(defaultMonthStr);
+  const [filterCategory, setFilterCategory] = useState<'all' | EmployeeCategoryGroup>('all');
   const [showConfig, setShowConfig] = useState<boolean>(false);
 
-  // Selected Employee
+  // Kategori Personel Terpilih
   const selectedEmployee = useMemo(() => {
     return employees.find((e) => e.id === selectedUserId) || employees[0] || null;
   }, [employees, selectedUserId]);
+
+  const selectedEmployeeCategory = useMemo(() => {
+    return selectedEmployee ? getEmployeeCategoryGroup(selectedEmployee) : 'OTHER';
+  }, [selectedEmployee]);
+
+  // Filter Karyawan Berdasarkan Kategori
+  const filteredEmployees = useMemo(() => {
+    if (filterCategory === 'all') return employees;
+    return employees.filter((e) => getEmployeeCategoryGroup(e) === filterCategory);
+  }, [employees, filterCategory]);
+
+  const categoryCounts = useMemo(() => {
+    let rt = 0;
+    let ship = 0;
+    let tetap = 0;
+    employees.forEach((e) => {
+      const grp = getEmployeeCategoryGroup(e);
+      if (grp === 'RUMAH TANGGA') rt++;
+      else if (grp === 'SHIPMENT') ship++;
+      else if (grp === 'KARYAWAN TETAP') tetap++;
+    });
+    return { all: employees.length, rt, ship, tetap };
+  }, [employees]);
+
+  const handleCategoryChange = (cat: 'all' | EmployeeCategoryGroup) => {
+    setFilterCategory(cat);
+    if (cat !== 'all') {
+      const match = employees.find((e) => getEmployeeCategoryGroup(e) === cat);
+      if (match) setSelectedUserId(match.id);
+    }
+  };
 
   // Form Configurable Metadata
   const [regu, setRegu] = useState<string>('REGU 1');
@@ -303,7 +344,8 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
     // 2. Metadata Columns
     wsData.push([`NAMA        : ${selectedEmployee.fullName}`, '', '', '', '', `SEKSI       : ${seksi}`, '', '', '']);
     wsData.push([`NO.ID       : ${selectedEmployee.nip}`, '', '', '', '', `UNIT        : ${unit}`, '', '', '']);
-    wsData.push([`POLA SHIFT  : ${polaShift}`, '', '', '', '', `DEPARTEMEN  : ${departemen}`, '', '', '']);
+    wsData.push([`KELOMPOK    : ${getEmployeeCategoryLabel(selectedEmployeeCategory)}`, '', '', '', '', `DEPARTEMEN  : ${departemen}`, '', '', '']);
+    wsData.push([`POLA SHIFT  : ${polaShift}`, '', '', '', '', `PERIODE     : ${selectedMonth}`, '', '', '']);
     wsData.push([]);
 
     // 3. Table Header Row 1
@@ -472,7 +514,58 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
         </div>
 
         {/* Filter Selection Strip (Hidden in Print) */}
-        <div className="px-4 py-2.5 bg-slate-850 border-b border-slate-700/60 flex flex-wrap items-center gap-4 text-xs no-print">
+        <div className="px-4 py-2.5 bg-slate-850 border-b border-slate-700/60 flex flex-wrap items-center gap-3 text-xs no-print">
+          {/* Category Switcher Pills */}
+          <div className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-lg border border-slate-700">
+            <button
+              type="button"
+              onClick={() => handleCategoryChange('all')}
+              className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+                filterCategory === 'all'
+                  ? 'bg-teal-600 text-white font-semibold'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Semua ({categoryCounts.all})
+            </button>
+            <button
+              type="button"
+              onClick={() => handleCategoryChange('RUMAH TANGGA')}
+              className={`px-2 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1 ${
+                filterCategory === 'RUMAH TANGGA'
+                  ? 'bg-emerald-600 text-white font-semibold'
+                  : 'text-slate-400 hover:text-emerald-400'
+              }`}
+            >
+              <span>🏠</span>
+              <span>Rumah Tangga ({categoryCounts.rt})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleCategoryChange('SHIPMENT')}
+              className={`px-2 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1 ${
+                filterCategory === 'SHIPMENT'
+                  ? 'bg-sky-600 text-white font-semibold'
+                  : 'text-slate-400 hover:text-sky-400'
+              }`}
+            >
+              <span>🚢</span>
+              <span>Shipment ({categoryCounts.ship})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleCategoryChange('KARYAWAN TETAP')}
+              className={`px-2 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1 ${
+                filterCategory === 'KARYAWAN TETAP'
+                  ? 'bg-purple-600 text-white font-semibold'
+                  : 'text-slate-400 hover:text-purple-400'
+              }`}
+            >
+              <span>⭐</span>
+              <span>Tetap ({categoryCounts.tetap})</span>
+            </button>
+          </div>
+
           <div className="flex items-center gap-2">
             <span className="text-slate-400 font-medium flex items-center gap-1">
               <User className="w-3.5 h-3.5 text-teal-400" /> Karyawan:
@@ -482,7 +575,7 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
                 <SelectValue placeholder="Pilih Karyawan" />
               </SelectTrigger>
               <SelectContent className="bg-slate-800 border-slate-700 text-slate-100 max-h-60">
-                {employees.map((emp) => (
+                {filteredEmployees.map((emp) => (
                   <SelectItem key={emp.id} value={emp.id} className="text-xs focus:bg-slate-700">
                     {emp.fullName} ({emp.nip}) - {emp.divisionName || 'Operasional'}
                   </SelectItem>
@@ -625,6 +718,13 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
                   <span className="w-3">:</span>
                   <span className="font-mono font-bold text-slate-950">
                     {selectedEmployee?.nip || '-'}
+                  </span>
+                </div>
+                <div className="flex">
+                  <span className="w-28 font-bold">KELOMPOK</span>
+                  <span className="w-3">:</span>
+                  <span className="font-semibold text-teal-800">
+                    {getEmployeeCategoryLabel(selectedEmployeeCategory)}
                   </span>
                 </div>
                 <div className="flex">
