@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
 import { HrmEmployeeLeaveCorrectionModal } from '@/components/hrm/HrmEmployeeLeaveCorrectionModal';
+import { HrmLeaveExecutiveRecapTab } from '@/components/hrm/superadmin/HrmLeaveExecutiveRecapTab';
 
 export const HrmCutiManagementTab: React.FC = () => {
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
@@ -32,6 +33,7 @@ export const HrmCutiManagementTab: React.FC = () => {
   const [selectedDivision, setSelectedDivision] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [subTab, setSubTab] = useState<'requests' | 'executive_recap'>('requests');
 
   // Approval Modal State
   const [actionModalOpen, setActionModalOpen] = useState(false);
@@ -106,24 +108,22 @@ export const HrmCutiManagementTab: React.FC = () => {
     if (!selectedLeave) return;
     setIsSubmitting(true);
     try {
-      const res = await hrmService.updateLeaveStatus(
+      await hrmService.updateLeaveStatus(
         selectedLeave.id,
         actionType === 'approve' ? 'approved' : 'rejected',
         'Super Administrator',
         actionNotes
       );
 
-      if (res.success) {
-        toast.success(
-          `Permohonan cuti/izin berhasil ${actionType === 'approve' ? 'disetujui' : 'ditolak'} dan tersinkron ke database.`
-        );
-        setActionModalOpen(false);
-        loadData();
-      } else {
-        toast.error(res.error || 'Gagal memproses permohonan cuti');
-      }
+      toast.success(
+        actionType === 'approve'
+          ? 'Permohonan cuti/izin disetujui (saldo sudah dipotong saat pengajuan).'
+          : 'Permohonan cuti/izin ditolak dan saldo cuti dikembalikan otomatis.'
+      );
+      setActionModalOpen(false);
+      loadData();
     } catch (err: any) {
-      toast.error('Terjadi kesalahan saat memproses status');
+      toast.error(err?.message || 'Gagal memproses permohonan cuti');
     } finally {
       setIsSubmitting(false);
     }
@@ -160,7 +160,42 @@ export const HrmCutiManagementTab: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {/* Sub-Tab Switcher: Pengajuan & Approval vs Rekap Pimpinan 3 Kelompok */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-1.5 rounded-2xl bg-muted/40 border border-border">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant={subTab === 'requests' ? 'default' : 'ghost'}
+            onClick={() => setSubTab('requests')}
+            className={`h-8 text-xs rounded-xl font-semibold ${
+              subTab === 'requests' ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs' : 'text-muted-foreground'
+            }`}
+          >
+            📋 Antrean Pengajuan &amp; Persetujuan ({totalLeaves})
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={subTab === 'executive_recap' ? 'default' : 'ghost'}
+            onClick={() => setSubTab('executive_recap')}
+            className={`h-8 text-xs rounded-xl font-semibold ${
+              subTab === 'executive_recap' ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs' : 'text-muted-foreground'
+            }`}
+          >
+            📊 Rekap Kuota &amp; Laporan Pimpinan (3 Kelompok FRP)
+          </Button>
+        </div>
+        <span className="text-[11px] text-muted-foreground px-2 hidden sm:inline">
+          Rumah Tangga (12h) • Shipment (9h) • Karyawan Tetap (12h)
+        </span>
+      </div>
+
+      {subTab === 'executive_recap' ? (
+        <HrmLeaveExecutiveRecapTab onSynced={loadData} />
+      ) : (
+        <div className="space-y-6">
       {/* Metric Overview Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5">
         <Card className="border-border bg-card shadow-xs">
@@ -377,7 +412,7 @@ export const HrmCutiManagementTab: React.FC = () => {
                             )}
                           </td>
                           <td className="py-3 px-4 text-center font-mono font-medium text-foreground">
-                            {user?.annualLeaveQuota ?? 12} Hari
+                            {Math.max(0, (user?.annualLeaveQuota ?? 12) - (user?.usedLeaveDays ?? 0))}/{user?.annualLeaveQuota ?? 12} Hari
                           </td>
                           <td className="py-3 px-4 text-center whitespace-nowrap">
                             {getStatusBadge(l.status)}
@@ -415,6 +450,8 @@ export const HrmCutiManagementTab: React.FC = () => {
           </div>
         </CardContent>
       </Card>
+        </div>
+      )}
 
       {/* Modal Action Approval/Rejection */}
       <Dialog open={actionModalOpen} onOpenChange={setActionModalOpen}>

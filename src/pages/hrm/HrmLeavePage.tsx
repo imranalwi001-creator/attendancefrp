@@ -2,7 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService } from '@/services/hrmService';
+import { api } from '@/services/apiClient';
 import { LeaveRequest, LeaveType, OvertimeRecord } from '@/types/hrm';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
   CalendarCheck2,
@@ -100,6 +102,7 @@ export const HrmLeavePage: React.FC = () => {
 
   // Users for Substitute Recommendations
   const [allUsers, setAllUsers] = useState<import('@/types/hrm').UserProfile[]>([]);
+  const [liveBalance, setLiveBalance] = useState<{ annualLeaveQuota: number; usedLeaveDays: number; remainingLeaveDays: number } | null>(null);
 
   // Attachment Preview Modal
   const [previewAttachment, setPreviewAttachment] = useState<string | null>(null);
@@ -128,7 +131,7 @@ export const HrmLeavePage: React.FC = () => {
       const json = await res.json();
       if (json.success) {
         toast.success(json.message);
-        if (detailModalOpen) setDetailModalOpen(false);
+        setSelectedDetailLeave(null);
         loadData();
       } else {
         toast.error(json.error || 'Gagal mereset karyawan pengganti.');
@@ -147,6 +150,17 @@ export const HrmLeavePage: React.FC = () => {
     setAllLeaves(hrmService.getLeaves());
     setAllOvertimes(hrmService.getOvertimeRecords());
     setAllUsers(hrmService.getUsers());
+    api.get<{ success: boolean; data: any }>(`/leaves/balance?userId=${encodeURIComponent(user.id)}`)
+      .then((res) => {
+        if (res?.success && res.data) {
+          setLiveBalance({
+            annualLeaveQuota: Number(res.data.annualLeaveQuota ?? 12),
+            usedLeaveDays: Number(res.data.usedLeaveDays ?? 0),
+            remainingLeaveDays: Number(res.data.remainingLeaveDays ?? 0),
+          });
+        }
+      })
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -403,8 +417,9 @@ export const HrmLeavePage: React.FC = () => {
 
   // Kuota cuti tahunan resmi karyawan (12 hari untuk reguler/wisma atau 9 hari untuk shipment)
   // Catatan: Plafon diskresi darurat kedukaan 2 hari hanya diakses via otoritas admin
-  const annualQuota = user?.annualLeaveQuota || 12;
-  const remainingLeave = annualQuota - (user?.usedLeaveDays || 0);
+  const annualQuota = liveBalance?.annualLeaveQuota ?? user?.annualLeaveQuota ?? 12;
+  const usedLeaveDays = liveBalance?.usedLeaveDays ?? user?.usedLeaveDays ?? 0;
+  const remainingLeave = liveBalance?.remainingLeaveDays ?? Math.max(0, annualQuota - usedLeaveDays);
 
   // User personal overtime stats
   const totalUserOtHours = overtimes.reduce((sum, o) => sum + (o.durationHours || 0), 0);
@@ -426,7 +441,7 @@ export const HrmLeavePage: React.FC = () => {
               <>
                 Sisa Kuota Cuti Tahunan:{' '}
                 <strong className="text-primary font-semibold">{remainingLeave} Hari</strong>
-                {' '}(dari total {annualQuota} hari · {user?.usedLeaveDays || 0} terpakai)
+                {' '}(dari total {annualQuota} hari · {usedLeaveDays} terpakai)
               </>
             ) : (
               <>

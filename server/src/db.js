@@ -817,6 +817,40 @@ export async function initDb() {
         AND date = '2026-11-04'
         AND start_time = '16:30'
         AND (task_description ILIKE '%shift 1%' OR task_description ILIKE '%shift I%');
+
+      -- ─── 23. LEAVE LEDGER (REAL-TIME QUOTA & MONTHLY RECAP AUDIT) + OVERTIME PAYROLL LINK ───
+      CREATE TABLE IF NOT EXISTS hrm_leave_ledger (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES hrm_profiles(id) ON DELETE CASCADE,
+        leave_request_id UUID REFERENCES hrm_leave_requests(id) ON DELETE CASCADE,
+        month_key VARCHAR(7) NOT NULL, -- 'YYYY-MM'
+        entry_type VARCHAR(40) NOT NULL, -- 'HISTORICAL_BASELINE', 'RESERVE_ON_SUBMIT', 'CONFIRMED_APPROVED', 'REFUND_REJECTED', 'MANUAL_ADJUSTMENT'
+        days_delta INTEGER NOT NULL DEFAULT 0,
+        notes TEXT,
+        created_by VARCHAR(150),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_leave_ledger_user ON hrm_leave_ledger(user_id, month_key);
+      CREATE INDEX IF NOT EXISTS idx_leave_ledger_req ON hrm_leave_ledger(leave_request_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_leave_ledger_baseline ON hrm_leave_ledger(user_id, month_key, entry_type) WHERE entry_type = 'HISTORICAL_BASELINE';
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_leave_ledger_req_type ON hrm_leave_ledger(leave_request_id, entry_type) WHERE leave_request_id IS NOT NULL;
+
+      ALTER TABLE hrm_overtime_records ADD COLUMN IF NOT EXISTS payroll_period_id UUID REFERENCES hrm_payroll_periods(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_overtime_payroll_period ON hrm_overtime_records(payroll_period_id);
+
+      ALTER TABLE hrm_payroll_periods ADD COLUMN IF NOT EXISTS effective_shipment_budget BIGINT;
+      ALTER TABLE hrm_payroll_periods ADD COLUMN IF NOT EXISTS effective_wisma_budget BIGINT;
+      ALTER TABLE hrm_payroll_periods ADD COLUMN IF NOT EXISTS target_efficiency_min BIGINT;
+      ALTER TABLE hrm_payroll_periods ADD COLUMN IF NOT EXISTS target_efficiency_max BIGINT;
+      ALTER TABLE hrm_payroll_periods ADD COLUMN IF NOT EXISTS strict_gate_enabled BOOLEAN DEFAULT true;
+      UPDATE hrm_payroll_periods
+      SET effective_shipment_budget = COALESCE(effective_shipment_budget, 65000000),
+          effective_wisma_budget = COALESCE(effective_wisma_budget, 4000000),
+          target_efficiency_min = COALESCE(target_efficiency_min, 55000000),
+          target_efficiency_max = COALESCE(target_efficiency_max, 60000000),
+          strict_gate_enabled = COALESCE(strict_gate_enabled, true)
+      WHERE year = 2026 AND month = 11;
     `);
 
     console.log('[Database] Schema verification, Biometric, Geofence, Field Sentinel Multi-Posts & Notifications extensions completed.');

@@ -4184,8 +4184,9 @@ export const hrmService = {
 
     // Push langsung ke backend PostgreSQL untuk mendapatkan UUID dan memicu broadcast WA seketika!
     let backendLeave: any = null;
+    let backendBalance: any = null;
     try {
-      const res = await api.post<{ success: boolean; leave: any }>('/leaves', {
+      const res = await api.post<{ success: boolean; leave?: any; data?: any; balance?: any }>('/leaves', {
         userId: user.id,
         leaveType: req.leaveType,
         startDate: req.startDate,
@@ -4197,13 +4198,36 @@ export const hrmService = {
         substituteName: req.substituteName,
         substituteNip: req.substituteNip,
       });
-      if (res && res.leave) {
-        backendLeave = res.leave;
+      if (res && (res.leave || res.data)) {
+        backendLeave = res.leave || res.data;
+      }
+      if (res && res.balance) {
+        backendBalance = res.balance;
       }
     } catch (err: any) {
       console.error('[HRM] Backend leave creation failed:', err);
       const errMsg = err?.data?.error || err?.message || 'Gagal menyimpan pengajuan ke server database';
       throw new Error(errMsg);
+    }
+
+    // Otomatis kurangi kuota cuti di local cache & CURRENT_USER langsung saat pengajuan cuti tahunan dikirim
+    const isAnnual = req.leaveType === 'cuti_tahunan' || (req.leaveType as string) === 'annual_leave' || (req.leaveType as string) === 'cuti';
+    if (isAnnual) {
+      const users = hrmService.getUsers();
+      const uIdx = users.findIndex((u) => u.id === user.id);
+      const nextUsed = backendBalance?.usedLeaveDays ?? ((user.usedLeaveDays || 0) + totalDays);
+      const nextQuota = backendBalance?.annualLeaveQuota ?? (user.annualLeaveQuota || 12);
+      if (uIdx !== -1) {
+        users[uIdx].usedLeaveDays = nextUsed;
+        users[uIdx].annualLeaveQuota = nextQuota;
+        safeSetJson(STORAGE_KEYS.USERS, users);
+      }
+      const cur = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
+      if (cur && cur.id === user.id) {
+        cur.usedLeaveDays = nextUsed;
+        cur.annualLeaveQuota = nextQuota;
+        safeSetJson(STORAGE_KEYS.CURRENT_USER, cur);
+      }
     }
 
     const newLeave: LeaveRequest = {
@@ -4435,19 +4459,26 @@ export const hrmService = {
       }));
     }
 
-    if (status === 'approved' && (leaves[idx].leaveType === 'cuti_tahunan' || leaves[idx].leaveType === 'annual_leave')) {
-      const users = hrmService.getUsers();
-      const uIdx = users.findIndex((u) => u.id === leaves[idx].userId);
-      if (uIdx !== -1) {
-        users[uIdx].usedLeaveDays = (users[uIdx].usedLeaveDays || 0) + leaves[idx].totalDays;
-        safeSetJson(STORAGE_KEYS.USERS, users);
-
-        const cur = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
-        if (cur && cur.id === leaves[idx].userId) {
-          cur.usedLeaveDays = (cur.usedLeaveDays || 0) + leaves[idx].totalDays;
-          safeSetJson(STORAGE_KEYS.CURRENT_USER, cur);
+    // Sinkronisasi saldo cuti dari server PostgreSQL (tanpa potong ganda jika sudah dipotong saat submit; auto-refund jika ditolak)
+    if (leaves[idx].leaveType === 'cuti_tahunan' || (leaves[idx].leaveType as string) === 'annual_leave') {
+      try {
+        const balRes = await api.get<{ success: boolean; data: { annualLeaveQuota: number; usedLeaveDays: number } }>(`/leaves/balance?userId=${encodeURIComponent(leaves[idx].userId)}`);
+        if (balRes?.success && balRes.data) {
+          const users = hrmService.getUsers();
+          const uIdx = users.findIndex((u) => u.id === leaves[idx].userId);
+          if (uIdx !== -1) {
+            users[uIdx].usedLeaveDays = balRes.data.usedLeaveDays;
+            users[uIdx].annualLeaveQuota = balRes.data.annualLeaveQuota;
+            safeSetJson(STORAGE_KEYS.USERS, users);
+          }
+          const cur = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
+          if (cur && cur.id === leaves[idx].userId) {
+            cur.usedLeaveDays = balRes.data.usedLeaveDays;
+            cur.annualLeaveQuota = balRes.data.annualLeaveQuota;
+            safeSetJson(STORAGE_KEYS.CURRENT_USER, cur);
+          }
         }
-      }
+      } catch (_) {}
     }
 
     safeSetJson(STORAGE_KEYS.LEAVES, leaves);

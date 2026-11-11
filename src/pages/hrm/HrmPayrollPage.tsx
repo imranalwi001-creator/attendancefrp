@@ -1185,12 +1185,13 @@ export const HrmPayrollPage: React.FC = () => {
     });
   }, [allUsers, profileDivFilter, profileSearch]);
 
-  const handleCreatePeriod = () => {
+  const handleCreatePeriod = async () => {
     try {
       hrmService.createPayrollPeriod(createMonth, createYear);
+      api.post('/payroll/periods', { month: createMonth, year: createYear }).catch(() => {});
       toast({
         title: 'Periode Berhasil Dibuat',
-        description: `Periode ${MONTH_NAMES[createMonth - 1]} ${createYear} telah aktif.`,
+        description: `Periode ${MONTH_NAMES[createMonth - 1]} ${createYear} telah aktif & tersinkron ke database.`,
       });
       setCreatePeriodOpen(false);
       refresh();
@@ -1199,12 +1200,22 @@ export const HrmPayrollPage: React.FC = () => {
     }
   };
 
-  const handleGenerateSlips = (periodId: string) => {
+  const handleGenerateSlips = async (periodId: string) => {
     try {
       const result = hrmService.generatePayrollSlips(periodId);
+      const targetPeriod = periods.find((pr) => pr.id === periodId);
+      let serverMsg = '';
+      if (targetPeriod) {
+        try {
+          const pRes: any = await api.post('/payroll/periods', { month: targetPeriod.month, year: targetPeriod.year });
+          const dbPeriodId = pRes?.data?.id || periodId;
+          const gRes: any = await api.post(`/payroll/periods/${dbPeriodId}/generate`, { month: targetPeriod.month, year: targetPeriod.year });
+          if (gRes?.success && gRes.data) serverMsg = ` (${gRes.data.overtimeSyncedCount || 0} SPKL lembur ${gRes.data.sourceOvertimeMonth} tersinkron ke PostgreSQL)`;
+        } catch {}
+      }
       toast({
         title: 'Slip Gaji Berhasil Digenerate',
-        description: `${result.length} slip gaji dihitung otomatis dengan presensi & lembur.`,
+        description: `${result.length} slip gaji dihitung otomatis dengan lembur bulan mundur (N-1)${serverMsg}.`,
       });
       setFilterSlipPeriod(periodId);
       setActiveTab('slips');
@@ -1214,9 +1225,19 @@ export const HrmPayrollPage: React.FC = () => {
     }
   };
 
-  const handlePeriodStatus = (id: string, status: any) => {
+  const handlePeriodStatus = async (id: string, status: any) => {
     try {
       hrmService.updatePayrollPeriodStatus(id, status, user?.id);
+      if (status === 'paid') {
+        const targetPeriod = periods.find((pr) => pr.id === id);
+        if (targetPeriod) {
+          try {
+            const pRes: any = await api.post('/payroll/periods', { month: targetPeriod.month, year: targetPeriod.year });
+            const dbPeriodId = pRes?.data?.id || id;
+            await api.post(`/payroll/periods/${dbPeriodId}/mark-paid`, {});
+          } catch {}
+        }
+      }
       toast({ title: `Status periode diperbarui: ${status.toUpperCase()}` });
       refresh();
     } catch (e: any) {

@@ -2,6 +2,17 @@ import express from 'express';
 import cors from 'cors';
 import { pool, initDb } from './db.js';
 import { seedInitialUsers } from './seed.js';
+import {
+  recalculateUserLeaveUsedDays,
+  seedOfficialLeaveBaselines,
+  recordLeaveSubmitLedger,
+  recordLeaveDecisionLedger,
+  buildExecutiveLeaveRecap,
+  resolveEffectiveBudgets,
+  buildPayrollArrearsOvertimeRecap,
+  generateBackendPayrollForPeriod,
+  buildShipmentCostControlRadar,
+} from './frpLeaveOvertimeSync.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -7505,6 +7516,15 @@ app.post('/api/leaves/correct-quota', async (req, res) => {
       if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
     }
 
+    const beforeRes = await pool.query(
+      'SELECT annual_leave_quota, used_leave_days FROM hrm_profiles WHERE id = $1 LIMIT 1',
+      [validUserId]
+    );
+    if (beforeRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+    const prevUsed = Number(beforeRes.rows[0].used_leave_days || 0);
+
     const updateRes = await pool.query(`
       UPDATE hrm_profiles
       SET annual_leave_quota = COALESCE($1::integer, annual_leave_quota),
@@ -7514,11 +7534,21 @@ app.post('/api/leaves/correct-quota', async (req, res) => {
       RETURNING id, full_name, nip, annual_leave_quota, used_leave_days;
     `, [cleanQuota, cleanUsed, validUserId]);
 
-    if (updateRes.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
-    }
-
     const updated = updateRes.rows[0];
+    if (cleanUsed !== null && cleanUsed !== prevUsed) {
+      const delta = cleanUsed - prevUsed;
+      const monthKey = new Date().toISOString().slice(0, 7);
+      await pool.query(`
+        INSERT INTO hrm_leave_ledger (user_id, leave_request_id, month_key, entry_type, days_delta, notes, created_by)
+        VALUES ($1, NULL, $2, 'MANUAL_ADJUSTMENT', $3, $4, $5)
+      `, [
+        validUserId,
+        monthKey,
+        delta,
+        reason || 'Koreksi resmi saldo cuti Superadmin',
+        operatorName || 'Superadmin',
+      ]).catch((e) => console.warn('[LeaveCorrection Ledger Note]:', e.message));
+    }
 
     // Catat notifikasi / audit trail
     try {
@@ -7548,6 +7578,29 @@ app.post('/api/leaves/correct-quota', async (req, res) => {
     });
   } catch (err) {
     console.error('[LeaveCorrection] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/leaves/executive-recap - Rekapan Cuti Resmi Pimpinan (Rumah Tangga 12h, Shipment 9h, Karyawan Tetap)
+app.get('/api/leaves/executive-recap', async (req, res) => {
+  try {
+    const recap = await buildExecutiveLeaveRecap(pool);
+    res.json({ success: true, data: recap });
+  } catch (err) {
+    console.error('[ExecutiveLeaveRecap] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/leaves/sync-baselines - Sinkronisasi ulang baseline & kalkulasi saldo cuti seluruh karyawan
+app.post('/api/leaves/sync-baselines', async (req, res) => {
+  try {
+    const count = await seedOfficialLeaveBaselines(pool);
+    const recap = await buildExecutiveLeaveRecap(pool);
+    res.json({ success: true, syncedCount: count, data: recap, message: `Baseline & saldo cuti ${count} personil berhasil disinkronkan.` });
+  } catch (err) {
+    console.error('[SyncLeaveBaselines] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -9036,23 +9089,19 @@ app.post('/api/hrm/executive-approval/respond', async (req, res) => {
         WHERE id = $6
       `, [decision, approverId, finalNotes, roleName, approverName, leave.id]);
 
-      // SINKRONISASI KUOTA CUTI DATABASE POSTGRESQL
-      if (decision === 'approved') {
-        const type = (leave.leave_type || '').toLowerCase();
-        if (type === 'cuti_tahunan' || type === 'annual_leave' || type === 'cuti') {
-          await pool.query(`
-            UPDATE hrm_profiles SET
-              used_leave_days = COALESCE(used_leave_days, 0) + $1,
-              updated_at = NOW()
-            WHERE id = $2;
-          `, [requestedDays, leave.user_id]);
-        } else if (type === 'izin' || type === 'permission') {
-          await pool.query(`
-            UPDATE hrm_profiles SET
-              used_permission_days = COALESCE(used_permission_days, 0) + $1,
-              updated_at = NOW()
-            WHERE id = $2;
-          `, [requestedDays, leave.user_id]);
+      // SINKRONISASI KUOTA CUTI DATABASE POSTGRESQL (IDEMPOTEN & AUTO-REFUND ON REJECT)
+      if (decision === 'approved' || decision === 'rejected') {
+        await recordLeaveDecisionLedger(pool, { leave, decision, approverName });
+        if (decision === 'approved') {
+          const type = (leave.leave_type || '').toLowerCase();
+          if (type === 'izin' || type === 'permission') {
+            await pool.query(`
+              UPDATE hrm_profiles SET
+                used_permission_days = COALESCE(used_permission_days, 0) + $1,
+                updated_at = NOW()
+              WHERE id = $2;
+            `, [requestedDays, leave.user_id]);
+          }
         }
       }
 
@@ -9331,25 +9380,20 @@ app.post(['/api/hrm/executive-approval/wa-inbound-action', '/api/whatsapp/webhoo
       let newUsedDays = Number(targetLeave.used_leave_days || 0);
       const annualQuota = Number(targetLeave.annual_leave_quota || 12);
 
-      if (decision === 'approved') {
-        newUsedDays += requestedDays;
-        const type = (targetLeave.leave_type || '').toLowerCase();
-        if (type === 'cuti_tahunan' || type === 'annual_leave' || type === 'cuti') {
-          await pool.query(`
-            UPDATE hrm_profiles SET
-              used_leave_days = COALESCE(used_leave_days, 0) + $1,
-              updated_at = NOW()
-            WHERE id = $2;
-          `, [requestedDays, targetLeave.user_id]);
-        } else if (type === 'izin' || type === 'permission') {
-          await pool.query(`
-            UPDATE hrm_profiles SET
-              used_permission_days = COALESCE(used_permission_days, 0) + $1,
-              updated_at = NOW()
-            WHERE id = $2;
-          `, [requestedDays, targetLeave.user_id]);
+      if (decision === 'approved' || decision === 'rejected') {
+        newUsedDays = await recordLeaveDecisionLedger(pool, { leave: targetLeave, decision, approverName });
+        if (decision === 'approved') {
+          const type = (targetLeave.leave_type || '').toLowerCase();
+          if (type === 'izin' || type === 'permission') {
+            await pool.query(`
+              UPDATE hrm_profiles SET
+                used_permission_days = COALESCE(used_permission_days, 0) + $1,
+                updated_at = NOW()
+              WHERE id = $2;
+            `, [requestedDays, targetLeave.user_id]);
+          }
+          await syncLeaveToAttendances(targetLeave);
         }
-        await syncLeaveToAttendances(targetLeave);
       }
 
       const newRemaining = Math.max(0, annualQuota - newUsedDays);
@@ -9608,35 +9652,36 @@ app.post('/api/leaves', async (req, res) => {
       finalNotes,
     ]);
 
-    // Update real-time kuota cuti / izin di profil jika langsung approved
-    if (targetStatus === 'approved') {
-      if (type === 'cuti_tahunan' || type === 'annual_leave') {
-        await pool.query(`
-          UPDATE hrm_profiles SET
-            used_leave_days = COALESCE(used_leave_days, 0) + $1,
-            updated_at = NOW()
-          WHERE id = $2;
-        `, [requestedDays, validUserId]);
-      } else if (type === 'izin' || type === 'permission') {
-        await pool.query(`
-          UPDATE hrm_profiles SET
-            used_permission_days = COALESCE(used_permission_days, 0) + $1,
-            updated_at = NOW()
-          WHERE id = $2;
-        `, [requestedDays, validUserId]);
-      }
-    }
-
     const leaveRow = result.rows[0];
+    // Update real-time kuota cuti langsung saat pengajuan dikirim (Reserve on Submit)
+    let updatedUsedDays = Number(userProfile.used_leave_days || 0);
+    if (type === 'cuti_tahunan' || type === 'annual_leave' || type === 'cuti') {
+      updatedUsedDays = await recordLeaveSubmitLedger(pool, {
+        userId: validUserId,
+        leaveRequestId: leaveRow.id,
+        leaveType: type,
+        startDate,
+        totalDays: requestedDays,
+        status: targetStatus,
+        operatorName: adminName || userProfile.full_name,
+      });
+    } else if (targetStatus === 'approved' && (type === 'izin' || type === 'permission')) {
+      await pool.query(`
+        UPDATE hrm_profiles SET
+          used_permission_days = COALESCE(used_permission_days, 0) + $1,
+          updated_at = NOW()
+        WHERE id = $2;
+      `, [requestedDays, validUserId]);
+    }
     const typeLabel = type.replace(/_/g, ' ').toUpperCase();
     const submitterRole = (userProfile.role_name || '').toLowerCase();
     const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
     const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
 
     const annualQuota = Number(userProfile.annual_leave_quota || 12);
-    const usedDays = Number(userProfile.used_leave_days || 0);
+    const usedDays = updatedUsedDays;
     const currentRemaining = Math.max(0, annualQuota - usedDays);
-    const estRemaining = Math.max(0, currentRemaining - requestedDays);
+    const estRemaining = currentRemaining;
 
     const quotaInfo = {
       annualQuota,
@@ -9702,7 +9747,12 @@ app.post('/api/leaves', async (req, res) => {
     res.json({
       success: true,
       data: leaveRow,
-      message: 'Pengajuan cuti/izin berhasil dikirim dan notifikasi otomatis diteruskan via WA & sistem ke seluruh pihak terkait.',
+      balance: {
+        annualLeaveQuota: annualQuota,
+        usedLeaveDays: usedDays,
+        remainingLeaveDays: currentRemaining,
+      },
+      message: 'Pengajuan cuti/izin berhasil dikirim dan saldo kuota otomatis tersinkronisasi ke database & PWA.',
     });
   } catch (err) {
     console.error('Leave submit error:', err);
@@ -9785,15 +9835,8 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       RETURNING *;
     `, [status, validApproverId || null, notes || null, validSubId || null, finalSubName || null, finalSubNip || null, leave.id]);
 
-    // 1. Jika disetujui & cuti tahunan, kurangi sisa kuota cuti di profil karyawan secara real-time!
-    if (status === 'approved' && (leave.leave_type === 'cuti_tahunan' || leave.leave_type === 'annual_leave')) {
-      await pool.query(`
-        UPDATE hrm_profiles SET
-          used_leave_days = COALESCE(used_leave_days, 0) + $1,
-          updated_at = NOW()
-        WHERE id = $2;
-      `, [leave.total_days, leave.user_id]);
-    }
+    // 1. Sinkronisasi ledger saldo cuti (tanpa potong ganda jika sudah dipotong saat submit; auto-refund jika ditolak)
+    await recordLeaveDecisionLedger(pool, { leave, decision: status, approverName });
 
     // 2. Jika disetujui & izin darurat, buka kunci kepulangan awal
     if (status === 'approved' && (leave.leave_type === 'izin_darurat' || leave.leave_type === 'emergency_leave')) {
@@ -10085,7 +10128,9 @@ app.get('/api/overtime', async (req, res) => {
 // 47 Shiftman Lapangan (Shipment): Plafon Rp 72.000.000 / bulan
 // 33 Wisma Biring Ere (Rumah Tangga): Plafon Rp 4.000.000 / bulan
 // Total Plafon Anggaran Sah Perusahaan: Rp 76.000.000 / bulan
-async function verifyOvertimeBudgetGuardrail(dbPool, userId, otDateStr, newCompensationAmount, excludeRecordId = null) {
+const overtimeCostAlertSent = new Set();
+
+async function verifyOvertimeBudgetGuardrail(dbPool, userId, otDateStr, newCompensationAmount, excludeRecordId = null, options = {}) {
   const monthStr = (otDateStr || '').substring(0, 7); // YYYY-MM
   if (!monthStr || monthStr.length !== 7) return { allowed: true };
 
@@ -10109,9 +10154,18 @@ async function verifyOvertimeBudgetGuardrail(dbPool, userId, otDateStr, newCompe
     }
   }
 
+  const [wmY, wmM] = String(monthStr || '').split('-').map(Number);
+  const payDate = wmY && wmM ? new Date(wmY, wmM, 1) : new Date();
+  const targetPayrollYm = `${payDate.getFullYear()}-${String(payDate.getMonth() + 1).padStart(2, '0')}`;
+  const periodCapRes = await dbPool.query(
+    'SELECT effective_shipment_budget, effective_wisma_budget, target_efficiency_min, target_efficiency_max, strict_gate_enabled FROM hrm_payroll_periods WHERE year = $1 AND month = $2 LIMIT 1',
+    [payDate.getFullYear(), payDate.getMonth() + 1]
+  );
+  const effBudgets = resolveEffectiveBudgets(targetPayrollYm, periodCapRes.rows[0] || null);
+
   const groupName = isWisma ? 'RUMAH TANGGA (WISMA BIRING ERE)' : 'SHIPMENT (SHIFTMAN LAPANGAN)';
-  const groupLimit = isWisma ? 4000000 : 72000000;
-  const companyTotalLimit = 76000000;
+  const groupLimit = isWisma ? effBudgets.wismaCap : effBudgets.shipmentCap;
+  const companyTotalLimit = effBudgets.totalCap;
 
   let queryAll = `
     SELECT COALESCE(SUM(o.compensation_amount), 0) as total_spent
@@ -10165,6 +10219,41 @@ async function verifyOvertimeBudgetGuardrail(dbPool, userId, otDateStr, newCompe
       allowed: false,
       reason: `Persetujuan/Pengajuan lembur ini melebihi Plafon Anggaran Total Perusahaan (Rp ${companyTotalLimit.toLocaleString('id-ID')}). Realisasi Total: Rp ${Math.round(totalApprovedAll).toLocaleString('id-ID')}, Sisa Kuota: Rp ${Math.round(sisa).toLocaleString('id-ID')}. Ditolak oleh guardrail anti-overbudget.`
     };
+  }
+
+  // Strict Anti-Boncos Gate: Jika Shipment menembus Target Efisiensi Atas (default Rp 60jt dari Rp 65jt),
+  // hanya Pimpinan / Direksi / Superadmin dengan flag forceBudgetOverride yang boleh meloloskan hingga Hard Cap.
+  if (!isWisma && effBudgets.strictGateEnabled && newTotalGroup > effBudgets.targetMax) {
+    const roleLower = String(options.approverRole || '').toLowerCase();
+    const isExecutive =
+      Boolean(options.forceBudgetOverride) &&
+      (roleLower.includes('superadmin') || roleLower.includes('pimpinan') || roleLower.includes('direktur'));
+    if (!isExecutive) {
+      return {
+        allowed: false,
+        requiresExecutiveOverride: true,
+        reason: `⛔ PENGAMAN ANTI-BONCOS AKTIF (Zona Ketat > Rp ${(effBudgets.targetMax / 1e6).toFixed(0)} Jt): Realisasi Shipment saat ini Rp ${Math.round(currentGroupSpent).toLocaleString('id-ID')} + SPKL ini (Rp ${Math.round(newCompensationAmount).toLocaleString('id-ID')}) melampaui Target Efisiensi Pimpinan Rp ${effBudgets.targetMax.toLocaleString('id-ID')} (dari budget Rp ${groupLimit.toLocaleString('id-ID')}). Diperlukan otorisasi khusus Pimpinan / Superadmin atau substitusi shift reguler.`
+      };
+    }
+  }
+
+  // WhatsApp Early Warning (dedup per bulan & ambang zona 55jt / 60jt)
+  if (!isWisma && newTotalGroup >= effBudgets.targetMin) {
+    const zoneKey = newTotalGroup > effBudgets.targetMax ? 'ORANGE_60JT' : 'YELLOW_55JT';
+    const dedupKey = `${monthStr}_${zoneKey}`;
+    if (!overtimeCostAlertSent.has(dedupKey)) {
+      overtimeCostAlertSent.add(dedupKey);
+      const pct = Math.round((newTotalGroup / groupLimit) * 100);
+      const alertText =
+        `⚠️ *EARLY WARNING BUDGET LEMBUR SHIPMENT (${monthStr})*\n\n` +
+        `Realisasi lembur Shipment telah menyentuh *Rp ${Math.round(newTotalGroup).toLocaleString('id-ID')}* (*${pct}%* dari pagu efektif Rp ${groupLimit.toLocaleString('id-ID')}).\n` +
+        `• Batas Aman Bawah: Rp ${effBudgets.targetMin.toLocaleString('id-ID')}\n` +
+        `• Batas Ketat Atas: Rp ${effBudgets.targetMax.toLocaleString('id-ID')}\n\n` +
+        `Sistem Anti-Boncos menyarankan seleksi ketat SPKL & rotasi personil jam rendah agar pencairan akhir bulan tetap terkendali di Rp 55–60 Juta.`;
+      for (const phone of ['082291998026', '082192755755', '081355904897']) {
+        sendWhatsAppAlert({ phone, message: alertText }).catch(() => {});
+      }
+    }
   }
 
   return { allowed: true, currentGroupSpent, remainingGroup: groupLimit - newTotalGroup };
@@ -10469,11 +10558,18 @@ app.put('/api/overtime/:id/status', async (req, res) => {
       }
     }
 
-    // Verifikasi Guardrail Anti-Overbudget Lembur PT FRP (Total Rp 76 Jt: Shipment Rp 72 Jt, Wisma Rp 4 Jt)
+    // Verifikasi Guardrail Anti-Overbudget Lembur PT FRP
     if (status === 'approved') {
-      const budgetGuard = await verifyOvertimeBudgetGuardrail(pool, ot.user_id, ot.date, compensation, ot.id);
+      const budgetGuard = await verifyOvertimeBudgetGuardrail(pool, ot.user_id, ot.date, compensation, ot.id, {
+        forceBudgetOverride: Boolean(req.body?.forceBudgetOverride),
+        approverRole: String(req.body?.approverRole || approvedByName || ''),
+      });
       if (!budgetGuard.allowed) {
-        return res.status(403).json({ success: false, error: budgetGuard.reason });
+        return res.status(403).json({
+          success: false,
+          error: budgetGuard.reason,
+          requiresExecutiveOverride: Boolean(budgetGuard.requiresExecutiveOverride),
+        });
       }
     }
 
@@ -11882,6 +11978,225 @@ app.get('/api/payroll/periods', async (req, res) => {
     const result = await pool.query('SELECT * FROM hrm_payroll_periods ORDER BY year DESC, month DESC LIMIT 24');
     res.json({ success: true, data: result.rows });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/overtime/payroll-arrears-recap - Rekap Lembur Dinamis Sistem Bulan Mundur (N-1 -> Payroll N)
+app.get('/api/overtime/payroll-arrears-recap', async (req, res) => {
+  try {
+    const payrollMonth = req.query.payrollMonth || new Date().toISOString().slice(0, 7);
+    const recap = await buildPayrollArrearsOvertimeRecap(pool, String(payrollMonth));
+    res.json({ success: true, data: recap });
+  } catch (err) {
+    console.error('[OvertimeArrearsRecap] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/payroll/periods - Buat atau ambil periode payroll bulan N di PostgreSQL
+app.post('/api/payroll/periods', async (req, res) => {
+  try {
+    const month = parseInt(req.body.month, 10);
+    const year = parseInt(req.body.year, 10);
+    if (!month || !year || month < 1 || month > 12) {
+      return res.status(400).json({ success: false, error: 'Bulan dan tahun periode wajib valid' });
+    }
+    const INDO_MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+    const periodLabel = req.body.periodLabel || `${INDO_MONTHS[month - 1]} ${year}`;
+    const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const existRes = await pool.query(
+      'SELECT * FROM hrm_payroll_periods WHERE year = $1 AND month = $2 LIMIT 1',
+      [year, month]
+    );
+    if (existRes.rows.length > 0) {
+      return res.json({ success: true, data: existRes.rows[0], existed: true });
+    }
+
+    const insertRes = await pool.query(`
+      INSERT INTO hrm_payroll_periods (
+        id, period_label, month, year, start_date, end_date, status, created_at, updated_at
+      ) VALUES (gen_random_uuid(), $1, $2, $3, $4::date, $5::date, 'draft', NOW(), NOW())
+      RETURNING *;
+    `, [periodLabel, month, year, startDate, endDate]);
+
+    res.json({ success: true, data: insertRes.rows[0] });
+  } catch (err) {
+    console.error('[CreatePayrollPeriod] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/payroll/periods/:id/generate - Generate slip & sinkron lembur bulan mundur (N-1) ke PostgreSQL
+app.post('/api/payroll/periods/:id/generate', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let periodRes;
+    if (UUID_REGEX.test(id)) {
+      periodRes = await pool.query('SELECT * FROM hrm_payroll_periods WHERE id = $1 LIMIT 1', [id]);
+    } else if (req.body?.month && req.body?.year) {
+      periodRes = await pool.query('SELECT * FROM hrm_payroll_periods WHERE year = $1 AND month = $2 LIMIT 1', [
+        parseInt(req.body.year, 10),
+        parseInt(req.body.month, 10),
+      ]);
+    } else {
+      return res.status(400).json({ success: false, error: 'ID periode tidak valid' });
+    }
+
+    let period = periodRes?.rows?.[0];
+    if (!period && req.body?.month && req.body?.year) {
+      const m = parseInt(req.body.month, 10);
+      const y = parseInt(req.body.year, 10);
+      const INDO_MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+      const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
+      const endDate = `${y}-${String(m).padStart(2, '0')}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+      const cr = await pool.query(`
+        INSERT INTO hrm_payroll_periods (id, period_label, month, year, start_date, end_date, status, created_at, updated_at)
+        VALUES (gen_random_uuid(), $1, $2, $3, $4::date, $5::date, 'draft', NOW(), NOW())
+        RETURNING *;
+      `, [`${INDO_MONTHS[m - 1]} ${y}`, m, y, startDate, endDate]);
+      period = cr.rows[0];
+    }
+
+    if (!period) {
+      return res.status(404).json({ success: false, error: 'Periode payroll tidak ditemukan di database' });
+    }
+
+    const summary = await generateBackendPayrollForPeriod(pool, period);
+    res.json({
+      success: true,
+      data: summary,
+      message: `Payroll ${summary.periodLabel} selesai digenerate (${summary.slipsCount} slip, lembur bulan ${summary.sourceOvertimeMonth} tersinkron).`,
+    });
+  } catch (err) {
+    console.error('[GeneratePayrollPeriod] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/overtime/cost-control-radar - Radar Anti-Boncos & Proyeksi Burn-Rate Lembur Shipment
+app.get('/api/overtime/cost-control-radar', async (req, res) => {
+  try {
+    const workMonth = String(req.query.workMonth || new Date().toISOString().slice(0, 7));
+    const data = await buildShipmentCostControlRadar(pool, workMonth);
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('[CostControlRadar] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PUT /api/overtime/cost-control-targets - Simpan Target Efisiensi (55jt - 60jt) & Strict Gate per bulan kerja
+app.put('/api/overtime/cost-control-targets', async (req, res) => {
+  try {
+    const { workMonth, targetMin, targetMax, strictGateEnabled } = req.body || {};
+    const [wy, wm] = String(workMonth || '').split('-').map(Number);
+    if (!wy || !wm || wm < 1 || wm > 12) {
+      return res.status(400).json({ success: false, error: 'Format workMonth harus YYYY-MM' });
+    }
+    const payDate = new Date(wy, wm, 1);
+    const py = payDate.getFullYear();
+    const pm = payDate.getMonth() + 1;
+    const tMin = Math.max(0, Math.round(Number(targetMin ?? 55000000)));
+    const tMax = Math.max(tMin, Math.round(Number(targetMax ?? 60000000)));
+    const strictFlag = strictGateEnabled !== undefined ? Boolean(strictGateEnabled) : true;
+    const INDO_MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+
+    const exist = await pool.query('SELECT id FROM hrm_payroll_periods WHERE year = $1 AND month = $2 LIMIT 1', [py, pm]);
+    if (exist.rows.length > 0) {
+      await pool.query(
+        'UPDATE hrm_payroll_periods SET target_efficiency_min = $1, target_efficiency_max = $2, strict_gate_enabled = $3, updated_at = NOW() WHERE id = $4',
+        [tMin, tMax, strictFlag, exist.rows[0].id]
+      );
+    } else {
+      const startDate = `${py}-${String(pm).padStart(2, '0')}-01`;
+      const endDate = `${py}-${String(pm).padStart(2, '0')}-${String(new Date(py, pm, 0).getDate()).padStart(2, '0')}`;
+      await pool.query(`
+        INSERT INTO hrm_payroll_periods (id, period_label, month, year, start_date, end_date, status, target_efficiency_min, target_efficiency_max, strict_gate_enabled, created_at, updated_at)
+        VALUES (gen_random_uuid(), $1, $2, $3, $4::date, $5::date, 'draft', $6, $7, $8, NOW(), NOW())
+      `, [`${INDO_MONTHS[pm - 1]} ${py}`, pm, py, startDate, endDate, tMin, tMax, strictFlag]);
+    }
+
+    const updated = await buildShipmentCostControlRadar(pool, `${wy}-${String(wm).padStart(2, '0')}`);
+    res.json({
+      success: true,
+      data: updated,
+      message: `Target Efisiensi Anti-Boncos untuk kerja ${wy}-${String(wm).padStart(2, '0')} disimpan (Rp ${(tMin / 1e6).toFixed(1)}jt – Rp ${(tMax / 1e6).toFixed(1)}jt, Strict Gate: ${strictFlag ? 'AKTIF' : 'NONAKTIF'}).`,
+    });
+  } catch (err) {
+    console.error('[SaveCostControlTargets] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PUT /api/payroll/periods/effective-budget - Simpan konfigurasi Budget Efektif bulanan (mis. Okt->Nov Rp 65jt + Rp 4jt)
+app.put('/api/payroll/periods/effective-budget', async (req, res) => {
+  try {
+    const { payrollMonth, effectiveShipmentBudget, effectiveWismaBudget } = req.body || {};
+    const [yStr, mStr] = String(payrollMonth || '').split('-');
+    const y = parseInt(yStr, 10);
+    const m = parseInt(mStr, 10);
+    if (!y || !m || m < 1 || m > 12) {
+      return res.status(400).json({ success: false, error: 'Format payrollMonth harus YYYY-MM' });
+    }
+    const shipVal = Math.max(0, Math.round(Number(effectiveShipmentBudget ?? 72000000)));
+    const wismaVal = Math.max(0, Math.round(Number(effectiveWismaBudget ?? 4000000)));
+    const INDO_MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+
+    const exist = await pool.query('SELECT id FROM hrm_payroll_periods WHERE year = $1 AND month = $2 LIMIT 1', [y, m]);
+    if (exist.rows.length > 0) {
+      await pool.query(
+        'UPDATE hrm_payroll_periods SET effective_shipment_budget = $1, effective_wisma_budget = $2, updated_at = NOW() WHERE id = $3',
+        [shipVal, wismaVal, exist.rows[0].id]
+      );
+    } else {
+      const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
+      const endDate = `${y}-${String(m).padStart(2, '0')}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+      await pool.query(`
+        INSERT INTO hrm_payroll_periods (id, period_label, month, year, start_date, end_date, status, effective_shipment_budget, effective_wisma_budget, created_at, updated_at)
+        VALUES (gen_random_uuid(), $1, $2, $3, $4::date, $5::date, 'draft', $6, $7, NOW(), NOW())
+      `, [`${INDO_MONTHS[m - 1]} ${y}`, m, y, startDate, endDate, shipVal, wismaVal]);
+    }
+
+    const updatedRecap = await buildPayrollArrearsOvertimeRecap(pool, `${y}-${String(m).padStart(2, '0')}`);
+    res.json({
+      success: true,
+      data: updatedRecap,
+      message: `Budget efektif Payroll ${INDO_MONTHS[m - 1]} ${y} disimpan: Shipment Rp ${shipVal.toLocaleString('id-ID')} + Wisma Rp ${wismaVal.toLocaleString('id-ID')} = Rp ${(shipVal + wismaVal).toLocaleString('id-ID')}`,
+    });
+  } catch (err) {
+    console.error('[SaveEffectiveBudget] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/payroll/periods/:id/mark-paid - Tandai periode, slip & lembur N-1 sudah dibayarkan
+app.post('/api/payroll/periods/:id/mark-paid', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let periodRes = UUID_REGEX.test(id)
+      ? await pool.query('SELECT * FROM hrm_payroll_periods WHERE id = $1 LIMIT 1', [id])
+      : { rows: [] };
+    if (periodRes.rows.length === 0 && req.body?.month && req.body?.year) {
+      periodRes = await pool.query('SELECT * FROM hrm_payroll_periods WHERE year = $1 AND month = $2 LIMIT 1', [
+        parseInt(req.body.year, 10),
+        parseInt(req.body.month, 10),
+      ]);
+    }
+    if (periodRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Periode payroll tidak ditemukan' });
+    }
+    const period = periodRes.rows[0];
+    await pool.query("UPDATE hrm_payroll_periods SET status = 'paid', updated_at = NOW() WHERE id = $1", [period.id]);
+    await pool.query("UPDATE hrm_payroll_slips SET status = 'paid', paid_at = NOW(), updated_at = NOW() WHERE period_id = $1", [period.id]);
+    await pool.query("UPDATE hrm_overtime_records SET payment_status = 'paid', updated_at = NOW() WHERE payroll_period_id = $1", [period.id]);
+
+    res.json({ success: true, message: `Periode ${period.period_label} dan seluruh lembur bulan mundur terkait ditandai LUNAS (PAID).` });
+  } catch (err) {
+    console.error('[MarkPayrollPaid] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -13516,15 +13831,7 @@ app.delete('/api/attendances/:id', async (req, res) => {
     }
     const targetUserId = delRes.rows[0].user_id;
     if (targetUserId) {
-      await pool.query(`
-        UPDATE hrm_profiles
-        SET used_leave_days = (
-          SELECT COUNT(DISTINCT attendance_date)
-          FROM hrm_attendances
-          WHERE user_id = $1 AND status = 'cuti'
-        )
-        WHERE id = $1;
-      `, [targetUserId]);
+      await recalculateUserLeaveUsedDays(pool, targetUserId);
     }
     res.json({ success: true, message: 'Data presensi berhasil dihapus', data: delRes.rows[0] });
   } catch (err) {
@@ -13577,19 +13884,10 @@ app.put('/api/attendances/:id/manual-correct', async (req, res) => {
         return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
       }
 
-      // Jika diubah menjadi cuti, pastikan kuota profil tersinkron
+      // Jika diubah menjadi cuti, pastikan kuota profil tersinkron tanpa merusak baseline ledger
       const targetUserId = nonWorkingResult.rows[0].user_id;
       if (targetUserId && canonicalStatus === 'cuti') {
-        await pool.query(`
-          UPDATE hrm_profiles
-          SET used_leave_days = GREATEST(COALESCE(used_leave_days, 0), (
-            SELECT COUNT(DISTINCT attendance_date)
-            FROM hrm_attendances
-            WHERE user_id = $1 AND status = 'cuti'
-          )),
-          updated_at = NOW()
-          WHERE id = $1;
-        `, [targetUserId]);
+        await recalculateUserLeaveUsedDays(pool, targetUserId);
       }
 
       return res.json({ success: true, data: nonWorkingResult.rows[0], message: `Presensi berhasil diubah menjadi ${canonicalStatus.toUpperCase()}` });
@@ -13646,18 +13944,10 @@ app.put('/api/attendances/:id/manual-correct', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Data presensi tidak ditemukan' });
     }
 
-    // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime
+    // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime dari ledger & pengajuan
     const targetUserId = result.rows[0].user_id;
     if (targetUserId) {
-      await pool.query(`
-        UPDATE hrm_profiles
-        SET used_leave_days = (
-          SELECT COUNT(DISTINCT attendance_date)
-          FROM hrm_attendances
-          WHERE user_id = $1 AND status = 'cuti'
-        )
-        WHERE id = $1;
-      `, [targetUserId]);
+      await recalculateUserLeaveUsedDays(pool, targetUserId);
     }
 
     res.json({ success: true, data: result.rows[0] });
@@ -13731,17 +14021,9 @@ app.post('/api/attendances/manual-entry', async (req, res) => {
       finalLateMinutes,
     ]);
 
-    // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime
+    // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime dari ledger & pengajuan
     if (userId) {
-      await pool.query(`
-        UPDATE hrm_profiles
-        SET used_leave_days = (
-          SELECT COUNT(DISTINCT attendance_date)
-          FROM hrm_attendances
-          WHERE user_id = $1 AND status = 'cuti'
-        )
-        WHERE id = $1;
-      `, [userId]);
+      await recalculateUserLeaveUsedDays(pool, userId);
     }
 
     res.json({ success: true, data: result.rows[0] });
@@ -14910,6 +15192,7 @@ async function start() {
   try {
     await initDb();
     await seedInitialUsers();
+    await seedOfficialLeaveBaselines(pool).catch((e) => console.warn('[BaselineSeed Note]:', e.message));
     await enforceEphemeralPhotoRetention();
     await syncAllUserBiometricEmbeddings();
 

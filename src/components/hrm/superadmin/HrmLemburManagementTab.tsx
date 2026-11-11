@@ -31,6 +31,9 @@ import {
 import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
 import { HrmEditLemburModal } from '@/components/hrm/superadmin/HrmEditLemburModal';
 import { HrmMonthlyFinancialRecapModal } from '@/components/hrm/HrmMonthlyFinancialRecapModal';
+import { HrmOvertimeArrearsPayrollTab } from '@/components/hrm/superadmin/HrmOvertimeArrearsPayrollTab';
+import { HrmOvertimeCostControlTab } from '@/components/hrm/superadmin/HrmOvertimeCostControlTab';
+import { getEmployeeCategoryGroup } from '@/types/hrm';
 import { api } from '@/services/apiClient';
 
 export const HrmLemburManagementTab: React.FC = () => {
@@ -39,8 +42,10 @@ export const HrmLemburManagementTab: React.FC = () => {
   const [divisions, setDivisions] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedDivision, setSelectedDivision] = useState<string>('all');
+  const [groupFilter, setGroupFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [subTab, setSubTab] = useState<'spkl_list' | 'cost_control' | 'arrears_payroll'>('spkl_list');
 
   // Financial & Quota Report Modal State
   const [reportModalOpen, setReportModalOpen] = useState<boolean>(false);
@@ -139,7 +144,10 @@ export const HrmLemburManagementTab: React.FC = () => {
 
     const matchesStatus = statusFilter === 'all' || r.status === statusFilter;
 
-    return matchesSearch && matchesDivision && matchesStatus;
+    const grp = getEmployeeCategoryGroup(user || { nip: uNip, fullName: uName });
+    const matchesGroup = groupFilter === 'all' || grp === groupFilter;
+
+    return matchesSearch && matchesDivision && matchesStatus && matchesGroup;
   });
 
   // Calculate Metrics
@@ -276,7 +284,55 @@ export const HrmLemburManagementTab: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {/* Sub-Tab Switcher: SPKL Real-Time vs Sinkronisasi Payroll Bulan Mundur (N-1) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-1.5 rounded-2xl bg-muted/40 border border-border">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant={subTab === 'spkl_list' ? 'default' : 'ghost'}
+            onClick={() => setSubTab('spkl_list')}
+            className={`h-8 text-xs rounded-xl font-semibold ${
+              subTab === 'spkl_list' ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs' : 'text-muted-foreground'
+            }`}
+          >
+            ⏱️ Pengajuan SPKL &amp; Plafon Anggaran ({totalSPKL})
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={subTab === 'cost_control' ? 'default' : 'ghost'}
+            onClick={() => setSubTab('cost_control')}
+            className={`h-8 text-xs rounded-xl font-semibold ${
+              subTab === 'cost_control' ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-xs' : 'text-muted-foreground'
+            }`}
+          >
+            🛡️ Radar Anti-Boncos (Target 55–60 Jt)
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={subTab === 'arrears_payroll' ? 'default' : 'ghost'}
+            onClick={() => setSubTab('arrears_payroll')}
+            className={`h-8 text-xs rounded-xl font-semibold ${
+              subTab === 'arrears_payroll' ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs' : 'text-muted-foreground'
+            }`}
+          >
+            💰 Rekap &amp; Sinkronisasi Payroll Bulan Mundur (N-1)
+          </Button>
+        </div>
+        <span className="text-[11px] text-muted-foreground px-2 hidden sm:inline">
+          Lembur Bulan N-1 &rarr; Dibayarkan di Payroll Bulan N
+        </span>
+      </div>
+
+      {subTab === 'cost_control' ? (
+        <HrmOvertimeCostControlTab onUpdated={loadData} />
+      ) : subTab === 'arrears_payroll' ? (
+        <HrmOvertimeArrearsPayrollTab onSynced={loadData} />
+      ) : (
+        <div className="space-y-6">
       {/* ═══ RADAR PLAFON & ANGGARAN LEMBUR PIMPINAN (STRICT BUDGET CAPS) ═══ */}
       <Card className="border-border bg-gradient-to-br from-card via-card to-blue-500/5 rounded-2xl shadow-xs overflow-hidden border-blue-500/30">
         <CardHeader className="pb-3 border-b border-border/80 bg-blue-500/5">
@@ -573,7 +629,7 @@ export const HrmLemburManagementTab: React.FC = () => {
 
         <CardContent className="pt-4 space-y-4">
           {/* Controls Bar */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3 top-2.5 text-muted-foreground" />
               <Input
@@ -582,6 +638,20 @@ export const HrmLemburManagementTab: React.FC = () => {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9 h-9 text-xs rounded-xl"
               />
+            </div>
+
+            <div>
+              <Select value={groupFilter} onValueChange={setGroupFilter}>
+                <SelectTrigger className="h-9 text-xs rounded-xl">
+                  <SelectValue placeholder="Kelompok Personil" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua 3 Kelompok FRP</SelectItem>
+                  <SelectItem value="RUMAH TANGGA">🏠 Rumah Tangga (FR07001–033)</SelectItem>
+                  <SelectItem value="SHIPMENT">🚢 Shipment (FR07034–080)</SelectItem>
+                  <SelectItem value="KARYAWAN TETAP">⭐ Karyawan Tetap (Aslam, Samsi, Takdir)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div>
@@ -734,6 +804,8 @@ export const HrmLemburManagementTab: React.FC = () => {
           </div>
         </CardContent>
       </Card>
+        </div>
+      )}
 
       {/* Modal Action Approval/Rejection */}
       <Dialog open={actionModalOpen} onOpenChange={setActionModalOpen}>
