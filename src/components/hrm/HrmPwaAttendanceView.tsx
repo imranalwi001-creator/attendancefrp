@@ -433,7 +433,16 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [overtimeModalOpen, setOvertimeModalOpen] = useState(false);
   const [userOvertimeList, setUserOvertimeList] = useState<OvertimeRecord[]>([]);
   const [userSubstitutions, setUserSubstitutions] = useState<any[]>([]);
-  const [liveLeaveBalance, setLiveLeaveBalance] = useState<{ annualLeaveQuota: number; usedLeaveDays: number; remainingLeaveDays: number; overtimeThisMonth?: any } | null>(null);
+  const [liveLeaveBalance, setLiveLeaveBalance] = useState<{
+    annualLeaveQuota: number;
+    usedLeaveDays: number;
+    pendingLeaveDays?: number;
+    approvedLeaveDays?: number;
+    remainingLeaveDays: number;
+    frpGroup?: string;
+    frpGroupLabel?: string;
+    overtimeThisMonth?: any;
+  } | null>(null);
   const [otDate, setOtDate] = useState(getTodayDateStr());
   const [otCategory, setOtCategory] = useState<'shift1' | 'shift2' | 'shift3' | 'dayshift' | 'darurat_wajib' | 'custom'>('shift1');
   const [otStartTime, setOtStartTime] = useState('07:30');
@@ -1107,6 +1116,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
           const latestSched = hrmService.getEmployeeTodaySchedule(user.id, todayStr);
           const finalEffectiveShift = resolveEffectiveShift(user, latestShifts, latestSched);
           setUserShift(finalEffectiveShift);
+          setUserLeaves(hrmService.getUserLeaves(user.id));
         })
         .catch(() => null);
 
@@ -1115,6 +1125,17 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         .then((balRes) => {
           if (balRes?.success && balRes.data) {
             setLiveLeaveBalance(balRes.data);
+            try {
+              const rawCur = localStorage.getItem('hrm_current_user');
+              if (rawCur) {
+                const cur = JSON.parse(rawCur);
+                if (cur && cur.id === user.id) {
+                  cur.annualLeaveQuota = balRes.data.annualLeaveQuota;
+                  cur.usedLeaveDays = balRes.data.usedLeaveDays;
+                  localStorage.setItem('hrm_current_user', JSON.stringify(cur));
+                }
+              }
+            } catch (_) {}
           }
         })
         .catch(() => null);
@@ -1503,6 +1524,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     window.addEventListener('hrm_attendance_updated', handleUpdate);
     window.addEventListener('hrm_settings_updated', handleUpdate);
     window.addEventListener('hrm_users_updated', handleUpdate);
+    window.addEventListener('hrm_leaves_updated', handleUpdate);
     window.addEventListener('hrm_shifts_updated', handleUpdate);
     window.addEventListener('hrm_schedules_updated', handleUpdate);
 
@@ -1530,6 +1552,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       window.removeEventListener('hrm_attendance_updated', handleUpdate);
       window.removeEventListener('hrm_settings_updated', handleUpdate);
       window.removeEventListener('hrm_users_updated', handleUpdate);
+      window.removeEventListener('hrm_leaves_updated', handleUpdate);
       window.removeEventListener('hrm_shifts_updated', handleUpdate);
       window.removeEventListener('hrm_schedules_updated', handleUpdate);
       document.removeEventListener('visibilitychange', handleResumeOrWakeup);
@@ -5554,13 +5577,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               <div className="space-y-2.5">
                 {/* ─── KARTU INFORMASI KUOTA CUTI KARYAWAN ─── */}
                 <div className="p-3.5 bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-cyan-500/10 dark:from-emerald-950/40 dark:to-cyan-950/30 rounded-2xl border border-emerald-500/25 space-y-2.5 shadow-xs">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
                       <CalendarCheck2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                       Status Kuota Cuti Tahunan
                     </span>
-                    <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200/60 dark:border-emerald-800/60">
-                      Tahun {new Date().getFullYear()}
+                    <span className="text-[9.5px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200/60 dark:border-emerald-800/60">
+                      {liveLeaveBalance?.frpGroupLabel || `Tahun ${new Date().getFullYear()}`}
                     </span>
                   </div>
 
@@ -5577,6 +5600,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       <p className="text-base font-extrabold text-amber-600 dark:text-amber-400 mt-0.5">
                         {analyticsData.usedLeave} <span className="text-[9px] font-normal text-slate-400">Hari</span>
                       </p>
+                      {(liveLeaveBalance?.pendingLeaveDays ?? 0) > 0 && (
+                        <p className="text-[8.5px] text-amber-600/80 dark:text-amber-300/80">
+                          ({liveLeaveBalance?.pendingLeaveDays}h pending)
+                        </p>
+                      )}
                     </div>
 
                     <div className="bg-white/90 dark:bg-slate-900/80 p-2.5 rounded-xl border border-emerald-200/80 dark:border-emerald-900/50 shadow-2xs">
@@ -5587,7 +5615,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     </div>
                   </div>
                   <p className="text-[9px] text-muted-foreground italic text-center">
-                    *Hak cuti tahunan bersifat Use-It-Or-Lose-It (tidak dapat diuangkan / tidak ada kompensasi kas).
+                    *Saldo cuti terpotong otomatis saat pengajuan &amp; dikembalikan jika ditolak (Use-It-Or-Lose-It).
                   </p>
                 </div>
                 {userLeaves.length === 0 ? (
@@ -6140,7 +6168,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             <div className="p-2.5 bg-emerald-500/10 dark:bg-emerald-950/30 rounded-2xl border border-emerald-500/20">
               <div className="flex items-center justify-between text-[10px] text-emerald-800 dark:text-emerald-300 font-bold mb-1.5">
                 <span>Informasi Hak Cuti Anda</span>
-                <span className="text-[9px] font-normal text-slate-500">Tahun {new Date().getFullYear()}</span>
+                <span className="text-[9px] font-normal text-slate-500">
+                  {liveLeaveBalance?.frpGroupLabel || `Tahun ${new Date().getFullYear()}`}
+                </span>
               </div>
               <div className="grid grid-cols-3 gap-1.5 text-center">
                 <div className="bg-white/80 dark:bg-slate-900/60 p-1.5 rounded-lg border border-slate-200/60 dark:border-slate-800">

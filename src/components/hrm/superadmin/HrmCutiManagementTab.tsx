@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { hrmService } from '@/services/hrmService';
+import { api } from '@/services/apiClient';
 import { LeaveRequest, LeaveStatus, UserProfile } from '@/types/hrm';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -20,10 +21,16 @@ import {
   CalendarCheck,
   Paperclip,
   Plus,
+  ArrowRight,
+  Users,
 } from 'lucide-react';
 import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
 import { HrmEmployeeLeaveCorrectionModal } from '@/components/hrm/HrmEmployeeLeaveCorrectionModal';
-import { HrmLeaveExecutiveRecapTab } from '@/components/hrm/superadmin/HrmLeaveExecutiveRecapTab';
+import {
+  HrmLeaveExecutiveRecapTab,
+  ExecutiveLeaveRecapResponse,
+  LeaveExecutiveRecapRow,
+} from '@/components/hrm/superadmin/HrmLeaveExecutiveRecapTab';
 
 export const HrmCutiManagementTab: React.FC = () => {
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
@@ -34,6 +41,8 @@ export const HrmCutiManagementTab: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [subTab, setSubTab] = useState<'requests' | 'executive_recap'>('requests');
+  const [recapFocusGroup, setRecapFocusGroup] = useState<'rumahTangga' | 'shipment' | 'karyawanTetap'>('rumahTangga');
+  const [execRecap, setExecRecap] = useState<ExecutiveLeaveRecapResponse | null>(null);
 
   // Approval Modal State
   const [actionModalOpen, setActionModalOpen] = useState(false);
@@ -51,25 +60,63 @@ export const HrmCutiManagementTab: React.FC = () => {
   // Leave Quota Correction Modal State
   const [leaveCorrectionOpen, setLeaveCorrectionOpen] = useState(false);
 
-  const loadData = () => {
+  const fetchQuotaRecap = useCallback(async () => {
+    try {
+      const res: any = await api.get('/leaves/executive-recap');
+      if (res?.success && res.data) {
+        setExecRecap(res.data);
+      }
+    } catch (_) {
+      // Fallback silently when offline
+    }
+  }, []);
+
+  const loadData = useCallback(async (forceSync: boolean = false) => {
     setIsLoading(true);
     setUsers(hrmService.getUsers());
     setDivisions(hrmService.getDivisions());
-    const lList = hrmService.getLeaves();
-    setLeaves(lList);
-    setIsLoading(false);
-  };
+    setLeaves(hrmService.getLeaves());
+    try {
+      await Promise.all([
+        hrmService.syncWithBackend(forceSync),
+        fetchQuotaRecap(),
+      ]);
+      setUsers(hrmService.getUsers());
+      setDivisions(hrmService.getDivisions());
+      setLeaves(hrmService.getLeaves());
+    } finally {
+      setIsLoading(false);
+    }
+  }, [fetchQuotaRecap]);
 
   useEffect(() => {
-    loadData();
-    const handleSync = () => loadData();
+    loadData(false);
+    const handleSync = () => {
+      setUsers(hrmService.getUsers());
+      setDivisions(hrmService.getDivisions());
+      setLeaves(hrmService.getLeaves());
+      fetchQuotaRecap();
+    };
     window.addEventListener('hrm_leaves_updated', handleSync);
+    window.addEventListener('hrm_users_updated', handleSync);
     window.addEventListener('hrm_data_updated', handleSync);
     return () => {
       window.removeEventListener('hrm_leaves_updated', handleSync);
+      window.removeEventListener('hrm_users_updated', handleSync);
       window.removeEventListener('hrm_data_updated', handleSync);
     };
-  }, []);
+  }, [loadData, fetchQuotaRecap]);
+
+  const recapRowByUserId = useMemo(() => {
+    const map = new Map<string, LeaveExecutiveRecapRow>();
+    if (!execRecap) return map;
+    [execRecap.rumahTangga, execRecap.shipment, execRecap.karyawanTetap].forEach((sec) => {
+      sec?.rows?.forEach((r) => {
+        map.set(r.userId, r);
+      });
+    });
+    return map;
+  }, [execRecap]);
 
   const filteredLeaves = leaves.filter((l) => {
     const user = users.find((u) => u.id === l.userId);
@@ -90,12 +137,12 @@ export const HrmCutiManagementTab: React.FC = () => {
     return matchesSearch && matchesDivision && matchesStatus;
   });
 
-  // Calculate Metrics
+  // Calculate Metrics (dukung alias snake_case Indonesia & Inggris)
   const totalLeaves = leaves.length;
   const pendingLeaves = leaves.filter((l) => l.status === 'pending').length;
   const approvedLeaves = leaves.filter((l) => l.status === 'approved').length;
-  const sickLeaves = leaves.filter((l) => l.leaveType === 'sakit' && l.status === 'approved').length;
-  const annualLeaves = leaves.filter((l) => l.leaveType === 'cuti_tahunan' && l.status === 'approved').length;
+  const sickLeaves = leaves.filter((l) => ['sakit', 'sick_leave'].includes(String(l.leaveType || '').toLowerCase()) && l.status === 'approved').length;
+  const annualLeaves = leaves.filter((l) => ['cuti_tahunan', 'annual_leave', 'cuti'].includes(String(l.leaveType || '').toLowerCase()) && l.status === 'approved').length;
 
   const handleOpenAction = (leave: LeaveRequest, type: 'approve' | 'reject') => {
     setSelectedLeave(leave);
@@ -108,20 +155,24 @@ export const HrmCutiManagementTab: React.FC = () => {
     if (!selectedLeave) return;
     setIsSubmitting(true);
     try {
+      const currentAdmin = hrmService.getCurrentUser();
       await hrmService.updateLeaveStatus(
         selectedLeave.id,
         actionType === 'approve' ? 'approved' : 'rejected',
-        'Super Administrator',
-        actionNotes
+        currentAdmin?.id || 'Super Administrator',
+        actionNotes,
+        selectedLeave.substituteId,
+        selectedLeave.substituteName,
+        selectedLeave.substituteNip
       );
 
       toast.success(
         actionType === 'approve'
-          ? 'Permohonan cuti/izin disetujui (saldo sudah dipotong saat pengajuan).'
+          ? 'Permohonan cuti/izin disetujui dan kuota tersinkronisasi ke Database & PWA.'
           : 'Permohonan cuti/izin ditolak dan saldo cuti dikembalikan otomatis.'
       );
       setActionModalOpen(false);
-      loadData();
+      await loadData(true);
     } catch (err: any) {
       toast.error(err?.message || 'Gagal memproses permohonan cuti');
     } finally {
@@ -145,16 +196,23 @@ export const HrmCutiManagementTab: React.FC = () => {
   const getLeaveTypeBadge = (type: string) => {
     const labels: Record<string, string> = {
       cuti_tahunan: 'Cuti Tahunan',
-      sakit: 'Sakit',
+      annual_leave: 'Cuti Tahunan',
+      cuti: 'Cuti Tahunan',
+      sakit: 'Izin Sakit',
+      sick_leave: 'Izin Sakit',
       izin: 'Izin Keperluan',
+      permission: 'Izin Keperluan',
       cuti_menikah: 'Cuti Menikah',
       cuti_melahirkan: 'Cuti Melahirkan',
       cuti_duka: 'Cuti Duka',
       izin_darurat: 'Izin Darurat',
+      emergency_leave: 'Izin Darurat',
+      unpaid_leave: 'Izin Khusus / Dinas',
     };
+    const key = String(type || '').toLowerCase();
     return (
       <Badge variant="outline" className="bg-muted text-foreground text-[11px] font-medium border-border">
-        {labels[type] || type}
+        {labels[key] || labels[type] || type}
       </Badge>
     );
   };
@@ -193,9 +251,121 @@ export const HrmCutiManagementTab: React.FC = () => {
       </div>
 
       {subTab === 'executive_recap' ? (
-        <HrmLeaveExecutiveRecapTab onSynced={loadData} />
+        <HrmLeaveExecutiveRecapTab
+          initialGroup={recapFocusGroup}
+          onSynced={() => loadData(true)}
+        />
       ) : (
         <div className="space-y-6">
+      {/* Panel Ringkasan Kuota Cuti 3 Kelompok Resmi PT. FRP (Tampil Langsung di /admin/cuti & Terhubung ke PWA) */}
+      <Card className="border-emerald-500/25 bg-gradient-to-br from-card via-card to-emerald-500/5 shadow-xs">
+        <CardHeader className="pb-2.5 pt-3.5 px-4 border-b border-border/60">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-emerald-600 shrink-0" />
+              <div>
+                <p className="text-xs font-bold text-foreground">
+                  Ringkasan Kuota Cuti 3 Kelompok Resmi PT. FRP (Sinkron PostgreSQL &amp; PWA Karyawan)
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  Klik salah satu kartu kelompok untuk melihat rincian kuota per orang &amp; matriks bulanan.
+                </p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setSubTab('executive_recap')}
+              className="h-7 text-[11px] rounded-xl gap-1 border-blue-500/30 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 font-semibold"
+            >
+              Lihat Matriks Lengkap 83 Personil
+              <ArrowRight className="w-3 h-3" />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-3.5">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {[
+              {
+                key: 'rumahTangga' as const,
+                title: '🏠 Rumah Tangga (FR07001–033)',
+                quotaLabel: 'Kuota Baku 12 Hari/Org • Mar 2026–Feb 2027',
+                section: execRecap?.rumahTangga,
+                fallbackCount: 33,
+                badgeCls: 'bg-teal-600 text-white',
+                borderCls: 'border-teal-500/30 hover:border-teal-500 bg-teal-500/5',
+              },
+              {
+                key: 'shipment' as const,
+                title: '🚢 Shipment (FR07034–080)',
+                quotaLabel: 'Kuota Baku 9 Hari/Org • Apr–Des 2026',
+                section: execRecap?.shipment,
+                fallbackCount: 47,
+                badgeCls: 'bg-blue-600 text-white',
+                borderCls: 'border-blue-500/30 hover:border-blue-500 bg-blue-500/5',
+              },
+              {
+                key: 'karyawanTetap' as const,
+                title: '⭐ Karyawan Tetap (Aslam, Samsi, Takdir)',
+                quotaLabel: 'Kuota Baku 12 Hari/Org • Persetujuan Pimpinan',
+                section: execRecap?.karyawanTetap,
+                fallbackCount: 3,
+                badgeCls: 'bg-purple-600 text-white',
+                borderCls: 'border-purple-500/30 hover:border-purple-500 bg-purple-500/5',
+              },
+            ].map((grp) => {
+              const s = grp.section?.summary;
+              return (
+                <button
+                  key={grp.key}
+                  type="button"
+                  onClick={() => {
+                    setRecapFocusGroup(grp.key);
+                    setSubTab('executive_recap');
+                  }}
+                  className={`text-left p-3.5 rounded-xl border transition-all ${grp.borderCls}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-foreground">{grp.title}</span>
+                    <Badge className={`text-[10px] ${grp.badgeCls}`}>
+                      {s?.totalEmployees ?? grp.fallbackCount} Org
+                    </Badge>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">{grp.quotaLabel}</p>
+                  <div className="grid grid-cols-3 gap-2 mt-2.5 pt-2 border-t border-border/60 text-center">
+                    <div>
+                      <span className="block text-[10px] text-muted-foreground">Total Hak</span>
+                      <span className="text-xs font-bold font-mono text-foreground">{s ? `${s.totalQuota}h` : '...'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-muted-foreground">Terpakai</span>
+                      <span className="text-xs font-bold font-mono text-amber-600 dark:text-amber-400">
+                        {s ? `${s.totalUsed}h` : '...'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-muted-foreground">Sisa Kuota</span>
+                      <span className="text-xs font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                        {s ? `${s.totalRemaining}h` : '...'}
+                      </span>
+                    </div>
+                  </div>
+                  {s && (
+                    <div className="flex items-center justify-between text-[10px] mt-1.5 text-muted-foreground">
+                      <span>Pending: {s.totalPending}h</span>
+                      <span className={s.exhaustedCount > 0 ? 'text-rose-600 font-semibold' : ''}>
+                        Kuota Habis: {s.exhaustedCount} Org
+                      </span>
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Metric Overview Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5">
         <Card className="border-border bg-card shadow-xs">
@@ -277,7 +447,7 @@ export const HrmCutiManagementTab: React.FC = () => {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={loadData}
+                onClick={() => loadData(true)}
                 disabled={isLoading}
                 className="h-8 text-xs rounded-xl gap-1.5"
               >
@@ -375,12 +545,23 @@ export const HrmCutiManagementTab: React.FC = () => {
                   ) : (
                     filteredLeaves.map((l) => {
                       const user = users.find((u) => u.id === l.userId);
+                      const recapRow = recapRowByUserId.get(l.userId);
+                      const quotaVal = recapRow?.quota ?? user?.annualLeaveQuota ?? 12;
+                      const usedVal = recapRow?.usedLeaveDays ?? user?.usedLeaveDays ?? 0;
+                      const remainingVal = recapRow?.remainingLeaveDays ?? Math.max(0, quotaVal - usedVal);
                       return (
                         <tr key={l.id} className="hover:bg-muted/30 transition-colors">
                           <td className="py-3 px-4">
                             <div>
                               <p className="font-semibold text-foreground">{l.userName || user?.fullName || 'Karyawan'}</p>
-                              <p className="text-[10px] text-muted-foreground font-mono">{l.userNip || user?.nip || '-'}</p>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="text-[10px] text-muted-foreground font-mono">{l.userNip || user?.nip || '-'}</span>
+                                {recapRow && (
+                                  <Badge variant="outline" className="text-[9.5px] px-1.5 py-0 h-4 font-semibold border-border text-muted-foreground">
+                                    {recapRow.group}
+                                  </Badge>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">
@@ -411,8 +592,13 @@ export const HrmCutiManagementTab: React.FC = () => {
                               <span className="text-[10px] text-muted-foreground">-</span>
                             )}
                           </td>
-                          <td className="py-3 px-4 text-center font-mono font-medium text-foreground">
-                            {Math.max(0, (user?.annualLeaveQuota ?? 12) - (user?.usedLeaveDays ?? 0))}/{user?.annualLeaveQuota ?? 12} Hari
+                          <td className="py-3 px-4 text-center font-mono font-medium text-foreground whitespace-nowrap">
+                            <span className={remainingVal === 0 ? 'text-rose-600 font-bold' : 'text-emerald-600 font-bold'}>
+                              {remainingVal}/{quotaVal} Hari
+                            </span>
+                            <span className="block text-[10px] text-muted-foreground">
+                              Terpakai {usedVal}h
+                            </span>
                           </td>
                           <td className="py-3 px-4 text-center whitespace-nowrap">
                             {getStatusBadge(l.status)}
@@ -547,7 +733,7 @@ export const HrmCutiManagementTab: React.FC = () => {
       <HrmManualLeaveModal
         open={manualLeaveModalOpen}
         onClose={() => setManualLeaveModalOpen(false)}
-        onSuccess={() => loadData()}
+        onSuccess={() => loadData(true)}
       />
 
       {/* Modal Koreksi Saldo Cuti Karyawan */}
@@ -555,7 +741,7 @@ export const HrmCutiManagementTab: React.FC = () => {
         isOpen={leaveCorrectionOpen}
         onClose={() => setLeaveCorrectionOpen(false)}
         allUsers={users}
-        onSaved={() => loadData()}
+        onSaved={() => loadData(true)}
       />
     </div>
   );

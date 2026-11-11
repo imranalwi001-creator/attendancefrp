@@ -195,8 +195,9 @@ export const HrmEmployeeLeaveCorrectionModal: React.FC<HrmEmployeeLeaveCorrectio
       );
       hrmService.setInMemoryUsers(allCachedUsers);
 
-      // 5. Trigger events untuk me-refresh semua listener
+      // 5. Trigger events untuk me-refresh semua listener (Admin Cuti, Rekap 3 Kelompok, dan PWA Karyawan)
       window.dispatchEvent(new Event('hrm_users_updated'));
+      window.dispatchEvent(new Event('hrm_leaves_updated'));
       window.dispatchEvent(new Event('hrm_data_updated'));
 
       toast.success(`Saldo cuti ${currentUser.fullName} berhasil diperbarui!`, {

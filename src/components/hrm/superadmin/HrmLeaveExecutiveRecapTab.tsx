@@ -83,15 +83,22 @@ const formatMonthCol = (mk: string) => {
 };
 
 interface Props {
+  initialGroup?: 'rumahTangga' | 'shipment' | 'karyawanTetap';
   onSynced?: () => void;
 }
 
-export const HrmLeaveExecutiveRecapTab: React.FC<Props> = ({ onSynced }) => {
+export const HrmLeaveExecutiveRecapTab: React.FC<Props> = ({ initialGroup, onSynced }) => {
   const [recap, setRecap] = useState<ExecutiveLeaveRecapResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [activeGroup, setActiveGroup] = useState<'rumahTangga' | 'shipment' | 'karyawanTetap'>('rumahTangga');
+  const [activeGroup, setActiveGroup] = useState<'rumahTangga' | 'shipment' | 'karyawanTetap'>(initialGroup || 'rumahTangga');
   const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    if (initialGroup) {
+      setActiveGroup(initialGroup);
+    }
+  }, [initialGroup]);
 
   const fetchRecap = async () => {
     setLoading(true);
@@ -111,6 +118,17 @@ export const HrmLeaveExecutiveRecapTab: React.FC<Props> = ({ onSynced }) => {
 
   useEffect(() => {
     fetchRecap();
+    const handleLiveRefresh = () => {
+      fetchRecap();
+    };
+    window.addEventListener('hrm_leaves_updated', handleLiveRefresh);
+    window.addEventListener('hrm_users_updated', handleLiveRefresh);
+    window.addEventListener('hrm_data_updated', handleLiveRefresh);
+    return () => {
+      window.removeEventListener('hrm_leaves_updated', handleLiveRefresh);
+      window.removeEventListener('hrm_users_updated', handleLiveRefresh);
+      window.removeEventListener('hrm_data_updated', handleLiveRefresh);
+    };
   }, []);
 
   const handleSyncBaseline = async () => {

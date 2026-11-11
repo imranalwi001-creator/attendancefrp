@@ -7449,15 +7449,39 @@ app.get('/api/leaves/balance', async (req, res) => {
       if (uRes.rows.length > 0) validUserId = uRes.rows[0].id;
     }
     const profileRes = await pool.query(
-      'SELECT annual_leave_quota, used_leave_days FROM hrm_profiles WHERE id = $1 LIMIT 1',
+      'SELECT id, nip, email, full_name, annual_leave_quota, used_leave_days FROM hrm_profiles WHERE id = $1 LIMIT 1',
       [validUserId]
     );
     if (profileRes.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
     }
     const p = profileRes.rows[0];
-    const quota = parseInt(p.annual_leave_quota || 12, 10);
-    const used = parseInt(p.used_leave_days || 0, 10);
+    const frpGroup = classifyFrpGroup(p);
+    let quota = parseInt(p.annual_leave_quota || (frpGroup === 'SHIPMENT' ? 9 : 12), 10);
+    let used = parseInt(p.used_leave_days || 0, 10);
+
+    // Sinkronkan used_leave_days realtime dari ledger + pengajuan cuti tahunan aktif agar 100% konsisten dengan Rekap Admin
+    if (frpGroup !== 'OTHER') {
+      used = await recalculateUserLeaveUsedDays(pool, p.id);
+    }
+
+    const pendingRes = await pool.query(`
+      SELECT COALESCE(SUM(total_days), 0) AS pending_days
+      FROM hrm_leave_requests
+      WHERE user_id = $1
+        AND LOWER(leave_type) IN ('cuti_tahunan', 'annual_leave', 'cuti')
+        AND status = 'pending'
+        AND start_date >= '2026-10-01'
+    `, [p.id]);
+    const pendingLeaveDays = parseInt(pendingRes.rows[0]?.pending_days || 0, 10);
+
+    const frpGroupLabel = frpGroup === 'SHIPMENT'
+      ? 'Shipment Operasional (Kuota 9 Hari)'
+      : frpGroup === 'RUMAH TANGGA'
+      ? 'Rumah Tangga & Wisma (Kuota 12 Hari)'
+      : frpGroup === 'KARYAWAN TETAP'
+      ? 'Karyawan Tetap (Kuota 12 Hari)'
+      : `Karyawan Reguler (Kuota ${quota} Hari)`;
 
     // ⚡ ATURAN RESMI PT FRP: Lembur dihitung & dibayarkan adalah BULAN MUNDUR (N-1)
     // Serta DILARANG menampilkan informasi nominal kompensasi rupiah di PWA karyawan
@@ -7480,7 +7504,11 @@ app.get('/api/leaves/balance', async (req, res) => {
       data: {
         annualLeaveQuota: quota,
         usedLeaveDays: used,
+        pendingLeaveDays,
+        approvedLeaveDays: Math.max(0, used - pendingLeaveDays),
         remainingLeaveDays: Math.max(0, quota - used),
+        frpGroup,
+        frpGroupLabel,
         // Lembur bulan mundur (approved) - Tanpa nominal rupiah untuk privasi karyawan
         overtimeThisMonth: {
           approvedCount: parseInt(ot.approved_count || 0, 10),
@@ -9599,7 +9627,7 @@ app.post('/api/leaves', async (req, res) => {
     let isUrgentSubmission = false;
 
     // Aturan Cuti Tahunan: Cek sisa kuota jika bukan bypass admin
-    if ((type === 'cuti_tahunan' || type === 'annual_leave') && !isAdminDirect) {
+    if (['cuti_tahunan', 'annual_leave', 'cuti'].includes(String(type).toLowerCase()) && !isAdminDirect) {
       const annualQuota = userProfile.annual_leave_quota ?? 12;
       const usedDays = userProfile.used_leave_days || 0;
       const remainingQuota = Math.max(0, annualQuota - usedDays);
@@ -9837,7 +9865,11 @@ app.put('/api/leaves/:id/status', async (req, res) => {
     `, [status, validApproverId || null, notes || null, validSubId || null, finalSubName || null, finalSubNip || null, leave.id]);
 
     // 1. Sinkronisasi ledger saldo cuti (tanpa potong ganda jika sudah dipotong saat submit; auto-refund jika ditolak)
-    await recordLeaveDecisionLedger(pool, { leave, decision: status, approverName });
+    const updatedUsedDays = await recordLeaveDecisionLedger(pool, { leave, decision: status, approverName });
+    const quotaProfRes = await pool.query('SELECT annual_leave_quota, used_leave_days FROM hrm_profiles WHERE id = $1 LIMIT 1', [leave.user_id]);
+    const quotaRow = quotaProfRes.rows[0] || {};
+    const finalAnnualQuota = parseInt(quotaRow.annual_leave_quota || 12, 10);
+    const finalUsedDays = parseInt(updatedUsedDays ?? quotaRow.used_leave_days ?? 0, 10);
 
     // 2. Jika disetujui & izin darurat, buka kunci kepulangan awal
     if (status === 'approved' && (leave.leave_type === 'izin_darurat' || leave.leave_type === 'emergency_leave')) {
@@ -10074,6 +10106,11 @@ app.put('/api/leaves/:id/status', async (req, res) => {
     res.json({
       success: true,
       data: updateRes.rows[0],
+      balance: {
+        annualLeaveQuota: finalAnnualQuota,
+        usedLeaveDays: finalUsedDays,
+        remainingLeaveDays: Math.max(0, finalAnnualQuota - finalUsedDays),
+      },
       message: `Permohonan berhasil di-${statusText.toLowerCase()} dan notifikasi WhatsApp & sistem terkirim serentak.`,
     });
   } catch (err) {

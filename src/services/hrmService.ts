@@ -997,6 +997,19 @@ export const hrmService = {
         if (Array.isArray(users) && users.length > 0) {
           inMemoryUsers = users;
           safeSetJson(STORAGE_KEYS.USERS, users);
+          const curUser = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
+          if (curUser) {
+            const matchedRemote = users.find((u: UserProfile) => u.id === curUser.id || (curUser.nip && u.nip === curUser.nip));
+            if (matchedRemote) {
+              safeSetJson(STORAGE_KEYS.CURRENT_USER, {
+                ...curUser,
+                annualLeaveQuota: matchedRemote.annualLeaveQuota ?? curUser.annualLeaveQuota,
+                usedLeaveDays: matchedRemote.usedLeaveDays ?? curUser.usedLeaveDays,
+                permissionQuota: matchedRemote.permissionQuota ?? curUser.permissionQuota,
+                usedPermissionDays: matchedRemote.usedPermissionDays ?? curUser.usedPermissionDays,
+              });
+            }
+          }
           window.dispatchEvent(new Event('hrm_users_updated'));
         }
         if (Array.isArray(roles) && roles.length > 0) {
@@ -4315,8 +4328,9 @@ export const hrmService = {
     const finalStatus: LeaveStatus = req.status || 'approved';
 
     let backendLeave: any = null;
+    let backendBalance: { annualLeaveQuota: number; usedLeaveDays: number; remainingLeaveDays?: number } | null = null;
     try {
-      const res = await api.post<{ success: boolean; data: any; leave: any }>('/leaves', {
+      const res = await api.post<{ success: boolean; data: any; leave: any; balance?: any }>('/leaves', {
         userId: user.id,
         leaveType: req.leaveType,
         startDate: req.startDate,
@@ -4335,8 +4349,13 @@ export const hrmService = {
         adminName: req.adminName || 'Super Administrator',
       });
       backendLeave = res?.data || res?.leave;
+      if (res?.balance) {
+        backendBalance = res.balance;
+      }
     } catch (err: any) {
-      console.warn('[HRM] Warning submitting manual leave to backend:', err);
+      console.error('[HRM] Backend manual leave creation failed:', err);
+      const errMsg = err?.data?.error || err?.message || 'Gagal mencatat cuti manual ke database PostgreSQL';
+      throw new Error(errMsg);
     }
 
     const newLeave: LeaveRequest = {
@@ -4366,19 +4385,32 @@ export const hrmService = {
     leaves.unshift(newLeave);
     safeSetJson(STORAGE_KEYS.LEAVES, leaves);
 
-    // Update kuota cuti / izin di profil lokal
-    if (finalStatus === 'approved') {
+    // Sinkronkan saldo kuota cuti / izin dari hasil perhitungan authoritative PostgreSQL
+    const isAnnualType = ['cuti_tahunan', 'annual_leave', 'cuti'].includes(String(req.leaveType).toLowerCase());
+    if (isAnnualType && (finalStatus === 'approved' || finalStatus === 'pending')) {
+      const nextUsed = backendBalance?.usedLeaveDays ?? ((user.usedLeaveDays || 0) + totalDays);
+      const nextQuota = backendBalance?.annualLeaveQuota ?? (user.annualLeaveQuota || 12);
+      const syncedUsers = users.map((u) =>
+        u.id === user.id ? { ...u, usedLeaveDays: nextUsed, annualLeaveQuota: nextQuota } : u
+      );
+      inMemoryUsers = syncedUsers;
+      safeSetJson(STORAGE_KEYS.USERS, syncedUsers);
+      const cur = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
+      if (cur && cur.id === user.id) {
+        cur.usedLeaveDays = nextUsed;
+        cur.annualLeaveQuota = nextQuota;
+        safeSetJson(STORAGE_KEYS.CURRENT_USER, cur);
+      }
+    } else if (finalStatus === 'approved' && (req.leaveType === 'izin' || (req.leaveType as any) === 'permission')) {
       const uIndex = users.findIndex((u) => u.id === user.id);
       if (uIndex !== -1) {
-        if (req.leaveType === 'cuti_tahunan' || (req.leaveType as any) === 'annual_leave') {
-          users[uIndex].usedLeaveDays = (users[uIndex].usedLeaveDays || 0) + totalDays;
-        } else if (req.leaveType === 'izin' || (req.leaveType as any) === 'permission') {
-          users[uIndex].usedPermissionDays = (users[uIndex].usedPermissionDays || 0) + totalDays;
-        }
+        users[uIndex].usedPermissionDays = (users[uIndex].usedPermissionDays || 0) + totalDays;
+        inMemoryUsers = users;
         safeSetJson(STORAGE_KEYS.USERS, users);
       }
     }
 
+    window.dispatchEvent(new Event('hrm_users_updated'));
     window.dispatchEvent(new Event('hrm_leaves_updated'));
     window.dispatchEvent(new Event('hrm_data_updated'));
 
@@ -4434,8 +4466,9 @@ export const hrmService = {
     const approver = hrmService.getUsers().find((u) => u.id === approverId);
 
     // Call backend API first to guarantee DB update & trigger dual-channel notifications
+    let statusBalance: { annualLeaveQuota: number; usedLeaveDays: number; remainingLeaveDays?: number } | null = null;
     try {
-      await api.put(`/leaves/${leaveId}/status`, {
+      const statusRes = await api.put<any>(`/leaves/${leaveId}/status`, {
         status,
         approverId,
         approverName: approver?.fullName || 'Atasan / HRD',
@@ -4445,6 +4478,9 @@ export const hrmService = {
         substituteNip,
         dailySubstitutes,
       });
+      if (statusRes?.balance) {
+        statusBalance = statusRes.balance;
+      }
     } catch (err: any) {
       console.error('[HRM] Error updating leave status in backend:', err);
       const errMsg = err?.data?.error || err?.message || 'Gagal menyimpan status persetujuan ke server';
@@ -4469,23 +4505,28 @@ export const hrmService = {
     }
 
     // Sinkronisasi saldo cuti dari server PostgreSQL (tanpa potong ganda jika sudah dipotong saat submit; auto-refund jika ditolak)
-    if (leaves[idx].leaveType === 'cuti_tahunan' || (leaves[idx].leaveType as string) === 'annual_leave') {
+    if (['cuti_tahunan', 'annual_leave', 'cuti'].includes(String(leaves[idx].leaveType || '').toLowerCase())) {
       try {
-        const balRes = await api.get<{ success: boolean; data: { annualLeaveQuota: number; usedLeaveDays: number } }>(`/leaves/balance?userId=${encodeURIComponent(leaves[idx].userId)}`);
-        if (balRes?.success && balRes.data) {
-          const users = hrmService.getUsers();
-          const uIdx = users.findIndex((u) => u.id === leaves[idx].userId);
-          if (uIdx !== -1) {
-            users[uIdx].usedLeaveDays = balRes.data.usedLeaveDays;
-            users[uIdx].annualLeaveQuota = balRes.data.annualLeaveQuota;
-            safeSetJson(STORAGE_KEYS.USERS, users);
-          }
+        let nextBalance = statusBalance;
+        if (!nextBalance) {
+          const balRes = await api.get<{ success: boolean; data: { annualLeaveQuota: number; usedLeaveDays: number } }>(`/leaves/balance?userId=${encodeURIComponent(leaves[idx].userId)}`);
+          if (balRes?.success && balRes.data) nextBalance = balRes.data;
+        }
+        if (nextBalance) {
+          const users = hrmService.getUsers().map((u) =>
+            u.id === leaves[idx].userId
+              ? { ...u, usedLeaveDays: nextBalance!.usedLeaveDays, annualLeaveQuota: nextBalance!.annualLeaveQuota }
+              : u
+          );
+          inMemoryUsers = users;
+          safeSetJson(STORAGE_KEYS.USERS, users);
           const cur = safeGetJson<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null);
           if (cur && cur.id === leaves[idx].userId) {
-            cur.usedLeaveDays = balRes.data.usedLeaveDays;
-            cur.annualLeaveQuota = balRes.data.annualLeaveQuota;
+            cur.usedLeaveDays = nextBalance.usedLeaveDays;
+            cur.annualLeaveQuota = nextBalance.annualLeaveQuota;
             safeSetJson(STORAGE_KEYS.CURRENT_USER, cur);
           }
+          window.dispatchEvent(new Event('hrm_users_updated'));
         }
       } catch (_) {}
     }
