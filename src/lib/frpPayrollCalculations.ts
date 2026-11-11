@@ -4,6 +4,41 @@ export const KARYAWAN_TETAP_DAILY_RATE = 140000;
 export const STANDARD_BASE_SALARY = 4045050;
 export const DEFAULT_ABSENCE_DEDUCTION_RATE = 155000;
 
+const ID_MONTH_NAMES = [
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+];
+const ID_MONTH_SHORT = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
+  'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des',
+];
+
+export function shiftYearMonth(yearMonth: string, deltaMonths: number): string {
+  const [yStr, mStr] = String(yearMonth || '').split('-');
+  const year = parseInt(yStr, 10);
+  const month = parseInt(mStr, 10);
+  if (!year || !month || month < 1 || month > 12) return yearMonth;
+  const d = new Date(Date.UTC(year, month - 1 + deltaMonths, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+export function getPreviousYearMonth(yearMonth: string): string {
+  return shiftYearMonth(yearMonth, -1);
+}
+
+export function getNextYearMonth(yearMonth: string): string {
+  return shiftYearMonth(yearMonth, 1);
+}
+
+export function formatYearMonthId(yearMonth: string, short = false): string {
+  const [yStr, mStr] = String(yearMonth || '').split('-');
+  const year = parseInt(yStr, 10);
+  const month = parseInt(mStr, 10);
+  if (!year || !month || month < 1 || month > 12) return yearMonth;
+  const names = short ? ID_MONTH_SHORT : ID_MONTH_NAMES;
+  return `${names[month - 1]} ${year}`;
+}
+
 export function countWeekdaysInMonth(yearMonth: string): number {
   const [yStr, mStr] = String(yearMonth || '').split('-');
   const year = parseInt(yStr, 10);

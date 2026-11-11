@@ -35,8 +35,24 @@ import { HrmOvertimeArrearsPayrollTab } from '@/components/hrm/superadmin/HrmOve
 import { HrmOvertimeCostControlTab } from '@/components/hrm/superadmin/HrmOvertimeCostControlTab';
 import { getEmployeeCategoryGroup } from '@/types/hrm';
 import { api } from '@/services/apiClient';
+import { formatYearMonthId, getNextYearMonth } from '@/lib/frpPayrollCalculations';
 
 export const HrmLemburManagementTab: React.FC = () => {
+  const curMonthYm = React.useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }, []);
+  const nextMonthYm = React.useMemo(() => getNextYearMonth(curMonthYm), [curMonthYm]);
+  const initialQuery = React.useMemo(() => {
+    const p = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+    const t = p?.get('tab');
+    const pm = p?.get('payrollMonth') || undefined;
+    return {
+      tab: t === 'arrears' ? ('arrears_payroll' as const) : t === 'cost_control' ? ('cost_control' as const) : ('spkl_list' as const),
+      payrollMonth: pm,
+    };
+  }, []);
+
   const [records, setRecords] = useState<OvertimeRecord[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [divisions, setDivisions] = useState<any[]>([]);
@@ -45,7 +61,9 @@ export const HrmLemburManagementTab: React.FC = () => {
   const [groupFilter, setGroupFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [subTab, setSubTab] = useState<'spkl_list' | 'cost_control' | 'arrears_payroll'>('spkl_list');
+  const [subTab, setSubTab] = useState<'spkl_list' | 'cost_control' | 'arrears_payroll'>(initialQuery.tab);
+  const [targetArrearsMonth, setTargetArrearsMonth] = useState<string | undefined>(initialQuery.payrollMonth);
+  const [nextMonthArrears, setNextMonthArrears] = useState<any>(null);
   const [liveBudgetCaps, setLiveBudgetCaps] = useState({
     shipmentCap: 65000000,
     wismaCap: 4000000,
@@ -116,7 +134,10 @@ export const HrmLemburManagementTab: React.FC = () => {
         setRecords(remoteOts);
         localStorage.setItem('hrm_overtime_records', JSON.stringify(remoteOts));
       }
-      const radarRes: any = await api.get('/overtime/cost-control-radar').catch(() => null);
+      const [radarRes, nextArrearsRes]: [any, any] = await Promise.all([
+        api.get('/overtime/cost-control-radar').catch(() => null),
+        api.get(`/overtime/payroll-arrears-recap?payrollMonth=${encodeURIComponent(nextMonthYm)}`).catch(() => null),
+      ]);
       if (radarRes?.success && radarRes.data?.budget) {
         setLiveBudgetCaps({
           shipmentCap: Number(radarRes.data.budget.hardCap || 65000000),
@@ -124,6 +145,9 @@ export const HrmLemburManagementTab: React.FC = () => {
           targetMin: Number(radarRes.data.budget.targetMin || 55000000),
           targetMax: Number(radarRes.data.budget.targetMax || 60000000),
         });
+      }
+      if (nextArrearsRes?.success && nextArrearsRes.data) {
+        setNextMonthArrears(nextArrearsRes.data);
       }
     } catch (e) {
       console.warn('[HrmLemburManagementTab] Sync remote overtime note:', e);
@@ -184,38 +208,62 @@ export const HrmLemburManagementTab: React.FC = () => {
   const budgetMetrics = React.useMemo(() => {
     let shipmentSpent = 0;
     let shipmentHours = 0;
+    let shipmentPaidHours = 0;
     let shipmentSpklCount = 0;
+    let shipmentPeopleCount = 0;
     let wismaSpent = 0;
     let wismaHours = 0;
+    let wismaPaidHours = 0;
     let wismaSpklCount = 0;
+    let wismaPeopleCount = 0;
 
-    const approvedOts = records.filter(
-      (r) => r.status === 'approved' || r.status === 'completed'
+    const curApprovedOts = records.filter(
+      (r) => (r.status === 'approved' || r.status === 'completed') && String(r.date || '').startsWith(curMonthYm)
+    );
+    const curPendingOts = records.filter(
+      (r) => r.status === 'pending' && String(r.date || '').startsWith(curMonthYm)
     );
 
-    approvedOts.forEach((r) => {
+    if (nextMonthArrears?.totals) {
+      const s = nextMonthArrears.totals.shipment || {};
+      const w = nextMonthArrears.totals.rumahTangga || {};
+      shipmentSpent = Number(s.totalPay || 0);
+      shipmentHours = Number(s.totalRawHours || 0);
+      shipmentPaidHours = Number(s.totalPaidHours || 0);
+      shipmentPeopleCount = Number(s.withOvertimeCount || 0);
+      wismaSpent = Number(w.totalPay || 0);
+      wismaHours = Number(w.totalRawHours || 0);
+      wismaPaidHours = Number(w.totalPaidHours || 0);
+      wismaPeopleCount = Number(w.withOvertimeCount || 0);
+    }
+
+    curApprovedOts.forEach((r) => {
       const user = users.find((u) => u.id === r.userId || u.nip === r.userNip);
-      const isWisma =
-        (user?.operationalGroup || '').toUpperCase().includes('RUMAH TANGGA') ||
-        (r.divisionName && r.divisionName.toLowerCase().includes('wisma')) ||
-        (r.divisionName && r.divisionName.toLowerCase().includes('rumah tangga')) ||
-        (r.userNip && parseInt(r.userNip.replace(/\D/g, ''), 10) <= 33);
+      const grp = getEmployeeCategoryGroup(user || { nip: r.userNip, fullName: r.userName });
+      if (grp === 'KARYAWAN TETAP') return;
+      const isWisma = grp === 'RUMAH TANGGA';
 
       const pay = Number(r.compensationAmount ?? r.totalPay ?? 0) || (Number(r.approvedHours || r.durationHours || 0) * 23381.79);
       const hours = Number(r.approvedHours || r.durationHours || 0);
 
       if (isWisma) {
-        wismaSpent += pay;
-        wismaHours += hours;
+        if (!nextMonthArrears?.totals) {
+          wismaSpent += pay;
+          wismaHours += hours;
+        }
         wismaSpklCount += 1;
       } else {
-        shipmentSpent += pay;
-        shipmentHours += hours;
+        if (!nextMonthArrears?.totals) {
+          shipmentSpent += pay;
+          shipmentHours += hours;
+        }
         shipmentSpklCount += 1;
       }
     });
 
-    const totalSpent = shipmentSpent + wismaSpent;
+    const totalSpent = nextMonthArrears?.totals
+      ? Number(nextMonthArrears.totals.grandTotalPay || shipmentSpent + wismaSpent)
+      : shipmentSpent + wismaSpent;
     const totalRemaining = Math.max(0, TOTAL_BUDGET_CAP - totalSpent);
     const shipmentRemaining = Math.max(0, SHIPMENT_BUDGET_CAP - shipmentSpent);
     const wismaRemaining = Math.max(0, WISMA_BUDGET_CAP - wismaSpent);
@@ -235,14 +283,20 @@ export const HrmLemburManagementTab: React.FC = () => {
       shipmentRemaining: Math.round(shipmentRemaining),
       shipmentBurnPct,
       shipmentHours,
+      shipmentPaidHours,
       shipmentSpklCount,
+      shipmentPeopleCount,
       wismaSpent: Math.round(wismaSpent),
       wismaRemaining: Math.round(wismaRemaining),
       wismaBurnPct,
       wismaHours,
+      wismaPaidHours,
       wismaSpklCount,
+      wismaPeopleCount,
+      curApprovedCount: curApprovedOts.length,
+      curPendingCount: curPendingOts.length,
     };
-  }, [records, users, TOTAL_BUDGET_CAP, SHIPMENT_BUDGET_CAP, WISMA_BUDGET_CAP]);
+  }, [records, users, curMonthYm, nextMonthArrears, TOTAL_BUDGET_CAP, SHIPMENT_BUDGET_CAP, WISMA_BUDGET_CAP]);
 
   const handleOpenEdit = (rec: OvertimeRecord) => {
     setEditingOt(rec);
@@ -345,7 +399,7 @@ export const HrmLemburManagementTab: React.FC = () => {
       {subTab === 'cost_control' ? (
         <HrmOvertimeCostControlTab onUpdated={loadData} />
       ) : subTab === 'arrears_payroll' ? (
-        <HrmOvertimeArrearsPayrollTab onSynced={loadData} />
+        <HrmOvertimeArrearsPayrollTab onSynced={loadData} initialPayrollMonth={targetArrearsMonth} />
       ) : (
         <div className="space-y-6">
       {/* ═══ RADAR PLAFON & ANGGARAN LEMBUR PIMPINAN (STRICT BUDGET CAPS) ═══ */}
@@ -446,6 +500,34 @@ export const HrmLemburManagementTab: React.FC = () => {
                 }`}
                 style={{ width: `${Math.max(2, budgetMetrics.totalBurnPct)}%` }}
               />
+            </div>
+
+            {/* Progres Lembur Bulan Berjalan -> Diproses & Dibayar Payroll Bulan Berikutnya (N+1) */}
+            <div className="pt-2.5 mt-1 border-t border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+              <div className="text-blue-100/90 space-y-0.5">
+                <div className="font-semibold flex flex-wrap items-center gap-1.5">
+                  <span>📈 Progres Kerja {formatYearMonthId(curMonthYm)} → Diproses &amp; Dibayar di Payroll {formatYearMonthId(nextMonthYm)}:</span>
+                  <span className="font-mono font-bold text-emerald-300">
+                    Rp {budgetMetrics.totalSpent.toLocaleString('id-ID')}
+                  </span>
+                </div>
+                <p className="text-[10.5px] text-blue-200/80 font-mono">
+                  {(budgetMetrics.shipmentPeopleCount + budgetMetrics.wismaPeopleCount)} Personil Sah • {budgetMetrics.shipmentHours + budgetMetrics.wismaHours}j real ({budgetMetrics.shipmentPaidHours + budgetMetrics.wismaPaidHours}j bayar x2) • {budgetMetrics.curApprovedCount} SPKL ACC
+                  {budgetMetrics.curPendingCount > 0 ? ` • ${budgetMetrics.curPendingCount} SPKL Pending` : ''}
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  setTargetArrearsMonth(nextMonthYm);
+                  setSubTab('arrears_payroll');
+                }}
+                className="h-8 text-xs rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold gap-1.5 shrink-0 shadow-xs"
+              >
+                <Coins className="w-3.5 h-3.5" />
+                <span>Pantau &amp; Proses ke Payroll {formatYearMonthId(nextMonthYm, true)} →</span>
+              </Button>
             </div>
           </div>
 

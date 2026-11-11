@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { toast } from 'sonner';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
@@ -9,6 +10,9 @@ import {
   aggregateFrpGroupPayroll,
   calculateFrpEmployeeRealtimePay,
   countWeekdaysInMonth,
+  formatYearMonthId,
+  getNextYearMonth,
+  getPreviousYearMonth,
 } from '@/lib/frpPayrollCalculations';
 import {
   UserCheck,
@@ -219,8 +223,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [selectedReportUser, setSelectedReportUser] = useState<UserProfile | null>(null);
   const [selectedReportAttendance, setSelectedReportAttendance] = useState<AttendanceRecord | null>(null);
   const [selectedReportShift, setSelectedReportShift] = useState<any>(null);
+  const navigate = useNavigate();
   const [financialRecapModalOpen, setFinancialRecapModalOpen] = useState<boolean>(false);
   const [payrollScopeGroup, setPayrollScopeGroup] = useState<'ALL' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP'>('ALL');
+  const [nextPayrollArrears, setNextPayrollArrears] = useState<any>(null);
   const [quickProfileModalOpen, setQuickProfileModalOpen] = useState<boolean>(false);
   const [selectedQuickProfile, setSelectedQuickProfile] = useState<{
     user: UserProfile;
@@ -579,6 +585,24 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     };
   }, []);
 
+  // Sinkronisasi real-time Progres Lembur Bulan Berjalan (curMonth -> dibayar di nextPayrollMonth) dengan kalkulasi resmi 2x PT FRP
+  React.useEffect(() => {
+    const activeYm = selectedMonth || currentMonthStr;
+    const nextYm = getNextYearMonth(activeYm);
+    let cancelled = false;
+    api
+      .get<any>(`/overtime/payroll-arrears-recap?payrollMonth=${encodeURIComponent(nextYm)}`)
+      .then((res) => {
+        if (!cancelled && res?.success && res.data) {
+          setNextPayrollArrears(res.data);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMonth, currentMonthStr, overtimes.length]);
+
   // Sinkronisasi jadwal roster harian (hrm_employee_schedules) sesuai tanggal aktif targetDayDate
   useEffect(() => {
     let isCancelled = false;
@@ -781,28 +805,38 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const allShifts = React.useMemo(() => hrmService.getShifts(), []);
 
   // Perhitungan Realtime Finansial & Kuota Anggaran Lembur Sah (Shipment Rp 65 Jt, Wisma Rp 4 Jt, Total Rp 69 Jt)
+  // + Sistem Bulan Mundur (N-1): Lembur periode N-1 dibayarkan di Payroll bulan N; lembur kerja bulan N dibayar di N+1
   // + Sinkronisasi Gaji Asli Database per Orang (Shipment & RT) & Rp 140.000/hari Tanpa Lembur/BPJS (Karyawan Tetap)
   const financialStats = React.useMemo(() => {
-    const curMonth = selectedMonth || currentMonthStr; // 'YYYY-MM'
+    const curMonth = selectedMonth || currentMonthStr; // 'YYYY-MM' (Bulan Payroll Berjalan N)
+    const arrearsMonth = getPreviousYearMonth(curMonth); // 'YYYY-MM' (Bulan Kerja Lembur N-1)
+    const nextPayrollMonth = getNextYearMonth(curMonth); // 'YYYY-MM' (Pembayaran Lembur Bulan Berjalan N+1)
     const officialUsers = users.filter((u) => isOfficialFrEmployee(u));
 
-    const monthOvertimes = overtimes.filter((o) => {
+    const isApprovedOt = (o: OvertimeRecord) =>
+      o.status === 'approved' || (o as any).status === 'completed';
+
+    const curMonthOvertimes = overtimes.filter((o) => {
       const d = o.date || (o as any).createdAt || '';
-      return d.startsWith(curMonth) && (o.status === 'approved' || (o as any).status === 'completed');
+      return d.startsWith(curMonth) && isApprovedOt(o);
+    });
+
+    const arrearsMonthOvertimes = overtimes.filter((o) => {
+      const d = o.date || (o as any).createdAt || '';
+      return d.startsWith(arrearsMonth) && isApprovedOt(o);
     });
 
     let shipmentSpent = 0;
     let shipmentHours = 0;
     let wismaSpent = 0;
     let wismaHours = 0;
-    const otPayByUserId = new Map<string, number>();
 
-    monthOvertimes.forEach((o) => {
+    curMonthOvertimes.forEach((o) => {
       const u = users.find((usr) => usr.id === o.userId || usr.nip === o.userNip);
       const grp = u ? getEmployeeCategoryGroup(u) : getEmployeeCategoryGroup(o.userNip || '');
       if (grp === 'KARYAWAN TETAP') return;
 
-      const amt = Number(o.compensationAmount || o.totalPay || 0);
+      const amt = Number((o as any).compensationAmount || o.totalPay || 0);
       const hrs = Number(o.approvedHours || o.durationHours || 0);
 
       if (grp === 'RUMAH TANGGA') {
@@ -812,9 +846,22 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         shipmentSpent += amt;
         shipmentHours += hrs;
       }
+    });
 
+    // Lembur Bulan Mundur (N-1) yang dibayarkan pada Payroll bulan curMonth (N)
+    const arrearsOtPayByUserId = new Map<string, number>();
+    let totalArrearsOvertimeHours = 0;
+
+    arrearsMonthOvertimes.forEach((o) => {
+      const u = users.find((usr) => usr.id === o.userId || usr.nip === o.userNip);
+      const grp = u ? getEmployeeCategoryGroup(u) : getEmployeeCategoryGroup(o.userNip || '');
+      if (grp === 'KARYAWAN TETAP') return;
+
+      const amt = Number((o as any).compensationAmount || o.totalPay || 0);
+      const hrs = Number(o.approvedHours || o.durationHours || 0);
+      totalArrearsOvertimeHours += hrs;
       if (u?.id) {
-        otPayByUserId.set(u.id, (otPayByUserId.get(u.id) || 0) + amt);
+        arrearsOtPayByUserId.set(u.id, (arrearsOtPayByUserId.get(u.id) || 0) + amt);
       }
     });
 
@@ -823,14 +870,32 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         user: u,
         month: curMonth,
         attendances: allAttendances,
-        monthOvertimePay: otPayByUserId.get(u.id) || 0,
+        monthOvertimePay: arrearsOtPayByUserId.get(u.id) || 0,
       })
     );
     const byGroup = aggregateFrpGroupPayroll(perUserCalcs);
     const workdaysInMonth = countWeekdaysInMonth(curMonth);
 
-    const totalOvertimeSpent = shipmentSpent + wismaSpent;
-    const totalOvertimeHours = shipmentHours + wismaHours;
+    const hasSyncedNextArrears =
+      nextPayrollArrears &&
+      nextPayrollArrears.payrollMonth === nextPayrollMonth &&
+      nextPayrollArrears.totals;
+
+    const syncedShipmentSpent = hasSyncedNextArrears ? Number(nextPayrollArrears.totals.shipment?.totalPay || 0) : shipmentSpent;
+    const syncedShipmentHours = hasSyncedNextArrears ? Number(nextPayrollArrears.totals.shipment?.totalRawHours || 0) : shipmentHours;
+    const syncedShipmentPaidHours = hasSyncedNextArrears ? Number(nextPayrollArrears.totals.shipment?.totalPaidHours || 0) : shipmentHours;
+    const syncedWismaSpent = hasSyncedNextArrears ? Number(nextPayrollArrears.totals.rumahTangga?.totalPay || 0) : wismaSpent;
+    const syncedWismaHours = hasSyncedNextArrears ? Number(nextPayrollArrears.totals.rumahTangga?.totalRawHours || 0) : wismaHours;
+    const syncedWismaPaidHours = hasSyncedNextArrears ? Number(nextPayrollArrears.totals.rumahTangga?.totalPaidHours || 0) : wismaHours;
+    const nextOvertimeEmployeesCount = hasSyncedNextArrears
+      ? Number(nextPayrollArrears.totals.shipment?.withOvertimeCount || 0) + Number(nextPayrollArrears.totals.rumahTangga?.withOvertimeCount || 0)
+      : curMonthOvertimes.length;
+
+    const totalOvertimeSpent = hasSyncedNextArrears
+      ? Number(nextPayrollArrears.totals.grandTotalPay || syncedShipmentSpent + syncedWismaSpent)
+      : shipmentSpent + wismaSpent;
+    const totalOvertimeHours = syncedShipmentHours + syncedWismaHours;
+    const totalOvertimePaidHours = syncedShipmentPaidHours + syncedWismaPaidHours;
     const TOTAL_BUDGET = 69000000;
     const SHIPMENT_BUDGET = 65000000;
     const WISMA_BUDGET = 4000000;
@@ -840,6 +905,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
     return {
       curMonth,
+      curMonthLabel: formatYearMonthId(curMonth),
+      curMonthShort: formatYearMonthId(curMonth, true),
+      arrearsMonth,
+      arrearsMonthLabel: formatYearMonthId(arrearsMonth),
+      arrearsMonthShort: formatYearMonthId(arrearsMonth, true),
+      nextPayrollMonth,
+      nextPayrollMonthLabel: formatYearMonthId(nextPayrollMonth),
+      nextPayrollMonthShort: formatYearMonthId(nextPayrollMonth, true),
       workdaysInMonth,
       totalUsers: officialUsers.length,
       TOTAL_BUDGET,
@@ -847,10 +920,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       WISMA_BUDGET,
       totalOvertimeSpent,
       totalOvertimeHours,
-      shipmentSpent,
-      shipmentHours,
-      wismaSpent,
-      wismaHours,
+      totalOvertimePaidHours,
+      nextOvertimeEmployeesCount,
+      totalArrearsOvertimePay: byGroup.all.totalOvertimePay,
+      totalArrearsOvertimeHours,
+      shipmentSpent: syncedShipmentSpent,
+      shipmentHours: syncedShipmentHours,
+      wismaSpent: syncedWismaSpent,
+      wismaHours: syncedWismaHours,
       remainingBudget,
       budgetPercent,
       totalBaseSalary: byGroup.all.totalBaseSalary,
@@ -1380,11 +1457,20 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                Monitoring anggaran lembur sah (80 Personil) &amp; estimasi nominal gaji tersinkronisasi database secara realtime.
+                Monitoring kuota lembur (80 Personil) &amp; estimasi payroll <strong>{financialStats.curMonthLabel}</strong> (Lembur Bulan Mundur N-1: <strong>{financialStats.arrearsMonthLabel}</strong>).
               </p>
             </div>
 
-            <div className="flex items-center gap-2 self-stretch lg:self-auto">
+            <div className="flex flex-wrap items-center gap-2 self-stretch lg:self-auto">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => navigate(`/admin/lembur?tab=arrears&payrollMonth=${encodeURIComponent(financialStats.nextPayrollMonth)}`)}
+                className="border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs h-9 px-3.5 rounded-xl font-semibold gap-1.5 transition-all w-full sm:w-auto"
+              >
+                <Coins size={14} />
+                <span>Proses Lembur {financialStats.curMonthShort} → Payroll {financialStats.nextPayrollMonthShort}</span>
+              </Button>
               <Button
                 type="button"
                 onClick={() => setFinancialRecapModalOpen(true)}
@@ -1404,17 +1490,17 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             </div>
 
             <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
-              <span className="text-[11px] text-muted-foreground block">Realisasi Lembur Berjalan</span>
+              <span className="text-[11px] text-muted-foreground block">Progres Lembur ({financialStats.curMonthShort} → {financialStats.nextPayrollMonthShort})</span>
               <span className="text-base font-bold text-amber-600 dark:text-amber-400 font-mono">
                 Rp {financialStats.totalOvertimeSpent.toLocaleString('id-ID')}
               </span>
               <span className="text-[10px] text-muted-foreground block mt-0.5">
-                {financialStats.totalOvertimeHours} Jam • {financialStats.budgetPercent}% Terserap
+                {financialStats.nextOvertimeEmployeesCount} Org • {financialStats.totalOvertimeHours}j real / {financialStats.totalOvertimePaidHours}j bayar ({financialStats.budgetPercent}%)
               </span>
             </div>
 
             <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
-              <span className="text-[11px] text-muted-foreground block">Sisa Anggaran Lembur</span>
+              <span className="text-[11px] text-muted-foreground block">Sisa Anggaran Lembur ({financialStats.curMonthShort})</span>
               <span className={`text-base font-bold font-mono ${financialStats.remainingBudget === 0 ? 'text-rose-600' : 'text-emerald-600 dark:text-emerald-400'}`}>
                 Rp {financialStats.remainingBudget.toLocaleString('id-ID')}
               </span>
@@ -1444,7 +1530,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 return (
                   <>
                     <span className="text-[11px] text-muted-foreground flex items-center justify-between gap-1">
-                      <span>Estimasi Payroll Bersih Realtime</span>
+                      <span>Estimasi Payroll ({financialStats.curMonthShort})</span>
                       <span className="font-semibold text-primary text-[10px]">{scopeLabel}</span>
                     </span>
                     <span className="text-base font-bold text-foreground font-mono block mt-0.5">
@@ -1453,7 +1539,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     <span className="text-[10px] text-muted-foreground block mt-0.5">
                       {payrollScopeGroup === 'KARYAWAN TETAP'
                         ? `${financialStats.workdaysInMonth} Hari Kerja × Rp 140rb • Non-Lembur • BPJS Rp 0`
-                        : `Pokok: Rp ${(activeBucket.totalBaseSalary / 1e6).toFixed(1)} Jt • BPJS: -Rp ${(activeBucket.totalBpjs / 1e6).toFixed(1)} Jt${activeBucket.totalAlpaDeduction > 0 ? ` • Alpa: -Rp ${activeBucket.totalAlpaDeduction.toLocaleString('id-ID')}` : ''}`}
+                        : `Pokok: Rp ${(activeBucket.totalBaseSalary / 1e6).toFixed(1)} Jt • Lembur ${financialStats.arrearsMonthShort}: +Rp ${activeBucket.totalOvertimePay.toLocaleString('id-ID')} • BPJS: -Rp ${(activeBucket.totalBpjs / 1e6).toFixed(1)} Jt${activeBucket.totalAlpaDeduction > 0 ? ` • Alpa: -Rp ${activeBucket.totalAlpaDeduction.toLocaleString('id-ID')}` : ''}`}
                     </span>
                   </>
                 );

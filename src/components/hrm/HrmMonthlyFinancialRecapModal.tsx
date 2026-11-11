@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -48,6 +49,9 @@ import {
   aggregateFrpGroupPayroll,
   calculateFrpEmployeeRealtimePay,
   countWeekdaysInMonth,
+  formatYearMonthId,
+  getNextYearMonth,
+  getPreviousYearMonth,
 } from '@/lib/frpPayrollCalculations';
 import { getTodayDateStr } from '@/services/hrmService';
 import { toast } from 'sonner';
@@ -95,14 +99,16 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
   const todayStr = getTodayDateStr();
   const currentMonthStr = todayStr.slice(0, 7); // 'YYYY-MM'
 
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'attendance_matrix' | 'budget_80' | 'employee_overtime' | 'payroll_recap' | 'division_overtime'>('payroll_recap');
   const [selectedMonth, setSelectedMonth] = useState<string>(initialMonth || currentMonthStr);
   const [search, setSearch] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<'ALL' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP'>(initialGroup || 'ALL');
   const [filterOnlyWithOvertime, setFilterOnlyWithOvertime] = useState<boolean>(false);
 
-  // Live overtimes state tersinkron dari PostgreSQL
+  // Live overtimes & synced PT FRP next-month payroll projection
   const [liveOvertimes, setLiveOvertimes] = useState<any[]>(initialOvertimes || []);
+  const [syncedNextArrears, setSyncedNextArrears] = useState<any>(null);
 
   // Sinkronisasi prop initialOvertimes jika berubah
   useEffect(() => {
@@ -126,6 +132,31 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         .catch(() => {});
     }
   }, [isOpen, initialMonth, initialGroup]);
+
+  // Bulan Mundur (N-1) & Bulan Berikutnya (N+1) untuk sinkronisasi pembayaran lembur PT FRP
+  const arrearsMonth = useMemo(() => getPreviousYearMonth(selectedMonth), [selectedMonth]);
+  const nextPayrollMonth = useMemo(() => getNextYearMonth(selectedMonth), [selectedMonth]);
+  const selectedMonthShort = useMemo(() => formatYearMonthId(selectedMonth, true), [selectedMonth]);
+  const arrearsMonthLabel = useMemo(() => formatYearMonthId(arrearsMonth), [arrearsMonth]);
+  const arrearsMonthShort = useMemo(() => formatYearMonthId(arrearsMonth, true), [arrearsMonth]);
+  const nextMonthLabel = useMemo(() => formatYearMonthId(nextPayrollMonth), [nextPayrollMonth]);
+  const nextMonthShort = useMemo(() => formatYearMonthId(nextPayrollMonth, true), [nextPayrollMonth]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    fetch(`/api/overtime/payroll-arrears-recap?payrollMonth=${encodeURIComponent(nextPayrollMonth)}`)
+      .then((r) => r.json())
+      .then((res) => {
+        if (!cancelled && res?.success && res.data) {
+          setSyncedNextArrears(res.data);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, nextPayrollMonth]);
 
   // Format label bulan terpilih (contoh: "November 2026")
   const selectedMonthLabel = useMemo(() => {
@@ -277,7 +308,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       const annualLeaveQuota = 12;
       const remainingLeave = Math.max(0, annualLeaveQuota - cutiCount);
 
-      // ── Lembur Bulan Terpilih (Karyawan Tetap = 0 / Non-Lembur) ──
+      // ── Lembur Bulan Terpilih (Realisasi Kerja Bulan N -> Dibayar N+1; Karyawan Tetap = 0) ──
       const userMonthOts = opGroup === 'KARYAWAN TETAP'
         ? []
         : normalizedOvertimes.filter(
@@ -289,6 +320,19 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         0
       );
       const spklCount = userMonthOts.length;
+
+      // ── Lembur Bulan Mundur (N-1 -> Dibayarkan pada Payroll Bulan Terpilih N; Karyawan Tetap = 0) ──
+      const userArrearsOts = opGroup === 'KARYAWAN TETAP'
+        ? []
+        : normalizedOvertimes.filter(
+            (o) => (o.userId === u.id || o.userNip === u.nip) && o.date.startsWith(arrearsMonth) && (o.status === 'approved' || o.status === 'completed')
+          );
+      const arrearsOtHours = userArrearsOts.reduce((sum, o) => sum + o.approvedHours, 0);
+      const arrearsOtPay = userArrearsOts.reduce(
+        (sum, o) => sum + (o.compensationAmount || (o.approvedHours * 23381.79)),
+        0
+      );
+      const arrearsSpklCount = userArrearsOts.length;
 
       // Rincian string per tanggal lembur
       const otDateDetails = opGroup === 'KARYAWAN TETAP'
@@ -318,13 +362,14 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       const isShiftOff = userSched?.isOff === true || userSched?.shiftCode === 'OFF';
 
       // ── Standar Remunerasi Resmi PT FRP (Sinkron dengan Monitoring & Backend Payroll) ──
-      // - Shipment (47) & Rumah Tangga (33): Upah Pokok DB, BPJS 4% (3% TK + 1% Kes), PPh 21 Rp 0, + Lembur Sah
+      // - Pembayaran lembur mengikuti Sistem Bulan Mundur (N-1: lembur bulan sebelumnya dibayarkan bulan ini)
+      // - Shipment (47) & Rumah Tangga (33): Upah Pokok DB, BPJS 4% (3% TK + 1% Kes), PPh 21 Rp 0, + Lembur N-1
       // - Karyawan Tetap (3: Aslam, Samsi, Takdir): Rp 140.000/hari kerja Senin-Jumat, Tanpa Lembur & Tanpa BPJS
       const payCalc = calculateFrpEmployeeRealtimePay({
         user: u,
         month: selectedMonth,
         attendances,
-        monthOvertimePay: monthOtPay,
+        monthOvertimePay: Math.round(arrearsOtPay),
       });
       const baseSalary = payCalc.baseSalary;
       const bpjsTk = payCalc.bpjsTk;
@@ -361,6 +406,9 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         monthOtHours,
         monthOtPay: Math.round(monthOtPay),
         spklCount,
+        arrearsOtHours,
+        arrearsOtPay: Math.round(arrearsOtPay),
+        arrearsSpklCount,
         otDateDetails: otDateDetails || '-',
         rawOts: userMonthOts,
         baseSalary,
@@ -371,7 +419,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         netSalary,
       };
     });
-  }, [officialEmps, normalizedOvertimes, schedules, attendances, leaves, todayStr, selectedMonth, selectedMonthLabel]);
+  }, [officialEmps, normalizedOvertimes, schedules, attendances, leaves, todayStr, selectedMonth, arrearsMonth, selectedMonthLabel]);
 
   // ─── 2. REKAPAN LEMBUR & KINERJA PER DIVISI ───
   const divisionRecap = useMemo(() => {
@@ -467,6 +515,8 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
     let totalAlpaDed = 0;
     let totalOtPay = 0;
     let totalOtHours = 0;
+    let totalArrearsOtPay = 0;
+    let totalArrearsOtHours = 0;
     let totalNetSal = 0;
     let totalSpklCount = 0;
     let employeesWithOtCount = 0;
@@ -490,6 +540,8 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       totalAlpaDed += row.alpaDeduction;
       totalOtPay += row.monthOtPay;
       totalOtHours += row.monthOtHours;
+      totalArrearsOtPay += row.arrearsOtPay;
+      totalArrearsOtHours += row.arrearsOtHours;
       totalNetSal += row.netSalary;
       totalSpklCount += row.spklCount;
 
@@ -520,7 +572,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         baseSalary: row.baseSalary,
         totalBpjs: row.totalBpjs,
         alpaDeduction: row.alpaDeduction,
-        overtimePay: row.monthOtPay,
+        overtimePay: row.arrearsOtPay,
         netSalary: row.netSalary,
       }))
     );
@@ -548,11 +600,18 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       WISMA_BUDGET_CAP,
       workdaysInMonth,
       byGroup,
+      arrearsMonth,
+      arrearsMonthLabel,
+      arrearsMonthShort,
+      selectedMonthShort,
+      nextMonthShort,
       totalBaseSal,
       totalBpjs,
       totalAlpaDed,
       totalOtPay,
       totalOtHours,
+      totalArrearsOtPay,
+      totalArrearsOtHours,
       totalNetSal,
       totalSpklCount,
       employeesWithOtCount,
@@ -579,7 +638,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       avgAttendanceRate,
       avgPunctualityRate,
     };
-  }, [employeeFinancialList, selectedMonth]);
+  }, [employeeFinancialList, selectedMonth, arrearsMonth, arrearsMonthLabel, arrearsMonthShort, selectedMonthShort, nextMonthShort]);
 
   // ─── 3. MULTI-SHEET EXCEL EXPORT (5 LAPORAN LENGKAP DALAM 1 WORKBOOK) ───
   const handleExportExcel = () => {
@@ -635,8 +694,9 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         'Nama Karyawan': item.name,
         Divisi: item.divisionName,
         'Grup Operasional': getOpGroupFullLabel(item.opGroup),
-        'Total Jam Lembur Sebulan': item.monthOtHours,
-        'Total Nominal Lembur Sebulan (Rp)': item.monthOtPay,
+        [`Jam Lembur Kerja ${selectedMonthShort} (-> Payroll ${nextMonthShort})`]: item.monthOtHours,
+        [`Nominal Lembur Kerja ${selectedMonthShort} (Rp)`]: item.monthOtPay,
+        [`Lembur N-1 Masuk Payroll (${arrearsMonthShort}) (Rp)`]: item.arrearsOtPay,
         'Gaji Pokok / Harian (Rp)': item.baseSalary,
         'BPJS Ketenagakerjaan 3% (Rp)': item.bpjsTk,
         'BPJS Kesehatan 1% (Rp)': item.bpjsKes,
@@ -650,8 +710,9 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         'Nama Karyawan': `Total ${employeeFinancialList.length} Karyawan Sah`,
         Divisi: '',
         'Grup Operasional': '',
-        'Total Jam Lembur Sebulan': summary.totalOtHours,
-        'Total Nominal Lembur Sebulan (Rp)': summary.totalOtPay,
+        [`Jam Lembur Kerja ${selectedMonthShort} (-> Payroll ${nextMonthShort})`]: summary.totalOtHours,
+        [`Nominal Lembur Kerja ${selectedMonthShort} (Rp)`]: summary.totalOtPay,
+        [`Lembur N-1 Masuk Payroll (${arrearsMonthShort}) (Rp)`]: summary.totalArrearsOtPay,
         'Gaji Pokok / Harian (Rp)': summary.totalBaseSal,
         'BPJS Ketenagakerjaan 3% (Rp)': employeeFinancialList.reduce((s, i) => s + i.bpjsTk, 0),
         'BPJS Kesehatan 1% (Rp)': employeeFinancialList.reduce((s, i) => s + i.bpjsKes, 0),
@@ -692,14 +753,14 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       const ws3 = XLSX.utils.json_to_sheet(sheet3Rows);
       XLSX.utils.book_append_sheet(workbook, ws3, 'Rincian_SPKL_Lembur');
 
-      // Sheet 4: Rekap Remunerasi & Gaji Bersih
+      // Sheet 4: Rekap Remunerasi & Gaji Bersih (Lembur Bulan Mundur N-1)
       const sheet4Rows = employeeFinancialList.map((item, idx) => ({
         No: idx + 1,
         NIP: item.nip,
         'Nama Karyawan': item.name,
         Divisi: item.divisionName,
         'Gaji Pokok Tunggal (Rp)': item.baseSalary,
-        'Uang Lembur (Rp)': item.monthOtPay,
+        [`Uang Lembur N-1 (${arrearsMonthShort}) (Rp)`]: item.arrearsOtPay,
         'BPJS TK 3% (Rp)': item.bpjsTk,
         'BPJS Kes 1% (Rp)': item.bpjsKes,
         'Total Potongan BPJS 4% (Rp)': item.totalBpjs,
@@ -853,14 +914,14 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         doc.text(`REKAPITULASI PENGGAJIAN & REMUNERASI BAKU PT FRP - ${selectedMonthLabel.toUpperCase()}`, 14, 18);
         doc.setFontSize(7.5);
         const pdfBase = filteredList.reduce((s, i) => s + i.baseSalary, 0);
-        const pdfOt = filteredList.reduce((s, i) => s + i.monthOtPay, 0);
+        const pdfOt = filteredList.reduce((s, i) => s + i.arrearsOtPay, 0);
         const pdfTk = filteredList.reduce((s, i) => s + i.bpjsTk, 0);
         const pdfKes = filteredList.reduce((s, i) => s + i.bpjsKes, 0);
         const pdfAlpa = filteredList.reduce((s, i) => s + i.alpaDeduction, 0);
         const pdfNet = filteredList.reduce((s, i) => s + i.netSalary, 0);
-        doc.text(`Shipment & Wisma: Pokok DB + BPJS 4% | Karyawan Tetap (3 Org): Rp 140rb/hk (Non-Lembur, Bebas BPJS) • Total THP: Rp ${pdfNet.toLocaleString('id-ID')}`, 14, 22);
+        doc.text(`Lembur Bulan Mundur (N-1: ${summary.arrearsMonthLabel}) -> Dibayar di ${selectedMonthLabel} | Tetap: Rp 140rb/hk Tanpa Lembur & BPJS • Total THP: Rp ${pdfNet.toLocaleString('id-ID')}`, 14, 22);
 
-        const headers = [['No', 'NIP', 'Nama Karyawan', 'Divisi', 'Grup', 'Gaji Pokok', 'Lembur (Rp)', 'BPJS TK 3%', 'BPJS Kes 1%', 'Pot. Alpa', 'Gaji Bersih (THP)']];
+        const headers = [['No', 'NIP', 'Nama Karyawan', 'Divisi', 'Grup', 'Gaji Pokok', `Lembur ${summary.arrearsMonthShort} (N-1)`, 'BPJS TK 3%', 'BPJS Kes 1%', 'Pot. Alpa', 'Gaji Bersih (THP)']];
         const body = filteredList.map((i, idx) => [
           idx + 1,
           i.nip,
@@ -868,7 +929,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
           i.divisionName,
           getOpGroupBadgeLabel(i.opGroup),
           `Rp ${i.baseSalary.toLocaleString('id-ID')}`,
-          `Rp ${i.monthOtPay.toLocaleString('id-ID')}`,
+          `Rp ${i.arrearsOtPay.toLocaleString('id-ID')}`,
           `-Rp ${i.bpjsTk.toLocaleString('id-ID')}`,
           `-Rp ${i.bpjsKes.toLocaleString('id-ID')}`,
           i.alpaDeduction > 0 ? `-Rp ${i.alpaDeduction.toLocaleString('id-ID')}` : '-',
@@ -1252,7 +1313,11 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                   <div>
                     <div className="flex items-baseline justify-between">
                       <p className="text-xl font-bold font-mono text-foreground">
-                        Rp {summary.totalOtPay.toLocaleString('id-ID')}
+                        Rp {(
+                          syncedNextArrears?.payrollMonth === nextPayrollMonth && syncedNextArrears?.totals
+                            ? Number(syncedNextArrears.totals.grandTotalPay || 0)
+                            : summary.totalOtPay
+                        ).toLocaleString('id-ID')}
                       </p>
                       <span className="text-xs font-mono text-muted-foreground">
                         / Rp {summary.TOTAL_BUDGET_CAP.toLocaleString('id-ID')}
@@ -1273,13 +1338,33 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                     <p className="text-[11px] text-muted-foreground mt-1 flex items-center justify-between">
                       <span>Sisa Pagu Bersih ({selectedMonthLabel}):</span>
                       <strong className="text-emerald-600 dark:text-emerald-400 font-mono">
-                        Rp {summary.totalRemBudget.toLocaleString('id-ID')}
+                        Rp {(
+                          syncedNextArrears?.payrollMonth === nextPayrollMonth && syncedNextArrears?.budgetMeta
+                            ? Math.max(0, Number(syncedNextArrears.budgetMeta.totalCap || 69000000) - Number(syncedNextArrears.totals?.grandTotalPay || 0))
+                            : summary.totalRemBudget
+                        ).toLocaleString('id-ID')}
                       </strong>
                     </p>
                     <p className="text-[10px] text-muted-foreground flex items-center justify-between">
-                      <span>Total Realisasi Jam:</span>
-                      <strong className="font-mono">{summary.totalOtHours} Jam ({summary.totalSpklCount}x SPKL)</strong>
+                      <span>Siap Payroll {summary.nextMonthShort} (x2):</span>
+                      <strong className="font-mono text-emerald-700 dark:text-emerald-400">
+                        Rp {(
+                          syncedNextArrears?.payrollMonth === nextPayrollMonth
+                            ? Number(syncedNextArrears.totals?.grandTotalPay || summary.totalOtPay)
+                            : summary.totalOtPay
+                        ).toLocaleString('id-ID')} ({summary.totalOtHours}j • {summary.totalSpklCount} SPKL)
+                      </strong>
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        navigate(`/admin/lembur?tab=arrears&payrollMonth=${encodeURIComponent(nextPayrollMonth)}`);
+                      }}
+                      className="mt-2 w-full py-1.5 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10.5px] font-bold transition-colors text-center"
+                    >
+                      Proses &amp; Masukkan ke Payroll {nextMonthLabel} →
+                    </button>
                   </div>
                 </CardContent>
               </Card>
@@ -1299,10 +1384,22 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                       </div>
                       <div className="flex items-center justify-between mt-1">
                         <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300">
-                          Rp {summary.shipmentOtPay.toLocaleString('id-ID')} ({summary.shipmentOtHours} Jam)
+                          Rp {(
+                            syncedNextArrears?.payrollMonth === nextPayrollMonth && syncedNextArrears?.totals?.shipment
+                              ? Number(syncedNextArrears.totals.shipment.totalPay || 0)
+                              : summary.shipmentOtPay
+                          ).toLocaleString('id-ID')} ({
+                            syncedNextArrears?.payrollMonth === nextPayrollMonth && syncedNextArrears?.totals?.shipment
+                              ? Number(syncedNextArrears.totals.shipment.totalRawHours || 0)
+                              : summary.shipmentOtHours
+                          } Jam)
                         </span>
                         <span className="text-[10px] font-bold text-muted-foreground">
-                          Sisa: Rp {summary.shipmentRemBudget.toLocaleString('id-ID')}
+                          Sisa: Rp {(
+                            syncedNextArrears?.payrollMonth === nextPayrollMonth && syncedNextArrears?.totals?.shipment
+                              ? Number(syncedNextArrears.totals.shipment.budgetRemaining ?? summary.shipmentRemBudget)
+                              : summary.shipmentRemBudget
+                          ).toLocaleString('id-ID')}
                         </span>
                       </div>
                     </div>
@@ -1313,10 +1410,22 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                       </div>
                       <div className="flex items-center justify-between mt-1">
                         <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300">
-                          Rp {summary.wismaOtPay.toLocaleString('id-ID')} ({summary.wismaOtHours} Jam)
+                          Rp {(
+                            syncedNextArrears?.payrollMonth === nextPayrollMonth && syncedNextArrears?.totals?.rumahTangga
+                              ? Number(syncedNextArrears.totals.rumahTangga.totalPay || 0)
+                              : summary.wismaOtPay
+                          ).toLocaleString('id-ID')} ({
+                            syncedNextArrears?.payrollMonth === nextPayrollMonth && syncedNextArrears?.totals?.rumahTangga
+                              ? Number(syncedNextArrears.totals.rumahTangga.totalRawHours || 0)
+                              : summary.wismaOtHours
+                          } Jam)
                         </span>
                         <span className="text-[10px] font-bold text-muted-foreground">
-                          Sisa: Rp {summary.wismaRemBudget.toLocaleString('id-ID')}
+                          Sisa: Rp {(
+                            syncedNextArrears?.payrollMonth === nextPayrollMonth && syncedNextArrears?.totals?.rumahTangga
+                              ? Number(syncedNextArrears.totals.rumahTangga.budgetRemaining ?? summary.wismaRemBudget)
+                              : summary.wismaRemBudget
+                          ).toLocaleString('id-ID')}
                         </span>
                       </div>
                     </div>
@@ -1362,6 +1471,10 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                           <div className="flex justify-between">
                             <span>⭐ Tetap ({summary.byGroup.karyawanTetap.employeeCount} × {summary.workdaysInMonth}hk @140rb):</span>
                             <span className="text-foreground font-semibold">Rp {summary.byGroup.karyawanTetap.totalNetSalary.toLocaleString('id-ID')}</span>
+                          </div>
+                          <div className="flex justify-between pt-0.5 border-t border-border/50 text-[10px]">
+                            <span>⏳ Lembur N-1 ({summary.arrearsMonthShort}):</span>
+                            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">+Rp {activeBucket.totalOvertimePay.toLocaleString('id-ID')}</span>
                           </div>
                         </div>
                       </div>
@@ -1579,10 +1692,10 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                       <TableHead className="min-w-[170px]">Karyawan &amp; NIP</TableHead>
                       <TableHead className="min-w-[130px]">Grup &amp; Shift</TableHead>
                       <TableHead className="min-w-[120px] text-center">Lembur Hari Live</TableHead>
-                      <TableHead className="min-w-[130px] text-center">Lembur Bln Ini (Jam / Rp)</TableHead>
+                      <TableHead className="min-w-[130px] text-center">Lembur Kerja {summary.selectedMonthShort} (→ {summary.nextMonthShort})</TableHead>
                       <TableHead className="min-w-[110px] text-right">Gaji Pokok</TableHead>
                       <TableHead className="min-w-[100px] text-right">Pot. BPJS 4%</TableHead>
-                      <TableHead className="min-w-[130px] text-right">Gaji Bersih (THP)</TableHead>
+                      <TableHead className="min-w-[130px] text-right">Gaji Bersih (+N-1)</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody className="divide-y divide-border/60 text-xs">
@@ -1656,10 +1769,11 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
               {/* Footer Summary Bar */}
               <div className="p-3 bg-muted/40 border-t border-border flex flex-col sm:flex-row items-center justify-between text-xs gap-2">
                 <span className="text-muted-foreground font-medium">
-                  Total Karyawan Ditampilkan: <strong className="text-foreground">{filteredList.length} Orang</strong>
+                  Total Karyawan Ditampilkan: <strong className="text-foreground">{filteredList.length} Orang</strong> • Lembur masuk THP: <strong className="text-emerald-600">{summary.arrearsMonthShort} (N-1)</strong>
                 </span>
-                <div className="flex items-center gap-4 font-mono font-bold text-xs">
-                  <span>Total Lembur: <span className="text-emerald-600">Rp {filteredList.reduce((s, i) => s + i.monthOtPay, 0).toLocaleString('id-ID')}</span></span>
+                <div className="flex flex-wrap items-center gap-4 font-mono font-bold text-xs">
+                  <span>Lembur Kerja ({summary.selectedMonthShort}): <span className="text-amber-600">Rp {filteredList.reduce((s, i) => s + i.monthOtPay, 0).toLocaleString('id-ID')}</span></span>
+                  <span>Lembur Payroll ({summary.arrearsMonthShort}): <span className="text-emerald-600">Rp {filteredList.reduce((s, i) => s + i.arrearsOtPay, 0).toLocaleString('id-ID')}</span></span>
                   <span>Total Gaji Bersih: <span className="text-primary">Rp {filteredList.reduce((s, i) => s + i.netSalary, 0).toLocaleString('id-ID')}</span></span>
                 </div>
               </div>
@@ -1766,7 +1880,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                       <TableHead className="min-w-[160px]">Karyawan &amp; NIP</TableHead>
                       <TableHead className="min-w-[130px]">Divisi &amp; Grup</TableHead>
                       <TableHead className="min-w-[110px] text-right">Gaji Pokok Tunggal</TableHead>
-                      <TableHead className="min-w-[110px] text-right">Lembur Sah (Rp)</TableHead>
+                      <TableHead className="min-w-[125px] text-right">Lembur {summary.arrearsMonthShort} (N-1)</TableHead>
                       <TableHead className="min-w-[95px] text-right">BPJS TK 3%</TableHead>
                       <TableHead className="min-w-[95px] text-right">BPJS Kes 1%</TableHead>
                       <TableHead className="min-w-[95px] text-right">Pot. Alpa</TableHead>
@@ -1807,7 +1921,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                             {item.opGroup === 'KARYAWAN TETAP' ? (
                               <span className="text-muted-foreground font-normal">Non-Lembur (Rp 0)</span>
                             ) : (
-                              <>+Rp {item.monthOtPay.toLocaleString('id-ID')}</>
+                              <>+Rp {item.arrearsOtPay.toLocaleString('id-ID')}</>
                             )}
                           </TableCell>
                           <TableCell className="text-right font-mono text-xs text-rose-600 dark:text-rose-400">
@@ -1835,11 +1949,11 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
               {/* Footer Summary Bar */}
               <div className="p-3 bg-muted/40 border-t border-border flex flex-col sm:flex-row items-center justify-between text-xs gap-2">
                 <span className="text-muted-foreground font-medium">
-                  Shipment &amp; Wisma: <strong className="text-foreground">Pokok DB + BPJS 4%</strong> • Tetap (3 Org): <strong className="text-purple-600 dark:text-purple-400">Rp 140rb/hk (Non-Lembur, Tanpa BPJS)</strong>
+                  Bulan Mundur N-1: <strong className="text-foreground">Lembur {summary.arrearsMonthLabel} → Dibayar {selectedMonthLabel}</strong> • Lembur {summary.selectedMonthShort} (Rp {summary.totalOtPay.toLocaleString('id-ID')}) → {summary.nextMonthShort}
                 </span>
                 <div className="flex flex-wrap items-center gap-3 font-mono font-bold text-xs">
                   <span>Pokok: <span className="text-foreground">Rp {filteredList.reduce((s, i) => s + i.baseSalary, 0).toLocaleString('id-ID')}</span></span>
-                  <span>Lembur: <span className="text-emerald-600">+Rp {filteredList.reduce((s, i) => s + i.monthOtPay, 0).toLocaleString('id-ID')}</span></span>
+                  <span>Lembur ({summary.arrearsMonthShort}): <span className="text-emerald-600">+Rp {filteredList.reduce((s, i) => s + i.arrearsOtPay, 0).toLocaleString('id-ID')}</span></span>
                   <span>BPJS: <span className="text-rose-600">-Rp {filteredList.reduce((s, i) => s + i.totalBpjs, 0).toLocaleString('id-ID')}</span></span>
                   <span>Netto (THP): <span className="text-primary">Rp {filteredList.reduce((s, i) => s + i.netSalary, 0).toLocaleString('id-ID')}</span></span>
                 </div>

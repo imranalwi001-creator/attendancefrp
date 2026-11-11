@@ -35,6 +35,7 @@ import {
   isMacciniBajiOfficer,
   isSimulationAccount,
   isOfficialFrEmployee,
+  getEmployeeCategoryGroup,
   FiscalPeriodSettings,
   YearEndClosingRecord,
   HolidayOvertimeMode,
@@ -43,6 +44,14 @@ import {
 import { api } from './apiClient';
 import { payrollTaxEngine } from './payrollTaxEngine';
 import { GenerationResult, DEFAULT_SHIFTS as ROSTER_DEFAULT_SHIFTS } from './rosterSchedulerService';
+import {
+  KARYAWAN_TETAP_DAILY_RATE,
+  STANDARD_BASE_SALARY,
+  countWeekdaysInMonth,
+  isWeekdayIsoDate,
+  matchesAttendanceUser,
+  normalizeNipCompact,
+} from '@/lib/frpPayrollCalculations';
 import { notifyUserWithAudioAndVibe } from './soundVibrationService';
 import { geofenceService } from './geofenceService';
 import { hrmHolidayService } from './hrmHolidayService';
@@ -5778,20 +5787,26 @@ export const hrmService = {
     const profile = hrmService.getSalaryProfile(userId);
     const settings = hrmService.getPayrollSettings();
     const otSettings = hrmService.getOvertimeSettings();
+    const empGroup = getEmployeeCategoryGroup(employee);
+    const isKaryawanTetap = empGroup === 'KARYAWAN TETAP';
+    const periodYm = `${period.year}-${String(period.month).padStart(2, '0')}`;
+    const workdaysInMonth = countWeekdaysInMonth(periodYm);
 
-    // Defaults if no salary profile exists
-    const baseSalary = profile?.baseSalary || 0;
-    const positionAllowance = profile?.positionAllowance || 0;
-    const transportAllowance = profile?.transportAllowance || 0;
-    const mealAllowance = profile?.mealAllowance || 0;
-    const housingAllowance = profile?.housingAllowance || 0;
-    const healthAllowance = profile?.healthAllowance || 0;
-    const otherAllowances = profile?.otherAllowances || [];
+    // Kebijakan PT FRP: Upah Pokok Tunggal (Tanpa Tunjangan) & Karyawan Tetap Rp 140.000/hari kerja
+    const baseSalary = isKaryawanTetap
+      ? workdaysInMonth * KARYAWAN_TETAP_DAILY_RATE
+      : (profile?.baseSalary || (employee as any).baseSalary || STANDARD_BASE_SALARY);
+    const positionAllowance = 0;
+    const transportAllowance = 0;
+    const mealAllowance = 0;
+    const housingAllowance = 0;
+    const healthAllowance = 0;
+    const otherAllowances: any[] = [];
 
     // ── Attendance in this period ──
     const allAttendance = hrmService.getAttendances();
     const periodAttendance = allAttendance.filter(
-      (a) => a.userId === userId && a.attendanceDate >= period.startDate && a.attendanceDate <= period.endDate
+      (a) => matchesAttendanceUser(a, employee) && a.attendanceDate >= period.startDate && a.attendanceDate <= period.endDate
     );
 
     const presentDays = periodAttendance.filter((a) =>
@@ -5800,14 +5815,27 @@ export const hrmService = {
     const lateRecords = periodAttendance.filter((a) => a.status === 'terlambat');
     const lateCount = lateRecords.length;
     const totalLateMinutes = lateRecords.reduce((s, a) => s + (a.lateMinutes || 0), 0);
-    const absentCount = periodAttendance.filter((a) => a.status === 'alfa').length;
+
+    const alpaDateSet = new Set<string>();
+    for (const a of periodAttendance) {
+      const st = String(a.status || '').toLowerCase();
+      const sub = String((a as any).absentSubtype || '').toLowerCase();
+      if (st === 'alpa' || st === 'alfa' || sub === 'mangkir') {
+        const dt = String(a.attendanceDate || '').slice(0, 10);
+        if (!isKaryawanTetap || isWeekdayIsoDate(dt)) {
+          alpaDateSet.add(dt);
+        }
+      }
+    }
+    const absentCount = alpaDateSet.size;
     const leaveCount = periodAttendance.filter((a) =>
       ['izin', 'sakit', 'cuti'].includes(a.status)
     ).length;
 
-    // ── Overtime in this period (ATURAN PT FRP: Pembayaran lembur adalah BULAN MUNDUR N-1) ──
+    // ── Overtime in this period (ATURAN PT FRP: Pembayaran lembur adalah BULAN MUNDUR N-1, Karyawan Tetap Non-Lembur) ──
     const allOt = hrmService.getOvertimeRecords();
-    
+    const empNipNorm = normalizeNipCompact(employee.nip);
+
     // Hitung tanggal rentang bulan mundur (1 bulan sebelum periode berjalan)
     const pStart = new Date(period.startDate);
     const prevMonthDate = new Date(pStart.getFullYear(), pStart.getMonth() - 1, 1);
@@ -5817,15 +5845,18 @@ export const hrmService = {
     const prevMonthStartStr = `${prevYear}-${prevMonth}-01`;
     const prevMonthEndStr = `${prevYear}-${prevMonth}-${String(lastDayPrevMonth).padStart(2, '0')}`;
 
-    const periodOt = settings.includeOvertimeInPayroll
-      ? allOt.filter(
-          (r) =>
-            r.userId === userId &&
+    const periodOt = (!isKaryawanTetap && settings.includeOvertimeInPayroll)
+      ? allOt.filter((r) => {
+          const rNipNorm = normalizeNipCompact((r as any).userNip);
+          const sameUser = r.userId === userId || (empNipNorm && rNipNorm && empNipNorm === rNipNorm);
+          return (
+            sameUser &&
             r.date >= prevMonthStartStr &&
             r.date <= prevMonthEndStr &&
             (r.status === 'approved' || (r as any).status === 'completed') &&
             r.paymentStatus !== 'paid'
-        )
+          );
+        })
       : [];
 
     const rawOvertimeHours = periodOt.reduce((s, r) => s + (Number((r as any).approvedHours ?? r.durationHours) || 0), 0);
@@ -5844,12 +5875,14 @@ export const hrmService = {
     const empShiftName = (employee.shiftName || profile?.shiftName || '').toUpperCase();
     const isDayShift = DAY_SHIFT_NIPS.has(employee.nip || '') || empShiftName.includes('DAY');
 
-    const fwpOtCalc = payrollTaxEngine.calculateFwpOvertimePay(
-      baseSalary,
-      rawOvertimeHours,
-      isDayShift,
-      employee.overtimeRateOverride || profile?.overtimeRateOverride
-    );
+    const fwpOtCalc = isKaryawanTetap
+      ? { totalOvertimePay: 0, cappedRealHours: 0 }
+      : payrollTaxEngine.calculateFwpOvertimePay(
+          baseSalary,
+          rawOvertimeHours,
+          isDayShift,
+          employee.overtimeRateOverride || profile?.overtimeRateOverride
+        );
 
     const overtimePay = fwpOtCalc.totalOvertimePay;
     const overtimeHours = fwpOtCalc.cappedRealHours;
@@ -5862,15 +5895,16 @@ export const hrmService = {
 
     // ── Deductions ──
     const isSpecialOfficer = isLeadershipSpecialFieldOfficer(employee) || isLeadershipSpecialFieldOfficer(userId);
-    const isLateEnabled = isSpecialOfficer || employee.isLateDeductionEnabled === true || profile?.isLateDeductionEnabled === true || settings.isLateDeductionEnabled === true;
+    const isLateEnabled = !isKaryawanTetap && (isSpecialOfficer || employee.isLateDeductionEnabled === true || profile?.isLateDeductionEnabled === true || settings.isLateDeductionEnabled === true);
     const ratePerMinute = employee.lateDeductionPerMinute || profile?.lateDeductionPerMinute || (isSpecialOfficer ? 1000 : (settings.lateDeductionPerMinute || 1000));
 
     const lateDeduction = isLateEnabled
       ? totalLateMinutes * ratePerMinute
       : 0;
-    const absenceDeduction = absentCount * settings.absenceDeductionPerDay;
-    const bpjsKesehatan = Math.round((settings.bpjsKesehatanEmployee / 100) * baseSalary);
-    const bpjsKetenagakerjaan = Math.round((settings.bpjsKetenagakerjaanEmployee / 100) * baseSalary);
+    const absenceRate = isKaryawanTetap ? KARYAWAN_TETAP_DAILY_RATE : (settings.absenceDeductionPerDay || 155000);
+    const absenceDeduction = absentCount * absenceRate;
+    const bpjsKesehatan = isKaryawanTetap ? 0 : Math.round((settings.bpjsKesehatanEmployee / 100) * baseSalary);
+    const bpjsKetenagakerjaan = isKaryawanTetap ? 0 : Math.round((settings.bpjsKetenagakerjaanEmployee / 100) * baseSalary);
     // Sesuai aturan resmi PT. FAWWAZ RESKI PERWIRA: PPh 21 DITIADAKAN / Rp 0
     const pph21 = 0;
     const totalDeductions = lateDeduction + absenceDeduction + bpjsKesehatan + bpjsKetenagakerjaan;
@@ -5908,7 +5942,7 @@ export const hrmService = {
       otherDeductions: [],
       totalDeductions,
       netSalary,
-      workingDays: settings.workingDaysPerMonth,
+      workingDays: isKaryawanTetap ? workdaysInMonth : settings.workingDaysPerMonth,
       presentDays,
       lateCount,
       totalLateMinutes,

@@ -111,19 +111,23 @@ const formatYmLabel = (ym: string) => {
 const getCurrentAndNextMonths = () => {
   const now = new Date();
   const curYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevYm = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
   const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   const nextYm = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
-  return { curYm, nextYm };
+  return { prevYm, curYm, nextYm };
 };
 
 interface Props {
   onSynced?: () => void;
+  initialPayrollMonth?: string;
 }
 
-export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
-  const { curYm, nextYm } = useMemo(() => getCurrentAndNextMonths(), []);
-  const [payrollMonth, setPayrollMonth] = useState<string>(curYm);
+export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced, initialPayrollMonth }) => {
+  const { prevYm, curYm, nextYm } = useMemo(() => getCurrentAndNextMonths(), []);
+  const [payrollMonth, setPayrollMonth] = useState<string>(initialPayrollMonth || curYm);
   const [recap, setRecap] = useState<ArrearsRecapResponse | null>(null);
+  const [nextMonthPreview, setNextMonthPreview] = useState<ArrearsRecapResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncingPayroll, setSyncingPayroll] = useState(false);
   const [groupFilter, setGroupFilter] = useState<'ALL' | 'RUMAH TANGGA' | 'SHIPMENT' | 'KARYAWAN TETAP'>('ALL');
@@ -133,12 +137,28 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
   const [editWismaBudget, setEditWismaBudget] = useState<string>('4000000');
   const [savingBudget, setSavingBudget] = useState(false);
 
+  useEffect(() => {
+    if (initialPayrollMonth) {
+      setPayrollMonth(initialPayrollMonth);
+    }
+  }, [initialPayrollMonth]);
+
   const fetchArrearsRecap = async (targetMonth = payrollMonth) => {
     setLoading(true);
     try {
-      const res: any = await api.get(`/overtime/payroll-arrears-recap?payrollMonth=${encodeURIComponent(targetMonth)}`);
+      const [res, nextRes]: [any, any] = await Promise.all([
+        api.get(`/overtime/payroll-arrears-recap?payrollMonth=${encodeURIComponent(targetMonth)}`),
+        targetMonth === nextYm
+          ? Promise.resolve(null)
+          : api.get(`/overtime/payroll-arrears-recap?payrollMonth=${encodeURIComponent(nextYm)}`).catch(() => null),
+      ]);
       if (res?.success && res.data) {
         setRecap(res.data);
+        if (targetMonth === nextYm) {
+          setNextMonthPreview(res.data);
+        } else if (nextRes?.success && nextRes.data) {
+          setNextMonthPreview(nextRes.data);
+        }
         if (res.data.budgetMeta) {
           setEditShipmentBudget(String(res.data.budgetMeta.shipmentCap));
           setEditWismaBudget(String(res.data.budgetMeta.wismaCap));
@@ -213,6 +233,28 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
       setSyncingPayroll(false);
     }
   };
+
+  const progressStats = useMemo(() => {
+    const emps = (recap?.employees || []).filter((e) => e.group !== 'KARYAWAN TETAP');
+    const approvedSpklTotal = emps.reduce((s, e) => s + Number(e.spklApprovedCount || 0), 0);
+    const pendingSpklTotal = emps.reduce((s, e) => s + Number(e.spklPendingCount || 0), 0);
+    const readyCount = emps.filter((e) => e.syncState === 'ready_for_payroll').length;
+    const includedCount = emps.filter((e) => e.syncState === 'included_in_payroll').length;
+    const paidCount = emps.filter((e) => e.syncState === 'paid').length;
+    const withOvertimeCount = emps.filter((e) => e.spklApprovedCount > 0).length;
+    const totalRawHours = emps.reduce((s, e) => s + Number(e.rawApprovedHours || 0), 0);
+    const totalPaidHours = emps.reduce((s, e) => s + Number(e.paidHours || 0), 0);
+    return {
+      approvedSpklTotal,
+      pendingSpklTotal,
+      readyCount,
+      includedCount,
+      paidCount,
+      withOvertimeCount,
+      totalRawHours: Number(totalRawHours.toFixed(1)),
+      totalPaidHours: Number(totalPaidHours.toFixed(1)),
+    };
+  }, [recap]);
 
   const filteredEmployees = useMemo(() => {
     if (!recap) return [];
@@ -484,25 +526,36 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
                   size="sm"
                   variant={payrollMonth === curYm ? 'default' : 'secondary'}
                   onClick={() => setPayrollMonth(curYm)}
-                  className="h-7 text-[11px] rounded-lg"
+                  className="h-8 text-[11px] rounded-lg"
                 >
-                  Payroll {formatYmLabel(curYm)}
+                  Payroll {formatYmLabel(curYm)} (← {formatYmLabel(prevYm)})
                 </Button>
                 <Button
                   type="button"
                   size="sm"
                   variant={payrollMonth === nextYm ? 'default' : 'secondary'}
                   onClick={() => setPayrollMonth(nextYm)}
-                  className="h-7 text-[11px] rounded-lg"
+                  className={`h-8 text-[11px] rounded-lg gap-1.5 ${
+                    payrollMonth === nextYm ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 border border-amber-400/30'
+                  }`}
                 >
-                  Payroll {formatYmLabel(nextYm)} (Lembur {formatYmLabel(curYm)})
+                  <span>📈 Progres {formatYmLabel(curYm)} → Payroll {formatYmLabel(nextYm)}</span>
+                  {nextMonthPreview && (
+                    <Badge className="bg-black/30 text-amber-200 border-0 font-mono text-[10px] px-1.5 py-0">
+                      Rp {(nextMonthPreview.totals.grandTotalPay || 0).toLocaleString('id-ID')}
+                    </Badge>
+                  )}
                 </Button>
               </div>
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center gap-3">
               <div className="text-left sm:text-right">
-                <p className="text-[11px] text-slate-300">Total Lembur Siap Payroll:</p>
+                <p className="text-[11px] text-slate-300">
+                  {payrollMonth === nextYm
+                    ? `Progres Kerja ${formatYmLabel(curYm)} Siap Masuk Payroll ${formatYmLabel(nextYm)}:`
+                    : `Total Lembur Siap Payroll ${formatYmLabel(payrollMonth)}:`}
+                </p>
                 <p className="text-xl font-extrabold font-mono text-emerald-400">
                   Rp {(recap?.totals.grandTotalPay || 0).toLocaleString('id-ID')}
                 </p>
@@ -518,10 +571,48 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
                 className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs gap-2 shadow-md"
               >
                 <Send className="w-4 h-4" />
-                {syncingPayroll ? 'Menyinkronkan ke PostgreSQL...' : `Sinkronkan ke Payroll ${formatYmLabel(payrollMonth)}`}
+                {syncingPayroll ? 'Menyinkronkan ke PostgreSQL...' : `Proses & Masukkan ke Payroll ${formatYmLabel(payrollMonth)}`}
               </Button>
             </div>
           </div>
+
+          {/* Ringkasan Progres Proses & Kesiapan Masuk Payroll */}
+          {recap && (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+              <div className="p-3 rounded-xl border border-border bg-card">
+                <span className="text-[10.5px] text-muted-foreground block">Realisasi Sah ({formatYmLabel(recap.sourceOvertimeMonth)})</span>
+                <span className="font-mono font-bold text-sm text-foreground">
+                  {progressStats.withOvertimeCount} Org • {progressStats.approvedSpklTotal} SPKL
+                </span>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block mt-0.5">Siap kalkulasi N-1</span>
+              </div>
+              <div className="p-3 rounded-xl border border-border bg-card">
+                <span className="text-[10.5px] text-muted-foreground block">SPKL Masih Pending Approval</span>
+                <span className={`font-mono font-bold text-sm ${progressStats.pendingSpklTotal > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                  {progressStats.pendingSpklTotal} SPKL Pending
+                </span>
+                <span className="text-[10px] text-muted-foreground block mt-0.5">
+                  {progressStats.pendingSpklTotal > 0 ? 'Perlu ACC agar ikut masuk payroll' : 'Semua pengajuan selesai diproses'}
+                </span>
+              </div>
+              <div className="p-3 rounded-xl border border-border bg-card">
+                <span className="text-[10.5px] text-muted-foreground block">Akumulasi Jam Kerja → Bayar (x2)</span>
+                <span className="font-mono font-bold text-sm text-blue-600 dark:text-blue-400">
+                  {progressStats.totalRawHours} j real → {progressStats.totalPaidHours} j bayar
+                </span>
+                <span className="text-[10px] text-muted-foreground block mt-0.5">Aturan cap 30j Shift / 56j Day Shift</span>
+              </div>
+              <div className="p-3 rounded-xl border border-border bg-card">
+                <span className="text-[10.5px] text-muted-foreground block">Status Sinkron Payroll ({formatYmLabel(payrollMonth)})</span>
+                <span className="font-mono font-bold text-sm text-foreground">
+                  {progressStats.readyCount} Siap • {progressStats.includedCount} Slip • {progressStats.paidCount} Paid
+                </span>
+                <span className="text-[10px] text-muted-foreground block mt-0.5">
+                  Klik proses kanan atas untuk update slip
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Dynamic Effective Monthly Budget Strip */}
           {recap?.budgetMeta && (
