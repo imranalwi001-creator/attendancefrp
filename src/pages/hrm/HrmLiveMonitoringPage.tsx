@@ -3,7 +3,7 @@ import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { toast } from 'sonner';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { AttendanceRecord, Division, UserProfile, OvertimeRecord, PerimeterViolation, isMobileOnlineOfficer, isOfficialFrEmployee, isLeadershipSpecialFieldOfficer, isSimulationAccount, LeaveRequest, EmployeeSchedule, isMacciniBajiOfficer } from '@/types/hrm';
+import { AttendanceRecord, Division, EmployeeCategoryGroup, UserProfile, OvertimeRecord, PerimeterViolation, getEmployeeCategoryGroup, getEmployeeCategoryLabel, isMobileOnlineOfficer, isOfficialFrEmployee, isLeadershipSpecialFieldOfficer, isSimulationAccount, LeaveRequest, EmployeeSchedule, isMacciniBajiOfficer } from '@/types/hrm';
 import { resolveEffectiveShift, calculateAttendanceLateness } from '@/lib/hrmShiftResolver';
 import {
   UserCheck,
@@ -44,6 +44,7 @@ import {
   Coins,
   SlidersHorizontal,
   Filter,
+  Users,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -94,15 +95,13 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'all' | 'present' | 'late' | 'absent' | 'mangkir' | 'anomalies' | 'breaches' | 'field_radar'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterDivision, setFilterDivision] = useState('all');
+  const [filterCategory, setFilterCategory] = useState<'all' | EmployeeCategoryGroup>('all');
   const [filterShift, setFilterShift] = useState<string>('all');
   const [filterStatusCol, setFilterStatusCol] = useState<string>('all');
   const [filterOvertimeCol, setFilterOvertimeCol] = useState<string>('all');
   const [visibleColumns, setVisibleColumns] = useState(() => {
-    try {
-      const saved = localStorage.getItem('hrm_monitoring_visible_columns');
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return {
+    const defaults = {
+      category: true,
       division: true,
       shift: true,
       status: true,
@@ -112,6 +111,11 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       security: true,
       actions: true,
     };
+    try {
+      const saved = localStorage.getItem('hrm_monitoring_visible_columns');
+      if (saved) return { ...defaults, ...JSON.parse(saved) };
+    } catch {}
+    return defaults;
   });
 
   const updateVisibleColumns = (updater: (prev: typeof visibleColumns) => typeof visibleColumns) => {
@@ -254,37 +258,38 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     setRealtimeReportModalOpen(true);
   };
 
+  const resolveMonitoringStatusLabel = (status: string, absentSubtype: any, att: AttendanceRecord | null) => {
+    const isLate = status === 'late' || status === 'terlambat' || (att?.lateMinutes && att.lateMinutes > 0);
+    if (isLate) return `TERLAMBAT (${att?.lateMinutes || 0}m)`;
+    if (att?.clockIn) return 'HADIR';
+    if (status === 'mangkir' || status === 'alfa' || absentSubtype === 'mangkir') return 'ALPA / MANGKIR';
+    if (absentSubtype === 'off') return 'LIBUR / OFF';
+    if (absentSubtype === 'unregistered') return 'BELUM REGISTRASI WAJAH';
+    if (absentSubtype === 'cuti') return 'CUTI TAHUNAN';
+    if (absentSubtype === 'sakit') return 'IZIN SAKIT';
+    if (absentSubtype === 'izin') return 'IZIN RESMI';
+    return 'BELUM HADIR';
+  };
+
+  const getCategoryFileSlug = (cat: 'all' | EmployeeCategoryGroup) => {
+    if (cat === 'RUMAH TANGGA') return 'Rumah_Tangga_FR07001-FR07033';
+    if (cat === 'SHIPMENT') return 'Shipment_FR07034-FR07080';
+    if (cat === 'KARYAWAN TETAP') return 'Karyawan_Tetap_Takdir_Aslam_Samsi';
+    return 'Semua_Karyawan';
+  };
+
   const handleExportAllRealtimeExcel = () => {
     const exportDateStr = targetDayDate || getTodayDateStr();
-    const data = filtered.map(({ user: u, attendance: att, status, absentSubtype, shift }, idx) => {
-      const isLate = status === 'terlambat' || (att?.lateMinutes && att.lateMinutes > 0);
-      let statusText = 'BELUM HADIR';
-      if (isLate) {
-        statusText = `TERLAMBAT (${att?.lateMinutes || 0}m)`;
-      } else if (att?.clockIn) {
-        statusText = 'HADIR';
-      } else if (status === 'alfa' || absentSubtype === 'mangkir') {
-        statusText = 'ALPA / MANGKIR';
-      } else if (absentSubtype === 'off') {
-        statusText = 'LIBUR / OFF';
-      } else if (absentSubtype === 'unregistered') {
-        statusText = 'BELUM REGISTRASI WAJAH';
-      } else if (absentSubtype === 'cuti') {
-        statusText = 'CUTI TAHUNAN';
-      } else if (absentSubtype === 'sakit') {
-        statusText = 'IZIN SAKIT';
-      } else if (absentSubtype === 'izin') {
-        statusText = 'IZIN RESMI';
-      }
-
-      return {
+    const mapRows = (items: typeof filtered) =>
+      items.map(({ user: u, attendance: att, status, absentSubtype, shift }, idx) => ({
         No: idx + 1,
         NIP: u.nip,
         'Nama Karyawan': u.fullName,
+        'Kelompok': getEmployeeCategoryLabel(getEmployeeCategoryGroup(u)),
         'Divisi': u.divisionName || '-',
         'Jabatan': u.roleName || u.role || 'Karyawan',
         'Shift': shift?.name || u.shiftName || 'Day Shift',
-        'Status Kehadiran': statusText,
+        'Status Kehadiran': resolveMonitoringStatusLabel(status, absentSubtype, att),
         'Jam Masuk': att?.clockIn ? att.clockIn.substring(0, 5) : '-',
         'Jam Pulang': att?.clockOut ? att.clockOut.substring(0, 5) : (att?.clockIn ? 'Aktif Bertugas' : '-'),
         'Durasi Kerja (Jam)': att?.workDurationMinutes ? (att.workDurationMinutes / 60).toFixed(1) : '-',
@@ -292,14 +297,24 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         'Skor Wajah AI': att?.biometricScore ? `${att.biometricScore}%` : '-',
         'Jarak Geofence': att?.geofenceDistance != null ? `${Math.round(att.geofenceDistance)}m` : '-',
         'Lokasi Presensi': att?.notes || u.assignedLocationName || '-',
-      };
-    });
+      }));
 
-    const worksheet = XLSX.utils.json_to_sheet(data);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Monitoring_Realtime');
-    XLSX.writeFile(workbook, `Monitoring_Realtime_Semua_Karyawan_${exportDateStr}.xlsx`);
-    toast.success(`Rekap realtime ${data.length} karyawan (${exportDateStr}) berhasil diunduh!`);
+    const activeSlug = getCategoryFileSlug(filterCategory);
+    if (filterCategory === 'all') {
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(mapRows(filtered)), 'Semua_Karyawan');
+      const rtRows = filtered.filter((i) => getEmployeeCategoryGroup(i.user) === 'RUMAH TANGGA');
+      const shipRows = filtered.filter((i) => getEmployeeCategoryGroup(i.user) === 'SHIPMENT');
+      const tetapRows = filtered.filter((i) => getEmployeeCategoryGroup(i.user) === 'KARYAWAN TETAP');
+      if (rtRows.length > 0) XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(mapRows(rtRows)), 'Rumah_Tangga_FR07001-33');
+      if (shipRows.length > 0) XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(mapRows(shipRows)), 'Shipment_FR07034-80');
+      if (tetapRows.length > 0) XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(mapRows(tetapRows)), 'Karyawan_Tetap_3');
+    } else {
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(mapRows(filtered)), activeSlug.slice(0, 31));
+    }
+
+    XLSX.writeFile(workbook, `Monitoring_Realtime_${activeSlug}_${exportDateStr}.xlsx`);
+    toast.success(`Rekap realtime ${filtered.length} karyawan (${exportDateStr}) berhasil diunduh!`);
   };
 
   const handleExportAllRealtimePdf = () => {
@@ -316,6 +331,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         format: 'a4',
       });
 
+      const activeCategoryTitle = filterCategory === 'all' ? 'Semua Kelompok Operasional' : getEmployeeCategoryLabel(filterCategory);
+
       // Header Laporan
       doc.setFontSize(13);
       doc.setFont('helvetica', 'bold');
@@ -324,40 +341,30 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       doc.setFont('helvetica', 'normal');
       doc.text(`LAPORAN MONITORING PRESENSI & OPERASIONAL REALTIME - ${exportDateStr} (WITA)`, 14, 17);
       doc.setFontSize(7.5);
-      doc.text(`Total Karyawan: ${filtered.length} Orang | Server: fawwazreskiperwira.com | Dicetak: ${new Date().toLocaleString('id-ID')}`, 14, 21);
+      doc.text(`Kelompok: ${activeCategoryTitle} | Total: ${filtered.length} Orang | Server: fawwazreskiperwira.com | Dicetak: ${new Date().toLocaleString('id-ID')}`, 14, 21);
 
       const tableHead = [
-        ['No', 'NIP', 'Nama Karyawan', 'Divisi', 'Shift', 'Status Kehadiran', 'Masuk', 'Pulang', 'Telat', 'Skor Wajah', 'Jarak Pos', 'Lokasi']
+        ['No', 'NIP', 'Nama Karyawan', 'Kelompok', 'Divisi', 'Shift', 'Status Kehadiran', 'Masuk', 'Pulang', 'Telat', 'Skor Wajah', 'Jarak Pos', 'Lokasi']
       ];
 
       const tableBody = filtered.map(({ user: u, attendance: att, status, absentSubtype, shift }, idx) => {
-        const isLate = status === 'terlambat' || (att?.lateMinutes && att.lateMinutes > 0);
-        let statusText = 'BELUM HADIR';
-        if (isLate) {
-          statusText = `TERLAMBAT (${att?.lateMinutes || 0}m)`;
-        } else if (att?.clockIn) {
-          statusText = 'HADIR';
-        } else if (status === 'alfa' || absentSubtype === 'mangkir') {
-          statusText = 'ALPA / MANGKIR';
-        } else if (absentSubtype === 'off') {
-          statusText = 'LIBUR / OFF';
-        } else if (absentSubtype === 'unregistered') {
-          statusText = 'BELUM REGISTRASI WAJAH';
-        } else if (absentSubtype === 'cuti') {
-          statusText = 'CUTI TAHUNAN';
-        } else if (absentSubtype === 'sakit') {
-          statusText = 'IZIN SAKIT';
-        } else if (absentSubtype === 'izin') {
-          statusText = 'IZIN RESMI';
-        }
+        const catGroup = getEmployeeCategoryGroup(u);
+        const shortCat = catGroup === 'RUMAH TANGGA'
+          ? 'Rumah Tangga'
+          : catGroup === 'SHIPMENT'
+          ? 'Shipment'
+          : catGroup === 'KARYAWAN TETAP'
+          ? 'Karyawan Tetap'
+          : 'Lainnya';
 
         return [
           idx + 1,
           u?.nip || '-',
           u?.fullName || '-',
+          shortCat,
           u?.divisionName || '-',
           shift?.name || u?.shiftName || 'Day Shift',
-          statusText,
+          resolveMonitoringStatusLabel(status, absentSubtype, att),
           att?.clockIn ? att.clockIn.substring(0, 5) : '-',
           att?.clockOut ? att.clockOut.substring(0, 5) : (att?.clockIn ? 'Aktif' : '-'),
           att?.lateMinutes ? `${att.lateMinutes}m` : '-',
@@ -377,8 +384,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold' },
         columnStyles: {
           2: { halign: 'left', fontStyle: 'bold' }, // Nama Karyawan
-          3: { halign: 'left' }, // Divisi
-          11: { halign: 'left' } // Lokasi
+          3: { halign: 'left' }, // Kelompok
+          4: { halign: 'left' }, // Divisi
+          12: { halign: 'left' } // Lokasi
         },
         didDrawPage: (data: any) => {
           const totalPages = doc.getNumberOfPages ? doc.getNumberOfPages() : (doc.internal as any)?.getNumberOfPages?.() || 1;
@@ -387,7 +395,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         }
       });
 
-      const filename = `Monitoring_Realtime_Semua_Karyawan_${exportDateStr}.pdf`;
+      const filename = `Monitoring_Realtime_${getCategoryFileSlug(filterCategory)}_${exportDateStr}.pdf`;
       doc.save(filename);
       toast.success(`Laporan PDF monitoring ${filtered.length} karyawan berhasil diunduh: ${filename}`);
     } catch (err: any) {
@@ -1147,6 +1155,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       else if (filterStatusCol === 'unregistered') matchStatusCol = item.absentSubtype === 'unregistered';
     }
 
+    // Filter Kolom Kelompok
+    const itemCategory = getEmployeeCategoryGroup(item.user);
+    const matchCategory = filterCategory === 'all' || itemCategory === filterCategory;
+
     // Filter Kolom Lembur Live
     let matchOt = true;
     if (filterOvertimeCol === 'has_ot') {
@@ -1155,13 +1167,46 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       matchOt = (item.todayOvertimeHours === 0) && (item.monthlyOvertimeHours === 0);
     }
 
-    return matchTab && matchDiv && matchSearch && matchShift && matchStatusCol && matchOt;
+    return matchTab && matchDiv && matchSearch && matchShift && matchStatusCol && matchOt && matchCategory;
+  }).sort((a, b) => {
+    const priority: Record<EmployeeCategoryGroup, number> = {
+      'RUMAH TANGGA': 1,
+      'SHIPMENT': 2,
+      'KARYAWAN TETAP': 3,
+      'OTHER': 4,
+    };
+    const catA = getEmployeeCategoryGroup(a.user);
+    const catB = getEmployeeCategoryGroup(b.user);
+    if (priority[catA] !== priority[catB]) return priority[catA] - priority[catB];
+    const numA = parseInt(String(a.user.nip || '').replace(/\D/g, ''), 10) || 999999;
+    const numB = parseInt(String(b.user.nip || '').replace(/\D/g, ''), 10) || 999999;
+    if (numA !== numB) return numA - numB;
+    return String(a.user.fullName || '').localeCompare(String(b.user.fullName || ''));
   });
 
-  const presentCount = monitoredList.filter((i) => i.status === 'present').length;
-  const lateCount = monitoredList.filter((i) => i.status === 'late').length;
-  const mangkirCount = monitoredList.filter((i) => i.status === 'mangkir' || (i as any).absentSubtype === 'mangkir').length;
-  const absentCount = monitoredList.filter((i) => i.status === 'absent' && (i as any).absentSubtype !== 'mangkir').length;
+  const buildCategoryStats = (list: typeof monitoredList) => ({
+    total: list.length,
+    present: list.filter((i) => i.status === 'present').length,
+    late: list.filter((i) => i.status === 'late').length,
+    mangkir: list.filter((i) => i.status === 'mangkir' || (i as any).absentSubtype === 'mangkir').length,
+    absent: list.filter((i) => i.status === 'absent' && (i as any).absentSubtype !== 'mangkir').length,
+  });
+
+  const categoryMonitoringStats = {
+    all: buildCategoryStats(monitoredList),
+    rumahTangga: buildCategoryStats(monitoredList.filter((i) => getEmployeeCategoryGroup(i.user) === 'RUMAH TANGGA')),
+    shipment: buildCategoryStats(monitoredList.filter((i) => getEmployeeCategoryGroup(i.user) === 'SHIPMENT')),
+    karyawanTetap: buildCategoryStats(monitoredList.filter((i) => getEmployeeCategoryGroup(i.user) === 'KARYAWAN TETAP')),
+  };
+
+  const scopedMonitoredList = filterCategory === 'all'
+    ? monitoredList
+    : monitoredList.filter((i) => getEmployeeCategoryGroup(i.user) === filterCategory);
+
+  const presentCount = scopedMonitoredList.filter((i) => i.status === 'present').length;
+  const lateCount = scopedMonitoredList.filter((i) => i.status === 'late').length;
+  const mangkirCount = scopedMonitoredList.filter((i) => i.status === 'mangkir' || (i as any).absentSubtype === 'mangkir').length;
+  const absentCount = scopedMonitoredList.filter((i) => i.status === 'absent' && (i as any).absentSubtype !== 'mangkir').length;
   const activeBreaches = perimeterViolations.filter((v) => {
     if (v.status !== 'active') return false;
     const u = users.find((usr) => usr.id === v.userId || usr.nip === v.userNip);
@@ -1174,6 +1219,35 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const radarSummary: AnomalyRadarSummary = React.useMemo(() => {
     return anomalyDetectionService.analyzeWorkforceAnomalies(users, activePeriodAttendances, overtimes);
   }, [users, activePeriodAttendances, overtimes]);
+
+  const getCategoryBadgeMeta = (group: EmployeeCategoryGroup) => {
+    switch (group) {
+      case 'RUMAH TANGGA':
+        return {
+          shortLabel: '🏠 Rumah Tangga',
+          label: '🏠 Rumah Tangga (FR07001–FR07033)',
+          badgeClass: 'bg-teal-50 text-teal-800 border-teal-200 dark:bg-teal-950/40 dark:text-teal-300 dark:border-teal-800',
+        };
+      case 'SHIPMENT':
+        return {
+          shortLabel: '🚢 Shipment',
+          label: '🚢 Shipment (FR07034–FR07080)',
+          badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800',
+        };
+      case 'KARYAWAN TETAP':
+        return {
+          shortLabel: '⭐ Karyawan Tetap',
+          label: '⭐ Karyawan Tetap (Takdir, Aslam, Samsi)',
+          badgeClass: 'bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800',
+        };
+      default:
+        return {
+          shortLabel: 'Lainnya',
+          label: 'Karyawan Operasional',
+          badgeClass: 'bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-900/40 dark:text-slate-300 dark:border-slate-700',
+        };
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -1419,6 +1493,103 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         );
       })()}
 
+      {/* Panel Monitoring Khusus Kelompok Operasional PT. FRP */}
+      <div className="space-y-2.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Users size={15} className="text-primary" />
+            <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              Monitoring Khusus Kelompok Operasional
+            </h2>
+          </div>
+          {filterCategory !== 'all' && (
+            <button
+              type="button"
+              onClick={() => setFilterCategory('all')}
+              className="text-[11px] font-semibold text-primary hover:underline self-start sm:self-auto"
+            >
+              Tampilkan Semua Kelompok ({categoryMonitoringStats.all.total})
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
+          {[
+            {
+              key: 'all' as const,
+              title: 'Semua Kelompok',
+              subtitle: 'Seluruh Personil Aktif PT. FRP',
+              stats: categoryMonitoringStats.all,
+              activeCls: 'border-primary bg-primary/10 ring-1 ring-primary/25',
+              accentText: 'text-primary',
+            },
+            {
+              key: 'RUMAH TANGGA' as const,
+              title: '🏠 Rumah Tangga',
+              subtitle: 'NIP FR07001 – FR07033 • Wisma Biring Ere',
+              stats: categoryMonitoringStats.rumahTangga,
+              activeCls: 'border-teal-500 bg-teal-50/70 dark:bg-teal-950/30 ring-1 ring-teal-500/30',
+              accentText: 'text-teal-700 dark:text-teal-300',
+            },
+            {
+              key: 'SHIPMENT' as const,
+              title: '🚢 Shipment',
+              subtitle: 'NIP FR07034 – FR07080 • Shiftman Lapangan',
+              stats: categoryMonitoringStats.shipment,
+              activeCls: 'border-indigo-500 bg-indigo-50/70 dark:bg-indigo-950/30 ring-1 ring-indigo-500/30',
+              accentText: 'text-indigo-700 dark:text-indigo-300',
+            },
+            {
+              key: 'KARYAWAN TETAP' as const,
+              title: '⭐ Karyawan Tetap',
+              subtitle: 'Takdir, Muh Aslam Faisal, La Unga Samsi',
+              stats: categoryMonitoringStats.karyawanTetap,
+              activeCls: 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/30 ring-1 ring-amber-500/30',
+              accentText: 'text-amber-700 dark:text-amber-300',
+            },
+          ].map((cat) => {
+            const isSelected = filterCategory === cat.key;
+            return (
+              <div
+                key={cat.key}
+                onClick={() => setFilterCategory(isSelected && cat.key !== 'all' ? 'all' : cat.key)}
+                className={`p-3.5 rounded-2xl border cursor-pointer transition-all shadow-2xs ${
+                  isSelected ? `${cat.activeCls} shadow-xs` : 'border-border bg-card hover:bg-muted/40'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className={`text-sm font-bold ${isSelected ? cat.accentText : 'text-foreground'}`}>
+                      {cat.title}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">
+                      {cat.subtitle}
+                    </p>
+                  </div>
+                  <span className="text-xl font-bold font-mono text-foreground shrink-0">
+                    {cat.stats.total}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 mt-3 pt-2.5 border-t border-border/60 text-[10px] font-medium">
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                    Hadir {cat.stats.present}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">
+                    Telat {cat.stats.late}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800">
+                    Mangkir {cat.stats.mangkir}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
+                    Lainnya {cat.stats.absent}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Status Counters */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3.5">
         <div
@@ -1429,8 +1600,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
-          <p className="text-xs font-medium text-muted-foreground">Semua Karyawan</p>
-          <p className="text-2xl font-bold text-foreground mt-1 font-mono">{users.length} Orang</p>
+          <p className="text-xs font-medium text-muted-foreground">
+            {filterCategory === 'all' ? 'Semua Karyawan' : getEmployeeCategoryLabel(filterCategory)}
+          </p>
+          <p className="text-2xl font-bold text-foreground mt-1 font-mono">{scopedMonitoredList.length} Orang</p>
         </div>
 
         <div
@@ -1664,7 +1837,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       <Card className="border-border/80 bg-card rounded-2xl shadow-xs">
         <CardContent className="p-3.5 space-y-3">
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
-            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="relative">
                 <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
                 <Input
@@ -1674,6 +1847,18 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   className="pl-9 text-xs rounded-xl h-9"
                 />
               </div>
+
+              <Select value={filterCategory} onValueChange={(v) => setFilterCategory(v as 'all' | EmployeeCategoryGroup)}>
+                <SelectTrigger className="text-xs rounded-xl h-9">
+                  <SelectValue placeholder="Semua Kelompok" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Kelompok Operasional</SelectItem>
+                  <SelectItem value="RUMAH TANGGA">🏠 Rumah Tangga (FR07001–FR07033)</SelectItem>
+                  <SelectItem value="SHIPMENT">🚢 Shipment (FR07034–FR07080)</SelectItem>
+                  <SelectItem value="KARYAWAN TETAP">⭐ Karyawan Tetap (Takdir, Aslam, Samsi)</SelectItem>
+                </SelectContent>
+              </Select>
 
               <Select value={filterDivision} onValueChange={setFilterDivision}>
                 <SelectTrigger className="text-xs rounded-xl h-9">
@@ -1748,6 +1933,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => updateVisibleColumns(() => ({
+                          category: true,
                           division: true,
                           shift: true,
                           status: true,
@@ -1763,6 +1949,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                       </button>
                     </div>
                     <div className="space-y-2 text-xs">
+                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
+                        <Checkbox checked={visibleColumns.category} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, category: Boolean(v) }))} />
+                        <span className="text-foreground font-medium">Kelompok / Kategori</span>
+                      </label>
                       <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
                         <Checkbox checked={visibleColumns.division} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, division: Boolean(v) }))} />
                         <span className="text-foreground font-medium">Divisi &amp; Jabatan</span>
@@ -1888,7 +2078,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               </Select>
             </div>
 
-            {(filterShift !== 'all' || filterStatusCol !== 'all' || filterOvertimeCol !== 'all' || filterDivision !== 'all' || searchQuery) && (
+            {(filterShift !== 'all' || filterStatusCol !== 'all' || filterOvertimeCol !== 'all' || filterDivision !== 'all' || filterCategory !== 'all' || searchQuery) && (
               <Button
                 type="button"
                 variant="ghost"
@@ -1898,6 +2088,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   setFilterStatusCol('all');
                   setFilterOvertimeCol('all');
                   setFilterDivision('all');
+                  setFilterCategory('all');
                   setSearchQuery('');
                 }}
                 className="h-8 px-2.5 text-[11px] rounded-xl text-rose-600 hover:bg-rose-500/10 font-medium gap-1"
@@ -1908,7 +2099,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             )}
 
             <div className="ml-auto text-[11px] text-muted-foreground font-mono">
-              Menampilkan <strong>{filtered.length}</strong> dari {users.length} Karyawan
+              Menampilkan <strong>{filtered.length}</strong> dari {scopedMonitoredList.length} Karyawan
             </div>
           </div>
         </CardContent>
@@ -2590,6 +2781,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 <TableRow className="hover:bg-transparent border-b border-border/70 text-xs">
                   <TableHead className="w-12 text-center font-semibold text-muted-foreground">#</TableHead>
                   <TableHead className="min-w-[200px] font-semibold text-muted-foreground">Karyawan</TableHead>
+                  {visibleColumns.category && <TableHead className="min-w-[140px] font-semibold text-muted-foreground">Kelompok</TableHead>}
                   {visibleColumns.division && <TableHead className="min-w-[140px] font-semibold text-muted-foreground">Divisi &amp; Jabatan</TableHead>}
                   {visibleColumns.shift && <TableHead className="min-w-[125px] text-center font-semibold text-muted-foreground">Jadwal Shift</TableHead>}
                   {visibleColumns.status && (
@@ -2701,6 +2893,18 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                             </div>
                           </div>
                         </TableCell>
+                        {visibleColumns.category && (
+                          <TableCell>
+                            {(() => {
+                              const meta = getCategoryBadgeMeta(getEmployeeCategoryGroup(u));
+                              return (
+                                <Badge variant="outline" className={`${meta.badgeClass} text-[10px] rounded-full px-2 py-0.5 font-semibold whitespace-nowrap`}>
+                                  {meta.shortLabel}
+                                </Badge>
+                              );
+                            })()}
+                          </TableCell>
+                        )}
                         {visibleColumns.division && (
                           <TableCell>
                             <p className="text-xs font-medium text-foreground truncate max-w-[160px]">{u.divisionName || '-'}</p>
@@ -3161,6 +3365,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         <p className="text-[11px] text-muted-foreground font-mono">
                           {u.nip} • {u.divisionName || '-'}
                         </p>
+                        {(() => {
+                          const meta = getCategoryBadgeMeta(getEmployeeCategoryGroup(u));
+                          return (
+                            <Badge variant="outline" className={`${meta.badgeClass} text-[9px] rounded-full px-2 py-0 mt-1 font-semibold inline-flex`}>
+                              {meta.shortLabel}
+                            </Badge>
+                          );
+                        })()}
                       </div>
                     </div>
 
