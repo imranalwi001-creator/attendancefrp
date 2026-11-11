@@ -440,14 +440,20 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     }
   };
 
-  const loadData = () => {
+  const syncFromLocalCache = () => {
     const today = getTodayDateStr();
     setUsers(hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)));
     setDivisions(hrmService.getDivisions());
-    const all = hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip));
-    setAllAttendances(all);
+    setAllAttendances(hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip)));
     setAttendances(hrmService.getAttendances(today).filter((a) => isOfficialFrEmployee(a.userNip)));
     setOvertimes(hrmService.getOvertimeRecords().filter((o) => isOfficialFrEmployee(o.userNip)));
+    setApprovedLeaves(hrmService.getLeaves().filter((l) => l.status === 'approved'));
+    setPerimeterViolations(hrmService.getPerimeterViolations().filter((v) => isOfficialFrEmployee(v.userNip)));
+  };
+
+  const loadData = () => {
+    const today = getTodayDateStr();
+    syncFromLocalCache();
     fetch('/api/overtime')
       .then((r) => r.json())
       .then((res) => {
@@ -473,9 +479,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         }
       })
       .catch(() => {});
-    setPerimeterViolations(hrmService.getPerimeterViolations().filter((v) => isOfficialFrEmployee(v.userNip)));
     loadFieldAgents();
-    fetchLiveUsersFast();
     hrmService.getMacciniVesselStatus().then((s) => {
       if (s) setMacciniVesselStatus(s);
     }).catch(() => null);
@@ -484,13 +488,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       .then((res) => {
         if (res.success && Array.isArray(res.data)) {
           setApprovedLeaves(res.data);
-        } else {
-          setApprovedLeaves(hrmService.getLeaves().filter((l) => l.status === 'approved'));
         }
       })
-      .catch(() => {
-        setApprovedLeaves(hrmService.getLeaves().filter((l) => l.status === 'approved'));
-      });
+      .catch(() => {});
     fetch(`/api/employee-schedules?date=${today}`)
       .then((r) => r.json())
       .then((res) => {
@@ -518,34 +518,26 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           });
         }
       }
-      fetch(`/api/employee-schedules?date=${today}`)
-        .then((r) => r.json())
-        .then((res) => {
-          if (res.success && Array.isArray(res.data)) {
-            setTodaySchedules(res.data);
-            hrmService.saveEmployeeSchedules(res.data);
-          }
-        })
-        .catch(() => {});
     } catch (e) {
       console.warn('[LiveMonitoring] Fast fetch note:', e);
     }
   };
 
   useEffect(() => {
+    // 1. Render instan dari local cache lalu sinkron satu kali terarah (tanpa request storm)
     loadData();
     fetchLiveUsersFast();
     fetchLiveAttendancesFast();
     hrmService.syncWithBackend().then(() => {
-      loadData();
-      fetchLiveUsersFast();
-      fetchLiveAttendancesFast();
+      syncFromLocalCache();
     });
 
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const handleUpdated = () => {
-      loadData();
-      fetchLiveUsersFast();
-      fetchLiveAttendancesFast();
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        syncFromLocalCache();
+      }, 300);
     };
     const handlePing = () => loadFieldAgents();
     window.addEventListener('hrm_data_updated', handleUpdated);
@@ -555,27 +547,32 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     window.addEventListener('hrm_field_ping_received', handlePing);
     window.addEventListener('hrm_patrol_check_submitted', handlePing);
 
-    // Fast polling every 2.5 detik untuk respon instan saat ada karyawan ceklok & sinkron user enrollment
+    // Polling ringan setiap 10 detik (hanya saat tab aktif) agar responsif tanpa membanjiri jaringan
     let pollCycle = 0;
     const fastInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       fetchLiveAttendancesFast();
-      loadFieldAgents();
       pollCycle++;
-      if (pollCycle % 3 === 0) {
+      if (pollCycle % 2 === 0) {
+        loadFieldAgents();
+      }
+      if (pollCycle % 6 === 0) {
         fetchLiveUsersFast();
       }
-    }, 2500);
+    }, 10000);
 
-    // Master background sync setiap 30 detik
+    // Master background sync setiap 60 detik saat tab aktif
     const masterInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       hrmService.syncWithBackend().then(() => {
-        loadData();
-        fetchLiveUsersFast();
+        syncFromLocalCache();
       });
-    }, 30000);
+    }, 60000);
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       window.removeEventListener('hrm_data_updated', handleUpdated);
+      window.removeEventListener('hrm_overtime_updated', handleUpdated);
       window.removeEventListener('hrm_attendance_updated', handleUpdated);
       window.removeEventListener('hrm_users_updated', handleUpdated);
       window.removeEventListener('hrm_field_ping_received', handlePing);
@@ -3031,6 +3028,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                   <img
                                     src={photo}
                                     alt={u.fullName}
+                                    loading="lazy"
+                                    decoding="async"
                                     className="w-8 h-8 rounded-full object-cover border-2 border-primary/30 group-hover/avatar:border-primary shrink-0 shadow-xs ring-1 ring-transparent group-hover/avatar:ring-primary/40 transition-all"
                                     onError={(e) => {
                                       const target = e.currentTarget;
@@ -3508,6 +3507,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                             <img
                               src={photo}
                               alt={u.fullName}
+                              loading="lazy"
+                              decoding="async"
                               className="w-9 h-9 rounded-full object-cover border-2 border-primary/30 group-hover/avatar:border-primary shrink-0 shadow-xs ring-1 ring-transparent group-hover/avatar:ring-primary/40 transition-all"
                               onError={(e) => {
                                 const target = e.currentTarget;

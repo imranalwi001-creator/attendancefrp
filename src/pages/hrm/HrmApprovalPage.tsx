@@ -2269,7 +2269,7 @@ export const HrmApprovalPage: React.FC = () => {
               {selectedLeave?.attachmentUrl ? (
                 <div className="flex items-center justify-between gap-3 p-2 bg-background rounded-lg border border-border">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    {selectedLeave.attachmentUrl.startsWith('data:image') || selectedLeave.attachmentUrl.includes('http') ? (
+                    {selectedLeave.attachmentUrl.startsWith('data:image') || selectedLeave.attachmentUrl.startsWith('/api/') || selectedLeave.attachmentUrl.includes('http') ? (
                       <img
                         src={selectedLeave.attachmentUrl}
                         alt="Bukti Lampiran"

@@ -460,6 +460,15 @@ function formatUserRow(r) {
     resolvedEnd = r.custom_end_time ? r.custom_end_time.substring(0, 5) : '16:00';
   }
 
+  const hasPhoto = Boolean(
+    r.has_avatar ||
+    (typeof r.avatar_url === 'string' && r.avatar_url.length > 50) ||
+    (typeof r.face_photo_url === 'string' && r.face_photo_url.length > 50) ||
+    (typeof r.face_enrolled_photo === 'string' && r.face_enrolled_photo.length > 50) ||
+    (typeof r.latest_attendance_photo === 'string' && r.latest_attendance_photo.length > 50)
+  );
+  const avatarEndpointUrl = hasPhoto ? `/api/users/${r.id}/avatar` : null;
+
   return {
     id: r.id,
     nip: r.nip,
@@ -491,13 +500,7 @@ function formatUserRow(r) {
     isOffToday: Boolean(r.today_is_off),
     customStartTime: isSpecial && r.custom_start_time ? r.custom_start_time.substring(0, 5) : null,
     customEndTime: isSpecial && r.custom_end_time ? r.custom_end_time.substring(0, 5) : null,
-    avatarUrl: (() => {
-      const hasPhoto = (typeof r.avatar_url === 'string' && r.avatar_url.length > 50) ||
-                       (typeof r.face_photo_url === 'string' && r.face_photo_url.length > 50) ||
-                       (typeof r.face_enrolled_photo === 'string' && r.face_enrolled_photo.length > 50) ||
-                       (typeof r.latest_attendance_photo === 'string' && r.latest_attendance_photo.length > 50);
-      return hasPhoto ? `/api/users/${r.id}/avatar` : null;
-    })(),
+    avatarUrl: avatarEndpointUrl,
     gender: r.gender,
     birthPlace: r.birth_place,
     birthDate: r.birth_date,
@@ -532,9 +535,9 @@ function formatUserRow(r) {
     maxDailyOvertimeHours: r.max_daily_overtime_hours ? parseFloat(r.max_daily_overtime_hours) : 4.0,
     overtimeRateOverride: r.overtime_rate_override ? parseFloat(r.overtime_rate_override) : null,
     isActive: r.is_active !== false,
-    isFaceEnrolled: r.is_face_enrolled === true || !!descriptor || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
+    isFaceEnrolled: r.is_face_enrolled === true || r.has_face_descriptor === true || !!descriptor || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
     faceDescriptor: null, // Lean payload: AI descriptor disimpan di backend, tidak perlu ditransfer ke browser
-    faceEnrolledPhoto: r.avatar_url || null,
+    faceEnrolledPhoto: avatarEndpointUrl,
     faceEnrolledAt: r.face_enrolled_at || null,
     deviceId: r.device_id || null,
     registeredDeviceId: r.device_id || r.registered_device_id || null,
@@ -601,10 +604,45 @@ async function resolveShiftId(shiftId) {
 }
 
 // ─── 2. BOOTSTRAP INITIAL SYNC ───────────────────────────────────────────────
+let lastBootstrapAutoCloseMs = 0;
+
+function sanitizeLeaveRow(l) {
+  if (!l) return l;
+  const rawAtt = l.attachment_url;
+  return {
+    ...l,
+    attachment_url: (typeof rawAtt === 'string' && rawAtt.startsWith('data:image/'))
+      ? `/api/leaves/${l.id}/attachment`
+      : rawAtt,
+  };
+}
+
+function streamBase64Media(req, res, raw, etagPrefix, entityId, notFoundMsg) {
+  if (!raw || typeof raw !== 'string') {
+    return res.status(404).json({ success: false, error: notFoundMsg });
+  }
+  const match = raw.match(/^data:([^;]+);base64,(.+)$/);
+  if (match) {
+    const etag = `"${etagPrefix}-${entityId}-${match[2].length}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    if (req.headers['if-none-match'] === etag) return res.status(304).end();
+    res.setHeader('Content-Type', match[1]);
+    return res.send(Buffer.from(match[2], 'base64'));
+  }
+  if (raw.startsWith('http://') || raw.startsWith('https://')) {
+    return res.redirect(raw);
+  }
+  return res.status(404).json({ success: false, error: notFoundMsg });
+}
+
 app.get('/api/sync/bootstrap', async (req, res) => {
   try {
-    // Jalankan auto-close rekonsiliasi presensi pulang sebelum mengambil snapshot data
-    await runAutoCloseCompliantAttendance().catch(() => {});
+    // Jalankan auto-close rekonsiliasi secara periodik di latar belakang (non-blocking) agar bootstrap tetap instan
+    if (Date.now() - lastBootstrapAutoCloseMs > 5 * 60 * 1000) {
+      lastBootstrapAutoCloseMs = Date.now();
+      runAutoCloseCompliantAttendance().catch(() => {});
+    }
 
     const [
       usersRes,
@@ -892,7 +930,7 @@ app.get('/api/sync/bootstrap', async (req, res) => {
         company,
         attendances,
         perimeterViolations,
-        leaves: leavesRes.rows,
+        leaves: leavesRes.rows.map(sanitizeLeaveRow),
         overtimeSettings: overtimeSettingsRes.rows[0] || null,
         overtimeRecords: overtimeRecordsRes.rows,
         payrollSettings: payrollSettingsRes.rows[0] || null,
@@ -1284,13 +1322,12 @@ app.get('/api/users/:id', async (req, res) => {
   }
 });
 
-// Endpoint avatar foto profil karyawan on-demand dengan HTTP Cache (Fast Native C++ Stream)
+// Endpoint avatar foto profil karyawan on-demand dengan HTTP Cache + ETag (Zero subquery lag)
 app.get('/api/users/:id/avatar', async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
-      `SELECT p.id, p.avatar_url, p.face_photo_url, p.face_enrolled_photo,
-              (SELECT a.photo_in FROM hrm_attendances a WHERE a.user_id = p.id AND a.photo_in IS NOT NULL ORDER BY a.attendance_date DESC, a.created_at DESC LIMIT 1) as latest_photo
+      `SELECT p.id, p.avatar_url, p.face_photo_url, p.face_enrolled_photo
        FROM hrm_profiles p
        WHERE p.id::text = $1 OR p.nip = $1 OR LOWER(p.email) = LOWER($1)
        LIMIT 1`,
@@ -1300,22 +1337,21 @@ app.get('/api/users/:id/avatar', async (req, res) => {
       return res.status(404).json({ success: false, error: 'User tidak ditemukan' });
     }
     const r = result.rows[0];
-    const candidateList = [r.avatar_url, r.face_enrolled_photo, r.face_photo_url, r.latest_photo];
-    const targetAvatar = candidateList.find(s => typeof s === 'string' && (s.startsWith('data:image/') || s.startsWith('http://') || s.startsWith('https://')));
-    if (targetAvatar && typeof targetAvatar === 'string') {
-      const match = targetAvatar.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) {
-        const mimeType = match[1];
-        const base64Data = match[2];
-        const imgBuffer = Buffer.from(base64Data, 'base64');
-        res.setHeader('Content-Type', mimeType);
-        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
-        return res.send(imgBuffer);
-      } else if (targetAvatar.startsWith('http://') || targetAvatar.startsWith('https://')) {
-        return res.redirect(targetAvatar);
+    const isValidPhoto = (s) => typeof s === 'string' && (s.startsWith('data:image/') || s.startsWith('http://') || s.startsWith('https://'));
+    let targetAvatar = [r.avatar_url, r.face_enrolled_photo, r.face_photo_url].find(isValidPhoto);
+
+    // Hanya query hrm_attendances jika ketiga kolom foto di profil kosong
+    if (!targetAvatar) {
+      const attPhotoRes = await pool.query(
+        'SELECT photo_in FROM hrm_attendances WHERE user_id = $1 AND photo_in IS NOT NULL ORDER BY attendance_date DESC, created_at DESC LIMIT 1',
+        [r.id]
+      );
+      if (attPhotoRes.rows.length > 0 && isValidPhoto(attPhotoRes.rows[0].photo_in)) {
+        targetAvatar = attPhotoRes.rows[0].photo_in;
       }
     }
-    return res.status(404).json({ success: false, error: 'Avatar belum diset' });
+
+    return streamBase64Media(req, res, targetAvatar, 'av', r.id, 'Avatar belum diset');
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -4508,7 +4544,7 @@ app.get('/api/field-sentinel/active-agents', async (req, res) => {
                    pc.id,
                    pc.check_type,
                    pc.created_at,
-                   pc.watermarked_photo_url as photo_url,
+                   CASE WHEN pc.watermarked_photo_url LIKE 'data:image/%' THEN '/api/field-sentinel/patrol-checks/' || pc.id || '/photo' ELSE pc.watermarked_photo_url END as photo_url,
                    pc.location_name,
                    pc.is_within_radius,
                    pc.distance_from_target as distance,
@@ -4522,7 +4558,7 @@ app.get('/api/field-sentinel/active-agents', async (req, res) => {
                    a.id,
                    'attendance_selfie' as check_type,
                    (a.attendance_date + COALESCE(a.clock_in, a.clock_out, '08:00:00'::time))::timestamp with time zone as created_at,
-                   COALESCE(a.photo_in, a.photo_out) as photo_url,
+                   '/api/attendances/' || a.id || '/photo?type=' || CASE WHEN a.photo_in IS NOT NULL THEN 'in' ELSE 'out' END as photo_url,
                    COALESCE(p.assigned_location_name, 'Pos Lapangan Terdaftar') as location_name,
                    COALESCE(a.geofence_valid, true) as is_within_radius,
                    COALESCE(a.geofence_distance_meters, 0) as distance,
@@ -4572,6 +4608,19 @@ app.get('/api/field-sentinel/active-agents', async (req, res) => {
     res.json({ success: true, data: users });
   } catch (err) {
     console.error('Active agents error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// On-demand Patrol Check watermarked photo stream (menghindari transfer base64 1.7MB tiap polling)
+app.get('/api/field-sentinel/patrol-checks/:id/photo', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT watermarked_photo_url FROM hrm_field_patrol_checks WHERE id::text = $1 LIMIT 1',
+      [req.params.id]
+    );
+    return streamBase64Media(req, res, result.rows[0]?.watermarked_photo_url, 'pc', req.params.id, 'Foto patrol tidak ditemukan');
+  } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -7823,7 +7872,20 @@ app.get('/api/leaves', async (req, res) => {
     }
     query += ' ORDER BY l.created_at DESC LIMIT 200';
     const result = await pool.query(query, params);
-    res.json({ success: true, data: result.rows });
+    res.json({ success: true, data: result.rows.map(sanitizeLeaveRow) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Stream lampiran cuti/izin on-demand dengan cache HTTP
+app.get('/api/leaves/:id/attachment', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT attachment_url FROM hrm_leave_requests WHERE id::text = $1 LIMIT 1',
+      [req.params.id]
+    );
+    return streamBase64Media(req, res, result.rows[0]?.attachment_url, 'lv', req.params.id, 'Lampiran tidak ditemukan');
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
