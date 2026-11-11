@@ -18,10 +18,9 @@ Skill standar operasional & arsitektur sistem untuk pengelolaan **Cuti Karyawan*
 | **🚢 Shipment (Shiftman Lapangan)** | `FR07034` – `FR07080` (47 Personil) | **9 Hari** (Hangus akhir periode, tidak diuangkan) | Addendum: **Apr – Des 2026** (9 kolom bulan) | Plafon **Rp 72.000.000/bulan**. 44 Shift Normal max 30 jam real ($\times 2 = 60$ jam bayar); 3 Day Shift max 56 jam real ($\times 2 = 112$ jam bayar). |
 | **⭐ Karyawan Tetap (Petugas Khusus Pimpinan)** | **Muh Aslam Faisal** (`FRP 07065`), **LA UNGA SAMSI, S.K.M** (`FR.07.066`), **TAKDIR** (`FRP.07.046`) | **12 Hari** | Tahun Berjalan (**Mar 2026 – Feb 2027**) | Approval cuti/izin langsung oleh **Direktur Utama (082291998026)** & **Pimpinan (082192755755)**. **TIDAK ADA LEMBUR / Non-Lembur (SPKL = Rp 0)** — hak lembur hanya untuk 80 personil Shipment & Rumah Tangga. |
 
-> **Aturan Baku Remunerasi & Pajak PT FRP (`AGENTS.md`):**
-> - Sistem **Upah Pokok Tunggal** (tanpa tunjangan jabatan/makan/transport/perumahan/kesehatan).
-> - **PPh 21 = Rp 0** (ditiadakan dari slip gaji).
-> - Potongan resmi hanya: BPJS Ketenagakerjaan **3%**, BPJS Kesehatan **1%**, Presensi/Alpa, dan denda keterlambatan (bila aktif).
+> **Aturan Baku Remunerasi & Pajak PT FRP (`AGENTS.md` + Kebijakan Karyawan Tetap):**
+> - **Shipment (47 Org) & Rumah Tangga (33 Org):** Sistem **Upah Pokok Tunggal** sesuai profil database (`Rp 4.045.050 – Rp 4.181.940`, tanpa tunjangan), **PPh 21 = Rp 0**, potongan resmi hanya BPJS Ketenagakerjaan **3%**, BPJS Kesehatan **1%**, Presensi/Alpa (`Rp 155.000/hr`), serta hak lembur (SPKL).
+> - **Karyawan Tetap (3 Org: Muh Aslam Faisal, LA UNGA SAMSI, TAKDIR):** Dihitung **Rp 140.000 / hari kerja (Senin–Jumat)** dalam bulan berjalan (`workdaysInMonth × Rp 140.000`, mis. 21 hari kerja di Nov 2026 = `Rp 2.940.000`/orang, minus mangkir hari kerja jika ada), **Tanpa Lembur (`Rp 0`)** dan **Tanpa Potongan BPJS (`Rp 0`)**.
 
 ---
 

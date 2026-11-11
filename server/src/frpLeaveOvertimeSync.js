@@ -59,6 +59,22 @@ function extractFrpSequence(nip) {
   return m ? parseInt(m[1], 10) : 9999;
 }
 
+const KARYAWAN_TETAP_DAILY_RATE = 140000;
+
+function countWeekdaysInMonth(yearMonth) {
+  const [yStr, mStr] = String(yearMonth || '').split('-');
+  const year = parseInt(yStr, 10);
+  const month = parseInt(mStr, 10);
+  if (!year || !month || month < 1 || month > 12) return 21;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  let workdays = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dow = new Date(Date.UTC(year, month - 1, d)).getUTCDay();
+    if (dow !== 0 && dow !== 6) workdays += 1;
+  }
+  return workdays;
+}
+
 // Baseline resmi dari dokumen Excel Pimpinan:
 // 1. REKAP CUTI RUMAH TANGGA DAN WISMA TAHUN KE 2 (Mar 2026 - Sep 2026)
 const RUMAH_TANGGA_BASELINE = {
@@ -559,8 +575,9 @@ async function buildPayrollArrearsOvertimeRecap(pool, payrollMonthKey) {
       const isOvertimeEligible = group !== 'KARYAWAN TETAP';
       const isDayShift = DAY_SHIFT_NIPS.has(normNip) || String(p.shift_name || '').toUpperCase().includes('DAY');
 
-      // Kebijakan Direksi PT FRP: Karyawan Tetap (Aslam, Samsi, Takdir) TIDAK diperlakukan lembur (Non-Lembur / 0 SPKL).
+      // Kebijakan Direksi PT FRP: Karyawan Tetap (Aslam, Samsi, Takdir) Rp 140.000/hari kerja Senin-Jumat, tanpa lembur & tanpa BPJS.
       if (!isOvertimeEligible) {
+        const workdays = countWeekdaysInMonth(targetPayrollMonth);
         return {
           userId: p.id,
           nip: p.nip,
@@ -569,7 +586,9 @@ async function buildPayrollArrearsOvertimeRecap(pool, payrollMonthKey) {
           group,
           isOvertimeEligible: false,
           isDayShift,
-          baseSalary: Number(p.effective_salary || 4045050),
+          workdaysInMonth: workdays,
+          dailyRate: KARYAWAN_TETAP_DAILY_RATE,
+          baseSalary: workdays * KARYAWAN_TETAP_DAILY_RATE,
           hourlyRate: 0,
           spklApprovedCount: 0,
           spklPendingCount: 0,
@@ -703,7 +722,8 @@ async function generateBackendPayrollForPeriod(pool, period) {
   // Attendance counts for targetPayrollMonth (alpa & terlambat)
   const attRes = await pool.query(`
     SELECT user_id,
-           COUNT(*) FILTER (WHERE status IN ('alfa', 'mangkir'))::int AS alpa_days,
+           COUNT(*) FILTER (WHERE status IN ('alfa', 'alpa', 'mangkir'))::int AS alpa_days,
+           COUNT(*) FILTER (WHERE status IN ('alfa', 'alpa', 'mangkir') AND EXTRACT(ISODOW FROM attendance_date) < 6)::int AS weekday_alpa_days,
            COALESCE(SUM(late_minutes) FILTER (WHERE status = 'terlambat'), 0)::int AS total_late_minutes
     FROM hrm_attendances
     WHERE TO_CHAR(attendance_date, 'YYYY-MM') = $1
@@ -715,21 +735,31 @@ async function generateBackendPayrollForPeriod(pool, period) {
   const settingsRes = await pool.query('SELECT * FROM hrm_payroll_settings ORDER BY updated_at DESC LIMIT 1');
   const pSettings = settingsRes.rows[0] || {};
   const absenceRate = Number(pSettings.absence_deduction_per_day || 155000);
+  const workdaysInMonth = countWeekdaysInMonth(targetPayrollMonth);
 
   const slipsCreated = [];
   const allLinkedOtIds = [];
 
   for (const emp of arrears.employees) {
-    const baseSalary = emp.baseSalary || 4045050;
-    const overtimePay = emp.calculatedPay || 0;
+    const isKaryawanTetap = emp.group === 'KARYAWAN TETAP';
+    const baseSalary = isKaryawanTetap
+      ? workdaysInMonth * KARYAWAN_TETAP_DAILY_RATE
+      : (emp.baseSalary || 4045050);
+    const overtimePay = isKaryawanTetap ? 0 : (emp.calculatedPay || 0);
     const grossIncome = baseSalary + overtimePay;
 
-    const bpjsKes = Math.round(baseSalary * 0.01);
-    const bpjsTk = Math.round(baseSalary * 0.03);
-    const alpaDays = Number(attMap[emp.userId]?.alpa_days || 0);
-    const absenceDeduction = alpaDays * absenceRate;
+    const bpjsKes = isKaryawanTetap ? 0 : Math.round(baseSalary * 0.01);
+    const bpjsTk = isKaryawanTetap ? 0 : Math.round(baseSalary * 0.03);
+    const alpaDays = isKaryawanTetap
+      ? Number(attMap[emp.userId]?.weekday_alpa_days || 0)
+      : Number(attMap[emp.userId]?.alpa_days || 0);
+    const empAlpaRate = isKaryawanTetap ? KARYAWAN_TETAP_DAILY_RATE : absenceRate;
+    const absenceDeduction = alpaDays * empAlpaRate;
     const totalDeductions = bpjsKes + bpjsTk + absenceDeduction;
     const netSalary = Math.max(0, grossIncome - totalDeductions);
+    const slipNotes = isKaryawanTetap
+      ? `Gaji Karyawan Tetap Rp 140.000/hari kerja Senin-Jumat (${workdaysInMonth} hk, Tanpa Lembur & Tanpa Potongan BPJS)`
+      : `Lembur disinkronkan dari periode kerja ${arrears.sourceOvertimeMonth} (Sistem Bulan Mundur N-1)`;
 
     const slipRes = await pool.query(`
       INSERT INTO hrm_payroll_slips (
@@ -776,8 +806,8 @@ async function generateBackendPayrollForPeriod(pool, period) {
       totalDeductions,
       netSalary,
       alpaDays,
-      absenceRate,
-      `Lembur disinkronkan dari periode kerja ${arrears.sourceOvertimeMonth} (Sistem Bulan Mundur N-1)`,
+      empAlpaRate,
+      slipNotes,
     ]);
     slipsCreated.push(slipRes.rows[0]);
     allLinkedOtIds.push(...emp.overtimeIds);

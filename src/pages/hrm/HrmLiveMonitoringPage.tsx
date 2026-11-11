@@ -6,6 +6,11 @@ import { api } from '@/services/apiClient';
 import { AttendanceRecord, Division, EmployeeCategoryGroup, UserProfile, OvertimeRecord, PerimeterViolation, getEmployeeCategoryGroup, getEmployeeCategoryLabel, isMobileOnlineOfficer, isOfficialFrEmployee, isLeadershipSpecialFieldOfficer, isSimulationAccount, LeaveRequest, EmployeeSchedule, isMacciniBajiOfficer } from '@/types/hrm';
 import { resolveEffectiveShift, calculateAttendanceLateness } from '@/lib/hrmShiftResolver';
 import {
+  aggregateFrpGroupPayroll,
+  calculateFrpEmployeeRealtimePay,
+  countWeekdaysInMonth,
+} from '@/lib/frpPayrollCalculations';
+import {
   UserCheck,
   Clock,
   Search,
@@ -215,6 +220,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [selectedReportAttendance, setSelectedReportAttendance] = useState<AttendanceRecord | null>(null);
   const [selectedReportShift, setSelectedReportShift] = useState<any>(null);
   const [financialRecapModalOpen, setFinancialRecapModalOpen] = useState<boolean>(false);
+  const [payrollScopeGroup, setPayrollScopeGroup] = useState<'ALL' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP'>('ALL');
   const [quickProfileModalOpen, setQuickProfileModalOpen] = useState<boolean>(false);
   const [selectedQuickProfile, setSelectedQuickProfile] = useState<{
     user: UserProfile;
@@ -775,11 +781,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const allShifts = React.useMemo(() => hrmService.getShifts(), []);
 
   // Perhitungan Realtime Finansial & Kuota Anggaran Lembur Sah (Shipment Rp 65 Jt, Wisma Rp 4 Jt, Total Rp 69 Jt)
+  // + Sinkronisasi Gaji Asli Database per Orang (Shipment & RT) & Rp 140.000/hari Tanpa Lembur/BPJS (Karyawan Tetap)
   const financialStats = React.useMemo(() => {
-    const curMonth = currentMonthStr; // 'YYYY-MM'
+    const curMonth = selectedMonth || currentMonthStr; // 'YYYY-MM'
     const officialUsers = users.filter((u) => isOfficialFrEmployee(u));
-    const BASE_SALARY = 4045050;
-    const BPJS_RATE = 0.04; // 3% TK + 1% Kes = Rp 161.802
 
     const monthOvertimes = overtimes.filter((o) => {
       const d = o.date || (o as any).createdAt || '';
@@ -790,25 +795,39 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     let shipmentHours = 0;
     let wismaSpent = 0;
     let wismaHours = 0;
+    const otPayByUserId = new Map<string, number>();
 
     monthOvertimes.forEach((o) => {
       const u = users.find((usr) => usr.id === o.userId || usr.nip === o.userNip);
-      const nip = (u?.nip || o.userNip || '').toUpperCase();
-      const grp = (u?.operationalGroup || '').toUpperCase();
-      const numMatch = nip.match(/(\d+)/);
-      const nipNum = numMatch ? parseInt(numMatch[1], 10) : 999;
-      const isWisma = grp.includes('RUMAH') || grp.includes('WISMA') || (nipNum >= 1 && nipNum <= 33);
+      const grp = u ? getEmployeeCategoryGroup(u) : getEmployeeCategoryGroup(o.userNip || '');
+      if (grp === 'KARYAWAN TETAP') return;
+
       const amt = Number(o.compensationAmount || o.totalPay || 0);
       const hrs = Number(o.approvedHours || o.durationHours || 0);
 
-      if (isWisma) {
+      if (grp === 'RUMAH TANGGA') {
         wismaSpent += amt;
         wismaHours += hrs;
       } else {
         shipmentSpent += amt;
         shipmentHours += hrs;
       }
+
+      if (u?.id) {
+        otPayByUserId.set(u.id, (otPayByUserId.get(u.id) || 0) + amt);
+      }
     });
+
+    const perUserCalcs = officialUsers.map((u) =>
+      calculateFrpEmployeeRealtimePay({
+        user: u,
+        month: curMonth,
+        attendances: allAttendances,
+        monthOvertimePay: otPayByUserId.get(u.id) || 0,
+      })
+    );
+    const byGroup = aggregateFrpGroupPayroll(perUserCalcs);
+    const workdaysInMonth = countWeekdaysInMonth(curMonth);
 
     const totalOvertimeSpent = shipmentSpent + wismaSpent;
     const totalOvertimeHours = shipmentHours + wismaHours;
@@ -819,13 +838,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     const remainingBudget = Math.max(0, TOTAL_BUDGET - totalOvertimeSpent);
     const budgetPercent = Math.min(100, Math.round((totalOvertimeSpent / TOTAL_BUDGET) * 100));
 
-    // Standar 80 Personil Operasional Sah PT FRP
-    const totalBaseSalary = officialUsers.length * BASE_SALARY;
-    const totalBpjsDeduction = officialUsers.length * Math.round(BASE_SALARY * BPJS_RATE);
-    const totalEstimatedNet = totalBaseSalary - totalBpjsDeduction + totalOvertimeSpent;
-
     return {
       curMonth,
+      workdaysInMonth,
       totalUsers: officialUsers.length,
       TOTAL_BUDGET,
       SHIPMENT_BUDGET,
@@ -838,13 +853,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       wismaHours,
       remainingBudget,
       budgetPercent,
-      totalBaseSalary,
-      totalBpjsDeduction,
-      totalEstimatedNet,
+      totalBaseSalary: byGroup.all.totalBaseSalary,
+      totalBpjsDeduction: byGroup.all.totalBpjs,
+      totalEstimatedNet: byGroup.all.totalNetSalary,
+      byGroup,
       isNearLimit: budgetPercent >= 85,
       isExceeded: totalOvertimeSpent >= TOTAL_BUDGET,
     };
-  }, [currentMonthStr, users, overtimes]);
+  }, [selectedMonth, currentMonthStr, users, overtimes, allAttendances]);
 
   const isDailyView = periodScope === 'today' || Boolean(selectedDayDate);
 
@@ -1408,14 +1424,87 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             </div>
 
             <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
-              <span className="text-[11px] text-muted-foreground block">Estimasi Payroll Bersih Realtime</span>
-              <span className="text-base font-bold text-foreground font-mono">
-                Rp {financialStats.totalEstimatedNet.toLocaleString('id-ID')}
-              </span>
-              <span className="text-[10px] text-muted-foreground block mt-0.5">
-                Gaji Pokok: Rp 323.6 Jt • BPJS: -Rp 12.9 Jt
-              </span>
+              {(() => {
+                const activeBucket =
+                  payrollScopeGroup === 'SHIPMENT'
+                    ? financialStats.byGroup.shipment
+                    : payrollScopeGroup === 'RUMAH TANGGA'
+                    ? financialStats.byGroup.rumahTangga
+                    : payrollScopeGroup === 'KARYAWAN TETAP'
+                    ? financialStats.byGroup.karyawanTetap
+                    : financialStats.byGroup.all;
+                const scopeLabel =
+                  payrollScopeGroup === 'SHIPMENT'
+                    ? 'Shipment (47)'
+                    : payrollScopeGroup === 'RUMAH TANGGA'
+                    ? 'Rumah Tangga (33)'
+                    : payrollScopeGroup === 'KARYAWAN TETAP'
+                    ? 'Karyawan Tetap (3)'
+                    : `Semua (${financialStats.byGroup.all.employeeCount})`;
+                return (
+                  <>
+                    <span className="text-[11px] text-muted-foreground flex items-center justify-between gap-1">
+                      <span>Estimasi Payroll Bersih Realtime</span>
+                      <span className="font-semibold text-primary text-[10px]">{scopeLabel}</span>
+                    </span>
+                    <span className="text-base font-bold text-foreground font-mono block mt-0.5">
+                      Rp {activeBucket.totalNetSalary.toLocaleString('id-ID')}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground block mt-0.5">
+                      {payrollScopeGroup === 'KARYAWAN TETAP'
+                        ? `${financialStats.workdaysInMonth} Hari Kerja × Rp 140rb • Non-Lembur • BPJS Rp 0`
+                        : `Pokok: Rp ${(activeBucket.totalBaseSalary / 1e6).toFixed(1)} Jt • BPJS: -Rp ${(activeBucket.totalBpjs / 1e6).toFixed(1)} Jt${activeBucket.totalAlpaDeduction > 0 ? ` • Alpa: -Rp ${activeBucket.totalAlpaDeduction.toLocaleString('id-ID')}` : ''}`}
+                    </span>
+                  </>
+                );
+              })()}
             </div>
+          </div>
+
+          {/* Pilihan & Rekonsiliasi Total Nominal Gaji per Kelompok (Shipment + Rumah Tangga + Karyawan Tetap = Total) */}
+          <div className="mt-3 pt-3 border-t border-border/60 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {[
+                {
+                  key: 'ALL' as const,
+                  label: `Semua (${financialStats.byGroup.all.employeeCount})`,
+                  amount: financialStats.byGroup.all.totalNetSalary,
+                },
+                {
+                  key: 'SHIPMENT' as const,
+                  label: `🚢 Shipment (${financialStats.byGroup.shipment.employeeCount})`,
+                  amount: financialStats.byGroup.shipment.totalNetSalary,
+                },
+                {
+                  key: 'RUMAH TANGGA' as const,
+                  label: `🏠 Rumah Tangga (${financialStats.byGroup.rumahTangga.employeeCount})`,
+                  amount: financialStats.byGroup.rumahTangga.totalNetSalary,
+                },
+                {
+                  key: 'KARYAWAN TETAP' as const,
+                  label: `⭐ Tetap (${financialStats.byGroup.karyawanTetap.employeeCount} • Rp 140rb/hr)`,
+                  amount: financialStats.byGroup.karyawanTetap.totalNetSalary,
+                },
+              ].map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setPayrollScopeGroup(opt.key)}
+                  className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all flex items-center gap-1.5 ${
+                    payrollScopeGroup === opt.key
+                      ? 'bg-primary text-primary-foreground border-primary shadow-2xs'
+                      : 'bg-muted/40 text-foreground border-border/70 hover:bg-muted'
+                  }`}
+                >
+                  <span>{opt.label}:</span>
+                  <span className="font-mono font-bold">Rp {opt.amount.toLocaleString('id-ID')}</span>
+                </button>
+              ))}
+            </div>
+            <span className="text-[10.5px] font-mono text-muted-foreground">
+              Rekonsiliasi: Rp {financialStats.byGroup.shipment.totalNetSalary.toLocaleString('id-ID')} + Rp {financialStats.byGroup.rumahTangga.totalNetSalary.toLocaleString('id-ID')} + Rp {financialStats.byGroup.karyawanTetap.totalNetSalary.toLocaleString('id-ID')} ={' '}
+              <strong className="text-foreground">Rp {financialStats.byGroup.all.totalNetSalary.toLocaleString('id-ID')}</strong>
+            </span>
           </div>
         </CardContent>
       </Card>
@@ -3933,7 +4022,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         shift={selectedReportShift}
       />
 
-      {/* Modal Rekapitulasi Gaji & Lembur Realtime Seluruh Karyawan (Plafon Rp 76 Jt) */}
+      {/* Modal Rekapitulasi Gaji & Lembur Realtime Seluruh Karyawan */}
       <HrmMonthlyFinancialRecapModal
         isOpen={financialRecapModalOpen}
         onClose={() => setFinancialRecapModalOpen(false)}
@@ -3942,6 +4031,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         attendances={allAttendances}
         schedules={todaySchedules}
         leaves={approvedLeaves}
+        initialMonth={selectedMonth}
+        initialGroup={payrollScopeGroup}
       />
 
       {/* Modal Pop-up Foto Profil & Detail Lengkap (Jadwal Live, Lembur, Cuti, dsb) */}

@@ -43,7 +43,12 @@ import {
   Sparkles,
   Download,
 } from 'lucide-react';
-import { UserProfile, OvertimeRecord, AttendanceRecord, EmployeeSchedule, LeaveRequest, isOfficialFrEmployee } from '@/types/hrm';
+import { UserProfile, OvertimeRecord, AttendanceRecord, EmployeeSchedule, LeaveRequest, isOfficialFrEmployee, getEmployeeCategoryGroup } from '@/types/hrm';
+import {
+  aggregateFrpGroupPayroll,
+  calculateFrpEmployeeRealtimePay,
+  countWeekdaysInMonth,
+} from '@/lib/frpPayrollCalculations';
 import { getTodayDateStr } from '@/services/hrmService';
 import { toast } from 'sonner';
 
@@ -56,7 +61,25 @@ interface Props {
   schedules?: EmployeeSchedule[];
   leaves?: LeaveRequest[];
   initialMonth?: string;
+  initialGroup?: 'ALL' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP';
 }
+
+const getOpGroupBadgeLabel = (grp: string) =>
+  grp === 'KARYAWAN TETAP' ? 'Tetap (140rb/hr)' : grp === 'SHIPMENT' ? 'Shipment' : 'Wisma';
+
+const getOpGroupFullLabel = (grp: string) =>
+  grp === 'KARYAWAN TETAP'
+    ? '3 Karyawan Tetap (Rp 140rb/hr)'
+    : grp === 'SHIPMENT'
+    ? '47 Shiftman Lapangan'
+    : '33 Wisma Biring Ere';
+
+const getOpGroupBadgeClass = (grp: string) =>
+  grp === 'KARYAWAN TETAP'
+    ? 'bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20'
+    : grp === 'SHIPMENT'
+    ? 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20'
+    : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20';
 
 export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
   isOpen,
@@ -67,14 +90,15 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
   schedules = [],
   leaves = [],
   initialMonth,
+  initialGroup,
 }) => {
   const todayStr = getTodayDateStr();
   const currentMonthStr = todayStr.slice(0, 7); // 'YYYY-MM'
 
-  const [activeTab, setActiveTab] = useState<'attendance_matrix' | 'budget_80' | 'employee_overtime' | 'payroll_recap' | 'division_overtime'>('attendance_matrix');
+  const [activeTab, setActiveTab] = useState<'attendance_matrix' | 'budget_80' | 'employee_overtime' | 'payroll_recap' | 'division_overtime'>('payroll_recap');
   const [selectedMonth, setSelectedMonth] = useState<string>(initialMonth || currentMonthStr);
   const [search, setSearch] = useState('');
-  const [selectedGroup, setSelectedGroup] = useState<'ALL' | 'SHIPMENT' | 'RUMAH TANGGA'>('ALL');
+  const [selectedGroup, setSelectedGroup] = useState<'ALL' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP'>(initialGroup || 'ALL');
   const [filterOnlyWithOvertime, setFilterOnlyWithOvertime] = useState<boolean>(false);
 
   // Live overtimes state tersinkron dari PostgreSQL
@@ -91,6 +115,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
   useEffect(() => {
     if (isOpen) {
       if (initialMonth) setSelectedMonth(initialMonth);
+      if (initialGroup) setSelectedGroup(initialGroup);
       fetch('/api/overtime')
         .then((r) => r.json())
         .then((res) => {
@@ -100,7 +125,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         })
         .catch(() => {});
     }
-  }, [isOpen, initialMonth]);
+  }, [isOpen, initialMonth, initialGroup]);
 
   // Format label bulan terpilih (contoh: "November 2026")
   const selectedMonthLabel = useMemo(() => {
@@ -142,13 +167,10 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
   // ─── 1. PERHITUNGAN LENGKAP DETAIL BULANAN PER KARYAWAN ───
   const employeeFinancialList = useMemo(() => {
     return officialEmps.map((u, idx) => {
-      const isWisma =
-        (u.operationalGroup || '').toUpperCase().includes('RUMAH TANGGA') ||
-        (u.divisionName && u.divisionName.toLowerCase().includes('wisma')) ||
-        (u.divisionName && u.divisionName.toLowerCase().includes('rumah tangga')) ||
-        (u.nip && parseInt(u.nip.replace(/\D/g, ''), 10) <= 33);
-
-      const opGroup: 'RUMAH TANGGA' | 'SHIPMENT' = isWisma ? 'RUMAH TANGGA' : 'SHIPMENT';
+      const cat = getEmployeeCategoryGroup(u);
+      const isWisma = cat === 'RUMAH TANGGA';
+      const opGroup: 'RUMAH TANGGA' | 'SHIPMENT' | 'KARYAWAN TETAP' =
+        cat === 'KARYAWAN TETAP' ? 'KARYAWAN TETAP' : isWisma ? 'RUMAH TANGGA' : 'SHIPMENT';
 
       const isFaceEnrolled = Boolean(
         u.isFaceEnrolled ||
@@ -255,10 +277,12 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       const annualLeaveQuota = 12;
       const remainingLeave = Math.max(0, annualLeaveQuota - cutiCount);
 
-      // ── Lembur Bulan Terpilih ──
-      const userMonthOts = normalizedOvertimes.filter(
-        (o) => (o.userId === u.id || o.userNip === u.nip) && o.date.startsWith(selectedMonth) && (o.status === 'approved' || o.status === 'completed')
-      );
+      // ── Lembur Bulan Terpilih (Karyawan Tetap = 0 / Non-Lembur) ──
+      const userMonthOts = opGroup === 'KARYAWAN TETAP'
+        ? []
+        : normalizedOvertimes.filter(
+            (o) => (o.userId === u.id || o.userNip === u.nip) && o.date.startsWith(selectedMonth) && (o.status === 'approved' || o.status === 'completed')
+          );
       const monthOtHours = userMonthOts.reduce((sum, o) => sum + o.approvedHours, 0);
       const monthOtPay = userMonthOts.reduce(
         (sum, o) => sum + (o.compensationAmount || (o.approvedHours * 23381.79)),
@@ -267,14 +291,18 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       const spklCount = userMonthOts.length;
 
       // Rincian string per tanggal lembur
-      const otDateDetails = userMonthOts
-        .map((o) => `${o.date.slice(8, 10)} ${selectedMonthLabel.slice(0, 3)}: ${o.approvedHours}J (Rp ${Math.round(o.compensationAmount || (o.approvedHours * 23381.79)).toLocaleString('id-ID')})`)
-        .join(', ');
+      const otDateDetails = opGroup === 'KARYAWAN TETAP'
+        ? 'Non-Lembur'
+        : userMonthOts
+            .map((o) => `${o.date.slice(8, 10)} ${selectedMonthLabel.slice(0, 3)}: ${o.approvedHours}J (Rp ${Math.round(o.compensationAmount || (o.approvedHours * 23381.79)).toLocaleString('id-ID')})`)
+            .join(', ');
 
       // ── Lembur Hari Ini (Live Overtime jika selectedMonth adalah bulan berjalan) ──
-      const todayApprovedOts = normalizedOvertimes.filter(
-        (o) => (o.userId === u.id || o.userNip === u.nip) && o.date === todayStr && (o.status === 'approved' || o.status === 'completed')
-      );
+      const todayApprovedOts = opGroup === 'KARYAWAN TETAP'
+        ? []
+        : normalizedOvertimes.filter(
+            (o) => (o.userId === u.id || o.userNip === u.nip) && o.date === todayStr && (o.status === 'approved' || o.status === 'completed')
+          );
       const todayOtHours = todayApprovedOts.reduce((sum, o) => sum + o.approvedHours, 0);
       const todayOtPay = todayApprovedOts.reduce(
         (sum, o) => sum + (o.compensationAmount || (o.approvedHours * 23381.79)),
@@ -289,20 +317,21 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       const shiftName = userSched?.shiftName || u.shiftName || 'Day Shift (07:30 - 16:30)';
       const isShiftOff = userSched?.isOff === true || userSched?.shiftCode === 'OFF';
 
-      // ── Standar Remunerasi Resmi PT FRP (Rule 7 & 8 AGENTS.md) ──
-      // - Upah Pokok Tunggal: Standar Rp 4.045.050 (Tanpa Tunjangan)
-      // - Potongan Baku BPJS: TK 3% (Rp 121.351) + Kes 1% (Rp 40.450) = Rp 161.802
-      // - PPh 21 = Rp 0
-      const baseSalary = u.baseSalary || 4045050;
-      const bpjsTk = Math.round(baseSalary * 0.03); // Rp 121.351
-      const bpjsKes = Math.round(baseSalary * 0.01); // Rp 40.450
-      const totalBpjs = bpjsTk + bpjsKes; // Rp 161.802
-
-      // Potongan Mangkir / Alpa di Bulan Terpilih
-      const alpaDeduction = alpaCount * Math.round(baseSalary / 22);
-
-      // Gaji Bersih Realtime (Take Home Pay)
-      const netSalary = Math.round(baseSalary - totalBpjs - alpaDeduction + monthOtPay);
+      // ── Standar Remunerasi Resmi PT FRP (Sinkron dengan Monitoring & Backend Payroll) ──
+      // - Shipment (47) & Rumah Tangga (33): Upah Pokok DB, BPJS 4% (3% TK + 1% Kes), PPh 21 Rp 0, + Lembur Sah
+      // - Karyawan Tetap (3: Aslam, Samsi, Takdir): Rp 140.000/hari kerja Senin-Jumat, Tanpa Lembur & Tanpa BPJS
+      const payCalc = calculateFrpEmployeeRealtimePay({
+        user: u,
+        month: selectedMonth,
+        attendances,
+        monthOvertimePay: monthOtPay,
+      });
+      const baseSalary = payCalc.baseSalary;
+      const bpjsTk = payCalc.bpjsTk;
+      const bpjsKes = payCalc.bpjsKes;
+      const totalBpjs = payCalc.totalBpjs;
+      const alpaDeduction = payCalc.alpaDeduction;
+      const netSalary = payCalc.netSalary;
 
       return {
         sequenceNo: idx + 1,
@@ -429,8 +458,8 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
 
   // Agregasi Finansial Seluruh Karyawan & Budget Monitoring PT FRP
   const summary = useMemo(() => {
-    const TOTAL_BUDGET_CAP = 76000000;
-    const SHIPMENT_BUDGET_CAP = 72000000;
+    const TOTAL_BUDGET_CAP = 69000000;
+    const SHIPMENT_BUDGET_CAP = 65000000;
     const WISMA_BUDGET_CAP = 4000000;
 
     let totalBaseSal = 0;
@@ -479,11 +508,23 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       if (row.opGroup === 'RUMAH TANGGA') {
         wismaOtPay += row.monthOtPay;
         wismaOtHours += row.monthOtHours;
-      } else {
+      } else if (row.opGroup === 'SHIPMENT') {
         shipmentOtPay += row.monthOtPay;
         shipmentOtHours += row.monthOtHours;
       }
     });
+
+    const byGroup = aggregateFrpGroupPayroll(
+      employeeFinancialList.map((row) => ({
+        group: row.opGroup,
+        baseSalary: row.baseSalary,
+        totalBpjs: row.totalBpjs,
+        alpaDeduction: row.alpaDeduction,
+        overtimePay: row.monthOtPay,
+        netSalary: row.netSalary,
+      }))
+    );
+    const workdaysInMonth = countWeekdaysInMonth(selectedMonth);
 
     const totalBurnPct = Math.min(100, (totalOtPay / TOTAL_BUDGET_CAP) * 100);
     const shipmentBurnPct = Math.min(100, (shipmentOtPay / SHIPMENT_BUDGET_CAP) * 100);
@@ -505,6 +546,8 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       TOTAL_BUDGET_CAP,
       SHIPMENT_BUDGET_CAP,
       WISMA_BUDGET_CAP,
+      workdaysInMonth,
+      byGroup,
       totalBaseSal,
       totalBpjs,
       totalAlpaDed,
@@ -536,7 +579,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       avgAttendanceRate,
       avgPunctualityRate,
     };
-  }, [employeeFinancialList]);
+  }, [employeeFinancialList, selectedMonth]);
 
   // ─── 3. MULTI-SHEET EXCEL EXPORT (5 LAPORAN LENGKAP DALAM 1 WORKBOOK) ───
   const handleExportExcel = () => {
@@ -549,7 +592,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         NIP: item.nip,
         'Nama Karyawan': item.name,
         Divisi: item.divisionName,
-        Grup: item.opGroup === 'SHIPMENT' ? 'Shiftman Lapangan' : 'Wisma Biring Ere',
+        Grup: getOpGroupFullLabel(item.opGroup),
         'Status Wajah': item.isFaceEnrolled ? 'Terdaftar (Aktif)' : 'Belum Registrasi',
         'Hadir Tepat Waktu': item.tepatWaktuCount,
         'Terlambat (Kali)': item.telatCount,
@@ -585,16 +628,16 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       const ws1 = XLSX.utils.json_to_sheet(sheet1Rows);
       XLSX.utils.book_append_sheet(workbook, ws1, 'Rekap_Presensi_Bulanan');
 
-      // Sheet 2: Rekap 80 Karyawan & Budget Sah Rp 76 Jt
+      // Sheet 2: Rekap Karyawan & Budget Efektif Rp 69 Jt
       const sheet2Rows = employeeFinancialList.map((item, idx) => ({
         No: idx + 1,
         NIP: item.nip,
         'Nama Karyawan': item.name,
         Divisi: item.divisionName,
-        'Grup Operasional': item.opGroup === 'SHIPMENT' ? '47 Shiftman Lapangan' : '33 Wisma Biring Ere',
+        'Grup Operasional': getOpGroupFullLabel(item.opGroup),
         'Total Jam Lembur Sebulan': item.monthOtHours,
         'Total Nominal Lembur Sebulan (Rp)': item.monthOtPay,
-        'Gaji Pokok Tunggal (Rp)': item.baseSalary,
+        'Gaji Pokok / Harian (Rp)': item.baseSalary,
         'BPJS Ketenagakerjaan 3% (Rp)': item.bpjsTk,
         'BPJS Kesehatan 1% (Rp)': item.bpjsKes,
         'Total Potongan BPJS (Rp)': item.totalBpjs,
@@ -609,15 +652,15 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         'Grup Operasional': '',
         'Total Jam Lembur Sebulan': summary.totalOtHours,
         'Total Nominal Lembur Sebulan (Rp)': summary.totalOtPay,
-        'Gaji Pokok Tunggal (Rp)': summary.totalBaseSal,
-        'BPJS Ketenagakerjaan 3% (Rp)': Math.round(summary.totalBaseSal * 0.03),
-        'BPJS Kesehatan 1% (Rp)': Math.round(summary.totalBaseSal * 0.01),
+        'Gaji Pokok / Harian (Rp)': summary.totalBaseSal,
+        'BPJS Ketenagakerjaan 3% (Rp)': employeeFinancialList.reduce((s, i) => s + i.bpjsTk, 0),
+        'BPJS Kesehatan 1% (Rp)': employeeFinancialList.reduce((s, i) => s + i.bpjsKes, 0),
         'Total Potongan BPJS (Rp)': summary.totalBpjs,
         'Potongan Alpa (Rp)': summary.totalAlpaDed,
         'Estimasi Gaji Bersih Realtime (Rp)': summary.totalNetSal,
       });
       const ws2 = XLSX.utils.json_to_sheet(sheet2Rows);
-      XLSX.utils.book_append_sheet(workbook, ws2, 'Plafon_Lembur_76Jt');
+      XLSX.utils.book_append_sheet(workbook, ws2, 'Plafon_Lembur_69Jt');
 
       // Sheet 3: Laporan Nominal Lembur Per Karyawan
       const sheet3Rows = employeeFinancialList
@@ -627,7 +670,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
           NIP: item.nip,
           'Nama Karyawan': item.name,
           Divisi: item.divisionName,
-          Grup: item.opGroup === 'SHIPMENT' ? 'Shipment' : 'Wisma',
+          Grup: getOpGroupBadgeLabel(item.opGroup),
           'Frekuensi SPKL': `${item.spklCount}x Penugasan`,
           'Total Jam Lembur': item.monthOtHours,
           'Rincian Tanggal Lembur': item.otDateDetails,
@@ -671,7 +714,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       const sheet5Rows = divisionRecap.map((d, idx) => ({
         No: idx + 1,
         'Nama Divisi / Pos': d.divisionName,
-        'Grup Operasional': d.opGroup === 'SHIPMENT' ? '47 Shiftman Lapangan' : '33 Wisma Biring Ere',
+        'Grup Operasional': getOpGroupFullLabel(d.opGroup),
         'Total Personil': d.totalEmployees,
         'Karyawan Lembur': d.overtimeEmployeeCount,
         'Frekuensi SPKL': `${d.totalSpklCount}x`,
@@ -682,7 +725,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       sheet5Rows.push({
         No: '' as any,
         'Nama Divisi / Pos': 'TOTAL PERUSAHAAN',
-        'Grup Operasional': '80 Personil Sah',
+        'Grup Operasional': `${employeeFinancialList.length} Personil Sah (80 Lembur + 3 Tetap)`,
         'Total Personil': employeeFinancialList.length,
         'Karyawan Lembur': summary.employeesWithOtCount,
         'Frekuensi SPKL': `${summary.totalSpklCount}x`,
@@ -726,7 +769,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
           i.nip,
           i.name,
           i.divisionName,
-          i.opGroup === 'SHIPMENT' ? 'Shipment' : 'Wisma',
+          getOpGroupBadgeLabel(i.opGroup),
           i.tepatWaktuCount,
           i.telatCount > 0 ? `${i.telatCount}x` : '-',
           i.totalLateMinutes > 0 ? `${i.totalLateMinutes}m` : '-',
@@ -769,7 +812,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
             i.nip,
             i.name,
             i.divisionName,
-            i.opGroup === 'SHIPMENT' ? 'Shipment' : 'Wisma',
+            getOpGroupBadgeLabel(i.opGroup),
             `${i.spklCount}x`,
             `${i.monthOtHours} Jam`,
             i.otDateDetails,
@@ -809,7 +852,13 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       } else if (activeTab === 'payroll_recap') {
         doc.text(`REKAPITULASI PENGGAJIAN & REMUNERASI BAKU PT FRP - ${selectedMonthLabel.toUpperCase()}`, 14, 18);
         doc.setFontSize(7.5);
-        doc.text(`Aturan Resmi: Upah Pokok Tunggal Rp 4.045.050, Tanpa Tunjangan, PPh 21 Rp 0 • Total THP: Rp ${summary.totalNetSal.toLocaleString('id-ID')}`, 14, 22);
+        const pdfBase = filteredList.reduce((s, i) => s + i.baseSalary, 0);
+        const pdfOt = filteredList.reduce((s, i) => s + i.monthOtPay, 0);
+        const pdfTk = filteredList.reduce((s, i) => s + i.bpjsTk, 0);
+        const pdfKes = filteredList.reduce((s, i) => s + i.bpjsKes, 0);
+        const pdfAlpa = filteredList.reduce((s, i) => s + i.alpaDeduction, 0);
+        const pdfNet = filteredList.reduce((s, i) => s + i.netSalary, 0);
+        doc.text(`Shipment & Wisma: Pokok DB + BPJS 4% | Karyawan Tetap (3 Org): Rp 140rb/hk (Non-Lembur, Bebas BPJS) • Total THP: Rp ${pdfNet.toLocaleString('id-ID')}`, 14, 22);
 
         const headers = [['No', 'NIP', 'Nama Karyawan', 'Divisi', 'Grup', 'Gaji Pokok', 'Lembur (Rp)', 'BPJS TK 3%', 'BPJS Kes 1%', 'Pot. Alpa', 'Gaji Bersih (THP)']];
         const body = filteredList.map((i, idx) => [
@@ -817,7 +866,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
           i.nip,
           i.name,
           i.divisionName,
-          i.opGroup === 'SHIPMENT' ? 'Shipment' : 'Wisma',
+          getOpGroupBadgeLabel(i.opGroup),
           `Rp ${i.baseSalary.toLocaleString('id-ID')}`,
           `Rp ${i.monthOtPay.toLocaleString('id-ID')}`,
           `-Rp ${i.bpjsTk.toLocaleString('id-ID')}`,
@@ -831,12 +880,12 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
           `${filteredList.length} Karyawan`,
           '',
           '',
-          `Rp ${summary.totalBaseSal.toLocaleString('id-ID')}`,
-          `Rp ${summary.totalOtPay.toLocaleString('id-ID')}`,
-          `-Rp ${Math.round(summary.totalBaseSal * 0.03).toLocaleString('id-ID')}`,
-          `-Rp ${Math.round(summary.totalBaseSal * 0.01).toLocaleString('id-ID')}`,
-          summary.totalAlpaDed > 0 ? `-Rp ${summary.totalAlpaDed.toLocaleString('id-ID')}` : '-',
-          `Rp ${summary.totalNetSal.toLocaleString('id-ID')}`,
+          `Rp ${pdfBase.toLocaleString('id-ID')}`,
+          `Rp ${pdfOt.toLocaleString('id-ID')}`,
+          `-Rp ${pdfTk.toLocaleString('id-ID')}`,
+          `-Rp ${pdfKes.toLocaleString('id-ID')}`,
+          pdfAlpa > 0 ? `-Rp ${pdfAlpa.toLocaleString('id-ID')}` : '-',
+          `Rp ${pdfNet.toLocaleString('id-ID')}`,
         ]);
 
         runAutoTable(doc, {
@@ -863,13 +912,13 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
       } else if (activeTab === 'division_overtime') {
         doc.text(`REKAPAN REALISASI LEMBUR & PERSONIL PER DIVISI - ${selectedMonthLabel.toUpperCase()}`, 14, 18);
         doc.setFontSize(7.5);
-        doc.text(`Total Realisasi: Rp ${summary.totalOtPay.toLocaleString('id-ID')} • Plafon Sah: Rp 76.000.000 • Tanggal Cetak: ${todayStr}`, 14, 22);
+        doc.text(`Total Realisasi: Rp ${summary.totalOtPay.toLocaleString('id-ID')} • Budget Efektif: Rp 69.000.000 • Tanggal Cetak: ${todayStr}`, 14, 22);
 
         const headers = [['No', 'Nama Divisi / Pos', 'Grup', 'Total Personil', 'Personil Lembur', 'Frekuensi SPKL', 'Total Jam', 'Total Nominal Lembur (Rp)', 'Rata-rata/Org']];
         const body = filteredDivisions.map((d, idx) => [
           idx + 1,
           d.divisionName,
-          d.opGroup === 'SHIPMENT' ? 'Shipment' : 'Wisma',
+          getOpGroupBadgeLabel(d.opGroup),
           d.totalEmployees,
           d.overtimeEmployeeCount,
           `${d.totalSpklCount}x`,
@@ -911,9 +960,9 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
         doc.save(`Rekapan_Lembur_Per_Divisi_${selectedMonth}.pdf`);
       } else {
         // Tab budget_80
-        doc.text(`REKAPITULASI 80 KARYAWAN SAH & PLAFON LEMBUR RP 76 JT - ${selectedMonthLabel.toUpperCase()}`, 14, 18);
+        doc.text(`REKAPITULASI KARYAWAN SAH & BUDGET LEMBUR RP 69 JT - ${selectedMonthLabel.toUpperCase()}`, 14, 18);
         doc.setFontSize(7.5);
-        doc.text(`Plafon Sah: Rp 76.000.000 (Shipment: Rp 72 Jt | Wisma: Rp 4 Jt) • Tanggal Cetak: ${todayStr}`, 14, 22);
+        doc.text(`Budget Efektif: Rp 69.000.000 (Shipment: Rp 65 Jt | Wisma: Rp 4 Jt) • Tetap: Rp 140rb/hk Tanpa Lembur & BPJS • Dicetak: ${todayStr}`, 14, 22);
 
         const headers = [['No', 'NIP', 'Nama Karyawan', 'Divisi', 'Grup', 'Jam Lembur', 'Lembur (Rp)', 'Gaji Pokok', 'BPJS 4%', 'Gaji Bersih (THP)']];
         const body = filteredEmployees.map((i, idx) => [
@@ -921,7 +970,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
           i.nip,
           i.name,
           i.divisionName,
-          i.opGroup === 'SHIPMENT' ? 'Shipment' : 'Wisma',
+          getOpGroupBadgeLabel(i.opGroup),
           `${i.monthOtHours}h`,
           `Rp ${i.monthOtPay.toLocaleString('id-ID')}`,
           `Rp ${i.baseSalary.toLocaleString('id-ID')}`,
@@ -982,7 +1031,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                 Rekapitulasi Bulanan Lengkap (Presensi, Lembur &amp; Remunerasi)
               </DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground mt-0.5">
-                Pantauan 360° performa kehadiran, kepatuhan plafon lembur Rp 76 Jt, dan gaji bersih 80 personil operasional PT. FRP.
+                Pantauan 360° performa kehadiran, budget lembur efektif Rp 69 Jt (80 Org), dan gaji bersih 83 personil PT. FRP (termasuk 3 Tetap @ Rp 140rb/hk).
               </DialogDescription>
             </div>
 
@@ -1047,7 +1096,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
               }`}
             >
               <Users className="w-3.5 h-3.5" />
-              2. Plafon Lembur 80 Org (Rp 76 Jt)
+              2. Plafon Lembur 80 Org (Rp 69 Jt)
             </button>
 
             <button
@@ -1246,7 +1295,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                     <div className="p-2 rounded-lg bg-muted/40 border border-border">
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="font-semibold text-foreground">Grup SHIPMENT (47 Orang)</span>
-                        <span className="font-mono text-muted-foreground">Plafon Rp 72 Jt</span>
+                        <span className="font-mono text-muted-foreground">Budget Efektif Rp 65 Jt</span>
                       </div>
                       <div className="flex items-center justify-between mt-1">
                         <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300">
@@ -1278,34 +1327,46 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
               {/* Total Beban Gaji Bersih Realtime */}
               <Card className="border-border bg-gradient-to-br from-primary/10 via-card to-card rounded-xl shadow-2xs">
                 <CardContent className="p-4 space-y-2.5">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
                       <TrendingUp className="w-4 h-4 text-primary" />
-                      Total Gaji Bersih (Take Home Pay)
+                      Total Gaji Bersih ({selectedGroup === 'ALL' ? '83 Org' : selectedGroup})
                     </span>
                     <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] font-bold">
                       {selectedMonthLabel}
                     </Badge>
                   </div>
-                  <div>
-                    <p className="text-xl font-bold font-mono text-primary">
-                      Rp {summary.totalNetSal.toLocaleString('id-ID')}
-                    </p>
-                    <div className="mt-2 text-[10.5px] text-muted-foreground space-y-0.5 font-mono">
-                      <div className="flex justify-between">
-                        <span>Gaji Pokok Tunggal:</span>
-                        <span>Rp {summary.totalBaseSal.toLocaleString('id-ID')}</span>
+                  {(() => {
+                    const activeBucket =
+                      selectedGroup === 'SHIPMENT'
+                        ? summary.byGroup.shipment
+                        : selectedGroup === 'RUMAH TANGGA'
+                        ? summary.byGroup.rumahTangga
+                        : selectedGroup === 'KARYAWAN TETAP'
+                        ? summary.byGroup.karyawanTetap
+                        : summary.byGroup.all;
+                    return (
+                      <div>
+                        <p className="text-xl font-bold font-mono text-primary">
+                          Rp {activeBucket.totalNetSalary.toLocaleString('id-ID')}
+                        </p>
+                        <div className="mt-1.5 text-[10.5px] text-muted-foreground space-y-0.5 font-mono">
+                          <div className="flex justify-between">
+                            <span>🚢 Shipment ({summary.byGroup.shipment.employeeCount}):</span>
+                            <span className="text-foreground font-semibold">Rp {summary.byGroup.shipment.totalNetSalary.toLocaleString('id-ID')}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>🏠 Rumah Tangga ({summary.byGroup.rumahTangga.employeeCount}):</span>
+                            <span className="text-foreground font-semibold">Rp {summary.byGroup.rumahTangga.totalNetSalary.toLocaleString('id-ID')}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>⭐ Tetap ({summary.byGroup.karyawanTetap.employeeCount} × {summary.workdaysInMonth}hk @140rb):</span>
+                            <span className="text-foreground font-semibold">Rp {summary.byGroup.karyawanTetap.totalNetSalary.toLocaleString('id-ID')}</span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex justify-between text-emerald-600 dark:text-emerald-400">
-                        <span>(+) Realisasi Lembur:</span>
-                        <span>+Rp {summary.totalOtPay.toLocaleString('id-ID')}</span>
-                      </div>
-                      <div className="flex justify-between text-rose-600 dark:text-rose-400">
-                        <span>(-) Potongan BPJS (4%):</span>
-                        <span>-Rp {summary.totalBpjs.toLocaleString('id-ID')}</span>
-                      </div>
-                    </div>
-                  </div>
+                    );
+                  })()}
                 </CardContent>
               </Card>
             </div>
@@ -1334,7 +1395,7 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
-                47 Shiftman Lapangan
+                47 Shipment
               </button>
               <button
                 type="button"
@@ -1345,7 +1406,18 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
-                33 Wisma Biring Ere
+                33 Rumah Tangga
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedGroup('KARYAWAN TETAP')}
+                className={`py-1.5 px-3 rounded-lg font-semibold transition-all ${
+                  selectedGroup === 'KARYAWAN TETAP'
+                    ? 'bg-purple-600 text-white shadow-2xs'
+                    : 'text-purple-700 dark:text-purple-300 hover:bg-purple-500/10'
+                }`}
+              >
+                ⭐ 3 Karyawan Tetap (140rb/hr)
               </button>
               {activeTab === 'employee_overtime' && (
                 <button
@@ -1416,13 +1488,9 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                             <span className="text-xs text-foreground font-medium">{item.divisionName}</span>
                             <Badge
                               variant="outline"
-                              className={`text-[9px] px-1 py-0 rounded block w-fit mt-0.5 ${
-                                item.opGroup === 'SHIPMENT'
-                                  ? 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20'
-                                  : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20'
-                              }`}
+                              className={`text-[9px] px-1 py-0 rounded block w-fit mt-0.5 ${getOpGroupBadgeClass(item.opGroup)}`}
                             >
-                              {item.opGroup === 'SHIPMENT' ? 'Shipment' : 'Wisma'}
+                              {getOpGroupBadgeLabel(item.opGroup)}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-center font-mono font-bold text-xs text-teal-700 dark:text-teal-300">
@@ -1537,13 +1605,9 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                           <TableCell>
                             <Badge
                               variant="outline"
-                              className={`text-[9.5px] px-1.5 py-0.2 rounded-md ${
-                                item.opGroup === 'SHIPMENT'
-                                  ? 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20'
-                                  : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20'
-                              }`}
+                              className={`text-[9.5px] px-1.5 py-0.2 rounded-md ${getOpGroupBadgeClass(item.opGroup)}`}
                             >
-                              {item.opGroup === 'SHIPMENT' ? 'Shipment' : 'Wisma'}
+                              {getOpGroupBadgeLabel(item.opGroup)}
                             </Badge>
                             <p className="text-[10px] text-muted-foreground font-mono mt-0.5 truncate max-w-[120px]">
                               {item.shiftName}
@@ -1643,13 +1707,9 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                           <TableCell className="text-center">
                             <Badge
                               variant="outline"
-                              className={`text-[9px] px-1.5 py-0.2 rounded-md ${
-                                item.opGroup === 'SHIPMENT'
-                                  ? 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20'
-                                  : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20'
-                              }`}
+                              className={`text-[9px] px-1.5 py-0.2 rounded-md ${getOpGroupBadgeClass(item.opGroup)}`}
                             >
-                              {item.opGroup === 'SHIPMENT' ? 'Shipment' : 'Wisma'}
+                              {getOpGroupBadgeLabel(item.opGroup)}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-center font-mono font-bold text-xs">
@@ -1735,26 +1795,26 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                             <span className="text-xs text-foreground font-medium">{item.divisionName}</span>
                             <Badge
                               variant="outline"
-                              className={`text-[9px] px-1 py-0 rounded block w-fit mt-0.5 ${
-                                item.opGroup === 'SHIPMENT'
-                                  ? 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20'
-                                  : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20'
-                              }`}
+                              className={`text-[9px] px-1 py-0 rounded block w-fit mt-0.5 ${getOpGroupBadgeClass(item.opGroup)}`}
                             >
-                              {item.opGroup === 'SHIPMENT' ? 'Shipment' : 'Wisma'}
+                              {getOpGroupBadgeLabel(item.opGroup)}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right font-mono text-xs">
                             Rp {item.baseSalary.toLocaleString('id-ID')}
                           </TableCell>
                           <TableCell className="text-right font-mono text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-                            +Rp {item.monthOtPay.toLocaleString('id-ID')}
+                            {item.opGroup === 'KARYAWAN TETAP' ? (
+                              <span className="text-muted-foreground font-normal">Non-Lembur (Rp 0)</span>
+                            ) : (
+                              <>+Rp {item.monthOtPay.toLocaleString('id-ID')}</>
+                            )}
                           </TableCell>
                           <TableCell className="text-right font-mono text-xs text-rose-600 dark:text-rose-400">
-                            -Rp {item.bpjsTk.toLocaleString('id-ID')}
+                            {item.bpjsTk > 0 ? `-Rp ${item.bpjsTk.toLocaleString('id-ID')}` : <span className="text-muted-foreground">Rp 0</span>}
                           </TableCell>
                           <TableCell className="text-right font-mono text-xs text-rose-600 dark:text-rose-400">
-                            -Rp {item.bpjsKes.toLocaleString('id-ID')}
+                            {item.bpjsKes > 0 ? `-Rp ${item.bpjsKes.toLocaleString('id-ID')}` : <span className="text-muted-foreground">Rp 0</span>}
                           </TableCell>
                           <TableCell className="text-right font-mono text-xs text-rose-600 dark:text-rose-400">
                             {item.alpaDeduction > 0 ? `-Rp ${item.alpaDeduction.toLocaleString('id-ID')}` : '-'}
@@ -1775,12 +1835,13 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
               {/* Footer Summary Bar */}
               <div className="p-3 bg-muted/40 border-t border-border flex flex-col sm:flex-row items-center justify-between text-xs gap-2">
                 <span className="text-muted-foreground font-medium">
-                  Aturan Baku: <strong className="text-foreground">Upah Pokok Tunggal</strong> (Tanpa Tunjangan, PPh 21 Rp 0, BPJS 4% Baku)
+                  Shipment &amp; Wisma: <strong className="text-foreground">Pokok DB + BPJS 4%</strong> • Tetap (3 Org): <strong className="text-purple-600 dark:text-purple-400">Rp 140rb/hk (Non-Lembur, Tanpa BPJS)</strong>
                 </span>
-                <div className="flex items-center gap-4 font-mono font-bold text-xs">
-                  <span>Total Pokok: <span className="text-foreground">Rp {filteredList.reduce((s, i) => s + i.baseSalary, 0).toLocaleString('id-ID')}</span></span>
-                  <span>Total Lembur: <span className="text-emerald-600">Rp {filteredList.reduce((s, i) => s + i.monthOtPay, 0).toLocaleString('id-ID')}</span></span>
-                  <span>Total Netto (THP): <span className="text-primary">Rp {filteredList.reduce((s, i) => s + i.netSalary, 0).toLocaleString('id-ID')}</span></span>
+                <div className="flex flex-wrap items-center gap-3 font-mono font-bold text-xs">
+                  <span>Pokok: <span className="text-foreground">Rp {filteredList.reduce((s, i) => s + i.baseSalary, 0).toLocaleString('id-ID')}</span></span>
+                  <span>Lembur: <span className="text-emerald-600">+Rp {filteredList.reduce((s, i) => s + i.monthOtPay, 0).toLocaleString('id-ID')}</span></span>
+                  <span>BPJS: <span className="text-rose-600">-Rp {filteredList.reduce((s, i) => s + i.totalBpjs, 0).toLocaleString('id-ID')}</span></span>
+                  <span>Netto (THP): <span className="text-primary">Rp {filteredList.reduce((s, i) => s + i.netSalary, 0).toLocaleString('id-ID')}</span></span>
                 </div>
               </div>
             </div>
@@ -1823,13 +1884,9 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
                           <TableCell>
                             <Badge
                               variant="outline"
-                              className={`text-[9.5px] px-1.5 py-0.2 rounded-md ${
-                                d.opGroup === 'SHIPMENT'
-                                  ? 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20'
-                                  : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20'
-                              }`}
+                              className={`text-[9.5px] px-1.5 py-0.2 rounded-md ${getOpGroupBadgeClass(d.opGroup)}`}
                             >
-                              {d.opGroup === 'SHIPMENT' ? '47 Shiftman Lapangan' : '33 Wisma Biring Ere'}
+                              {getOpGroupFullLabel(d.opGroup)}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-center font-mono font-medium text-xs">
