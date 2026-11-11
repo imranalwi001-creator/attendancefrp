@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService } from '@/services/hrmService';
 import { hrmHolidayService } from '@/services/hrmHolidayService';
-import { UserProfile, OvertimeStatus } from '@/types/hrm';
+import { UserProfile, OvertimeStatus, getEmployeeCategoryGroup } from '@/types/hrm';
 import { resolveEffectiveShift } from '@/lib/hrmShiftResolver';
 import {
   Clock,
@@ -65,13 +65,20 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
 
   useEffect(() => {
     if (open) {
-      const allUsers = hrmService.getUsers().filter((u) => u.isActive);
-      setUsers(allUsers);
+      const eligibleUsers = hrmService
+        .getUsers()
+        .filter((u) => u.isActive && ['RUMAH TANGGA', 'SHIPMENT'].includes(getEmployeeCategoryGroup(u)) && u.overtimeEligible !== false);
+      setUsers(eligibleUsers);
 
       if (preselectedUser) {
-        setSelectedUserId(preselectedUser.id);
-      } else if (!selectedUserId && allUsers.length > 0) {
-        setSelectedUserId(allUsers[0].id);
+        if (getEmployeeCategoryGroup(preselectedUser) === 'KARYAWAN TETAP' || preselectedUser.overtimeEligible === false) {
+          toast.error('Karyawan Tetap (Aslam, Samsi, Takdir) berstatus Non-Lembur dan tidak dapat diberikan SPKL.');
+          if (eligibleUsers.length > 0) setSelectedUserId(eligibleUsers[0].id);
+        } else {
+          setSelectedUserId(preselectedUser.id);
+        }
+      } else if (!selectedUserId && eligibleUsers.length > 0) {
+        setSelectedUserId(eligibleUsers[0].id);
       }
 
       // Check if current date is weekend or national holiday
@@ -442,7 +449,7 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
                 </div>
                 {isShipment && (
                   <p className="text-muted-foreground text-[10px]">
-                    Karyawan masuk dalam kuota <strong>Plafon 72 Juta</strong> (Shift 1 = 8 Jam, Shift 2 = 7 Jam, Shift 3 = 9 Jam, Day Shift = 8 Jam dinamis).
+                    Karyawan Shipment (47 Personil Sah): diawasi <strong>Budget Efektif Rp 65 Jt / Plafon SK Rp 72 Jt</strong> dengan Target Efisiensi <strong>Rp 55–60 Jt</strong> (Shift 1 = 8j, Shift 2 = 7j, Shift 3 = 9j, Day Shift = 8j).
                   </p>
                 )}
                 {isRumahTangga && (

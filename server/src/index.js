@@ -3,6 +3,7 @@ import cors from 'cors';
 import { pool, initDb } from './db.js';
 import { seedInitialUsers } from './seed.js';
 import {
+  classifyFrpGroup,
   recalculateUserLeaveUsedDays,
   seedOfficialLeaveBaselines,
   recordLeaveSubmitLedger,
@@ -10135,13 +10136,20 @@ async function verifyOvertimeBudgetGuardrail(dbPool, userId, otDateStr, newCompe
   if (!monthStr || monthStr.length !== 7) return { allowed: true };
 
   const uRes = await dbPool.query(`
-    SELECT id, nip, full_name, operational_group, division_id
+    SELECT id, nip, email, full_name, operational_group, division_id
     FROM hrm_profiles
     WHERE id = $1
     LIMIT 1
   `, [userId]);
   if (uRes.rows.length === 0) return { allowed: true };
   const user = uRes.rows[0];
+
+  if (classifyFrpGroup(user) === 'KARYAWAN TETAP') {
+    return {
+      allowed: false,
+      reason: 'Karyawan Tetap (Muh Aslam Faisal, La Unga Samsi, Takdir) berstatus Non-Lembur dan tidak dapat diperlakukan lembur (SPKL). Hak lembur hanya untuk 80 personil Shipment & Rumah Tangga.',
+    };
+  }
 
   const nipUpper = (user.nip || '').toUpperCase();
   const groupUpper = (user.operational_group || '').toUpperCase();
@@ -10328,7 +10336,13 @@ app.post('/api/overtime', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan dalam sistem' });
     }
 
-    // Aturan Direksi PT FRP: Hak lembur (SPKL) HANYA berlaku untuk 80 orang karyawan lapangan/operasional yang sah (Shipment & Rumah Tangga)
+    // Aturan Direksi PT FRP: Karyawan Tetap (Aslam, Samsi, Takdir) berstatus Non-Lembur, dan hak lembur (SPKL) HANYA berlaku untuk 80 orang personil lapangan/operasional yang sah (Shipment & Rumah Tangga)
+    if (classifyFrpGroup(userProfile) === 'KARYAWAN TETAP') {
+      return res.status(403).json({
+        success: false,
+        error: 'Karyawan Tetap (Muh Aslam Faisal, La Unga Samsi, Takdir) tidak berhak dan tidak dapat diperlakukan lembur (SPKL). Hak lembur hanya untuk 80 personil Shipment & Rumah Tangga.'
+      });
+    }
     const isEligible = userProfile.overtime_eligible === true || 
                        ['SHIPMENT', 'RUMAH TANGGA'].includes((userProfile.operational_group || '').toUpperCase());
     if (!isEligible) {

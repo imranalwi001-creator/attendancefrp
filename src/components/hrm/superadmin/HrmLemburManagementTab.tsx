@@ -668,10 +668,9 @@ export const HrmLemburManagementTab: React.FC = () => {
                   <SelectValue placeholder="Kelompok Personil" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Semua 3 Kelompok FRP</SelectItem>
+                  <SelectItem value="all">Semua 80 Personil Lembur (RT &amp; Shipment)</SelectItem>
                   <SelectItem value="RUMAH TANGGA">🏠 Rumah Tangga (FR07001–033)</SelectItem>
                   <SelectItem value="SHIPMENT">🚢 Shipment (FR07034–080)</SelectItem>
-                  <SelectItem value="KARYAWAN TETAP">⭐ Karyawan Tetap (Aslam, Samsi, Takdir)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

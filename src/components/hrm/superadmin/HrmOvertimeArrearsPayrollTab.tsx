@@ -39,8 +39,9 @@ export interface ArrearsEmployeeRow {
   rawCalculatedPay?: number;
   calculatedPay: number;
   recordedCompensationSum: number;
-  syncState: 'no_overtime' | 'ready_for_payroll' | 'included_in_payroll' | 'paid';
+  syncState: 'no_overtime' | 'ready_for_payroll' | 'included_in_payroll' | 'paid' | 'non_overtime_exempt';
   overtimeIds: string[];
+  isOvertimeEligible?: boolean;
 }
 
 export interface GroupSummary {
@@ -217,6 +218,7 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
     if (!recap) return [];
     const q = searchQuery.trim().toLowerCase();
     return recap.employees.filter((e) => {
+      if (e.group === 'KARYAWAN TETAP' && !q) return false;
       if (groupFilter !== 'ALL' && e.group !== groupFilter) return false;
       if (onlyWithOvertime && e.spklApprovedCount === 0 && e.spklPendingCount === 0) return false;
       if (q) {
@@ -238,6 +240,8 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
         return <Badge className="bg-blue-600 text-white text-[10px]">Masuk Slip Payroll</Badge>;
       case 'ready_for_payroll':
         return <Badge className="bg-amber-500 text-white text-[10px]">Siap Masuk Payroll</Badge>;
+      case 'non_overtime_exempt':
+        return <Badge variant="secondary" className="text-[10px] text-slate-600 dark:text-slate-300">Non-Lembur (Tetap)</Badge>;
       default:
         return <Badge variant="outline" className="text-[10px] text-muted-foreground">Nihil Lembur</Badge>;
     }
@@ -282,30 +286,30 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
         [
           'Karyawan Tetap (Aslam, Samsi, Takdir)',
           recap.totals.karyawanTetap.employeeCount,
-          recap.totals.karyawanTetap.withOvertimeCount,
-          recap.totals.karyawanTetap.totalRawHours,
-          recap.totals.karyawanTetap.totalPaidHours,
-          recap.totals.karyawanTetap.totalFlexytimeHours,
-          recap.totals.karyawanTetap.totalPay,
           0,
           0,
+          0,
+          0,
+          0,
+          0,
+          'Non-Lembur (Gaji Pokok Saja)',
         ],
         [],
         [
-          'GRAND TOTAL UPAH LEMBUR',
+          'GRAND TOTAL UPAH LEMBUR (80 PERSONIL SAH)',
           '',
           '',
           recap.totals.grandTotalHours,
           '',
           '',
           recap.totals.grandTotalPay,
-          recap.budgetMeta?.totalCap ?? 76000000,
-          Math.max(0, (recap.budgetMeta?.totalCap ?? 76000000) - recap.totals.grandTotalPay),
+          recap.budgetMeta?.totalCap ?? 69000000,
+          Math.max(0, (recap.budgetMeta?.totalCap ?? 69000000) - recap.totals.grandTotalPay),
         ],
       ]);
       XLSX.utils.book_append_sheet(wb, sumSheet, 'Ringkasan N-1 Pimpinan');
 
-      const buildDetailSheet = (grp: 'RUMAH TANGGA' | 'SHIPMENT' | 'KARYAWAN TETAP', tabName: string) => {
+      const buildDetailSheet = (grp: 'RUMAH TANGGA' | 'SHIPMENT', tabName: string) => {
         const list = recap.employees.filter((e) => e.group === grp);
         const aoa: any[][] = [
           [`RINCIAN LEMBUR ${grp} — ${periodText}`],
@@ -337,7 +341,6 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
 
       buildDetailSheet('RUMAH TANGGA', 'Rumah Tangga (33)');
       buildDetailSheet('SHIPMENT', 'Shipment (47)');
-      buildDetailSheet('KARYAWAN TETAP', 'Karyawan Tetap (3)');
 
       XLSX.writeFile(wb, `REKAP_LEMBUR_PAYROLL_${recap.sourceOvertimeMonth}_KE_${recap.payrollMonth}.xlsx`);
       toast.success('Laporan Excel Lembur & Payroll N-1 berhasil diunduh.');
@@ -361,17 +364,17 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
         14,
         20
       );
-      const shipCapLabel = Math.round((recap.budgetMeta?.shipmentCap ?? 72000000) / 1000000);
+      const shipCapLabel = Math.round((recap.budgetMeta?.shipmentCap ?? 65000000) / 1000000);
       const wismaCapLabel = Math.round((recap.budgetMeta?.wismaCap ?? 4000000) / 1000000);
       doc.text(
-        `Total Pengeluaran Lembur: Rp ${recap.totals.grandTotalPay.toLocaleString('id-ID')} | Shipment: Rp ${recap.totals.shipment.totalPay.toLocaleString('id-ID')} / Rp ${shipCapLabel}jt | Wisma RT: Rp ${recap.totals.rumahTangga.totalPay.toLocaleString('id-ID')} / Rp ${wismaCapLabel}jt`,
+        `Total Pengeluaran Lembur (80 Personil Sah): Rp ${recap.totals.grandTotalPay.toLocaleString('id-ID')} | Shipment: Rp ${recap.totals.shipment.totalPay.toLocaleString('id-ID')} / Rp ${shipCapLabel}jt | Wisma RT: Rp ${recap.totals.rumahTangga.totalPay.toLocaleString('id-ID')} / Rp ${wismaCapLabel}jt`,
         14,
         25
       );
 
-      const activeList = filteredEmployees.length > 0 ? filteredEmployees : recap.employees;
+      const activeList = filteredEmployees.length > 0 ? filteredEmployees : recap.employees.filter((e) => e.group !== 'KARYAWAN TETAP');
       const body = activeList
-        .filter((e) => e.spklApprovedCount > 0 || e.group === 'KARYAWAN TETAP' || !onlyWithOvertime)
+        .filter((e) => e.group !== 'KARYAWAN TETAP' && (e.spklApprovedCount > 0 || !onlyWithOvertime))
         .map((e, idx) => [
           String(idx + 1),
           e.nip,
@@ -413,7 +416,7 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
                 Sinkronisasi Lembur &amp; Payroll Sistem Bulan Mundur (Arrears N-1)
               </CardTitle>
               <CardDescription className="text-xs mt-0.5">
-                Lembur bulan kerja sebelumnya (<strong>N-1</strong>) otomatis dihitung, diawasi plafonnya (Rp 72jt + Rp 4jt), lalu disinkronkan ke slip gaji bulan berjalan (<strong>N</strong>).
+                Lembur 80 personil sah bulan kerja sebelumnya (<strong>N-1</strong>) diawasi budget aktif (Shipment <strong>Rp 65jt</strong> + Rumah Tangga <strong>Rp 4jt</strong>) lalu disinkronkan ke slip gaji bulan berjalan (<strong>N</strong>).
               </CardDescription>
             </div>
 
@@ -584,65 +587,67 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
             </div>
           )}
 
-          {/* 3-Group Summary Cards */}
+          {/* 2-Group Overtime Summary Cards (80 Eligible Personnel ONLY) */}
           {recap && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {[
-                {
-                  key: 'RUMAH TANGGA' as const,
-                  title: '🏠 Rumah Tangga (FR07001–033)',
-                  sub: `Budget Efektif Rp ${(recap.budgetMeta?.wismaCap ?? 4000000).toLocaleString('id-ID')} dibagi rata (maks Rp ${(recap.budgetMeta?.perWismaPersonCap ?? 121212).toLocaleString('id-ID')}/org) + Flexytime`,
-                  data: recap.totals.rumahTangga,
-                  badge: 'bg-teal-600 text-white',
-                },
-                {
-                  key: 'SHIPMENT' as const,
-                  title: '🚢 Shipment (FR07034–080)',
-                  sub: `Budget Efektif Rp ${(recap.budgetMeta?.shipmentCap ?? 72000000).toLocaleString('id-ID')} (44 Shift Normal 30j x2 + 3 Day Shift 56j x2)`,
-                  data: recap.totals.shipment,
-                  badge: 'bg-blue-600 text-white',
-                },
-                {
-                  key: 'KARYAWAN TETAP' as const,
-                  title: '⭐ Karyawan Tetap (Aslam, Samsi, Takdir)',
-                  sub: 'Pengawasan langsung Pimpinan & Direktur Utama',
-                  data: recap.totals.karyawanTetap,
-                  badge: 'bg-purple-600 text-white',
-                },
-              ].map((card) => (
-                <button
-                  key={card.key}
-                  type="button"
-                  onClick={() => setGroupFilter(groupFilter === card.key ? 'ALL' : card.key)}
-                  className={`text-left p-3.5 rounded-xl border transition-all ${
-                    groupFilter === card.key
-                      ? 'border-blue-600 bg-blue-500/10 shadow-xs'
-                      : 'border-border bg-card hover:bg-muted/30'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold text-foreground">{card.title}</span>
-                    <Badge className={`text-[10px] ${card.badge}`}>
-                      {card.data.withOvertimeCount}/{card.data.employeeCount} Org Lembur
-                    </Badge>
-                  </div>
-                  <p className="text-[10.5px] text-muted-foreground mt-1">{card.sub}</p>
-                  <div className="mt-2.5 flex items-baseline justify-between font-mono">
-                    <span className="text-base font-extrabold text-foreground">
-                      Rp {card.data.totalPay.toLocaleString('id-ID')}
-                    </span>
-                    <span className="text-[11px] text-muted-foreground">
-                      {card.data.totalRawHours}j real • {card.data.totalPaidHours}j bayar
-                    </span>
-                  </div>
-                  {card.data.budgetCap > 0 && (
-                    <p className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 mt-1">
-                      Sisa Plafon: Rp {card.data.budgetRemaining.toLocaleString('id-ID')}
-                      {card.data.totalFlexytimeHours > 0 ? ` • Flexytime: ${card.data.totalFlexytimeHours}j` : ''}
-                    </p>
-                  )}
-                </button>
-              ))}
+            <div className="space-y-2.5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {[
+                  {
+                    key: 'RUMAH TANGGA' as const,
+                    title: '🏠 Rumah Tangga (FR07001–033)',
+                    sub: `Budget Efektif Rp ${(recap.budgetMeta?.wismaCap ?? 4000000).toLocaleString('id-ID')} dibagi rata (maks Rp ${(recap.budgetMeta?.perWismaPersonCap ?? 121212).toLocaleString('id-ID')}/org) + Flexytime`,
+                    data: recap.totals.rumahTangga,
+                    badge: 'bg-teal-600 text-white',
+                  },
+                  {
+                    key: 'SHIPMENT' as const,
+                    title: '🚢 Shipment (FR07034–080)',
+                    sub: `Budget Efektif Rp ${(recap.budgetMeta?.shipmentCap ?? 65000000).toLocaleString('id-ID')} (Target Efisiensi Rp 55–60 Jt • 44 Shift Normal 30j x2 + 3 Day Shift 56j x2)`,
+                    data: recap.totals.shipment,
+                    badge: 'bg-blue-600 text-white',
+                  },
+                ].map((card) => (
+                  <button
+                    key={card.key}
+                    type="button"
+                    onClick={() => setGroupFilter(groupFilter === card.key ? 'ALL' : card.key)}
+                    className={`text-left p-3.5 rounded-xl border transition-all ${
+                      groupFilter === card.key
+                        ? 'border-blue-600 bg-blue-500/10 shadow-xs'
+                        : 'border-border bg-card hover:bg-muted/30'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-foreground">{card.title}</span>
+                      <Badge className={`text-[10px] ${card.badge}`}>
+                        {card.data.withOvertimeCount}/{card.data.employeeCount} Org Lembur
+                      </Badge>
+                    </div>
+                    <p className="text-[10.5px] text-muted-foreground mt-1">{card.sub}</p>
+                    <div className="mt-2.5 flex items-baseline justify-between font-mono">
+                      <span className="text-base font-extrabold text-foreground">
+                        Rp {card.data.totalPay.toLocaleString('id-ID')}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {card.data.totalRawHours}j real • {card.data.totalPaidHours}j bayar
+                      </span>
+                    </div>
+                    {card.data.budgetCap > 0 && (
+                      <p className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 mt-1">
+                        Sisa Plafon: Rp {card.data.budgetRemaining.toLocaleString('id-ID')}
+                        {card.data.totalFlexytimeHours > 0 ? ` • Flexytime: ${card.data.totalFlexytimeHours}j` : ''}
+                      </p>
+                    )}
+                  </button>
+                ))}
+              </div>
+              <div className="px-3.5 py-2 rounded-xl border border-slate-300/60 dark:border-slate-700 bg-muted/40 text-[11px] text-muted-foreground flex items-center justify-between flex-wrap gap-2">
+                <span>
+                  <strong className="text-foreground">Kebijakan Non-Lembur Karyawan Tetap (3 Personil):</strong> Muh Aslam Faisal, La Unga Samsi, dan Takdir{' '}
+                  <strong className="text-foreground">tidak dapat diperlakukan lembur (SPKL = Rp 0)</strong>; tetap menerima slip gaji pokok bulanan saat generate payroll.
+                </span>
+                <Badge variant="outline" className="text-[10px] font-mono">80 Personil Berhak Lembur</Badge>
+              </div>
             </div>
           )}
 
@@ -728,8 +733,10 @@ export const HrmOvertimeArrearsPayrollTab: React.FC<Props> = ({ onSynced }) => {
                             {emp.group}
                           </Badge>
                           <div className="text-[10px] text-muted-foreground mt-0.5">
-                            {emp.group === 'RUMAH TANGGA'
-                              ? 'Cap Rp 121.212 + Flexytime'
+                            {emp.group === 'KARYAWAN TETAP'
+                              ? 'Non-Lembur (Gaji Pokok Saja)'
+                              : emp.group === 'RUMAH TANGGA'
+                              ? `Cap Rp ${(recap?.budgetMeta?.perWismaPersonCap ?? 121212).toLocaleString('id-ID')} + Flexytime`
                               : emp.isDayShift
                               ? 'Day Shift (Maks 56j)'
                               : 'Shift Normal (Maks 30j)'}

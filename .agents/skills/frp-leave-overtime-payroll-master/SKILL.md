@@ -16,7 +16,7 @@ Skill standar operasional & arsitektur sistem untuk pengelolaan **Cuti Karyawan*
 | :--- | :--- | :---: | :--- | :--- |
 | **🏠 Rumah Tangga (Wisma Biring Ere)** | `FR07001` – `FR07033` (33 Personil) | **12 Hari** (Hangus akhir periode, tidak diuangkan) | Tahun ke-2: **Mar 2026 – Feb 2027** (12 kolom bulan) | Plafon **Rp 4.000.000/bulan** dibagi rata (Rp 121.212/orang). Kelebihan jam dialihkan ke **Flexytime** (libur kompensasi bulan berjalan, hangus jika tidak diambil). |
 | **🚢 Shipment (Shiftman Lapangan)** | `FR07034` – `FR07080` (47 Personil) | **9 Hari** (Hangus akhir periode, tidak diuangkan) | Addendum: **Apr – Des 2026** (9 kolom bulan) | Plafon **Rp 72.000.000/bulan**. 44 Shift Normal max 30 jam real ($\times 2 = 60$ jam bayar); 3 Day Shift max 56 jam real ($\times 2 = 112$ jam bayar). |
-| **⭐ Karyawan Tetap (Petugas Khusus Pimpinan)** | **Muh Aslam Faisal** (`FRP 07065`), **LA UNGA SAMSI, S.K.M** (`FR.07.066`), **TAKDIR** (`FRP.07.046`) | **12 Hari** | Tahun Berjalan (**Mar 2026 – Feb 2027**) | Approval cuti/izin/lembur langsung oleh **Direktur Utama (082291998026)** & **Pimpinan (082192755755)**. Bebas syarat rekan pengganti pos (*exempt zero-vacancy*). |
+| **⭐ Karyawan Tetap (Petugas Khusus Pimpinan)** | **Muh Aslam Faisal** (`FRP 07065`), **LA UNGA SAMSI, S.K.M** (`FR.07.066`), **TAKDIR** (`FRP.07.046`) | **12 Hari** | Tahun Berjalan (**Mar 2026 – Feb 2027**) | Approval cuti/izin langsung oleh **Direktur Utama (082291998026)** & **Pimpinan (082192755755)**. **TIDAK ADA LEMBUR / Non-Lembur (SPKL = Rp 0)** — hak lembur hanya untuk 80 personil Shipment & Rumah Tangga. |
 
 > **Aturan Baku Remunerasi & Pajak PT FRP (`AGENTS.md`):**
 > - Sistem **Upah Pokok Tunggal** (tanpa tunjangan jabatan/makan/transport/perumahan/kesehatan).
@@ -61,10 +61,10 @@ Skill standar operasional & arsitektur sistem untuk pengelolaan **Cuti Karyawan*
 
 ### B. Alur Sinkronisasi Database ↔ Web Admin ↔ Payroll ↔ PWA
 1. **Monitor Antrean Bulan Mundur (`GET /api/overtime/payroll-arrears-recap?payrollMonth=YYYY-MM`)**:
-   - Menghitung otomatis bulan sumber $N-1$, mengelompokkan personil menjadi **Rumah Tangga**, **Shipment**, dan **Karyawan Tetap**, mengecek plafon (Rp 4 jt vs Rp 72 jt), dan memantau `payment_status`: `unpaid`, `included_in_payroll`, atau `paid`.
+   - Menghitung otomatis bulan sumber $N-1$ khusus bagi **80 personil yang berhak lembur** (**Rumah Tangga** plafon **Rp 4 jt** & **Shipment** budget efektif **Rp 65 jt** / SK **Rp 72 jt**), sementara **Karyawan Tetap (Aslam, Samsi, Takdir)** berstatus `non_overtime_exempt` (**Rp 0**), dan memantau `payment_status`: `unpaid`, `included_in_payroll`, atau `paid`.
 2. **Generate Payroll Terpusat (`POST /api/payroll/periods/:id/generate`)**:
    - Mengambil data kehadiran bulan $N$ dan data lembur `approved` bulan $N-1$ langsung dari PostgreSQL.
-   - Menghitung kompensasi sesuai aturan masing-masing kelompok (Shipment $2\times$ tarif area dengan cap 30/56 jam; Wisma/Rumah Tangga alokasi Rp 4 jt rata + Flexytime; Karyawan Tetap sesuai profil).
+   - Menghitung kompensasi sesuai aturan masing-masing kelompok (Shipment $2\times$ tarif area dengan cap 30/56 jam; Wisma/Rumah Tangga alokasi Rp 4 jt rata + Flexytime; **Karyawan Tetap selalu `total_overtime_pay = 0`** dan menerima gaji pokok + potongan BPJS 3%/1%).
    - Menulis `hrm_payroll_slips` di PostgreSQL dan menandai `hrm_overtime_records.payment_status = 'included_in_payroll'` serta `payroll_period_id = period.id` agar tidak pernah terbayar ganda.
 3. **Pelunasan & Publikasi Slip (`POST /api/payroll/periods/:id/mark-paid` & Publish)**:
    - Menandai periode, slip, dan record lembur terkait menjadi `paid`.

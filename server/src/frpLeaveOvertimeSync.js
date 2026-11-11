@@ -556,7 +556,35 @@ async function buildPayrollArrearsOvertimeRecap(pool, payrollMonthKey) {
     .map((p) => {
       const group = classifyFrpGroup(p);
       const normNip = normalizeNip(p.nip);
+      const isOvertimeEligible = group !== 'KARYAWAN TETAP';
       const isDayShift = DAY_SHIFT_NIPS.has(normNip) || String(p.shift_name || '').toUpperCase().includes('DAY');
+
+      // Kebijakan Direksi PT FRP: Karyawan Tetap (Aslam, Samsi, Takdir) TIDAK diperlakukan lembur (Non-Lembur / 0 SPKL).
+      if (!isOvertimeEligible) {
+        return {
+          userId: p.id,
+          nip: p.nip,
+          fullName: p.full_name,
+          divisionName: p.division_name || '-',
+          group,
+          isOvertimeEligible: false,
+          isDayShift,
+          baseSalary: Number(p.effective_salary || 4045050),
+          hourlyRate: 0,
+          spklApprovedCount: 0,
+          spklPendingCount: 0,
+          rawApprovedHours: 0,
+          cappedRealHours: 0,
+          paidHours: 0,
+          flexytimeHours: 0,
+          rawCalculatedPay: 0,
+          calculatedPay: 0,
+          recordedCompensationSum: 0,
+          syncState: 'non_overtime_exempt',
+          overtimeIds: [],
+        };
+      }
+
       const userOts = otByUser[p.id] || [];
       const approvedOts = userOts.filter((r) => r.status === 'approved' || r.status === 'completed');
       const pendingOts = userOts.filter((r) => r.status === 'pending');
@@ -591,6 +619,7 @@ async function buildPayrollArrearsOvertimeRecap(pool, payrollMonthKey) {
         fullName: p.full_name,
         divisionName: p.division_name || '-',
         group,
+        isOvertimeEligible: true,
         isDayShift,
         baseSalary: Number(p.effective_salary || 4045050),
         hourlyRate: Number(calc.hourlyRate.toFixed(2)),

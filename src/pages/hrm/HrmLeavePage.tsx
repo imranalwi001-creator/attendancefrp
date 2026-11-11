@@ -3,7 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { LeaveRequest, LeaveType, OvertimeRecord } from '@/types/hrm';
+import { LeaveRequest, LeaveType, OvertimeRecord, getEmployeeCategoryGroup } from '@/types/hrm';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
@@ -56,6 +56,9 @@ export const HrmLeavePage: React.FC = () => {
   // Supervisor & Officer View State
   const userRole = (user?.roleName || user?.role || '').toLowerCase();
   const isSupervisorRole = ['superadmin', 'admin', 'hrd', 'pimpinan', 'dirut', 'pengawas', 'korlap', 'k3'].includes(userRole);
+  const isOvertimeAllowedForSelf = user
+    ? getEmployeeCategoryGroup(user) !== 'KARYAWAN TETAP' && (user as any)?.overtimeEligible !== false
+    : false;
   const [viewScope, setViewScope] = useState<'incoming' | 'personal'>(isSupervisorRole ? 'incoming' : 'personal');
   const [allLeaves, setAllLeaves] = useState<LeaveRequest[]>([]);
   const [allOvertimes, setAllOvertimes] = useState<OvertimeRecord[]>([]);
@@ -310,6 +313,10 @@ export const HrmLeavePage: React.FC = () => {
   };
 
   const handleOpenOtModal = () => {
+    if (!isOvertimeAllowedForSelf) {
+      toast.error('Karyawan Tetap (Aslam, Samsi, Takdir) berstatus Non-Lembur dan tidak dapat mengajukan SPKL.');
+      return;
+    }
     setOtDate(new Date().toISOString().split('T')[0]);
     setOtStartTime('17:00');
     setOtEndTime('20:00');
@@ -519,14 +526,20 @@ export const HrmLeavePage: React.FC = () => {
                   Input Lembur Karyawan
                 </Button>
               )}
-              <Button
-                onClick={handleOpenOtModal}
-                variant={isSupervisorRole ? 'outline' : 'default'}
-                className="font-medium rounded-xl shadow-sm gap-2 text-xs"
-              >
-                <Plus className="w-4 h-4" />
-                {isSupervisorRole ? 'Ajukan Lembur Sendiri' : 'Ajukan Lembur (SPL)'}
-              </Button>
+              {isOvertimeAllowedForSelf ? (
+                <Button
+                  onClick={handleOpenOtModal}
+                  variant={isSupervisorRole ? 'outline' : 'default'}
+                  className="font-medium rounded-xl shadow-sm gap-2 text-xs"
+                >
+                  <Plus className="w-4 h-4" />
+                  {isSupervisorRole ? 'Ajukan Lembur Sendiri' : 'Ajukan Lembur (SPL)'}
+                </Button>
+              ) : (
+                <Badge variant="outline" className="text-[11px] py-1.5 px-3 rounded-xl border-slate-300 dark:border-slate-700 text-muted-foreground">
+                  Karyawan Tetap: Non-Lembur (SPKL Nihil)
+                </Badge>
+              )}
             </div>
           )}
         </div>
