@@ -28,7 +28,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { hrmService } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { LeaveRequest, OvertimeRecord, UserProfile, isOfficialFrEmployee } from '@/types/hrm';
+import { LeaveRequest, OvertimeRecord, UserProfile, isOfficialFrEmployee, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
 import { toast } from 'sonner';
 
 interface HrmFieldAuthorityMobileModalProps {

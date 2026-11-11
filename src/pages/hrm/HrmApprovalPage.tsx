@@ -208,7 +208,8 @@ export const HrmApprovalPage: React.FC = () => {
       if (json.success) {
         toast.success(json.message);
         if (detailModalOpen) setDetailModalOpen(false);
-        loadRealtimeData();
+        await hrmService.syncWithBackend();
+        loadData();
       } else {
         toast.error(json.error || 'Gagal mereset karyawan pengganti.');
       }
