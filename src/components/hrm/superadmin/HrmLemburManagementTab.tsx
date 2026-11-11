@@ -46,6 +46,12 @@ export const HrmLemburManagementTab: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [subTab, setSubTab] = useState<'spkl_list' | 'cost_control' | 'arrears_payroll'>('spkl_list');
+  const [liveBudgetCaps, setLiveBudgetCaps] = useState({
+    shipmentCap: 65000000,
+    wismaCap: 4000000,
+    targetMin: 55000000,
+    targetMax: 60000000,
+  });
 
   // Financial & Quota Report Modal State
   const [reportModalOpen, setReportModalOpen] = useState<boolean>(false);
@@ -110,6 +116,15 @@ export const HrmLemburManagementTab: React.FC = () => {
         setRecords(remoteOts);
         localStorage.setItem('hrm_overtime_records', JSON.stringify(remoteOts));
       }
+      const radarRes: any = await api.get('/overtime/cost-control-radar').catch(() => null);
+      if (radarRes?.success && radarRes.data?.budget) {
+        setLiveBudgetCaps({
+          shipmentCap: Number(radarRes.data.budget.hardCap || 65000000),
+          wismaCap: Number(radarRes.data.budget.wismaCap ?? 4000000),
+          targetMin: Number(radarRes.data.budget.targetMin || 55000000),
+          targetMax: Number(radarRes.data.budget.targetMax || 60000000),
+        });
+      }
     } catch (e) {
       console.warn('[HrmLemburManagementTab] Sync remote overtime note:', e);
     } finally {
@@ -161,10 +176,10 @@ export const HrmLemburManagementTab: React.FC = () => {
     .filter((r) => r.status === 'approved' || r.status === 'completed')
     .reduce((acc, curr) => acc + (Number(curr.compensationAmount ?? curr.totalPay) || 0), 0);
 
-  // ─── PERHITUNGAN REALTIME KUOTA & PLAFON ANGGARAN LEMBUR PIMPINAN (RP 76 JT) ───
-  const TOTAL_BUDGET_CAP = 76000000;
-  const SHIPMENT_BUDGET_CAP = 72000000;
-  const WISMA_BUDGET_CAP = 4000000;
+  // ─── PERHITUNGAN REALTIME KUOTA & BUDGET EFEKTIF PIMPINAN (RP 65 JT SHIPMENT + RP 4 JT WISMA = RP 69 JT) ───
+  const SHIPMENT_BUDGET_CAP = liveBudgetCaps.shipmentCap;
+  const WISMA_BUDGET_CAP = liveBudgetCaps.wismaCap;
+  const TOTAL_BUDGET_CAP = SHIPMENT_BUDGET_CAP + WISMA_BUDGET_CAP;
 
   const budgetMetrics = React.useMemo(() => {
     let shipmentSpent = 0;
@@ -227,7 +242,7 @@ export const HrmLemburManagementTab: React.FC = () => {
       wismaHours,
       wismaSpklCount,
     };
-  }, [records, users]);
+  }, [records, users, TOTAL_BUDGET_CAP, SHIPMENT_BUDGET_CAP, WISMA_BUDGET_CAP]);
 
   const handleOpenEdit = (rec: OvertimeRecord) => {
     setEditingOt(rec);
@@ -367,29 +382,36 @@ export const HrmLemburManagementTab: React.FC = () => {
           </div>
         </CardHeader>
         <CardContent className="p-4 space-y-3.5">
-          {/* Live Overall Quota Meter (Plafon Rp 76 Jt Gabungan 80 Personil) */}
+          {/* Live Overall Quota Meter (Budget Efektif Pimpinan + Target Efisiensi 55-60 Jt) */}
           <div className="p-3.5 sm:p-4 rounded-xl bg-gradient-to-r from-slate-950 via-slate-900 to-blue-950 text-white border border-blue-500/30 shadow-md space-y-2.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[11px] font-semibold text-blue-200 uppercase tracking-wider">
-                    Plafon Lembur Sah Perusahaan (Total Rp 76 Jt)
+                    Budget Efektif Lembur Perusahaan (Total Rp {Math.round(TOTAL_BUDGET_CAP / 1e6)} Jt)
                   </span>
                   <Badge
                     className={
-                      budgetMetrics.totalBurnPct > 90
+                      budgetMetrics.shipmentSpent > liveBudgetCaps.targetMax
                         ? 'bg-rose-500 text-white text-[10px]'
-                        : budgetMetrics.totalBurnPct > 70
+                        : budgetMetrics.shipmentSpent >= liveBudgetCaps.targetMin
                         ? 'bg-amber-500 text-white text-[10px]'
                         : 'bg-emerald-600 text-white text-[10px]'
                     }
                   >
-                    {budgetMetrics.totalBurnPct > 90
-                      ? '⚠️ Mendekati Plafon'
-                      : budgetMetrics.totalBurnPct > 70
-                      ? '⚡ Serapan Aktif'
+                    {budgetMetrics.shipmentSpent > liveBudgetCaps.targetMax
+                      ? '⚠️ Melewati Target 60 Jt'
+                      : budgetMetrics.shipmentSpent >= liveBudgetCaps.targetMin
+                      ? '⚡ Zona Waspada (55–60 Jt)'
                       : '✅ Kuota Aman'}
                   </Badge>
+                  <button
+                    type="button"
+                    onClick={() => setSubTab('cost_control')}
+                    className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200 border border-amber-400/30 hover:bg-amber-500/30 transition-colors"
+                  >
+                    🎯 Target Efisiensi Shipment: Rp {Math.round(liveBudgetCaps.targetMin / 1e6)}–{Math.round(liveBudgetCaps.targetMax / 1e6)} Jt
+                  </button>
                 </div>
                 <div className="flex items-baseline gap-2 mt-1">
                   <span className="text-2xl font-extrabold font-mono text-white">
@@ -435,7 +457,7 @@ export const HrmLemburManagementTab: React.FC = () => {
                 <Badge className="bg-blue-600 text-white text-[10px]">47 Karyawan</Badge>
               </div>
               <div>
-                <p className="text-lg font-extrabold text-foreground font-mono">Rp 72.000.000</p>
+                <p className="text-lg font-extrabold text-foreground font-mono">Rp {SHIPMENT_BUDGET_CAP.toLocaleString('id-ID')}</p>
                 <div className="space-y-1 mt-1 text-[11px] font-mono">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Terpakai:</span>
@@ -455,7 +477,7 @@ export const HrmLemburManagementTab: React.FC = () => {
                 </div>
               </div>
               <p className="text-[10px] text-muted-foreground leading-tight pt-1 border-t border-border/60">
-                Plafon gabungan 47 orang (44 Shift Normal + 3 Day Shift). Realisasi tidak boleh melebihi 72jt.
+                Budget efektif 47 orang (44 Shift Normal + 3 Day Shift). Target efisiensi Rp {Math.round(liveBudgetCaps.targetMin / 1e6)}–{Math.round(liveBudgetCaps.targetMax / 1e6)}jt (batas maks Rp {Math.round(SHIPMENT_BUDGET_CAP / 1e6)}jt).
               </p>
             </div>
 

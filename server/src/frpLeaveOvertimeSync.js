@@ -474,7 +474,7 @@ function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRa
 }
 
 function resolveEffectiveBudgets(targetPayrollMonth, linkedPeriod) {
-  const defaultShip = targetPayrollMonth === '2026-11' ? 65000000 : 72000000;
+  const defaultShip = 65000000;
   const defaultWisma = 4000000;
   const shipmentCap =
     linkedPeriod && linkedPeriod.effective_shipment_budget != null && Number(linkedPeriod.effective_shipment_budget) > 0
