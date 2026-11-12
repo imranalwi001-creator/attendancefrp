@@ -174,6 +174,8 @@ export const HrmApprovalPage: React.FC = () => {
   const [selectedSubstituteObj, setSelectedSubstituteObj] = useState<any | null>(null);
   const [dailySlots, setDailySlots] = useState<SmartReliefDailySlot[]>([]);
   const [selectedDailySubs, setSelectedDailySubs] = useState<Record<string, { substituteId: string; substituteName: string; substituteNip?: string }>>({});
+  const [dailySlotSearchMap, setDailySlotSearchMap] = useState<Record<string, string>>({});
+  const [singleDaySubSearch, setSingleDaySubSearch] = useState<string>('');
   const [candidateCategory, setCandidateCategory] = useState<'same_off' | 'same_shift' | 'global'>('same_off');
   const [substituteGroups, setSubstituteGroups] = useState<{
     sameDivOff: any[];
@@ -461,6 +463,8 @@ export const HrmApprovalPage: React.FC = () => {
     setLoadingSubstituteCandidates(true);
     setSelectedSubstituteId(leave.substituteId || '');
     setSelectedSubstituteObj(null);
+    setDailySlotSearchMap({});
+    setSingleDaySubSearch('');
 
     try {
       const candidates = await hrmService.getLeaveSubstituteCandidates({
@@ -499,23 +503,26 @@ export const HrmApprovalPage: React.FC = () => {
         setSelectedDailySubs({});
       }
 
-      // Default selection logic:
+      // Default selection logic: prioritaskan kandidat yang TIDAK memiliki konflik hari bersebelahan
       if (leave.substituteId) {
         setSelectedSubstituteId(leave.substituteId);
         const allList = [...offList, ...shiftList, ...globalList];
         const match = allList.find((c) => c.id === leave.substituteId);
         if (match) setSelectedSubstituteObj(match);
       } else if (offList.length > 0) {
-        setSelectedSubstituteId(offList[0].id);
-        setSelectedSubstituteObj(offList[0]);
+        const best = offList.find((c) => !c.isConsecutiveConflict) || offList[0];
+        setSelectedSubstituteId(best.id);
+        setSelectedSubstituteObj(best);
         setCandidateCategory('same_off');
       } else if (shiftList.length > 0) {
-        setSelectedSubstituteId(shiftList[0].id);
-        setSelectedSubstituteObj(shiftList[0]);
+        const best = shiftList.find((c) => !c.isConsecutiveConflict) || shiftList[0];
+        setSelectedSubstituteId(best.id);
+        setSelectedSubstituteObj(best);
         setCandidateCategory('same_shift');
       } else if (globalList.length > 0) {
-        setSelectedSubstituteId(globalList[0].id);
-        setSelectedSubstituteObj(globalList[0]);
+        const best = globalList.find((c) => !c.isConsecutiveConflict) || globalList[0];
+        setSelectedSubstituteId(best.id);
+        setSelectedSubstituteObj(best);
         setCandidateCategory('global');
       }
     } catch (e) {
@@ -550,9 +557,26 @@ export const HrmApprovalPage: React.FC = () => {
           toast.error('Aturan Baku PT FRP: 1 Karyawan Pengganti Hanya Berlaku untuk 1 Hari Saja! Anda memilih karyawan yang sama di lebih dari 1 hari. Mohon pilih personil berbeda untuk tiap hari.');
           return;
         }
+
+        // Guard: Cek apakah ada personil yang berkonflik jadwal lembur bersebelahan
+        for (const s of dailySlots) {
+          const subId = selectedDailySubs[s.date]?.substituteId;
+          const cand = s.candidates.find((c: any) => c.id === subId);
+          if (cand?.isConsecutiveConflict) {
+            toast.error(`Karyawan ${cand.fullName || cand.name} tidak boleh dipilih pada ${s.date} karena sudah bertugas sebagai pengganti di hari bersebelahan (Aturan Anti-Berturut-turut).`);
+            return;
+          }
+        }
       } else if (!selectedSubstituteId) {
         toast.error('Sesuai aturan operasional PT FRP, pekerjaan tidak boleh kosong saat karyawan cuti/izin. Tetapkan satu karyawan pengganti sebelum menyetujui.');
         return;
+      } else {
+        const allCands = [...substituteGroups.sameDivOff, ...substituteGroups.sameDivShift, ...substituteGroups.globalAll];
+        const selectedSub = selectedSubstituteObj || allCands.find((c) => c.id === selectedSubstituteId);
+        if (selectedSub?.isConsecutiveConflict) {
+          toast.error(`Karyawan ${selectedSub.fullName || selectedSub.name} tidak boleh dipilih karena sudah bertugas sebagai pengganti di hari bersebelahan (Aturan Anti-Berturut-turut).`);
+          return;
+        }
       }
     }
 
@@ -2430,6 +2454,21 @@ export const HrmApprovalPage: React.FC = () => {
                             )}
                           </div>
 
+                          {/* Pencarian Cepat Pengganti per Hari */}
+                          <div className="relative mb-2">
+                            <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <input
+                              type="text"
+                              value={dailySlotSearchMap[slot.date] || ''}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setDailySlotSearchMap((prev) => ({ ...prev, [slot.date]: val }));
+                              }}
+                              placeholder={`Pencarian cepat pengganti Hari ke-${sIdx + 1} (Ketik Nama / NIP)...`}
+                              className="w-full h-8 pl-8 pr-2.5 rounded-lg border border-border bg-background text-[11px] placeholder:text-muted-foreground focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                            />
+                          </div>
+
                           {/* Selector */}
                           <div className="flex items-center gap-2">
                             <select
@@ -2449,16 +2488,34 @@ export const HrmApprovalPage: React.FC = () => {
                               className="flex-1 h-9 px-2.5 rounded-lg border border-border bg-background text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
                             >
                               <option value="">-- Pilih Petugas Pengganti Hari Ini --</option>
-                              {slot.candidates.map((cand) => {
-                                const isUsedOther = dailySlots.some(
-                                  (other) => other.date !== slot.date && selectedDailySubs[other.date]?.substituteId === cand.id
-                                );
-                                return (
-                                  <option key={cand.id} value={cand.id}>
-                                    {cand.fullName || cand.name} ({cand.nip}) • {cand.categoryTitle} {isUsedOther ? '⚠️ [Dipilih di Hari Lain]' : `(Skor: ${cand.score}%)`}
-                                  </option>
-                                );
-                              })}
+                              {(() => {
+                                const qSlot = (dailySlotSearchMap[slot.date] || '').toLowerCase().trim();
+                                const filteredSlotCands = qSlot
+                                  ? slot.candidates.filter((c: any) =>
+                                      (c.fullName || c.name || '').toLowerCase().includes(qSlot) ||
+                                      (c.nip || '').toLowerCase().includes(qSlot)
+                                    )
+                                  : slot.candidates;
+
+                                return filteredSlotCands.map((cand) => {
+                                  const isUsedOther = dailySlots.some(
+                                    (other) => other.date !== slot.date && selectedDailySubs[other.date]?.substituteId === cand.id
+                                  );
+                                  const isConsecutive = Boolean(cand.isConsecutiveConflict);
+                                  const isDisabled = isUsedOther || isConsecutive;
+                                  return (
+                                    <option key={cand.id} value={cand.id} disabled={isDisabled}>
+                                      {isConsecutive ? '⛔ ' : isUsedOther ? '⚠️ ' : '⭐ '}
+                                      {cand.fullName || cand.name} ({cand.nip}) • {cand.categoryTitle}
+                                      {isConsecutive
+                                        ? ' [⛔ Dilarang: Bertugas di hari bersebelahan]'
+                                        : isUsedOther
+                                        ? ' [⚠️ Dipilih di Hari Lain]'
+                                        : ` (Skor: ${cand.score}%)`}
+                                    </option>
+                                  );
+                                });
+                              })()}
                             </select>
 
                             {currentPick?.substituteId && (
@@ -2479,6 +2536,19 @@ export const HrmApprovalPage: React.FC = () => {
                               </Button>
                             )}
                           </div>
+
+                          {(() => {
+                            const currentCand = slot.candidates.find((c: any) => c.id === currentPick?.substituteId);
+                            if (currentCand?.isConsecutiveConflict) {
+                              return (
+                                <p className="text-[10px] text-destructive font-semibold mt-1.5 flex items-center gap-1">
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                  Karyawan ini berkonflik! Sudah bertugas sebagai pengganti di hari bersebelahan (D-1 atau D+1). Wajib ganti personil lain.
+                                </p>
+                              );
+                            }
+                            return null;
+                          })()}
 
                           {hasConflict && (
                             <p className="text-[10px] text-destructive font-semibold mt-1.5 flex items-center gap-1">
@@ -2505,6 +2575,18 @@ export const HrmApprovalPage: React.FC = () => {
                 <p className="text-[11px] text-blue-900/80 dark:text-blue-300 leading-relaxed">
                   Hukum Zero Vacancy: Pos dinas tidak boleh kosong tenaga kerja! Jika personil berhalangan izin/sakit/cuti, operasional harus tetap berjalan lancar. Tetapkan 1 karyawan pengganti dan kirimkan reminder WhatsApp sebelum menyahkan permohonan.
                 </p>
+
+                {/* Pencarian Cepat Pengganti Manual */}
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={singleDaySubSearch}
+                    onChange={(e) => setSingleDaySubSearch(e.target.value)}
+                    placeholder="Pencarian cepat pengganti manual (Ketik Nama / NIP)..."
+                    className="w-full h-8 pl-8 pr-2.5 rounded-lg border border-border bg-background text-[11px] placeholder:text-muted-foreground focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                  />
+                </div>
 
                 {/* Tab Kategori Rekomendasi Pengganti */}
                 <div className="flex items-center gap-1 p-1 bg-background/80 rounded-lg border border-border text-[11px]">
@@ -2568,25 +2650,42 @@ export const HrmApprovalPage: React.FC = () => {
                         ? substituteGroups.sameDivShift
                         : substituteGroups.globalAll;
 
-                    if (activeList.length === 0) {
+                    const qSingle = singleDaySubSearch.toLowerCase().trim();
+                    const filteredList = qSingle
+                      ? activeList.filter((c: any) =>
+                          (c.fullName || c.name || '').toLowerCase().includes(qSingle) ||
+                          (c.nip || '').toLowerCase().includes(qSingle)
+                        )
+                      : activeList;
+
+                    if (filteredList.length === 0) {
                       return (
                         <div className="p-3 text-center text-[11px] text-muted-foreground bg-background rounded-lg border border-border">
-                          Tidak ada kandidat pada kategori ini. Silakan pilih tab lainnya.
+                          {qSingle
+                            ? `Tidak ada karyawan yang cocok dengan pencarian "${singleDaySubSearch}".`
+                            : 'Tidak ada kandidat pada kategori ini. Silakan pilih tab lainnya.'}
                         </div>
                       );
                     }
 
-                    return activeList.map((cand) => {
+                    return filteredList.map((cand) => {
                       const isSelected = selectedSubstituteId === cand.id;
+                      const isConsecutive = Boolean(cand.isConsecutiveConflict);
                       return (
                         <div
                           key={cand.id}
                           onClick={() => {
+                            if (isConsecutive) {
+                              toast.error(`Dilarang memilih ${cand.fullName || cand.name} karena bertugas pengganti di hari bersebelahan (Aturan anti-berturut-turut)!`);
+                              return;
+                            }
                             setSelectedSubstituteId(cand.id);
                             setSelectedSubstituteObj(cand);
                           }}
                           className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 ${
-                            isSelected
+                            isConsecutive
+                              ? 'bg-rose-500/5 border-rose-500/30 opacity-60 cursor-not-allowed'
+                              : isSelected
                               ? 'bg-blue-500/20 border-blue-500 text-foreground shadow-xs'
                               : 'bg-background hover:bg-muted/40 border-border text-foreground'
                           }`}
@@ -2596,7 +2695,9 @@ export const HrmApprovalPage: React.FC = () => {
                               type="radio"
                               name="substituteRadio"
                               checked={isSelected}
+                              disabled={isConsecutive}
                               onChange={() => {
+                                if (isConsecutive) return;
                                 setSelectedSubstituteId(cand.id);
                                 setSelectedSubstituteObj(cand);
                               }}
@@ -2606,20 +2707,30 @@ export const HrmApprovalPage: React.FC = () => {
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="font-bold text-xs">{cand.fullName || cand.name}</span>
                                 <span className="font-mono text-[10px] text-muted-foreground">({cand.nip})</span>
-                                {cand.matchScore && (
+                                {isConsecutive ? (
+                                  <span className="text-[9.5px] font-bold px-1.5 py-0.2 rounded-full bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30">
+                                    ⛔ Lembur Hari Bersebelahan
+                                  </span>
+                                ) : cand.matchScore ? (
                                   <span className="text-[9.5px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
                                     {cand.matchScore}% Cocok
                                   </span>
-                                )}
+                                ) : null}
                               </div>
                               <p className="text-[10px] text-muted-foreground mt-0.5">
                                 {cand.division || cand.divisionName || 'Operasional'} • {cand.reason || 'Karyawan Aktif'}
                               </p>
-                              <p className="text-[9.5px] text-blue-600 dark:text-blue-400 font-medium mt-0.5 flex items-center gap-1">
-                                <span>🛡️ Mewarisi bank pos koordinat</span>
-                                <span>•</span>
-                                <span>⭐ Kompensasi SPKL 1 shift</span>
-                              </p>
+                              {isConsecutive ? (
+                                <p className="text-[9.5px] text-rose-600 dark:text-rose-400 font-medium mt-0.5 flex items-center gap-1">
+                                  <span>⛔ Dilarang: Sudah bertugas sebagai pengganti di hari sebelum/sesudahnya</span>
+                                </p>
+                              ) : (
+                                <p className="text-[9.5px] text-blue-600 dark:text-blue-400 font-medium mt-0.5 flex items-center gap-1">
+                                  <span>🛡️ Mewarisi bank pos koordinat</span>
+                                  <span>•</span>
+                                  <span>⭐ Kompensasi SPKL 1 shift</span>
+                                </p>
+                              )}
                             </div>
                           </div>
 
@@ -2627,12 +2738,14 @@ export const HrmApprovalPage: React.FC = () => {
                             <Badge
                               variant="outline"
                               className={`text-[9.5px] px-1.5 py-0.5 ${
-                                cand.badge?.includes('OFF') || cand.badge?.includes('Paling')
+                                isConsecutive
+                                  ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 font-bold'
+                                  : cand.badge?.includes('OFF') || cand.badge?.includes('Paling')
                                   ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 font-bold'
                                   : 'bg-primary/10 text-primary border-primary/20'
                               }`}
                             >
-                              {cand.badge || 'Kandidat'}
+                              {isConsecutive ? '⛔ Dilarang' : cand.badge || 'Kandidat'}
                             </Badge>
 
                             {/* Tombol Konfirmasi WhatsApp & Reminder */}

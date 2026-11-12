@@ -804,6 +804,10 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                                             onChange={(e) => {
                                               const found = slotCands.find((c: any) => c.id === e.target.value);
                                               if (!found) return;
+                                              if (found.isConsecutiveConflict) {
+                                                toast.error(`Dilarang memilih ${found.name} karena sudah bertugas pengganti di hari bersebelahan (Aturan Anti-Berturut-turut)!`);
+                                                return;
+                                              }
                                               if ((prevDayPickedId && found.id === prevDayPickedId) || (nextDayPickedId && found.id === nextDayPickedId)) {
                                                 toast.error(`Dilarang memilih ${found.name} secara berturut-turut dengan hari bersebelahan!`);
                                                 return;
@@ -820,12 +824,12 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                                           >
                                             <option value="">-- Pilih Pengganti Hari ke-{slot.dayIndex || sIdx + 1} --</option>
                                             {filteredDayCands.map((cand: any) => {
-                                              const isAdjConflict = (prevDayPickedId && cand.id === prevDayPickedId) || (nextDayPickedId && cand.id === nextDayPickedId);
+                                              const isAdjConflict = cand.isConsecutiveConflict || (prevDayPickedId && cand.id === prevDayPickedId) || (nextDayPickedId && cand.id === nextDayPickedId);
                                               return (
                                                 <option key={cand.id} value={cand.id} disabled={Boolean(isAdjConflict)}>
                                                   {isAdjConflict ? '⛔ ' : '⭐ '}
                                                   {cand.name} ({cand.nip}) — {cand.categoryTitle || (cand.isOff ? 'Sedang Libur/OFF' : cand.shiftName)} (Skor: {cand.score}%)
-                                                  {isAdjConflict ? ' [Dipakai Hari Bersebelahan]' : ''}
+                                                  {cand.isConsecutiveConflict ? ' [⛔ Jadwal Lembur Bersebelahan]' : isAdjConflict ? ' [⛔ Dipakai Hari Bersebelahan]' : ''}
                                                 </option>
                                               );
                                             })}

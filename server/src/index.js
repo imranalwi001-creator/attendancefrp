@@ -8033,11 +8033,12 @@ async function evaluateCandidatesForSingleDate({
   targetDate,
   applicantDivId,
   applicantName,
+  applicantGroup,
   applicantPosts,
   allocatedSubstituteIds
 }) {
   const query = `
-    SELECT p.id, p.nip, p.full_name, p.phone, p.avatar_url, p.division_id, 
+    SELECT p.id, p.nip, p.full_name, p.phone, p.email, p.avatar_url, p.division_id, 
            COALESCE(d.name, 'Operasional') as division_name,
            p.placement_location, p.job_title,
            s.name as default_shift_name, s.start_time as default_shift_start, s.end_time as default_shift_end,
@@ -8045,7 +8046,17 @@ async function evaluateCandidatesForSingleDate({
            COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate,
            COALESCE((SELECT SUM(o.duration_hours) FROM hrm_overtime_records o 
                      WHERE o.user_id = p.id AND o.status = 'approved' 
-                     AND DATE_TRUNC('month', o.date) = DATE_TRUNC('month', $2::date)), 0) as ot_hours_month
+                     AND DATE_TRUNC('month', o.date) = DATE_TRUNC('month', $2::date)), 0) as ot_hours_month,
+           EXISTS (
+             SELECT 1 FROM hrm_leave_daily_substitutes lds
+             WHERE lds.substitute_id = p.id
+               AND lds.duty_date IN (($2::date - INTERVAL '1 day')::date, ($2::date + INTERVAL '1 day')::date)
+             UNION
+             SELECT 1 FROM hrm_shift_substitutions ss
+             WHERE ss.relief_user_id = p.id
+               AND ss.status = 'approved'
+               AND ss.duty_date IN (($2::date - INTERVAL '1 day')::date, ($2::date + INTERVAL '1 day')::date)
+           ) as has_adjacent_relief_duty
     FROM hrm_profiles p
     LEFT JOIN hrm_divisions d ON p.division_id = d.id
     LEFT JOIN hrm_shifts s ON p.shift_id = s.id
@@ -8058,6 +8069,12 @@ async function evaluateCandidatesForSingleDate({
         WHERE lr.user_id = p.id
           AND lr.status IN ('approved', 'pending')
           AND (lr.start_date <= $2::date AND lr.end_date >= $2::date)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM hrm_attendances a
+        WHERE a.user_id = p.id
+          AND a.attendance_date = $2::date
+          AND a.status IN ('cuti', 'izin', 'sakit')
       )
     ORDER BY (p.division_id::text = $3) DESC, p.full_name ASC;
   `;
@@ -8079,6 +8096,27 @@ async function evaluateCandidatesForSingleDate({
   const globalAll = [];
 
   for (const row of result.rows) {
+    let candGroup = classifyFrpGroup(row);
+    if (candGroup === 'OTHER') {
+      const dName = String(row.division_name || row.placement_location || '').toLowerCase();
+      if (dName.includes('rumah tangga') || dName.includes('wisma') || dName.includes('biring ere') || dName.includes('biringere')) {
+        candGroup = 'RUMAH TANGGA';
+      } else if (dName.includes('shipment') || dName.includes('timbangan') || dName.includes('bontoa') || dName.includes('maccini')) {
+        candGroup = 'SHIPMENT';
+      }
+    }
+
+    // ─── ATURAN KETAT: ISOLASI KELOMPOK (SHIPMENT HANYA SHIPMENT, RUMAH TANGGA HANYA RUMAH TANGGA) ───
+    if (applicantGroup === 'SHIPMENT' && candGroup !== 'SHIPMENT') {
+      continue;
+    }
+    if (applicantGroup === 'RUMAH TANGGA' && candGroup !== 'RUMAH TANGGA') {
+      continue;
+    }
+    if (applicantGroup === 'KARYAWAN TETAP' && candGroup !== 'KARYAWAN TETAP') {
+      continue;
+    }
+
     const isSameDivision = applicantDivId && String(row.division_id) === String(applicantDivId);
     const isOff = row.is_off === true || row.shift_code === 'OFF' || (!row.shift_code && !row.default_shift_name);
     const currentShift = isOff ? 'Libur / Off Duty' : (row.shift_name || row.default_shift_name || 'Shift Reguler');
@@ -8133,6 +8171,13 @@ async function evaluateCandidatesForSingleDate({
       reasons.push(`Lembur tinggi (${otMonth} jam)`);
     }
 
+    // ─── ATURAN ANTI-BERTURUT-TURUT: TUGAS PENGGANTI DI HARI BERSEBELAHAN (D-1 atau D+1) ───
+    const isConsecutiveConflict = Boolean(row.has_adjacent_relief_duty);
+    if (isConsecutiveConflict) {
+      finalScore -= 70;
+      reasons.unshift('⛔ Bertugas pengganti di hari bersebelahan (Dilarang berturut-turut)');
+    }
+
     // ─── ATURAN 1 HARI = 1 ORANG PENGGANTI (ANTI-KELELAHAN & SINGLE-DAY LIMIT) ───
     const isAlreadyAssignedAnotherDay = allocatedSubstituteIds && allocatedSubstituteIds.has(row.id);
     if (isAlreadyAssignedAnotherDay) {
@@ -8171,7 +8216,8 @@ async function evaluateCandidatesForSingleDate({
       otHoursMonth: otMonth,
       waConfirmUrl,
       applicantPosts,
-      isAlreadyAssignedAnotherDay
+      isAlreadyAssignedAnotherDay,
+      isConsecutiveConflict
     };
 
     ranked.push(candidate);
@@ -8209,10 +8255,11 @@ async function getSmartReliefRecommendations({ applicantId, startDate, endDate, 
   let applicantDivId = divisionId;
   let applicantShiftId = shiftId;
   let applicantPosts = [];
+  let applicantGroup = 'OTHER';
 
   if (applicantId) {
     const aRes = await pool.query(
-      `SELECT p.id, p.full_name, p.division_id, p.shift_id, p.placement_location,
+      `SELECT p.id, p.full_name, p.nip, p.email, p.division_id, p.shift_id, p.placement_location,
               d.name as division_name
        FROM hrm_profiles p
        LEFT JOIN hrm_divisions d ON p.division_id = d.id
@@ -8223,6 +8270,15 @@ async function getSmartReliefRecommendations({ applicantId, startDate, endDate, 
       const a = aRes.rows[0];
       validApplicantId = a.id;
       applicantName = a.full_name;
+      applicantGroup = classifyFrpGroup(a);
+      if (applicantGroup === 'OTHER') {
+        const dName = String(a.division_name || a.placement_location || '').toLowerCase();
+        if (dName.includes('rumah tangga') || dName.includes('wisma') || dName.includes('biring ere') || dName.includes('biringere')) {
+          applicantGroup = 'RUMAH TANGGA';
+        } else if (dName.includes('shipment') || dName.includes('timbangan') || dName.includes('bontoa') || dName.includes('maccini')) {
+          applicantGroup = 'SHIPMENT';
+        }
+      }
       if (!applicantDivId) applicantDivId = a.division_id;
       if (!applicantShiftId) applicantShiftId = a.shift_id;
 
@@ -8259,14 +8315,15 @@ async function getSmartReliefRecommendations({ applicantId, startDate, endDate, 
       targetDate: curDate,
       applicantDivId,
       applicantName,
+      applicantGroup,
       applicantPosts,
       allocatedSubstituteIds
     });
 
-    // Pilih kandidat terbaik yang BELUM bertugas di hari lain
-    let chosen = evalRes.ranked.find(c => !c.isAlreadyAssignedAnotherDay);
+    // Pilih kandidat terbaik: TIDAK bertugas di hari lain DAN TIDAK ada konflik berturut-turut
+    let chosen = evalRes.ranked.find(c => !c.isAlreadyAssignedAnotherDay && !c.isConsecutiveConflict);
     if (!chosen && evalRes.ranked.length > 0) {
-      chosen = evalRes.ranked[0]; // fallback jika personil habis
+      chosen = evalRes.ranked.find(c => !c.isAlreadyAssignedAnotherDay) || evalRes.ranked[0];
     }
 
     if (chosen) {
@@ -9838,6 +9895,20 @@ app.post('/api/leaves', async (req, res) => {
         return res.status(400).json({
           success: false,
           error: `Anda sudah memiliki pengajuan ${ex.leave_type} aktif (status: ${ex.status.toUpperCase()}) pada periode ${sStr} s/d ${eStr}. Dilarang membuat pengajuan ganda di rentang tanggal yang sama.`
+        });
+      }
+
+      // Guard Anti-Spam / Rapid-Fire Cooldown: Cegah karyawan mengajukan berturut-turut dalam waktu singkat sehingga data tidak duplikat
+      const recentSubmission = await pool.query(
+        `SELECT id, created_at FROM hrm_leave_requests 
+         WHERE user_id = $1 AND created_at > (NOW() - INTERVAL '60 seconds')
+         ORDER BY created_at DESC LIMIT 1`,
+        [validUserId]
+      );
+      if (recentSubmission.rows.length > 0) {
+        return res.status(429).json({
+          success: false,
+          error: 'Permohonan cuti/izin Anda baru saja terkirim ke sistem. Mohon tunggu 1 menit sebelum mengirim permohonan baru guna menghindari data ganda/duplikat.'
         });
       }
     }

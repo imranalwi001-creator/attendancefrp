@@ -4200,6 +4200,14 @@ export const hrmService = {
       throw new Error('Semua pengajuan cuti, izin, dan sakit WAJIB melampirkan foto bukti pendukung');
     }
 
+    // Cooldown Anti-Spam / Anti-Duplikat Pengajuan Beruntun
+    const now = Date.now();
+    const lastSubmitTime = (hrmService as any)._lastLeaveSubmitTime || 0;
+    if (now - lastSubmitTime < 60000) {
+      const waitSec = Math.ceil((60000 - (now - lastSubmitTime)) / 1000);
+      throw new Error(`Permohonan cuti baru saja terkirim ke server. Mohon tunggu ${waitSec} detik sebelum mengirim pengajuan baru guna menghindari duplikasi data.`);
+    }
+
     const start = new Date(req.startDate);
     const end = new Date(req.endDate);
     const diffTime = Math.abs(end.getTime() - start.getTime());
@@ -4227,6 +4235,7 @@ export const hrmService = {
       if (res && res.balance) {
         backendBalance = res.balance;
       }
+      (hrmService as any)._lastLeaveSubmitTime = Date.now();
     } catch (err: any) {
       console.error('[HRM] Backend leave creation failed:', err);
       const errMsg = err?.data?.error || err?.message || 'Gagal menyimpan pengajuan ke server database';
