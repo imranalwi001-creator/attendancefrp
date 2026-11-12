@@ -8571,33 +8571,42 @@ async function assignReliefSubstituteHelper({
       appliedEndTime = endTime;
       appliedDuration = durationHours;
 
-      await pool.query(`
-        INSERT INTO hrm_employee_schedules (
-          user_id, schedule_date, shift_id, shift_code, shift_name, start_time, end_time, duration_hours, is_off, notes, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, false, $9, NOW()
-        )
-        ON CONFLICT (user_id, schedule_date) DO UPDATE SET
-          shift_id = EXCLUDED.shift_id,
-          shift_code = EXCLUDED.shift_code,
-          shift_name = EXCLUDED.shift_name,
-          start_time = EXCLUDED.start_time,
-          end_time = EXCLUDED.end_time,
-          duration_hours = EXCLUDED.duration_hours,
-          is_off = false,
-          notes = EXCLUDED.notes,
-          updated_at = NOW();
-      `, [
-        reliefUserId,
-        curDateStr,
-        shiftId,
-        shiftCode,
-        `${shiftName} - Pengganti ${originalUser.full_name}`,
-        startTime,
-        endTime,
-        durationHours,
-        `Tugas Pengganti Pos ${originalUser.full_name} (Cuti Resmi)`
-      ]);
+      const reliefSchedRes = await pool.query(
+        `SELECT * FROM hrm_employee_schedules WHERE user_id = $1 AND schedule_date = $2 LIMIT 1`,
+        [reliefUserId, curDateStr]
+      );
+
+      if (reliefSchedRes.rows.length > 0) {
+        // Personil pengganti sudah memiliki jadwal resmi (baik Libur/OFF maupun Shift Kerjanya sendiri)
+        // PERTAHANKAN jadwal asli karyawan agar tidak tertimpa/tidak memicu Alpa palsu saat hari libur!
+        const existingNotes = reliefSchedRes.rows[0].notes || '';
+        const subNote = `Tugas Pengganti Pos ${originalUser.full_name} (Cuti Resmi)`;
+        const updatedNotes = existingNotes && !existingNotes.includes('Tugas Pengganti')
+          ? `${existingNotes} • ${subNote}`
+          : (existingNotes || subNote);
+        await pool.query(
+          `UPDATE hrm_employee_schedules SET notes = $1, updated_at = NOW() WHERE id = $2`,
+          [updatedNotes, reliefSchedRes.rows[0].id]
+        );
+      } else {
+        await pool.query(`
+          INSERT INTO hrm_employee_schedules (
+            user_id, schedule_date, shift_id, shift_code, shift_name, start_time, end_time, duration_hours, is_off, notes, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, false, $9, NOW()
+          )
+        `, [
+          reliefUserId,
+          curDateStr,
+          shiftId,
+          shiftCode,
+          `${shiftName} - Pengganti ${originalUser.full_name}`,
+          startTime,
+          endTime,
+          durationHours,
+          `Tugas Pengganti Pos ${originalUser.full_name} (Cuti Resmi)`
+        ]);
+      }
 
       await pool.query(`
         UPDATE hrm_employee_schedules
