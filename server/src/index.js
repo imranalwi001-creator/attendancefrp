@@ -13172,7 +13172,27 @@ app.get('/api/notifications', async (req, res) => {
     }
 
     const result = await pool.query(query, params);
-    res.json({ success: true, data: result.rows });
+
+    // Deduplikasi notifikasi agar 1 pengajuan (misal cuti 3 hari) hanya tampil sebagai 1 notifikasi di sisi penerima
+    const seenKeys = new Set();
+    const dedupedRows = [];
+    for (const row of result.rows) {
+      let meta = row.metadata;
+      if (typeof meta === 'string') {
+        try { meta = JSON.parse(meta); } catch (_) { meta = null; }
+      }
+      const dedupKey = meta && meta.leaveId
+        ? `leave:${meta.leaveId}`
+        : meta && meta.overtimeId
+        ? `ot:${meta.overtimeId}`
+        : `${row.type || ''}|${row.title || ''}|${row.message || ''}`;
+      if (!seenKeys.has(dedupKey)) {
+        seenKeys.add(dedupKey);
+        dedupedRows.push(row);
+      }
+    }
+
+    res.json({ success: true, data: dedupedRows });
   } catch (err) {
     console.error('Fetch notifications error:', err);
     res.status(500).json({ success: false, error: err.message });

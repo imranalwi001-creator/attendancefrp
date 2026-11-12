@@ -95,3 +95,9 @@ Khusus penugasan di **Pelabuhan Maccini Baji** (Koordinat: `-4.773545, 119.48752
    - Total Potongan Baku: **Rp 161.802** (3% + 1% dari Rp 4.045.050).
    - Jumlah Gaji Bersih Standar: **Rp 3.883.248** (Rp 4.045.050 - Rp 161.802).
    - DILARANG menampilkan baris potongan PPh 21 di slip gaji cetak maupun elektronik.
+9. **Aturan Baku Lembur Sambung Maju & Sambung Mundur Shift serta Larangan Pengganti Berturut-Turut**:
+   - **Lembur Sambung Maju Shift**: Karyawan menjalani **Shift Asli** terlebih dahulu (misal Shift I), lalu setelah selesai melanjutkan ke shift berikutnya (misal Shift II) sebagai **Shift Pengganti (Lembur)**.
+   - **Lembur Sambung Mundur Shift**: Karyawan masuk lebih awal di shift sebelumnya (misal Shift I) sebagai **Shift Pengganti (Lembur)**, lalu setelah selesai melanjutkan **Shift Asli** sesuai jadwal resminya (misal Shift II) pada tanggal yang sama.
+   - **Aturan Penyimpanan & Auto-Close**: Kedua sesi pada tanggal yang sama WAJIB tersimpan sebagai **2 baris terpisah** di `hrm_attendances` (tidak ada unique index tunggal `(user_id, attendance_date)`), masing-masing dengan `shift_id` dan `shift_name` sendiri, dan service auto-close wajib membaca `shift_id` milik sesi tersebut (`a.shift_id`), bukan jadwal pengganti.
+   - **Aturan Laporan Rekap (1 Tanggal = 1 Baris)**: Pada lembar rekap presensi & lembur karyawan, 1 tanggal hanya boleh tampil **1 baris**. **Shift Asli** masuk ke kolom **ABSEN** (`MASUK`, `PULANG`, `TELAT`), sedangkan **Shift Pengganti** masuk ke kolom **LEMBUR** (`MULAI`, `SELESAI`, `REALISASI JAM LEMBUR`).
+   - **Larangan Keras Pengganti Berturut-Turut**: Jika seorang karyawan cuti/izin lebih dari 1 hari (misal 3 hari), **DILARANG KERAS** menggunakan karyawan pengganti yang sama secara berturut-turut (1 pengganti maksimal 1 hari berturut-turut).

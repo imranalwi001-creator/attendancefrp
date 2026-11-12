@@ -53,9 +53,12 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
   const [searchQuery, setSearchQuery] = useState('');
   const [processingId, setProcessingId] = useState<string | null>(null);
 
-  // Smart Relief Candidates per Leave Request
+  // Smart Relief Candidates per Leave Request (termasuk rotasi harian multi-hari & pencarian per hari)
   const [candidatesMap, setCandidatesMap] = useState<Record<string, any[]>>({});
   const [selectedSubMap, setSelectedSubMap] = useState<Record<string, any>>({});
+  const [dailySlotsMap, setDailySlotsMap] = useState<Record<string, any[]>>({});
+  const [dailySubMap, setDailySubMap] = useState<Record<string, Record<string, any>>>({});
+  const [dailySearchMap, setDailySearchMap] = useState<Record<string, Record<string, string>>>({});
   const [loadingCandidates, setLoadingCandidates] = useState<Record<string, boolean>>({});
   const [sendingWaMap, setSendingWaMap] = useState<Record<string, boolean>>({});
   const [manualConfirmedMap, setManualConfirmedMap] = useState<Record<string, boolean>>({});
@@ -179,9 +182,41 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
         const list = res.data.allRanked || res.data.sameDivOff || [];
         setCandidatesMap((prev) => ({ ...prev, [leave.id]: list }));
 
+        const slots = Array.isArray(res.data.dailySlots) && res.data.dailySlots.length > 0
+          ? res.data.dailySlots
+          : [{
+              date: leave.startDate,
+              dayIndex: 1,
+              dayName: 'Hari ke-1',
+              recommendedSubstitute: list.find((c: any) => c.isOff) || list[0] || null,
+              candidates: list,
+            }];
+
+        setDailySlotsMap((prev) => ({ ...prev, [leave.id]: slots }));
+
+        // Auto-pilih N kandidat berbeda untuk masing-masing hari (anti-berturut-turut)
+        const autoDailySelection: Record<string, any> = {};
+        let prevSubId: string | null = null;
+        for (const slot of slots) {
+          const slotCands = Array.isArray(slot.candidates) && slot.candidates.length > 0 ? slot.candidates : list;
+          let picked = slot.recommendedSubstitute || slotCands.find((c: any) => c.id !== prevSubId && (c.isOff || !c.isAlreadyAssignedAnotherDay)) || slotCands.find((c: any) => c.id !== prevSubId) || slotCands[0];
+          if (picked && prevSubId && picked.id === prevSubId) {
+            const alt = slotCands.find((c: any) => c.id !== prevSubId);
+            if (alt) picked = alt;
+          }
+          if (picked) {
+            autoDailySelection[slot.date] = picked;
+            prevSubId = picked.id;
+          }
+        }
+        setDailySubMap((prev) => ({
+          ...prev,
+          [leave.id]: prev[leave.id] && Object.keys(prev[leave.id]).length > 0 ? prev[leave.id] : autoDailySelection,
+        }));
+
         // Default: pilih kandidat prioritas 1 (Sedang Libur/OFF) secara otomatis jika belum ada pengganti
         if (!selectedSubMap[leave.id] && list.length > 0) {
-          const defaultCand = list.find((c: any) => c.isOff) || list[0];
+          const defaultCand = autoDailySelection[slots[0]?.date] || list.find((c: any) => c.isOff) || list[0];
           setSelectedSubMap((prev) => ({ ...prev, [leave.id]: defaultCand }));
         }
       }
@@ -314,12 +349,38 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
     const chosenSubstitute = selectedSubMap[leave.id];
     const isSpecialOfficer = isLeadershipSpecialFieldOfficer(leave.userId || leave.userNip || leave.userName);
 
-    // Aturan Zero Vacancy: jika menyetujui, wajib ada personil pengganti (KECUALI 3 Petugas Lapangan Khusus Pimpinan: Aslam, Samsi, Takdir)!
-    if (status === 'approved' && !chosenSubstitute && !leave.substituteName && !isSpecialOfficer) {
-      toast.error('Aturan Zero Vacancy: Pos tidak boleh kosong! Harap pilih Rekan Pengganti Pos sebelum menyetujui.', {
-        duration: 4000,
-      });
-      return;
+    const slots = dailySlotsMap[leave.id] || [];
+    const dailySelection = dailySubMap[leave.id] || {};
+    const dailySubstitutesPayload = slots.map((slot: any) => {
+      const picked = dailySelection[slot.date] || chosenSubstitute;
+      return {
+        date: slot.date,
+        dutyDate: slot.date,
+        substituteId: picked?.id,
+        substituteName: picked?.name || picked?.fullName,
+        substituteNip: picked?.nip,
+      };
+    }).filter((d: any) => Boolean(d.substituteId));
+
+    // Aturan Zero Vacancy & Anti-Berturut-Turut: jika menyetujui, setiap hari wajib terisi dan tidak boleh orang yang sama berturut-turut!
+    if (status === 'approved' && !isSpecialOfficer) {
+      if (slots.length > 1) {
+        if (dailySubstitutesPayload.length < slots.length) {
+          toast.error(`Harap tentukan ${slots.length} karyawan pengganti untuk masing-masing hari cuti.`, { duration: 4000 });
+          return;
+        }
+        for (let i = 1; i < dailySubstitutesPayload.length; i++) {
+          if (dailySubstitutesPayload[i].substituteId === dailySubstitutesPayload[i - 1].substituteId) {
+            toast.error(`Dilarang menggunakan karyawan yang sama (${dailySubstitutesPayload[i].substituteName}) pada hari berturut-turut!`, { duration: 4500 });
+            return;
+          }
+        }
+      } else if (!chosenSubstitute && !leave.substituteName) {
+        toast.error('Aturan Zero Vacancy: Pos tidak boleh kosong! Harap pilih Rekan Pengganti Pos sebelum menyetujui.', {
+          duration: 4000,
+        });
+        return;
+      }
     }
 
     const isConfirmed = isSpecialOfficer ||
@@ -330,7 +391,9 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
     if (status === 'approved' && !isConfirmed && !force) {
       setConfirmModalData({
         leave,
-        substitute: chosenSubstitute || { name: leave.substituteName, nip: leave.substituteNip },
+        substitute: slots.length > 1
+          ? { name: dailySubstitutesPayload.map((d: any) => d.substituteName).join(', '), nip: '-' }
+          : (chosenSubstitute || { name: leave.substituteName, nip: leave.substituteNip }),
       });
       return;
     }
@@ -340,9 +403,11 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
       const approverName = currentUser?.fullName || 'Muh Aslam Faisal (Korlap)';
       const approverId = currentUser?.id || 'ebf10b16-ab2f-4b53-ab22-b3ffc00694db'; // Default Aslam UUID if context missing
 
-      const subId = chosenSubstitute?.id || leave.substituteId;
-      const subName = chosenSubstitute?.name || chosenSubstitute?.fullName || leave.substituteName;
-      const subNip = chosenSubstitute?.nip || leave.substituteNip;
+      const subId = dailySubstitutesPayload[0]?.substituteId || chosenSubstitute?.id || leave.substituteId;
+      const subName = dailySubstitutesPayload.length > 1
+        ? dailySubstitutesPayload.map((d: any) => d.substituteName).join(', ')
+        : (chosenSubstitute?.name || chosenSubstitute?.fullName || leave.substituteName);
+      const subNip = dailySubstitutesPayload[0]?.substituteNip || chosenSubstitute?.nip || leave.substituteNip;
 
       const res = await api.put<{ success: boolean; error?: string }>(`/leaves/${leave.id}/status`, {
         status,
@@ -354,6 +419,7 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
         substituteId: subId,
         substituteName: subName,
         substituteNip: subNip,
+        ...(dailySubstitutesPayload.length > 0 ? { dailySubstitutes: dailySubstitutesPayload } : {}),
       });
 
       if (res && res.success) {
@@ -638,26 +704,106 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                           </div>
 
                           {candidates.length > 0 ? (
-                            <div className="space-y-2">
-                              <label className="text-[9.5px] text-slate-400 block font-medium">
-                                Pilih rekan kerja untuk mengisi pos tugas agar tidak kosong:
-                              </label>
-                              <select
-                                value={selectedCandidate?.id || ''}
-                                onChange={(e) => {
-                                  const found = candidates.find((c) => c.id === e.target.value);
-                                  if (found) {
-                                    setSelectedSubMap((prev) => ({ ...prev, [leave.id]: found }));
-                                  }
-                                }}
-                                className="w-full bg-slate-950 border border-slate-700 text-slate-100 rounded-lg p-2 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
-                              >
-                                {candidates.map((cand) => (
-                                  <option key={cand.id} value={cand.id}>
-                                    ⭐ {cand.name} ({cand.nip}) — {cand.categoryTitle || (cand.isOff ? 'Sedang Libur/OFF' : cand.shiftName)} (Skor: {cand.score}%)
-                                  </option>
-                                ))}
-                              </select>
+                            <div className="space-y-2.5">
+                              {(() => {
+                                const slots = dailySlotsMap[leave.id] && dailySlotsMap[leave.id].length > 0
+                                  ? dailySlotsMap[leave.id]
+                                  : [{ date: leave.startDate, dayIndex: 1, dayName: 'Hari ke-1', candidates }];
+                                const dailySelection = dailySubMap[leave.id] || {};
+                                const dailySearches = dailySearchMap[leave.id] || {};
+
+                                return (
+                                  <div className="space-y-2.5">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <label className="text-[9.5px] text-slate-300 font-medium">
+                                        {slots.length > 1
+                                          ? `Tentukan ${slots.length} pengganti berbeda (1 hari = 1 orang, dilarang berturut-turut):`
+                                          : 'Pilih rekan kerja untuk mengisi pos tugas agar tidak kosong:'}
+                                      </label>
+                                      {slots.length > 1 && (
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold shrink-0">
+                                          {slots.length} Hari
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {slots.map((slot: any, sIdx: number) => {
+                                      const slotCands = Array.isArray(slot.candidates) && slot.candidates.length > 0 ? slot.candidates : candidates;
+                                      const qDay = (dailySearches[slot.date] || '').toLowerCase().trim();
+                                      const filteredDayCands = qDay
+                                        ? slotCands.filter((c: any) =>
+                                            (c.name || '').toLowerCase().includes(qDay) ||
+                                            (c.nip || '').toLowerCase().includes(qDay)
+                                          )
+                                        : slotCands;
+                                      const pickedForDay = dailySelection[slot.date] || (sIdx === 0 ? selectedCandidate : null);
+                                      const prevDayPickedId = sIdx > 0 ? dailySelection[slots[sIdx - 1].date]?.id : null;
+                                      const nextDayPickedId = sIdx < slots.length - 1 ? dailySelection[slots[sIdx + 1].date]?.id : null;
+
+                                      return (
+                                        <div key={slot.date} className="p-2 bg-slate-950/90 border border-slate-800 rounded-xl space-y-1.5">
+                                          <div className="flex items-center justify-between text-[10px]">
+                                            <span className="font-bold text-emerald-300">
+                                              Hari ke-{slot.dayIndex || sIdx + 1} ({slot.date})
+                                            </span>
+                                            <span className="text-slate-400 text-[9px]">{slot.dayName}</span>
+                                          </div>
+
+                                          {/* Pencarian Nama / NIP Pengganti per Hari */}
+                                          <div className="relative">
+                                            <Search className="w-3 h-3 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                            <input
+                                              type="text"
+                                              value={dailySearches[slot.date] || ''}
+                                              onChange={(e) => {
+                                                const val = e.target.value;
+                                                setDailySearchMap((prev) => ({
+                                                  ...prev,
+                                                  [leave.id]: { ...(prev[leave.id] || {}), [slot.date]: val },
+                                                }));
+                                              }}
+                                              placeholder={`Cari nama / NIP pengganti Hari ke-${slot.dayIndex || sIdx + 1}...`}
+                                              className="w-full bg-slate-900 border border-slate-700/80 text-slate-100 rounded-lg pl-7 pr-2.5 py-1.5 text-[11px] placeholder:text-slate-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                                            />
+                                          </div>
+
+                                          <select
+                                            value={pickedForDay?.id || ''}
+                                            onChange={(e) => {
+                                              const found = slotCands.find((c: any) => c.id === e.target.value);
+                                              if (!found) return;
+                                              if ((prevDayPickedId && found.id === prevDayPickedId) || (nextDayPickedId && found.id === nextDayPickedId)) {
+                                                toast.error(`Dilarang memilih ${found.name} secara berturut-turut dengan hari bersebelahan!`);
+                                                return;
+                                              }
+                                              setDailySubMap((prev) => ({
+                                                ...prev,
+                                                [leave.id]: { ...(prev[leave.id] || {}), [slot.date]: found },
+                                              }));
+                                              if (sIdx === 0) {
+                                                setSelectedSubMap((prev) => ({ ...prev, [leave.id]: found }));
+                                              }
+                                            }}
+                                            className="w-full bg-slate-900 border border-slate-700 text-slate-100 rounded-lg p-2 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                                          >
+                                            <option value="">-- Pilih Pengganti Hari ke-{slot.dayIndex || sIdx + 1} --</option>
+                                            {filteredDayCands.map((cand: any) => {
+                                              const isAdjConflict = (prevDayPickedId && cand.id === prevDayPickedId) || (nextDayPickedId && cand.id === nextDayPickedId);
+                                              return (
+                                                <option key={cand.id} value={cand.id} disabled={Boolean(isAdjConflict)}>
+                                                  {isAdjConflict ? '⛔ ' : '⭐ '}
+                                                  {cand.name} ({cand.nip}) — {cand.categoryTitle || (cand.isOff ? 'Sedang Libur/OFF' : cand.shiftName)} (Skor: {cand.score}%)
+                                                  {isAdjConflict ? ' [Dipakai Hari Bersebelahan]' : ''}
+                                                </option>
+                                              );
+                                            })}
+                                          </select>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })()}
 
                               {/* Selected Candidate Info & WhatsApp Action */}
                               {selectedCandidate && (
