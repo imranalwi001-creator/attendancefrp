@@ -1904,8 +1904,16 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
     // Prioritas 2: Jika tidak ada jadwal roster harian spesifik, ATAU jika frontend secara eksplisit mengirim target shiftId lanjutan (multi-shift: menyambung maju/mundur)
     const explicitReqShiftId = (req.body.shiftId && UUID_REGEX.test(req.body.shiftId)) ? req.body.shiftId : null;
-    if (((!hasDailySchedule && !activeShiftId) || (explicitReqShiftId && explicitReqShiftId !== activeShiftId)) && userProfile) {
-      let targetShiftId = explicitReqShiftId;
+    const isStaleProfileShiftFallback = Boolean(
+      hasDailySchedule &&
+      userProfile &&
+      explicitReqShiftId &&
+      explicitReqShiftId === userProfile.shift_id &&
+      (!req.body.shiftName || String(req.body.shiftName).trim().toLowerCase() === String(activeShiftName || '').trim().toLowerCase())
+    );
+    const effectiveExplicitShiftId = isStaleProfileShiftFallback ? null : explicitReqShiftId;
+    if (((!hasDailySchedule && !activeShiftId) || (effectiveExplicitShiftId && effectiveExplicitShiftId !== activeShiftId)) && userProfile) {
+      let targetShiftId = effectiveExplicitShiftId;
       if (!targetShiftId && userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) {
         targetShiftId = userProfile.shift_id;
       }

@@ -3441,6 +3441,7 @@ export const hrmService = {
         if (isUuid(data.shiftId)) return data.shiftId;
         if (isUuid(dailySchedule?.shiftId)) return dailySchedule.shiftId;
         if (isUuid(resolvedShift?.id)) return resolvedShift.id;
+        if (dailySchedule) return undefined;
         if (isUuid(userShift?.id)) return userShift.id;
         if (isUuid(user?.shiftId)) return user.shiftId;
         return undefined;
