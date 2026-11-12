@@ -3028,8 +3028,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       }
 
       const isStartingNextShift = actionType === 'clock_in' && Boolean(todayAttendance?.clockIn && todayAttendance?.clockOut);
-      const targetShiftId = isStartingNextShift && nextShiftInfo ? allMasterShifts.find(s => s.code === nextShiftInfo?.nextShiftCode)?.id : undefined;
-      const targetShiftName = isStartingNextShift && nextShiftInfo ? nextShiftInfo?.nextShiftName : undefined;
+      const matchedNextMasterShift = isStartingNextShift && nextShiftInfo
+        ? allMasterShifts.find((s) => {
+            const c = (s.code || '').toUpperCase();
+            const n = (s.name || '').toUpperCase();
+            if (c === nextShiftInfo.nextShiftCode) return true;
+            if (nextShiftInfo.nextShiftCode === 'SHF-II') return c === 'SIANG' || n.includes('SHIFT II') || n.includes('SHIFT 2');
+            if (nextShiftInfo.nextShiftCode === 'SHF-III') return c === 'MALAM' || n.includes('SHIFT III') || n.includes('SHIFT 3');
+            if (nextShiftInfo.nextShiftCode === 'SHF-I') return c === 'PAGI' || n.includes('SHIFT I ') || n.includes('SHIFT I(') || n.includes('SHIFT 1');
+            return false;
+          })
+        : undefined;
+      const targetShiftId = matchedNextMasterShift?.id;
+      const targetShiftName = isStartingNextShift && nextShiftInfo ? (matchedNextMasterShift?.name || nextShiftInfo.nextShiftName) : undefined;
 
       const effectiveAttDate = actionType === 'clock_out'
         ? (todayAttendance?.attendanceDate || todayAttendance?.date || todayStr)

@@ -365,10 +365,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         return dateStr >= sDate && dateStr <= eDate;
       });
 
-      // 3. Cari presensi pada tanggal ini
-      const att = combinedAttendances.find(
-        (a) => (a.attendanceDate || (a as any).date || '').slice(0, 10) === dateStr
-      );
+      // 3. Cari semua presensi pada tanggal ini (mendukung multi-shift dalam 1 hari, misal Shift Pengganti + Shift Asli)
+      const dayAtts = combinedAttendances
+        .filter((a) => (a.attendanceDate || (a as any).date || '').slice(0, 10) === dateStr)
+        .sort((a, b) => String(a.clockIn || '').localeCompare(String(b.clockIn || '')));
 
       // 4. Cari lembur pada tanggal ini (sinkron PostgreSQL snake_case & camelCase)
       const ot = combinedOvertimes.find((o) => {
@@ -376,6 +376,9 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         return oDate === dateStr;
       });
 
+      const sessionsToRender = dayAtts.length > 0 ? dayAtts : [undefined];
+
+      sessionsToRender.forEach((att, attIdx) => {
       let absenMasuk = '-';
       let absenPulang = '-';
       let telatMnt = '-';
@@ -390,7 +393,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       const hasClockOut = Boolean(att?.clockOut);
 
       // PRIORITAS 1: Presensi Fisik Aktual
-      if (hasClockIn) {
+      if (hasClockIn && att) {
         absenMasuk = (att.clockIn || '').substring(0, 5);
         if (hasClockOut) {
           absenPulang = (att.clockOut || '').substring(0, 5);
@@ -404,7 +407,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         if (att.notes) {
           uraianPekerjaan = att.notes;
         } else {
-          uraianPekerjaan = isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : (sched?.shiftName || 'Tugas Lapangan Operasional');
+          uraianPekerjaan = isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : (att.shiftName || sched?.shiftName || 'Tugas Lapangan Operasional');
         }
         memerintahkanKaur = isSpecialTarget ? 'Pimpinan PT. FRP' : (employeeKaur || 'Korlap');
       }
@@ -470,8 +473,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         memerintahkanKaur = '-';
       }
 
-      // Lembur / SPKL Realtime Sync (Mendukung snake_case dari PostgreSQL & camelCase dari Frontend)
-      if (ot) {
+      // Lembur / SPKL Realtime Sync (hanya lampirkan pada baris pertama di tanggal tersebut agar tidak duplikat)
+      if (ot && attIdx === 0) {
         const rawStart = ot.startTime || ot.start_time || '';
         const rawEnd = ot.endTime || ot.end_time || '';
         lemburMulai = rawStart ? String(rawStart).substring(0, 5) : '-';
@@ -510,7 +513,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           .trim();
         const posMatch = uraianPekerjaan.match(/\[Pos:\s*([^\]]+)\]/i);
         if (posMatch) {
-          uraianPekerjaan = `Tugas Lapangan di Pos ${posMatch[1].trim()}`;
+          const shiftPrefix = att?.shiftName ? `${att.shiftName} • ` : '';
+          uraianPekerjaan = `${shiftPrefix}Pos ${posMatch[1].trim()}`;
+        } else if (att?.shiftName && !uraianPekerjaan.includes(att.shiftName) && dayAtts.length > 1) {
+          uraianPekerjaan = `${att.shiftName} • ${uraianPekerjaan}`;
         }
       }
 
@@ -560,6 +566,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         ket,
         attRecord: att,
       });
+      });
     }
 
     return rows;
@@ -568,6 +575,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   // Statistik Rekapan Bulanan (Presisi & Dinamis)
   const stats = useMemo(() => {
     let totalHadir = 0;
+    const hadirDates = new Set<string>();
     let totalTelatKali = 0;
     let totalTelatMnt = 0;
     let totalOff = 0;
@@ -581,7 +589,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     monthlyRows.forEach((r) => {
       // HANYA hitung Hadir jika benar-benar HADIR atau TELAT atau LEMBUR (Bukan Cuti/Sakit/Izin/Off/Alpa)
       if (r.ket.includes('HADIR') || r.ket === 'TELAT' || r.ket.includes('LEMBUR')) {
-        totalHadir++;
+        hadirDates.add(r.rawDate);
+        totalHadir = hadirDates.size;
 
         let dayNetMins = 0;
         if (r.absenMasuk && r.absenPulang && r.absenMasuk !== '-' && r.absenPulang !== '-' && r.absenMasuk !== 'OFF' && r.absenPulang !== 'OFF') {

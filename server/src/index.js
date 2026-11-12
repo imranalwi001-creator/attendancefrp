@@ -9983,6 +9983,72 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       });
     }
 
+    // Aturan Ketat: Dilarang keras menggunakan karyawan pengganti yang sama secara berturut-turut (1 pengganti = maksimal 1 hari berturut-turut)
+    if (!isSpecial3 && status === 'approved') {
+      const startD = new Date(String(leave.start_date).slice(0, 10) + 'T00:00:00Z');
+      const endD = new Date(String(leave.end_date || leave.start_date).slice(0, 10) + 'T00:00:00Z');
+      const totalLeaveDays = Math.max(1, Math.round((endD - startD) / 86400000) + 1);
+
+      if (totalLeaveDays > 1 && !hasDaily) {
+        return res.status(400).json({
+          success: false,
+          error: 'Dilarang menggunakan karyawan pengganti yang sama secara berturut-turut! Untuk cuti lebih dari 1 hari, wajib menetapkan rotasi pengganti harian yang berbeda setiap hari.',
+        });
+      }
+
+      const assignmentsToValidate = hasDaily
+        ? dailySubstitutes.map((ds) => ({
+            subUserId: ds.substituteId || ds.id,
+            subName: ds.substituteName || ds.name || 'Karyawan Pengganti',
+            dutyDate: String(ds.date || ds.dutyDate || '').slice(0, 10),
+          }))
+        : (substituteId || leave.substitute_id)
+        ? [{
+            subUserId: substituteId || leave.substitute_id,
+            subName: substituteName || leave.substitute_name || 'Karyawan Pengganti',
+            dutyDate: String(leave.start_date).slice(0, 10),
+          }]
+        : [];
+
+      // Urutkan per tanggal dan cek duplikat berturut-turut dalam pengajuan yang sama
+      assignmentsToValidate.sort((a, b) => a.dutyDate.localeCompare(b.dutyDate));
+      for (let i = 1; i < assignmentsToValidate.length; i++) {
+        const prev = assignmentsToValidate[i - 1];
+        const curr = assignmentsToValidate[i];
+        if (prev.subUserId && curr.subUserId && String(prev.subUserId) === String(curr.subUserId)) {
+          return res.status(400).json({
+            success: false,
+            error: `Pelanggaran Aturan Pengganti Berturut-Turut: ${curr.subName} tidak diperbolehkan menjadi pengganti pada ${prev.dutyDate} dan ${curr.dutyDate} secara berturut-turut.`,
+          });
+        }
+      }
+
+      // Cek juga terhadap database (apakah pengganti sudah mengganti di hari D-1 atau D+1 pada penugasan lain)
+      for (const item of assignmentsToValidate) {
+        if (!item.subUserId || !item.dutyDate) continue;
+        const adjRes = await pool.query(
+          `SELECT duty_date::text as conflict_date FROM hrm_leave_daily_substitutes
+           WHERE substitute_id::text = $1
+             AND leave_request_id != $2
+             AND duty_date IN (($3::date - INTERVAL '1 day')::date, ($3::date + INTERVAL '1 day')::date)
+           UNION
+           SELECT duty_date::text as conflict_date FROM hrm_shift_substitutions
+           WHERE relief_user_id::text = $1
+             AND status = 'approved'
+             AND duty_date IN (($3::date - INTERVAL '1 day')::date, ($3::date + INTERVAL '1 day')::date)
+           LIMIT 1`,
+          [String(item.subUserId), leave.id, item.dutyDate]
+        ).catch(() => ({ rows: [] }));
+
+        if (adjRes.rows.length > 0) {
+          return res.status(400).json({
+            success: false,
+            error: `Pelanggaran Aturan Pengganti Berturut-Turut: ${item.subName} sudah bertugas sebagai pengganti pada ${adjRes.rows[0].conflict_date}, sehingga dilarang menjadi pengganti lagi pada ${item.dutyDate}.`,
+          });
+        }
+      }
+    }
+
     let validApproverId = approverId;
     if (approverId && !UUID_REGEX.test(approverId)) {
       const aRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [approverId]);
