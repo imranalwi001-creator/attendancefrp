@@ -14796,14 +14796,15 @@ Tembusan: Korlap, K3 & Admin HRD.`;
 async function runAutoCloseCompliantAttendance() {
   try {
     const candidates = await pool.query(`
-      SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.notes,
-             COALESCE(es.end_time::text, p.custom_end_time::text, s.end_time::text, '16:30') as shift_end_time,
-             COALESCE(es.start_time::text, p.custom_start_time::text, s.start_time::text, '07:30') as shift_start_time,
-             COALESCE(es.is_night_shift, s.is_cross_day, false) as is_cross_day,
+      SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.notes, a.shift_id as att_shift_id, a.shift_name as att_shift_name,
+             COALESCE(ash.end_time::text, es.end_time::text, p.custom_end_time::text, s.end_time::text, '16:30') as shift_end_time,
+             COALESCE(ash.start_time::text, es.start_time::text, p.custom_start_time::text, s.start_time::text, '07:30') as shift_start_time,
+             COALESCE(ash.is_cross_day, es.is_night_shift, s.is_cross_day, false) as is_cross_day,
              p.full_name, p.nip, p.phone, p.is_out_of_bounds,
              (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date as today_wita
       FROM hrm_attendances a
       JOIN hrm_profiles p ON a.user_id = p.id
+      LEFT JOIN hrm_shifts ash ON a.shift_id = ash.id
       LEFT JOIN hrm_shifts s ON p.shift_id = s.id
       LEFT JOIN hrm_employee_schedules es ON es.user_id = p.id AND es.schedule_date = a.attendance_date
       WHERE a.attendance_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date
@@ -14852,6 +14853,12 @@ async function runAutoCloseCompliantAttendance() {
 
       // GUARD MUTLAK 2: Dilarang keras auto-close presensi karyawan yang baru clock-in kurang dari 120 menit (2 jam)!
       if (clockInAgeMins < 120) {
+        continue;
+      }
+
+      // GUARD MUTLAK 3: Jika karyawan clock-in SETELAH jam selesai shift yang terbaca (misal sesi lanjutan Shift II/III),
+      // jangan pernah menutup dengan jam selesai shift sebelumnya (clock_out < clock_in).
+      if (clockInUtcMs >= shiftEndUtcMs) {
         continue;
       }
 
