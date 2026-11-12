@@ -9820,6 +9820,28 @@ app.post('/api/leaves', async (req, res) => {
     let finalReason = reason.trim();
     let isUrgentSubmission = false;
 
+    // Guard Anti-Double Submission: Cegah pengajuan ganda untuk rentang tanggal yang sama
+    if (!isAdminDirect) {
+      const existingLeaveCheck = await pool.query(
+        `SELECT id, leave_type, start_date, end_date, status 
+         FROM hrm_leave_requests 
+         WHERE user_id = $1 
+           AND status IN ('pending', 'approved') 
+           AND (start_date <= $3::date AND end_date >= $2::date)
+         LIMIT 1`,
+        [validUserId, startDate, endDate]
+      );
+      if (existingLeaveCheck.rows.length > 0) {
+        const ex = existingLeaveCheck.rows[0];
+        const sStr = ex.start_date.toISOString ? ex.start_date.toISOString().slice(0, 10) : String(ex.start_date).slice(0, 10);
+        const eStr = ex.end_date.toISOString ? ex.end_date.toISOString().slice(0, 10) : String(ex.end_date).slice(0, 10);
+        return res.status(400).json({
+          success: false,
+          error: `Anda sudah memiliki pengajuan ${ex.leave_type} aktif (status: ${ex.status.toUpperCase()}) pada periode ${sStr} s/d ${eStr}. Dilarang membuat pengajuan ganda di rentang tanggal yang sama.`
+        });
+      }
+    }
+
     // Aturan Cuti Tahunan: Cek sisa kuota jika bukan bypass admin
     if (['cuti_tahunan', 'annual_leave', 'cuti'].includes(String(type).toLowerCase()) && !isAdminDirect) {
       const annualQuota = userProfile.annual_leave_quota ?? 12;
@@ -10007,6 +10029,30 @@ app.put('/api/leaves/:id/status', async (req, res) => {
     }
     const leave = lRes.rows[0];
 
+    // Guard Anti-Reapproval & Anti-Double Approved Leave
+    if (leave.status === 'approved' && status === 'approved') {
+      return res.status(400).json({
+        success: false,
+        error: 'Permohonan cuti ini sudah berstatus DISETUJUI sebelumnya. Tidak diperbolehkan menyetujui ulang.',
+      });
+    }
+
+    if (status === 'approved') {
+      const overlapApproved = await pool.query(
+        `SELECT id, leave_type, start_date, end_date FROM hrm_leave_requests
+         WHERE user_id = $1 AND id != $2 AND status = 'approved'
+           AND (start_date <= $4::date AND end_date >= $3::date)
+         LIMIT 1`,
+        [leave.user_id, leave.id, leave.start_date, leave.end_date]
+      );
+      if (overlapApproved.rows.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: `Karyawan ${leave.user_name} sudah memiliki permohonan cuti (${overlapApproved.rows[0].leave_type}) yang disetujui pada periode tanggal yang sama. Dilarang menyetujui pengajuan ganda.`,
+        });
+      }
+    }
+
     // Aturan Zero Vacancy: Jika disetujui, pengganti wajib ada! (Kecuali 3 Petugas Lapangan Khusus Pimpinan)
     const isSpecial3 = isExemptFieldOfficer({
       id: leave.user_id,
@@ -10083,6 +10129,26 @@ app.put('/api/leaves/:id/status', async (req, res) => {
           return res.status(400).json({
             success: false,
             error: `Pelanggaran Aturan Pengganti Berturut-Turut: ${item.subName} sudah bertugas sebagai pengganti pada ${adjRes.rows[0].conflict_date}, sehingga dilarang menjadi pengganti lagi pada ${item.dutyDate}.`,
+          });
+        }
+
+        // Cek Zero Colliding Relief: Dilarang menugaskan lebih dari 1 personil pengganti untuk pos & tanggal yang sama
+        const posConflictRes = await pool.query(
+          `SELECT ss.duty_date::text as conflict_date, p.full_name as existing_sub_name
+           FROM hrm_shift_substitutions ss
+           JOIN hrm_profiles p ON ss.relief_user_id = p.id
+           WHERE ss.original_user_id = $1
+             AND ss.duty_date = $2::date
+             AND ss.status = 'approved'
+             AND (ss.reference_id IS NULL OR ss.reference_id != $3)
+           LIMIT 1`,
+          [leave.user_id, item.dutyDate, leave.id]
+        ).catch(() => ({ rows: [] }));
+
+        if (posConflictRes.rows.length > 0) {
+          return res.status(400).json({
+            success: false,
+            error: `Bentrok Penugasan Pengganti: Pos ${leave.user_name} pada tanggal ${item.dutyDate} sudah resmi digantikan oleh ${posConflictRes.rows[0].existing_sub_name}. Dilarang menugaskan lebih dari 1 personil pengganti di hari dan pos yang sama.`,
           });
         }
       }
