@@ -105,7 +105,12 @@ export const HrmLeavePage: React.FC = () => {
 
   // Users for Substitute Recommendations
   const [allUsers, setAllUsers] = useState<import('@/types/hrm').UserProfile[]>([]);
-  const [liveBalance, setLiveBalance] = useState<{ annualLeaveQuota: number; usedLeaveDays: number; remainingLeaveDays: number } | null>(null);
+  const [liveBalance, setLiveBalance] = useState<{
+    annualLeaveQuota: number;
+    usedLeaveDays: number;
+    remainingLeaveDays: number;
+    monthlyBreakdown?: Array<{ monthKey: string; label: string; days: number }>;
+  } | null>(null);
 
   // Attachment Preview Modal
   const [previewAttachment, setPreviewAttachment] = useState<string | null>(null);
@@ -160,6 +165,7 @@ export const HrmLeavePage: React.FC = () => {
             annualLeaveQuota: Number(res.data.annualLeaveQuota ?? 12),
             usedLeaveDays: Number(res.data.usedLeaveDays ?? 0),
             remainingLeaveDays: Number(res.data.remainingLeaveDays ?? 0),
+            monthlyBreakdown: Array.isArray(res.data.monthlyBreakdown) ? res.data.monthlyBreakdown : [],
           });
         }
       })
@@ -170,10 +176,12 @@ export const HrmLeavePage: React.FC = () => {
     loadData();
     hrmService.syncWithBackend().then(loadData);
     window.addEventListener('hrm_leaves_updated', loadData);
+    window.addEventListener('hrm_users_updated', loadData);
     window.addEventListener('hrm_overtime_updated', loadData);
     window.addEventListener('hrm_data_updated', loadData);
     return () => {
       window.removeEventListener('hrm_leaves_updated', loadData);
+      window.removeEventListener('hrm_users_updated', loadData);
       window.removeEventListener('hrm_overtime_updated', loadData);
       window.removeEventListener('hrm_data_updated', loadData);
     };
@@ -449,6 +457,18 @@ export const HrmLeavePage: React.FC = () => {
                 Sisa Kuota Cuti Tahunan:{' '}
                 <strong className="text-primary font-semibold">{remainingLeave} Hari</strong>
                 {' '}(dari total {annualQuota} hari · {usedLeaveDays} terpakai)
+                {Array.isArray(liveBalance?.monthlyBreakdown) && liveBalance.monthlyBreakdown.length > 0 && (
+                  <span className="flex flex-wrap gap-1.5 mt-1.5">
+                    {liveBalance.monthlyBreakdown.map((m) => (
+                      <span
+                        key={m.monthKey}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted border border-border text-[11px] font-mono"
+                      >
+                        {m.label}: <strong className="text-foreground">{m.days}h</strong>
+                      </span>
+                    ))}
+                  </span>
+                )}
               </>
             ) : (
               <>

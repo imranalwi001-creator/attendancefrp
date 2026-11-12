@@ -441,6 +441,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     remainingLeaveDays: number;
     frpGroup?: string;
     frpGroupLabel?: string;
+    months?: Record<string, number>;
+    monthlyBreakdown?: Array<{ monthKey: string; label: string; days: number; pendingDays?: number }>;
     overtimeThisMonth?: any;
   } | null>(null);
   const [otDate, setOtDate] = useState(getTodayDateStr());
@@ -1134,6 +1136,19 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   cur.usedLeaveDays = balRes.data.usedLeaveDays;
                   localStorage.setItem('hrm_current_user', JSON.stringify(cur));
                 }
+              }
+              const cachedUsers = hrmService.getUsers();
+              if (Array.isArray(cachedUsers) && cachedUsers.length > 0) {
+                const updatedUsers = cachedUsers.map((u) =>
+                  u.id === user.id
+                    ? {
+                        ...u,
+                        annualLeaveQuota: balRes.data.annualLeaveQuota,
+                        usedLeaveDays: balRes.data.usedLeaveDays,
+                      }
+                    : u
+                );
+                hrmService.setInMemoryUsers(updatedUsers);
               }
             } catch (_) {}
           }
@@ -5617,6 +5632,24 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <p className="text-[9px] text-muted-foreground italic text-center">
                     *Saldo cuti terpotong otomatis saat pengajuan &amp; dikembalikan jika ditolak (Use-It-Or-Lose-It).
                   </p>
+                  {Array.isArray(liveLeaveBalance?.monthlyBreakdown) && liveLeaveBalance.monthlyBreakdown.length > 0 && (
+                    <div className="pt-2 border-t border-emerald-500/20">
+                      <p className="text-[9.5px] font-semibold text-emerald-800 dark:text-emerald-300 mb-1.5">
+                        Rincian Cuti Terpakai Per Bulan:
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {liveLeaveBalance.monthlyBreakdown.map((m) => (
+                          <span
+                            key={m.monthKey}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/85 dark:bg-slate-900/75 border border-emerald-500/20 text-[10px] font-mono text-slate-700 dark:text-slate-200"
+                          >
+                            <span className="font-semibold">{m.label}:</span>
+                            <span className="font-bold text-amber-600 dark:text-amber-400">{m.days}h</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 {userLeaves.length === 0 ? (
                   <div className="p-6 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">

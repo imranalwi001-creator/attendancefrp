@@ -9,6 +9,8 @@ import {
   recordLeaveSubmitLedger,
   recordLeaveDecisionLedger,
   buildExecutiveLeaveRecap,
+  getUserLeaveMonthlyBreakdown,
+  reviseUserMonthlyLeaves,
   resolveEffectiveBudgets,
   buildPayrollArrearsOvertimeRecap,
   generateBackendPayrollForPeriod,
@@ -7547,6 +7549,7 @@ app.get('/api/leaves/balance', async (req, res) => {
       [validUserId, prevMonthStart]
     );
     const ot = otRes.rows[0];
+    const monthlyInfo = await getUserLeaveMonthlyBreakdown(pool, p);
 
     res.json({
       success: true,
@@ -7558,6 +7561,8 @@ app.get('/api/leaves/balance', async (req, res) => {
         remainingLeaveDays: Math.max(0, quota - used),
         frpGroup,
         frpGroupLabel,
+        months: monthlyInfo.months,
+        monthlyBreakdown: monthlyInfo.monthlyBreakdown,
         // Lembur bulan mundur (approved) - Tanpa nominal rupiah untuk privasi karyawan
         overtimeThisMonth: {
           approvedCount: parseInt(ot.approved_count || 0, 10),
@@ -7595,13 +7600,16 @@ app.post('/api/leaves/correct-quota', async (req, res) => {
     }
 
     const beforeRes = await pool.query(
-      'SELECT annual_leave_quota, used_leave_days FROM hrm_profiles WHERE id = $1 LIMIT 1',
+      'SELECT id, nip, email, annual_leave_quota, used_leave_days FROM hrm_profiles WHERE id = $1 LIMIT 1',
       [validUserId]
     );
     if (beforeRes.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
     }
-    const prevUsed = Number(beforeRes.rows[0].used_leave_days || 0);
+    const beforeProf = beforeRes.rows[0];
+    const prevUsed = classifyFrpGroup(beforeProf) !== 'OTHER'
+      ? await recalculateUserLeaveUsedDays(pool, validUserId)
+      : Number(beforeProf.used_leave_days || 0);
 
     const updateRes = await pool.query(`
       UPDATE hrm_profiles
@@ -7615,7 +7623,8 @@ app.post('/api/leaves/correct-quota', async (req, res) => {
     const updated = updateRes.rows[0];
     if (cleanUsed !== null && cleanUsed !== prevUsed) {
       const delta = cleanUsed - prevUsed;
-      const monthKey = new Date().toISOString().slice(0, 7);
+      const nowWita = new Date(Date.now() + 8 * 3600 * 1000);
+      const monthKey = nowWita.toISOString().slice(0, 7);
       await pool.query(`
         INSERT INTO hrm_leave_ledger (user_id, leave_request_id, month_key, entry_type, days_delta, notes, created_by)
         VALUES ($1, NULL, $2, 'MANUAL_ADJUSTMENT', $3, $4, $5)
@@ -7659,6 +7668,35 @@ app.post('/api/leaves/correct-quota', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// PUT & POST /api/leaves/monthly-revision - Revisi data cuti karyawan per bulan oleh Admin/Superadmin
+const handleMonthlyLeaveRevision = async (req, res) => {
+  try {
+    const { userId, monthlyValues, reason, operatorName } = req.body || {};
+    const result = await reviseUserMonthlyLeaves(pool, {
+      userId,
+      monthlyValues,
+      reason,
+      operatorName,
+    });
+    const recap = await buildExecutiveLeaveRecap(pool);
+    res.json({
+      success: true,
+      message: result.changes.length > 0
+        ? `Revisi cuti bulanan ${result.fullName} berhasil disimpan (${result.changes.length} bulan diperbarui).`
+        : `Tidak ada perubahan angka cuti untuk ${result.fullName}.`,
+      data: result,
+      recap,
+    });
+  } catch (err) {
+    const msg = err?.message || 'Gagal menyimpan revisi cuti bulanan';
+    const status = msg.includes('tidak ditemukan') ? 404 : (msg.includes('wajib') || msg.includes('valid') || msg.includes('harus') ? 400 : 500);
+    console.error('[MonthlyLeaveRevision] Error:', msg);
+    res.status(status).json({ success: false, error: msg });
+  }
+};
+app.put('/api/leaves/monthly-revision', handleMonthlyLeaveRevision);
+app.post('/api/leaves/monthly-revision', handleMonthlyLeaveRevision);
 
 // GET /api/leaves/executive-recap - Rekapan Cuti Resmi Pimpinan (Rumah Tangga 12h, Shipment 9h, Karyawan Tetap)
 app.get('/api/leaves/executive-recap', async (req, res) => {
@@ -9691,7 +9729,9 @@ app.post('/api/leaves', async (req, res) => {
     // Aturan Cuti Tahunan: Cek sisa kuota jika bukan bypass admin
     if (['cuti_tahunan', 'annual_leave', 'cuti'].includes(String(type).toLowerCase()) && !isAdminDirect) {
       const annualQuota = userProfile.annual_leave_quota ?? 12;
-      const usedDays = userProfile.used_leave_days || 0;
+      const usedDays = classifyFrpGroup(userProfile) !== 'OTHER'
+        ? await recalculateUserLeaveUsedDays(pool, validUserId)
+        : (userProfile.used_leave_days || 0);
       const remainingQuota = Math.max(0, annualQuota - usedDays);
       if (requestedDays > remainingQuota) {
         return res.status(400).json({

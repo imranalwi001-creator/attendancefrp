@@ -13,12 +13,22 @@ import {
   Users,
   CalendarDays,
   DatabaseZap,
+  Edit3,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/services/apiClient';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { HrmMonthlyLeaveRevisionModal } from '@/components/hrm/superadmin/HrmMonthlyLeaveRevisionModal';
+
+export interface LeaveMonthBreakdown {
+  baseline: number;
+  approvedReq: number;
+  pendingReq: number;
+  manualAdj: number;
+  total: number;
+}
 
 export interface LeaveExecutiveRecapRow {
   no: number;
@@ -31,7 +41,9 @@ export interface LeaveExecutiveRecapRow {
   quota: number;
   months: Record<string, number>;
   pendingMonths: Record<string, number>;
+  monthBreakdown?: Record<string, LeaveMonthBreakdown>;
   manualAdjustment: number;
+  otherManualAdjustment?: number;
   approvedUsedDays: number;
   pendingDays: number;
   usedLeaveDays: number;
@@ -93,6 +105,15 @@ export const HrmLeaveExecutiveRecapTab: React.FC<Props> = ({ initialGroup, onSyn
   const [syncing, setSyncing] = useState(false);
   const [activeGroup, setActiveGroup] = useState<'rumahTangga' | 'shipment' | 'karyawanTetap'>(initialGroup || 'rumahTangga');
   const [searchQuery, setSearchQuery] = useState('');
+  const [revisionModalOpen, setRevisionModalOpen] = useState(false);
+  const [editingRow, setEditingRow] = useState<LeaveExecutiveRecapRow | null>(null);
+  const [editingMonthKey, setEditingMonthKey] = useState<string | null>(null);
+
+  const openRevisionModal = (row: LeaveExecutiveRecapRow, monthKey?: string) => {
+    setEditingRow(row);
+    setEditingMonthKey(monthKey || null);
+    setRevisionModalOpen(true);
+  };
 
   useEffect(() => {
     if (initialGroup) {
@@ -504,7 +525,7 @@ export const HrmLeaveExecutiveRecapTab: React.FC<Props> = ({ initialGroup, onSyn
             </div>
             {currentSection && (
               <p className="text-[11px] text-muted-foreground">
-                Menampilkan <strong>{filteredRows.length}</strong> dari {currentSection.rows.length} personil • Aturan <em>Use-It-Or-Lose-It</em> (sisa tidak diuangkan)
+                Menampilkan <strong>{filteredRows.length}</strong> dari {currentSection.rows.length} personil • Klik angka bulan atau tombol <strong>Edit</strong> untuk revisi cuti bulanan
               </p>
             )}
           </div>
@@ -526,18 +547,19 @@ export const HrmLeaveExecutiveRecapTab: React.FC<Props> = ({ initialGroup, onSyn
                     ))}
                     <th className="py-2.5 px-3 text-center bg-amber-500/10 text-amber-700 dark:text-amber-300">Terpakai</th>
                     <th className="py-2.5 px-3 text-center bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">Sisa Hak</th>
+                    <th className="py-2.5 px-3 text-center">Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {loading && !recap ? (
                     <tr>
-                      <td colSpan={18} className="py-10 text-center text-muted-foreground">
+                      <td colSpan={19} className="py-10 text-center text-muted-foreground">
                         Memuat matriks cuti real-time dari database PostgreSQL...
                       </td>
                     </tr>
                   ) : filteredRows.length === 0 ? (
                     <tr>
-                      <td colSpan={18} className="py-10 text-center text-muted-foreground">
+                      <td colSpan={19} className="py-10 text-center text-muted-foreground">
                         Tidak ada data karyawan yang sesuai filter.
                       </td>
                     </tr>
@@ -554,21 +576,37 @@ export const HrmLeaveExecutiveRecapTab: React.FC<Props> = ({ initialGroup, onSyn
                         {(currentSection?.monthKeys || []).map((mk) => {
                           const val = row.months[mk] || 0;
                           const pend = row.pendingMonths[mk] || 0;
+                          const manualAdj = row.monthBreakdown?.[mk]?.manualAdj || 0;
+                          const hasManualRev = manualAdj !== 0;
                           return (
-                            <td key={mk} className="py-2 px-2 text-center font-mono">
+                            <td
+                              key={mk}
+                              onClick={() => openRevisionModal(row, mk)}
+                              title={`Klik untuk revisi cuti ${row.fullName} (${formatMonthCol(mk)})${hasManualRev ? ` • Revisi Admin: ${manualAdj > 0 ? `+${manualAdj}` : manualAdj}h` : ''}`}
+                              className="py-2 px-2 text-center font-mono cursor-pointer hover:bg-emerald-500/15 transition-colors group"
+                            >
                               {val > 0 ? (
                                 <span
-                                  title={pend > 0 ? `Termasuk ${pend} hari pengajuan pending` : `${val} hari terpakai`}
-                                  className={`inline-flex items-center justify-center min-w-[20px] px-1 rounded ${
+                                  className={`inline-flex items-center justify-center gap-0.5 min-w-[22px] px-1 rounded ${
                                     pend > 0
                                       ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300 font-bold'
-                                      : 'text-foreground font-semibold'
+                                      : hasManualRev
+                                      ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300 font-bold ring-1 ring-blue-500/30'
+                                      : 'text-foreground font-semibold group-hover:text-emerald-700 dark:group-hover:text-emerald-300'
                                   }`}
                                 >
                                   {val}
                                 </span>
                               ) : (
-                                <span className="text-muted-foreground/40">-</span>
+                                <span
+                                  className={`inline-flex items-center justify-center min-w-[20px] rounded ${
+                                    hasManualRev
+                                      ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 font-semibold px-1'
+                                      : 'text-muted-foreground/40 group-hover:text-emerald-600'
+                                  }`}
+                                >
+                                  {hasManualRev ? '0' : '-'}
+                                </span>
                               )}
                             </td>
                           );
@@ -587,6 +625,19 @@ export const HrmLeaveExecutiveRecapTab: React.FC<Props> = ({ initialGroup, onSyn
                           ) : (
                             <span className="text-emerald-700 dark:text-emerald-300">{row.remainingLeaveDays} Hari</span>
                           )}
+                        </td>
+                        <td className="py-2 px-2.5 text-center whitespace-nowrap">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openRevisionModal(row)}
+                            className="h-7 px-2 text-[11px] rounded-lg gap-1 border-emerald-500/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10"
+                            title={`Edit / revisi cuti bulanan ${row.fullName}`}
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            Edit
+                          </Button>
                         </td>
                       </tr>
                     ))
@@ -610,6 +661,7 @@ export const HrmLeaveExecutiveRecapTab: React.FC<Props> = ({ initialGroup, onSyn
                       <td className="py-2.5 px-3 text-center font-mono text-emerald-700 dark:text-emerald-300">
                         {currentSection.summary.totalRemaining}
                       </td>
+                      <td />
                     </tr>
                   </tfoot>
                 )}
@@ -618,6 +670,22 @@ export const HrmLeaveExecutiveRecapTab: React.FC<Props> = ({ initialGroup, onSyn
           </div>
         </CardContent>
       </Card>
+
+      <HrmMonthlyLeaveRevisionModal
+        isOpen={revisionModalOpen}
+        onClose={() => setRevisionModalOpen(false)}
+        row={editingRow}
+        monthKeys={currentSection?.monthKeys || []}
+        focusedMonthKey={editingMonthKey}
+        onSaved={(updatedRecap) => {
+          if (updatedRecap) {
+            setRecap(updatedRecap);
+          } else {
+            fetchRecap();
+          }
+          if (typeof onSynced === 'function') onSynced();
+        }}
+      />
     </div>
   );
 };

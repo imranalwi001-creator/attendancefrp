@@ -169,6 +169,29 @@ function isAnnualLeaveType(leaveType) {
   return t === 'cuti_tahunan' || t === 'annual_leave' || t === 'cuti';
 }
 
+const RT_MONTHS = ['2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12', '2027-01', '2027-02'];
+const SHP_MONTHS = ['2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12'];
+const MONTH_SHORT_ID = {
+  '01': 'JAN', '02': 'FEB', '03': 'MAR', '04': 'APR',
+  '05': 'MEI', '06': 'JUN', '07': 'JUL', '08': 'AGU',
+  '09': 'SEP', '10': 'OKT', '11': 'NOV', '12': 'DES',
+};
+
+function formatMonthLabel(mk) {
+  const [y, m] = String(mk || '').split('-');
+  return `${MONTH_SHORT_ID[m] || m} '${(y || '').slice(2)}`;
+}
+
+function extractMonthKey(val) {
+  if (val instanceof Date && !Number.isNaN(val.getTime())) {
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    return `${y}-${m}`;
+  }
+  const s = String(val || '').trim();
+  return /^\d{4}-\d{2}/.test(s) ? s.slice(0, 7) : '';
+}
+
 async function recalculateUserLeaveUsedDays(pool, userId) {
   if (!userId) return 0;
   // 1. Historical baseline + manual adjustment from ledger
@@ -268,7 +291,7 @@ async function recordLeaveSubmitLedger(pool, { userId, leaveRequestId, leaveType
   if (!isAnnualLeaveType(leaveType)) {
     return recalculateUserLeaveUsedDays(pool, userId);
   }
-  const monthKey = String(startDate || new Date().toISOString()).slice(0, 7);
+  const monthKey = extractMonthKey(startDate) || extractMonthKey(new Date());
   const entryType = status === 'approved' ? 'CONFIRMED_APPROVED' : 'RESERVE_ON_SUBMIT';
   await pool.query(`
     INSERT INTO hrm_leave_ledger (user_id, leave_request_id, month_key, entry_type, days_delta, notes, created_by)
@@ -292,10 +315,7 @@ async function recordLeaveDecisionLedger(pool, { leave, decision, approverName }
   if (!isAnnualLeaveType(leave.leave_type)) {
     return recalculateUserLeaveUsedDays(pool, leave.user_id);
   }
-  const startStr = leave.start_date instanceof Date
-    ? leave.start_date.toISOString().slice(0, 10)
-    : String(leave.start_date || '').slice(0, 10);
-  const monthKey = startStr.slice(0, 7) || new Date().toISOString().slice(0, 7);
+  const monthKey = extractMonthKey(leave.start_date) || extractMonthKey(new Date());
   const days = Number(leave.total_days || 1);
 
   if (decision === 'approved') {
@@ -316,6 +336,70 @@ async function recordLeaveDecisionLedger(pool, { leave, decision, approverName }
   return recalculateUserLeaveUsedDays(pool, leave.user_id);
 }
 
+function computeUserMonthlyLeaveMetrics(monthKeys, userBaselineMap, userManualMap, userRequests) {
+  const months = {};
+  const pendingMonths = {};
+  const monthBreakdown = {};
+  const reqApprovedByMonth = {};
+  const reqPendingByMonth = {};
+
+  for (const mk of monthKeys) {
+    reqApprovedByMonth[mk] = 0;
+    reqPendingByMonth[mk] = 0;
+  }
+
+  let approvedPostOct = 0;
+  let pendingPostOct = 0;
+  for (const req of (userRequests || [])) {
+    const mk = req.month_key || extractMonthKey(req.start_date);
+    const days = Number(req.total_days || 1);
+    if (req.status === 'pending') {
+      pendingPostOct += days;
+      if (reqPendingByMonth[mk] !== undefined) reqPendingByMonth[mk] += days;
+    } else {
+      approvedPostOct += days;
+      if (reqApprovedByMonth[mk] !== undefined) reqApprovedByMonth[mk] += days;
+    }
+  }
+
+  let manualInPeriod = 0;
+  for (const mk of monthKeys) {
+    const baseline = Number(userBaselineMap?.[mk] || 0);
+    const manualAdj = Number(userManualMap?.[mk] || 0);
+    const approvedReq = Number(reqApprovedByMonth[mk] || 0);
+    const pendingReq = Number(reqPendingByMonth[mk] || 0);
+    const total = Math.max(0, baseline + manualAdj + approvedReq + pendingReq);
+
+    months[mk] = total;
+    pendingMonths[mk] = pendingReq;
+    manualInPeriod += manualAdj;
+    monthBreakdown[mk] = {
+      baseline,
+      approvedReq,
+      pendingReq,
+      manualAdj,
+      total,
+    };
+  }
+
+  const baselineTotal = Object.values(userBaselineMap || {}).reduce((s, v) => s + Number(v || 0), 0);
+  const manualTotal = Object.values(userManualMap || {}).reduce((s, v) => s + Number(v || 0), 0);
+  const otherManualAdjustment = manualTotal - manualInPeriod;
+  const totalUsed = Math.max(0, baselineTotal + manualTotal + approvedPostOct + pendingPostOct);
+
+  return {
+    months,
+    pendingMonths,
+    monthBreakdown,
+    manualTotal,
+    otherManualAdjustment,
+    approvedPostOct,
+    pendingPostOct,
+    approvedUsedDays: Math.max(0, baselineTotal + manualTotal + approvedPostOct),
+    totalUsed,
+  };
+}
+
 async function buildExecutiveLeaveRecap(pool) {
   const profRes = await pool.query(`
     SELECT p.id, p.nip, p.email, p.full_name, p.annual_leave_quota, p.used_leave_days,
@@ -334,7 +418,7 @@ async function buildExecutiveLeaveRecap(pool) {
   `);
 
   const reqRes = await pool.query(`
-    SELECT id, user_id, leave_type, start_date, end_date, total_days, status
+    SELECT id, user_id, leave_type, TO_CHAR(start_date, 'YYYY-MM') AS month_key, start_date, end_date, total_days, status
     FROM hrm_leave_requests
     WHERE LOWER(leave_type) IN ('cuti_tahunan', 'annual_leave', 'cuti')
       AND status IN ('pending', 'approved')
@@ -342,13 +426,14 @@ async function buildExecutiveLeaveRecap(pool) {
   `);
 
   const baselineMap = {};
-  const manualMap = {};
+  const manualMonthMap = {};
   for (const row of ledgerRes.rows) {
     if (row.entry_type === 'HISTORICAL_BASELINE') {
       baselineMap[row.user_id] = baselineMap[row.user_id] || {};
       baselineMap[row.user_id][row.month_key] = (baselineMap[row.user_id][row.month_key] || 0) + Number(row.days || 0);
     } else if (row.entry_type === 'MANUAL_ADJUSTMENT') {
-      manualMap[row.user_id] = (manualMap[row.user_id] || 0) + Number(row.days || 0);
+      manualMonthMap[row.user_id] = manualMonthMap[row.user_id] || {};
+      manualMonthMap[row.user_id][row.month_key] = (manualMonthMap[row.user_id][row.month_key] || 0) + Number(row.days || 0);
     }
   }
 
@@ -358,44 +443,20 @@ async function buildExecutiveLeaveRecap(pool) {
     reqByUser[r.user_id].push(r);
   }
 
-  const RT_MONTHS = ['2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12', '2027-01', '2027-02'];
-  const SHP_MONTHS = ['2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12'];
-
   const buildRows = (groupName, monthKeys) => {
     const members = profRes.rows
       .filter((p) => classifyFrpGroup(p) === groupName)
       .sort((a, b) => extractFrpSequence(a.nip) - extractFrpSequence(b.nip) || String(a.full_name).localeCompare(String(b.full_name)));
 
     return members.map((p, idx) => {
-      const months = {};
-      const pendingMonths = {};
-      for (const mk of monthKeys) {
-        months[mk] = (baselineMap[p.id]?.[mk] || 0);
-        pendingMonths[mk] = 0;
-      }
-
-      let approvedPostOct = 0;
-      let pendingPostOct = 0;
-      for (const req of (reqByUser[p.id] || [])) {
-        const sStr = req.start_date instanceof Date ? req.start_date.toISOString().slice(0, 10) : String(req.start_date).slice(0, 10);
-        const mk = sStr.slice(0, 7);
-        const days = Number(req.total_days || 1);
-        if (months[mk] !== undefined) {
-          months[mk] += days;
-        }
-        if (req.status === 'pending') {
-          pendingPostOct += days;
-          if (pendingMonths[mk] !== undefined) pendingMonths[mk] += days;
-        } else {
-          approvedPostOct += days;
-        }
-      }
-
-      const baselineTotal = Object.values(baselineMap[p.id] || {}).reduce((s, v) => s + Number(v || 0), 0);
-      const manualAdj = Number(manualMap[p.id] || 0);
-      const totalUsed = Math.max(0, baselineTotal + manualAdj + approvedPostOct + pendingPostOct);
+      const m = computeUserMonthlyLeaveMetrics(
+        monthKeys,
+        baselineMap[p.id],
+        manualMonthMap[p.id],
+        reqByUser[p.id]
+      );
       const quota = Number(p.annual_leave_quota || (groupName === 'SHIPMENT' ? 9 : 12));
-      const remaining = Math.max(0, quota - totalUsed);
+      const remaining = Math.max(0, quota - m.totalUsed);
 
       return {
         no: idx + 1,
@@ -406,12 +467,14 @@ async function buildExecutiveLeaveRecap(pool) {
         roleName: p.role_name || 'Karyawan',
         group: groupName,
         quota,
-        months,
-        pendingMonths,
-        manualAdjustment: manualAdj,
-        approvedUsedDays: Math.max(0, baselineTotal + manualAdj + approvedPostOct),
-        pendingDays: pendingPostOct,
-        usedLeaveDays: totalUsed,
+        months: m.months,
+        pendingMonths: m.pendingMonths,
+        monthBreakdown: m.monthBreakdown,
+        manualAdjustment: m.manualTotal,
+        otherManualAdjustment: m.otherManualAdjustment,
+        approvedUsedDays: m.approvedUsedDays,
+        pendingDays: m.pendingPostOct,
+        usedLeaveDays: m.totalUsed,
         remainingLeaveDays: remaining,
       };
     });
@@ -463,6 +526,194 @@ async function buildExecutiveLeaveRecap(pool) {
       rows: karyawanTetap,
       summary: summarize(karyawanTetap, RT_MONTHS),
     },
+  };
+}
+
+async function getUserLeaveMonthlyBreakdown(pool, profile) {
+  if (!profile || !profile.id) {
+    return { monthKeys: RT_MONTHS, months: {}, monthlyBreakdown: [] };
+  }
+  const frpGroup = classifyFrpGroup(profile);
+  const monthKeys = frpGroup === 'SHIPMENT' ? SHP_MONTHS : RT_MONTHS;
+
+  const [ledgerRes, reqRes] = await Promise.all([
+    pool.query(`
+      SELECT month_key, entry_type, SUM(days_delta)::int AS days
+      FROM hrm_leave_ledger
+      WHERE user_id = $1
+        AND entry_type IN ('HISTORICAL_BASELINE', 'MANUAL_ADJUSTMENT')
+      GROUP BY month_key, entry_type
+    `, [profile.id]),
+    pool.query(`
+      SELECT id, TO_CHAR(start_date, 'YYYY-MM') AS month_key, start_date, total_days, status
+      FROM hrm_leave_requests
+      WHERE user_id = $1
+        AND LOWER(leave_type) IN ('cuti_tahunan', 'annual_leave', 'cuti')
+        AND status IN ('pending', 'approved')
+        AND start_date >= '2026-10-01'
+    `, [profile.id]),
+  ]);
+
+  const userBaseline = {};
+  const userManual = {};
+  for (const row of ledgerRes.rows) {
+    if (row.entry_type === 'HISTORICAL_BASELINE') {
+      userBaseline[row.month_key] = (userBaseline[row.month_key] || 0) + Number(row.days || 0);
+    } else if (row.entry_type === 'MANUAL_ADJUSTMENT') {
+      userManual[row.month_key] = (userManual[row.month_key] || 0) + Number(row.days || 0);
+    }
+  }
+
+  const m = computeUserMonthlyLeaveMetrics(monthKeys, userBaseline, userManual, reqRes.rows);
+  const monthlyBreakdown = monthKeys
+    .filter((mk) => (m.months[mk] || 0) > 0)
+    .map((mk) => ({
+      monthKey: mk,
+      label: formatMonthLabel(mk),
+      days: m.months[mk],
+      pendingDays: m.pendingMonths[mk] || 0,
+    }));
+
+  return {
+    monthKeys,
+    months: m.months,
+    monthlyBreakdown,
+  };
+}
+
+async function reviseUserMonthlyLeaves(pool, { userId, monthlyValues, reason, operatorName }) {
+  if (!userId) {
+    throw new Error('userId wajib diisi');
+  }
+  if (!monthlyValues || typeof monthlyValues !== 'object' || Array.isArray(monthlyValues)) {
+    throw new Error('monthlyValues wajib berupa objek { "YYYY-MM": jumlahHari }');
+  }
+
+  const entries = Object.entries(monthlyValues);
+  if (entries.length === 0) {
+    throw new Error('Minimal 1 bulan harus dikirim untuk direvisi');
+  }
+
+  for (const [mk, rawVal] of entries) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(mk))) {
+      throw new Error(`Format bulan tidak valid: ${mk} (gunakan YYYY-MM)`);
+    }
+    const num = Number(rawVal);
+    if (!Number.isInteger(num) || num < 0 || num > 31) {
+      throw new Error(`Jumlah hari cuti untuk ${mk} harus bilangan bulat 0..31`);
+    }
+  }
+
+  const client = await pool.connect();
+  const changes = [];
+  let profile = null;
+  let updatedUsedDays = 0;
+
+  try {
+    await client.query('BEGIN');
+
+    const uRes = await client.query(`
+      SELECT id, nip, email, full_name, annual_leave_quota, used_leave_days
+      FROM hrm_profiles
+      WHERE id::text = $1
+         OR LOWER(TRIM(nip)) = LOWER(TRIM($1))
+         OR LOWER(TRIM(email)) = LOWER(TRIM($1))
+      LIMIT 1
+      FOR UPDATE
+    `, [String(userId).trim()]);
+
+    if (uRes.rows.length === 0) {
+      throw new Error('Karyawan tidak ditemukan');
+    }
+    profile = uRes.rows[0];
+    const cleanReason = String(reason || '').trim() || 'Revisi data cuti bulanan oleh Superadmin';
+    const actor = String(operatorName || '').trim() || 'Super Administrator';
+
+    for (const [mk, rawVal] of entries) {
+      const desiredDays = parseInt(rawVal, 10);
+
+      const [ledRes, reqRes] = await Promise.all([
+        client.query(`
+          SELECT
+            COALESCE(SUM(days_delta) FILTER (WHERE entry_type = 'HISTORICAL_BASELINE'), 0)::int AS baseline_days,
+            COALESCE(SUM(days_delta) FILTER (WHERE entry_type = 'MANUAL_ADJUSTMENT'), 0)::int AS manual_days
+          FROM hrm_leave_ledger
+          WHERE user_id = $1 AND month_key = $2
+            AND entry_type IN ('HISTORICAL_BASELINE', 'MANUAL_ADJUSTMENT')
+        `, [profile.id, mk]),
+        client.query(`
+          SELECT COALESCE(SUM(total_days), 0)::int AS req_days
+          FROM hrm_leave_requests
+          WHERE user_id = $1
+            AND LOWER(leave_type) IN ('cuti_tahunan', 'annual_leave', 'cuti')
+            AND status IN ('pending', 'approved')
+            AND start_date >= '2026-10-01'
+            AND TO_CHAR(start_date, 'YYYY-MM') = $2
+        `, [profile.id, mk]),
+      ]);
+
+      const baselineDays = Number(ledRes.rows[0]?.baseline_days || 0);
+      const manualDays = Number(ledRes.rows[0]?.manual_days || 0);
+      const reqDays = Number(reqRes.rows[0]?.req_days || 0);
+
+      const rawCurrent = baselineDays + manualDays + reqDays;
+      const displayedCurrent = Math.max(0, rawCurrent);
+      const deltaDiff = desiredDays - rawCurrent;
+
+      if (deltaDiff !== 0) {
+        const noteText = `[REVISI BULANAN ${formatMonthLabel(mk)}: ${displayedCurrent}h → ${desiredDays}h] ${cleanReason}`;
+        await client.query(`
+          INSERT INTO hrm_leave_ledger (user_id, leave_request_id, month_key, entry_type, days_delta, notes, created_by)
+          VALUES ($1, NULL, $2, 'MANUAL_ADJUSTMENT', $3, $4, $5)
+        `, [profile.id, mk, deltaDiff, noteText, actor]);
+
+        changes.push({
+          monthKey: mk,
+          label: formatMonthLabel(mk),
+          previousDays: displayedCurrent,
+          newDays: desiredDays,
+          delta: deltaDiff,
+        });
+      }
+    }
+
+    updatedUsedDays = await recalculateUserLeaveUsedDays(client, profile.id);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const frpGroup = classifyFrpGroup(profile);
+  const quota = Number(profile.annual_leave_quota ?? (frpGroup === 'SHIPMENT' ? 9 : 12));
+  const remaining = Math.max(0, quota - updatedUsedDays);
+
+  if (changes.length > 0) {
+    const changeSummary = changes.map((c) => `${c.label}: ${c.previousDays}h→${c.newDays}h`).join(', ');
+    await pool.query(`
+      INSERT INTO hrm_notifications (user_id, title, message, type, is_read, created_at)
+      VALUES ($1, $2, $3, 'leave', false, NOW())
+    `, [
+      profile.id,
+      'Revisi Data Cuti Bulanan',
+      `Data cuti bulanan Anda direvisi oleh ${operatorName || 'Admin'} (${changeSummary}). Total terpakai: ${updatedUsedDays} Hari, Sisa Kuota: ${remaining}/${quota} Hari.`,
+    ]).catch(() => {});
+  }
+
+  const breakdown = await getUserLeaveMonthlyBreakdown(pool, profile);
+
+  return {
+    userId: profile.id,
+    nip: profile.nip,
+    fullName: profile.full_name,
+    frpGroup,
+    annualLeaveQuota: quota,
+    usedLeaveDays: updatedUsedDays,
+    remainingLeaveDays: remaining,
+    changes,
+    ...breakdown,
   };
 }
 
@@ -1015,6 +1266,8 @@ export {
   recordLeaveSubmitLedger,
   recordLeaveDecisionLedger,
   buildExecutiveLeaveRecap,
+  getUserLeaveMonthlyBreakdown,
+  reviseUserMonthlyLeaves,
   resolveEffectiveBudgets,
   buildPayrollArrearsOvertimeRecap,
   generateBackendPayrollForPeriod,
