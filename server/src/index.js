@@ -9956,7 +9956,8 @@ app.post('/api/leaves', async (req, res) => {
 // Update Status Cuti / Izin / Izin Darurat (Approval oleh Korlap, Admin, K3, atau Pimpinan)
 app.put('/api/leaves/:id/status', async (req, res) => {
   const { id } = req.params;
-  const { status, approverId, approverName, notes, substituteId, substituteName, substituteNip, dailySubstitutes } = req.body;
+  const { status, approverId, approverName, notes, substituteId, substituteName, substituteNip, dailySubstitutes, noSubstituteNeeded } = req.body;
+  const isNoSubNeeded = noSubstituteNeeded === true || noSubstituteNeeded === 'true';
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ success: false, error: 'Status tidak valid (hanya approved / rejected)' });
   }
@@ -9981,16 +9982,16 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       nip: leave.user_nip,
       email: leave.user_email,
     });
-    const hasDaily = Array.isArray(dailySubstitutes) && dailySubstitutes.length > 0;
-    if (!isSpecial3 && status === 'approved' && !substituteName && !leave.substitute_name && !hasDaily) {
+    const hasDaily = !isNoSubNeeded && Array.isArray(dailySubstitutes) && dailySubstitutes.length > 0;
+    if (!isSpecial3 && !isNoSubNeeded && status === 'approved' && !substituteName && !leave.substitute_name && !hasDaily) {
       return res.status(400).json({
         success: false,
-        error: 'Sesuai aturan Zero Vacancy, pekerjaan tidak boleh kosong! Anda wajib menetapkan Karyawan Pengganti Pos sebelum menyetujui pengajuan cuti.',
+        error: 'Sesuai aturan Zero Vacancy, pekerjaan tidak boleh kosong! Anda wajib menetapkan Karyawan Pengganti Pos sebelum menyetujui pengajuan cuti (atau centang opsi Tanpa Pengganti jika pos tidak memerlukan pengganti).',
       });
     }
 
     // Aturan Ketat: Dilarang keras menggunakan karyawan pengganti yang sama secara berturut-turut (1 pengganti = maksimal 1 hari berturut-turut)
-    if (!isSpecial3 && status === 'approved') {
+    if (!isSpecial3 && !isNoSubNeeded && status === 'approved') {
       const startD = new Date(String(leave.start_date).slice(0, 10) + 'T00:00:00Z');
       const endD = new Date(String(leave.end_date || leave.start_date).slice(0, 10) + 'T00:00:00Z');
       const totalLeaveDays = Math.max(1, Math.round((endD - startD) / 86400000) + 1);
@@ -10061,14 +10062,14 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       if (aRes.rows.length > 0) validApproverId = aRes.rows[0].id;
     }
 
-    let validSubId = substituteId || leave.substitute_id;
+    let validSubId = isNoSubNeeded ? null : (substituteId || leave.substitute_id);
     if (validSubId && !UUID_REGEX.test(validSubId)) {
       const sRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [validSubId]);
       if (sRes.rows.length > 0) validSubId = sRes.rows[0].id;
     }
 
-    let finalSubName = substituteName || leave.substitute_name;
-    let finalSubNip = substituteNip || leave.substitute_nip;
+    let finalSubName = isNoSubNeeded ? null : (substituteName || leave.substitute_name);
+    let finalSubNip = isNoSubNeeded ? null : (substituteNip || leave.substitute_nip);
 
     // Jika menggunakan format rotasi harian (1 hari = 1 orang)
     let dailySummaryFormatted = '';

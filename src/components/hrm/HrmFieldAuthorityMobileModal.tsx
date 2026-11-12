@@ -62,6 +62,7 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
   const [loadingCandidates, setLoadingCandidates] = useState<Record<string, boolean>>({});
   const [sendingWaMap, setSendingWaMap] = useState<Record<string, boolean>>({});
   const [manualConfirmedMap, setManualConfirmedMap] = useState<Record<string, boolean>>({});
+  const [noSubstituteNeededMap, setNoSubstituteNeededMap] = useState<Record<string, boolean>>({});
   const [resettingLeaveId, setResettingLeaveId] = useState<string | null>(null);
   const [confirmModalData, setConfirmModalData] = useState<{
     leave: LeaveRequest;
@@ -349,21 +350,24 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
     const chosenSubstitute = selectedSubMap[leave.id];
     const isSpecialOfficer = isLeadershipSpecialFieldOfficer(leave.userId || leave.userNip || leave.userName);
 
+    const isNoSubNeeded = Boolean(noSubstituteNeededMap[leave.id]);
     const slots = dailySlotsMap[leave.id] || [];
     const dailySelection = dailySubMap[leave.id] || {};
-    const dailySubstitutesPayload = slots.map((slot: any) => {
-      const picked = dailySelection[slot.date] || chosenSubstitute;
-      return {
-        date: slot.date,
-        dutyDate: slot.date,
-        substituteId: picked?.id,
-        substituteName: picked?.name || picked?.fullName,
-        substituteNip: picked?.nip,
-      };
-    }).filter((d: any) => Boolean(d.substituteId));
+    const dailySubstitutesPayload = isNoSubNeeded
+      ? []
+      : slots.map((slot: any) => {
+          const picked = dailySelection[slot.date] || chosenSubstitute;
+          return {
+            date: slot.date,
+            dutyDate: slot.date,
+            substituteId: picked?.id,
+            substituteName: picked?.name || picked?.fullName,
+            substituteNip: picked?.nip,
+          };
+        }).filter((d: any) => Boolean(d.substituteId));
 
-    // Aturan Zero Vacancy & Anti-Berturut-Turut: jika menyetujui, setiap hari wajib terisi dan tidak boleh orang yang sama berturut-turut!
-    if (status === 'approved' && !isSpecialOfficer) {
+    // Aturan Zero Vacancy & Anti-Berturut-Turut: jika menyetujui, setiap hari wajib terisi dan tidak boleh orang yang sama berturut-turut (kecuali 3 petugas khusus atau opsi Tidak Butuh Pengganti)!
+    if (status === 'approved' && !isSpecialOfficer && !isNoSubNeeded) {
       if (slots.length > 1) {
         if (dailySubstitutesPayload.length < slots.length) {
           toast.error(`Harap tentukan ${slots.length} karyawan pengganti untuk masing-masing hari cuti.`, { duration: 4000 });
@@ -384,6 +388,7 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
     }
 
     const isConfirmed = isSpecialOfficer ||
+      isNoSubNeeded ||
       leave.substituteConfirmed ||
       leave.substituteConfirmationStatus === 'confirmed' ||
       manualConfirmedMap[leave.id];
@@ -403,18 +408,23 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
       const approverName = currentUser?.fullName || 'Muh Aslam Faisal (Korlap)';
       const approverId = currentUser?.id || 'ebf10b16-ab2f-4b53-ab22-b3ffc00694db'; // Default Aslam UUID if context missing
 
-      const subId = dailySubstitutesPayload[0]?.substituteId || chosenSubstitute?.id || leave.substituteId;
-      const subName = dailySubstitutesPayload.length > 1
+      const subId = isNoSubNeeded ? undefined : (dailySubstitutesPayload[0]?.substituteId || chosenSubstitute?.id || leave.substituteId);
+      const subName = isNoSubNeeded
+        ? undefined
+        : dailySubstitutesPayload.length > 1
         ? dailySubstitutesPayload.map((d: any) => d.substituteName).join(', ')
         : (chosenSubstitute?.name || chosenSubstitute?.fullName || leave.substituteName);
-      const subNip = dailySubstitutesPayload[0]?.substituteNip || chosenSubstitute?.nip || leave.substituteNip;
+      const subNip = isNoSubNeeded ? undefined : (dailySubstitutesPayload[0]?.substituteNip || chosenSubstitute?.nip || leave.substituteNip);
 
       const res = await api.put<{ success: boolean; error?: string }>(`/leaves/${leave.id}/status`, {
         status,
         approverId,
         approverName,
+        noSubstituteNeeded: isNoSubNeeded,
         notes: status === 'approved'
-          ? `Disetujui sah oleh Otoritas Lapangan (${approverName}). Petugas pengganti: ${subName || '-'}${manualConfirmedMap[leave.id] ? ' [Konfirmasi Lisan]' : ''}`
+          ? isNoSubNeeded
+            ? `Disetujui sah oleh Otoritas Lapangan (${approverName}). Cuti disetujui tanpa petugas pengganti (Pos aman).`
+            : `Disetujui sah oleh Otoritas Lapangan (${approverName}). Petugas pengganti: ${subName || '-'}${manualConfirmedMap[leave.id] ? ' [Konfirmasi Lisan]' : ''}`
           : `Ditolak oleh Otoritas Lapangan (${approverName})`,
         substituteId: subId,
         substituteName: subName,
@@ -425,7 +435,9 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
       if (res && res.success) {
         toast.success(
           status === 'approved'
-            ? `✅ Permohonan cuti ${leave.userName} DISETUJUI! Pengganti resmi: ${subName}. Pos dinas aman & notifikasi WA terkirim.`
+            ? isNoSubNeeded
+              ? `✅ Permohonan cuti ${leave.userName} DISETUJUI (Tanpa Pengganti).`
+              : `✅ Permohonan cuti ${leave.userName} DISETUJUI! Pengganti resmi: ${subName}. Pos dinas aman & notifikasi WA terkirim.`
             : `Permohonan cuti ${leave.userName} berhasil DITOLAK.`
         );
         loadData();
@@ -694,7 +706,7 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
                               <Sparkles className="w-3 h-3 text-emerald-400" />
-                              <span>REKOMENDASI PENGGANTI POS (HUKUM ZERO VACANCY)</span>
+                              <span>REKOMENDASI PENGGANTI POS</span>
                             </span>
                             {isLoadingCands && (
                               <span className="text-[9.5px] text-slate-400 animate-pulse flex items-center gap-1">
@@ -703,7 +715,27 @@ export const HrmFieldAuthorityMobileModal: React.FC<HrmFieldAuthorityMobileModal
                             )}
                           </div>
 
-                          {candidates.length > 0 ? (
+                          {/* Opsi Cuti Tanpa Pengganti */}
+                          <label className="flex items-center gap-2 p-2 rounded-lg bg-slate-950/70 border border-slate-800 cursor-pointer hover:border-sky-500/40 transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(noSubstituteNeededMap[leave.id])}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setNoSubstituteNeededMap((prev) => ({ ...prev, [leave.id]: checked }));
+                              }}
+                              className="w-3.5 h-3.5 rounded border-slate-600 text-sky-500 focus:ring-sky-500 bg-slate-900"
+                            />
+                            <span className="text-[10.5px] font-semibold text-sky-300">
+                              Cuti Tanpa Pengganti (Pos Aman / Tidak Butuh Pengganti)
+                            </span>
+                          </label>
+
+                          {noSubstituteNeededMap[leave.id] ? (
+                            <div className="p-2.5 rounded-xl bg-sky-500/10 border border-sky-500/30 text-[10px] text-sky-200 leading-relaxed">
+                              Disetujui tanpa menugaskan karyawan pengganti dan tanpa membuat jadwal lembur pengganti (SPKL).
+                            </div>
+                          ) : candidates.length > 0 ? (
                             <div className="space-y-2.5">
                               {(() => {
                                 const slots = dailySlotsMap[leave.id] && dailySlotsMap[leave.id].length > 0
