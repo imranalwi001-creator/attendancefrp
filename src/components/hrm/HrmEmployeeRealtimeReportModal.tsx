@@ -370,10 +370,16 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         .filter((a) => (a.attendanceDate || (a as any).date || '').slice(0, 10) === dateStr)
         .sort((a, b) => String(a.clockIn || '').localeCompare(String(b.clockIn || '')));
 
+      // 4. Cari lembur pada tanggal ini (sinkron PostgreSQL snake_case & camelCase)
+      const ot = combinedOvertimes.find((o) => {
+        const oDate = String(o.date || o.overtimeDate || o.overtime_date || '').slice(0, 10);
+        return oDate === dateStr;
+      });
+
       const isSubstituteAtt = (a: any) => {
         const sName = String(a?.shiftName || a?.shift_name || '').toLowerCase();
         const nText = String(a?.notes || '').toLowerCase();
-        return sName.includes('pengganti') || nText.includes('pengganti') || nText.includes('lembur');
+        return sName.includes('pengganti') || nText.includes('pengganti') || nText.includes('lembur') || nText.includes('tugas darurat');
       };
 
       let att: any = dayAtts[0];
@@ -383,18 +389,17 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         if (foundSub) {
           subAtt = foundSub;
           att = dayAtts.find((a) => a !== foundSub) || dayAtts[0];
+        } else if (ot && (ot.startTime || ot.start_time)) {
+          // Cocokkan sesi yang jam masuknya paling dekat dengan jam mulai OT sebagai sesi lembur
+          const otStart = String(ot.startTime || ot.start_time).substring(0, 5);
+          const otMatch = dayAtts.find((a) => String(a.clockIn || '').substring(0, 5) === otStart) || dayAtts[dayAtts.length - 1];
+          subAtt = otMatch;
+          att = dayAtts.find((a) => a !== otMatch) || dayAtts[0];
         } else {
-          // Jika tidak ada label 'pengganti' eksplisit, sesi yang cocok dengan jadwal resmi masuk ABSEN, sisanya masuk LEMBUR
           att = dayAtts[dayAtts.length - 1];
           subAtt = dayAtts[0];
         }
       }
-
-      // 4. Cari lembur pada tanggal ini (sinkron PostgreSQL snake_case & camelCase)
-      const ot = combinedOvertimes.find((o) => {
-        const oDate = String(o.date || o.overtimeDate || o.overtime_date || '').slice(0, 10);
-        return oDate === dateStr;
-      });
 
       let absenMasuk = '-';
       let absenPulang = '-';

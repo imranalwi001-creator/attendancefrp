@@ -3008,7 +3008,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       // Determine late minutes using authoritative realtime shift evaluation
       let lateMinutes = 0;
       let status: 'hadir' | 'terlambat' = 'hadir';
-      if (actionType === 'clock_in' && userShift?.startTime) {
+      if (actionType === 'clock_in' && userShift?.startTime && !emergencyOverridePayload?.isEmergencyOverride && !emergencyOvertimePayload?.isEmergencyOvertime) {
         const isNext = Boolean(todayAttendance?.clockIn && todayAttendance?.clockOut) && Boolean(nextShiftInfo?.isNextShiftAvailable);
         const effectiveShiftStart = isNext && nextShiftInfo?.nextShiftStart ? nextShiftInfo.nextShiftStart : userShift.startTime;
         const effectiveShiftEnd = isNext && nextShiftInfo?.nextShiftEnd ? nextShiftInfo.nextShiftEnd : userShift.endTime;
@@ -7150,7 +7150,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
             let lateMinutes = 0;
             let status: 'hadir' | 'terlambat' = 'hadir';
-            if (actionType === 'clock_in' && userShift?.startTime) {
+            if (actionType === 'clock_in' && userShift?.startTime && !emergencyOverridePayload?.isEmergencyOverride && !emergencyOvertimePayload?.isEmergencyOvertime) {
               const latenessEval = calculateAttendanceLateness({
                 clockInTime: timeStr,
                 shiftStartTime: userShift.startTime,

@@ -2475,7 +2475,13 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       let finalStatus = 'hadir';
       let finalLateMinutes = 0;
 
-      if (isSimulationSession || isEmployeeOffToday) {
+      const isEmergencySession = Boolean(
+        isEmergencyOverride ||
+        req.body.isEmergencyOvertime === true ||
+        req.body.isEmergencyOvertime === 'true'
+      );
+
+      if (isSimulationSession || isEmployeeOffToday || isEmergencySession) {
         finalStatus = 'hadir';
         finalLateMinutes = 0;
       } else {
@@ -2534,7 +2540,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         isMockLocation === true,
         flagsJson,
         resolvedShiftId || null,
-        resolvedShiftName || null,
+        isEmergencySession ? (resolvedShiftName ? `Lembur Tugas Darurat (${resolvedShiftName})` : 'Lembur Tugas Darurat') : (resolvedShiftName || null),
         Boolean(isSimulationSession)
       ];
 
@@ -2584,7 +2590,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
           isMockLocation === true,
           flagsJson,
           resolvedShiftId || null,
-          resolvedShiftName || null,
+          isEmergencySession ? (resolvedShiftName ? `Lembur Tugas Darurat (${resolvedShiftName})` : 'Lembur Tugas Darurat') : (resolvedShiftName || null),
           Boolean(isSimulationSession),
           emptyId
         ]);
