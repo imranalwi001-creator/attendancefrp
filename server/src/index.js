@@ -1853,6 +1853,8 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     const isEmergencyOverride = req.body.isEmergencyOverride === true || req.body.isEmergencyOverride === 'true';
     const cleanEmergencyReason = (req.body.emergencyReason || req.body.emergencyOvertimeReason || notes || '').trim();
 
+    let hasDailySchedule = false;
+
     // Prioritas 1: Periksa Roster Jadwal Kerja harian (hrm_employee_schedules) hari ini
     if (userProfile) {
       try {
@@ -1865,6 +1867,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
           [validUserId, date]
         );
         if (schedRes.rows.length > 0) {
+          hasDailySchedule = true;
           const es = schedRes.rows[0];
           if (es.is_off) {
             isEmployeeOffToday = true;
@@ -1878,6 +1881,18 @@ app.post('/api/attendances/clock-in', async (req, res) => {
           isCrossDay = Boolean(es.is_night_shift || es.shift_is_cross_day);
           activeShiftName = es.shift_name || es.master_shift_name || `Shift ${es.shift_code}`;
           activeShiftId = (es.shift_id && UUID_REGEX.test(es.shift_id)) ? es.shift_id : (es.master_shift_id || null);
+          if (!activeShiftId) {
+            const codeUpper = String(es.shift_code || '').trim().toUpperCase();
+            const nameUpper = String(activeShiftName || '').toUpperCase();
+            if (codeUpper === 'M' || nameUpper.includes('SHIFT III') || nameUpper.includes('SHIFT 3')) {
+              activeShiftId = 'c394c927-d6b1-4376-9739-84c78aa8477d';
+              isCrossDay = true;
+            } else if (codeUpper === 'S' || nameUpper.includes('SHIFT II') || nameUpper.includes('SHIFT 2')) {
+              activeShiftId = 'd61c9fd6-d93e-406e-8781-0bfe8189dbfa';
+            } else if (codeUpper === 'P' || nameUpper.includes('SHIFT I ') || nameUpper.includes('SHIFT I(') || nameUpper.includes('SHIFT 1')) {
+              activeShiftId = '6203b9f0-b42d-40e2-8e8d-fd5767e0ef4b';
+            }
+          }
           if (es.master_shift_tolerance != null && userProfile.late_tolerance_minutes == null) {
             effectiveLateTolerance = Number(es.master_shift_tolerance);
           }
@@ -1889,7 +1904,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
     // Prioritas 2: Jika tidak ada jadwal roster harian spesifik, ATAU jika frontend secara eksplisit mengirim target shiftId lanjutan (multi-shift: menyambung maju/mundur)
     const explicitReqShiftId = (req.body.shiftId && UUID_REGEX.test(req.body.shiftId)) ? req.body.shiftId : null;
-    if ((!activeShiftId || (explicitReqShiftId && explicitReqShiftId !== activeShiftId)) && userProfile) {
+    if (((!hasDailySchedule && !activeShiftId) || (explicitReqShiftId && explicitReqShiftId !== activeShiftId)) && userProfile) {
       let targetShiftId = explicitReqShiftId;
       if (!targetShiftId && userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) {
         targetShiftId = userProfile.shift_id;
