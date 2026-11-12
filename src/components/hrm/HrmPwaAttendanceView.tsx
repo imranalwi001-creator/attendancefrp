@@ -1036,12 +1036,13 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       }
 
       if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
-        const existingIdx = userAtts.findIndex((a) => 
-          a.id === todayAtt?.id || 
-          a.date === todayStr || 
-          a.attendanceDate === todayStr || 
-          (todayAtt?.attendanceDate && (a.date === todayAtt.attendanceDate || a.attendanceDate === todayAtt.attendanceDate))
-        );
+        const existingIdx = todayAtt?.id
+          ? userAtts.findIndex((a) => a.id === todayAtt?.id)
+          : userAtts.findIndex((a) =>
+              a.date === todayStr ||
+              a.attendanceDate === todayStr ||
+              (todayAtt?.attendanceDate && (a.date === todayAtt.attendanceDate || a.attendanceDate === todayAtt.attendanceDate))
+            );
         if (existingIdx >= 0) {
           const mergedClockOut = userAtts[existingIdx].clockOut || todayAtt.clockOut || (userAtts[existingIdx].clock_out ? String(userAtts[existingIdx].clock_out).substring(0, 5) : undefined);
           const mergedClockOutFull = userAtts[existingIdx].clock_out || todayAtt.clock_out || mergedClockOut;
@@ -1073,9 +1074,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       // KONSISTENSI TOTAL: Kunci status presensi hari ini jika sudah absen masuk & absen pulang
       if (todayAtt && (todayAtt.clockIn || todayAtt.clock_in)) {
-        // MONOTONIC CLOCK-OUT GUARD: Sekali karyawan clock-out pada hari ini / sesi aktif, kunci permanen jika ada foto!
+        // MONOTONIC CLOCK-OUT GUARD: Sekali karyawan clock-out pada sesi yang sama, kunci permanen jika ada foto!
         const memDate = normalizeDateString(todayAttendance?.attendanceDate || todayAttendance?.date);
-        if (todayAttendance?.clockOut && !todayAtt.clockOut && (!memDate || memDate === todayStr || memDate === yesterdayStr)) {
+        const isSameAttendanceSession = !todayAtt.id || !todayAttendance?.id || todayAtt.id === todayAttendance.id;
+        if (isSameAttendanceSession && todayAttendance?.clockOut && !todayAtt.clockOut && (!memDate || memDate === todayStr || memDate === yesterdayStr)) {
           if (todayAttendance.clockOutPhoto || todayAttendance.photoOut) {
             todayAtt.clockOut = todayAttendance.clockOut;
             todayAtt.clock_out = todayAttendance.clock_out || todayAttendance.clockOut;
@@ -3362,7 +3364,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
   const approvedSubstituteToday = useMemo(() => {
     const swap = userSubstitutions.find(
-      (s) => s.status === 'approved' && (s.date === todayDateStr || s.targetDate === todayDateStr)
+      (s) =>
+        s.status === 'approved' &&
+        (s.date === todayDateStr ||
+          s.targetDate === todayDateStr ||
+          (s as any).dutyDate === todayDateStr ||
+          (s as any).duty_date === todayDateStr)
     );
     if (swap) return swap;
 
@@ -4324,7 +4331,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       return;
                     }
                     triggerClockOutFlow();
-                  } else if (!hasClockedIn) {
+                  } else if (!hasClockedIn || (isCurrentSessionClosed && nextShiftInfo?.isNextShiftAvailable)) {
                     if ((isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday) {
                       toast.info('Hari ini adalah jadwal Libur / Off Duty Anda. Selamat beristirahat!', {
                         icon: '☕',
@@ -4340,7 +4347,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 }}
                 className="relative w-[210px] h-[210px] shrink-0 aspect-square rounded-full p-2 flex items-center justify-center cursor-pointer transition-transform hover:scale-[1.02] active:scale-95 group select-none"
                 style={{ width: '210px', height: '210px', minWidth: '210px', minHeight: '210px', maxWidth: '210px', maxHeight: '210px' }}
-                title={isCurrentlyOnDuty ? "Ketuk untuk Presensi Pulang" : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday ? "Hari Ini Libur / Bebas Tugas" : "Ketuk untuk Ambil Foto Absen"}
+                title={
+                  isCurrentlyOnDuty
+                    ? "Ketuk untuk Presensi Pulang"
+                    : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
+                    ? "Hari Ini Libur / Bebas Tugas"
+                    : isCurrentSessionClosed && nextShiftInfo?.isNextShiftAvailable
+                    ? `Ketuk untuk Masuk ${nextShiftInfo.nextShiftCode.replace('SHF-', 'Shift ')}`
+                    : "Ketuk untuk Ambil Foto Absen"
+                }
               >
                 {/* Outer Ring Border */}
                 <div className={`absolute inset-0 rounded-full border-2 transition-colors pointer-events-none ${
@@ -4358,6 +4373,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     <textPath href="#circlePath" startOffset="50%" textAnchor="middle">
                       {hasClockedIn && !hasClockedOut
                         ? 'KETUK UNTUK ABSEN PULANG'
+                        : hasClockedOut && nextShiftInfo?.isNextShiftAvailable
+                        ? `KETUK UNTUK MASUK ${nextShiftInfo.nextShiftCode.replace('SHF-', 'SHIFT ')}`
                         : hasClockedOut
                         ? 'PRESENSI HARI INI SELESAI'
                         : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday

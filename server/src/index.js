@@ -1887,9 +1887,10 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       }
     }
 
-    // Prioritas 2: Jika tidak ada jadwal roster harian spesifik, periksa shift ID target atau shift resmi profil
-    if (!activeShiftId && userProfile) {
-      let targetShiftId = (req.body.shiftId && UUID_REGEX.test(req.body.shiftId)) ? req.body.shiftId : null;
+    // Prioritas 2: Jika tidak ada jadwal roster harian spesifik, ATAU jika frontend secara eksplisit mengirim target shiftId lanjutan (multi-shift: menyambung maju/mundur)
+    const explicitReqShiftId = (req.body.shiftId && UUID_REGEX.test(req.body.shiftId)) ? req.body.shiftId : null;
+    if ((!activeShiftId || (explicitReqShiftId && explicitReqShiftId !== activeShiftId)) && userProfile) {
+      let targetShiftId = explicitReqShiftId;
       if (!targetShiftId && userProfile.shift_id && UUID_REGEX.test(userProfile.shift_id)) {
         targetShiftId = userProfile.shift_id;
       }
@@ -1951,12 +1952,20 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         `SELECT id FROM hrm_shift_substitutions WHERE (relief_user_id = $1 OR original_user_id = $1) AND duty_date = $2 AND status = 'approved' LIMIT 1`,
         [userId, date]
       ).catch(() => ({ rows: [] }));
+      const dailySubRes = await pool.query(
+        `SELECT id FROM hrm_leave_daily_substitutes WHERE substitute_id = $1 AND duty_date = $2 LIMIT 1`,
+        [userId, date]
+      ).catch(() => ({ rows: [] }));
+      const schedSubRes = await pool.query(
+        `SELECT id FROM hrm_employee_schedules WHERE user_id = $1 AND schedule_date = $2 AND is_off = false AND LOWER(COALESCE(notes, '')) LIKE '%pengganti%' LIMIT 1`,
+        [userId, date]
+      ).catch(() => ({ rows: [] }));
       const swapRes = await pool.query(
         `SELECT id FROM hrm_shift_swaps WHERE (substitute_id = $1 OR requester_id = $1) AND swap_date = $2 AND status = 'approved' LIMIT 1`,
         [userId, date]
       ).catch(() => ({ rows: [] }));
 
-      const hasApprovedException = (otRes.rows.length > 0) || (subRes.rows.length > 0) || (swapRes.rows.length > 0);
+      const hasApprovedException = (otRes.rows.length > 0) || (subRes.rows.length > 0) || (dailySubRes.rows.length > 0) || (schedSubRes.rows.length > 0) || (swapRes.rows.length > 0);
 
       // Guard Dobel Shift / Shift Lanjutan: Jika karyawan sudah menyelesaikan shift hari ini
       const completedAttCheck = await pool.query(
@@ -2495,45 +2504,20 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         }
       }
 
-      // Buat rekaman presensi baru atau update jika sudah ada row hari ini (misal status alfa auto-mangkir)
+      // Buat rekaman presensi baru, atau perbarui hanya jika ada rekaman kosong (clock_in IS NULL, misal alfa auto-mangkir) pada tanggal tersebut.
+      // Jika sudah ada sesi shift sebelumnya yang sudah selesai (clock_out IS NOT NULL), INSERT baris baru agar multi-shift tercatat terpisah.
       const finalNotes = isSimulationSession
         ? `[SIMULASI SOSIALISASI] ${notes || ''}`.trim()
         : (notes || '');
 
-      const query = `
-        INSERT INTO hrm_attendances (
-          user_id, attendance_date, clock_in, photo_in, lat_in, long_in, status, late_minutes, notes,
-          biometric_score, biometric_match, geofence_distance_meters, geofence_valid, is_mock_location, security_flags,
-          shift_id, shift_name, is_simulation, is_verified, is_locked, is_perimeter_breached, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, true, false, false, NOW(), NOW())
-        ON CONFLICT (user_id, attendance_date) DO UPDATE
-        SET clock_in = EXCLUDED.clock_in,
-            photo_in = COALESCE(EXCLUDED.photo_in, hrm_attendances.photo_in),
-            lat_in = COALESCE(EXCLUDED.lat_in, hrm_attendances.lat_in),
-            long_in = COALESCE(EXCLUDED.long_in, hrm_attendances.long_in),
-            status = EXCLUDED.status,
-            late_minutes = EXCLUDED.late_minutes,
-            notes = CASE 
-              WHEN hrm_attendances.notes IS NOT NULL AND hrm_attendances.notes != '' AND hrm_attendances.notes NOT LIKE '%MANGKIR%'
-              THEN hrm_attendances.notes || ' | ' || EXCLUDED.notes 
-              ELSE EXCLUDED.notes 
-            END,
-            biometric_score = COALESCE(EXCLUDED.biometric_score, hrm_attendances.biometric_score),
-            biometric_match = COALESCE(EXCLUDED.biometric_match, hrm_attendances.biometric_match),
-            geofence_distance_meters = COALESCE(EXCLUDED.geofence_distance_meters, hrm_attendances.geofence_distance_meters),
-            geofence_valid = EXCLUDED.geofence_valid,
-            is_mock_location = EXCLUDED.is_mock_location,
-            security_flags = EXCLUDED.security_flags,
-            shift_id = COALESCE(EXCLUDED.shift_id, hrm_attendances.shift_id),
-            shift_name = COALESCE(EXCLUDED.shift_name, hrm_attendances.shift_name),
-            is_simulation = EXCLUDED.is_simulation,
-            is_verified = true,
-            is_locked = false,
-            is_perimeter_breached = false,
-            updated_at = NOW()
-        RETURNING *;
-      `;
-      result = await pool.query(query, [
+      const emptyAttRes = await pool.query(
+        `SELECT id, notes, shift_id, shift_name FROM hrm_attendances
+         WHERE user_id = $1 AND attendance_date = $2::date AND clock_in IS NULL
+         ORDER BY created_at DESC LIMIT 1`,
+        [validUserId, date]
+      );
+
+      const attParams = [
         validUserId,
         date,
         time,
@@ -2552,7 +2536,69 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         resolvedShiftId || null,
         resolvedShiftName || null,
         Boolean(isSimulationSession)
-      ]);
+      ];
+
+      if (emptyAttRes.rows.length > 0) {
+        const emptyId = emptyAttRes.rows[0].id;
+        const updateEmptyQuery = `
+          UPDATE hrm_attendances SET
+            clock_in = $1,
+            photo_in = COALESCE($2, photo_in),
+            lat_in = COALESCE($3, lat_in),
+            long_in = COALESCE($4, long_in),
+            status = $5,
+            late_minutes = $6,
+            notes = CASE
+              WHEN notes IS NOT NULL AND notes != '' AND notes NOT LIKE '%MANGKIR%'
+              THEN notes || ' | ' || $7
+              ELSE $7
+            END,
+            biometric_score = COALESCE($8, biometric_score),
+            biometric_match = COALESCE($9, biometric_match),
+            geofence_distance_meters = COALESCE($10, geofence_distance_meters),
+            geofence_valid = $11,
+            is_mock_location = $12,
+            security_flags = $13,
+            shift_id = COALESCE($14, shift_id),
+            shift_name = COALESCE($15, shift_name),
+            is_simulation = $16,
+            is_verified = true,
+            is_locked = false,
+            is_perimeter_breached = false,
+            updated_at = NOW()
+          WHERE id = $17
+          RETURNING *;
+        `;
+        result = await pool.query(updateEmptyQuery, [
+          time,
+          photo,
+          latitude,
+          longitude,
+          finalStatus,
+          finalLateMinutes,
+          finalNotes,
+          computedBiometricScore != null ? computedBiometricScore : null,
+          computedBiometricMatch != null ? computedBiometricMatch : null,
+          serverDistance != null ? serverDistance : geofenceDistance,
+          isServerGeofenceValid,
+          isMockLocation === true,
+          flagsJson,
+          resolvedShiftId || null,
+          resolvedShiftName || null,
+          Boolean(isSimulationSession),
+          emptyId
+        ]);
+      } else {
+        const insertQuery = `
+          INSERT INTO hrm_attendances (
+            user_id, attendance_date, clock_in, photo_in, lat_in, long_in, status, late_minutes, notes,
+            biometric_score, biometric_match, geofence_distance_meters, geofence_valid, is_mock_location, security_flags,
+            shift_id, shift_name, is_simulation, is_verified, is_locked, is_perimeter_breached, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, true, false, false, NOW(), NOW())
+          RETURNING *;
+        `;
+        result = await pool.query(insertQuery, attParams);
+      }
     }
     const insertedAttendance = result.rows[0];
 
@@ -8247,37 +8293,47 @@ async function syncLeaveToAttendances(leave) {
 
     for (let dt = new Date(sDate); dt <= eDate; dt.setDate(dt.getDate() + 1)) {
       const curDateStr = dt.toISOString().split('T')[0];
-      await pool.query(`
-        INSERT INTO hrm_attendances (
-          user_id, attendance_date, status, clock_in, clock_out,
-          photo_in, photo_out, lat_in, long_in, lat_out, long_out,
-          work_duration_minutes, late_minutes, is_verified, is_locked, is_perimeter_breached,
-          auto_closed_type, notes, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, NULL, NULL,
-          NULL, NULL, NULL, NULL, NULL, NULL,
-          0, 0, true, false, false,
-          NULL, $4, NOW(), NOW()
-        )
-        ON CONFLICT (user_id, attendance_date) DO UPDATE SET
-          status = EXCLUDED.status,
-          clock_in = NULL,
-          clock_out = NULL,
-          photo_in = NULL,
-          photo_out = NULL,
-          lat_in = NULL,
-          long_in = NULL,
-          lat_out = NULL,
-          long_out = NULL,
-          work_duration_minutes = 0,
-          late_minutes = 0,
-          auto_closed_type = NULL,
-          notes = EXCLUDED.notes,
-          is_verified = true,
-          is_locked = false,
-          is_perimeter_breached = false,
-          updated_at = NOW();
-      `, [leave.user_id, curDateStr, attStatus, noteText]);
+      const existingLeaveAtt = await pool.query(
+        `SELECT id FROM hrm_attendances WHERE user_id = $1 AND attendance_date = $2::date ORDER BY created_at DESC LIMIT 1`,
+        [leave.user_id, curDateStr]
+      );
+      if (existingLeaveAtt.rows.length > 0) {
+        await pool.query(`
+          UPDATE hrm_attendances SET
+            status = $1,
+            clock_in = NULL,
+            clock_out = NULL,
+            photo_in = NULL,
+            photo_out = NULL,
+            lat_in = NULL,
+            long_in = NULL,
+            lat_out = NULL,
+            long_out = NULL,
+            work_duration_minutes = 0,
+            late_minutes = 0,
+            auto_closed_type = NULL,
+            notes = $2,
+            is_verified = true,
+            is_locked = false,
+            is_perimeter_breached = false,
+            updated_at = NOW()
+          WHERE id = $3;
+        `, [attStatus, noteText, existingLeaveAtt.rows[0].id]);
+      } else {
+        await pool.query(`
+          INSERT INTO hrm_attendances (
+            user_id, attendance_date, status, clock_in, clock_out,
+            photo_in, photo_out, lat_in, long_in, lat_out, long_out,
+            work_duration_minutes, late_minutes, is_verified, is_locked, is_perimeter_breached,
+            auto_closed_type, notes, created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, NULL, NULL,
+            NULL, NULL, NULL, NULL, NULL, NULL,
+            0, 0, true, false, false,
+            NULL, $4, NOW(), NOW()
+          );
+        `, [leave.user_id, curDateStr, attStatus, noteText]);
+      }
     }
     console.log(`[syncLeaveToAttendances] Sukses sinkronisasi cuti/izin ${leave.user_id} (${leave.start_date} s/d ${leave.end_date}) ke tabel hrm_attendances`);
   } catch (err) {
@@ -14149,30 +14205,31 @@ app.post('/api/attendances/manual-entry', async (req, res) => {
       `, [userId, attendanceDate]).catch(e => console.warn('[manual-entry Reconcile Warning]:', e.message));
     }
 
-    const query = `
-      INSERT INTO hrm_attendances (user_id, attendance_date, status, clock_in, clock_out, notes, late_minutes, is_verified, is_locked, is_perimeter_breached, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, true, false, false, NOW(), NOW())
-      ON CONFLICT (user_id, attendance_date) DO UPDATE
-      SET status = EXCLUDED.status,
-          clock_in = EXCLUDED.clock_in,
-          clock_out = EXCLUDED.clock_out,
-          notes = EXCLUDED.notes,
-          late_minutes = EXCLUDED.late_minutes,
-          is_verified = true,
-          is_locked = false,
-          is_perimeter_breached = false,
-          updated_at = NOW()
-      RETURNING *;
-    `;
-    const result = await pool.query(query, [
-      userId,
-      attendanceDate,
-      canonicalStatus,
-      finalClockIn,
-      finalClockOut,
-      notes || (isNonWorking ? `Disahkan: ${canonicalStatus.toUpperCase()}` : 'Presensi manual divalidasi oleh Superadmin'),
-      finalLateMinutes,
-    ]);
+    const existingManualAtt = await pool.query(
+      `SELECT id FROM hrm_attendances WHERE user_id = $1 AND attendance_date = $2::date ORDER BY created_at DESC LIMIT 1`,
+      [userId, attendanceDate]
+    );
+    const manualNotes = notes || (isNonWorking ? `Disahkan: ${canonicalStatus.toUpperCase()}` : 'Presensi manual divalidasi oleh Superadmin');
+    const result = existingManualAtt.rows.length > 0
+      ? await pool.query(`
+          UPDATE hrm_attendances
+          SET status = $1,
+              clock_in = $2,
+              clock_out = $3,
+              notes = $4,
+              late_minutes = $5,
+              is_verified = true,
+              is_locked = false,
+              is_perimeter_breached = false,
+              updated_at = NOW()
+          WHERE id = $6
+          RETURNING *;
+        `, [canonicalStatus, finalClockIn, finalClockOut, manualNotes, finalLateMinutes, existingManualAtt.rows[0].id])
+      : await pool.query(`
+          INSERT INTO hrm_attendances (user_id, attendance_date, status, clock_in, clock_out, notes, late_minutes, is_verified, is_locked, is_perimeter_breached, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, true, false, false, NOW(), NOW())
+          RETURNING *;
+        `, [userId, attendanceDate, canonicalStatus, finalClockIn, finalClockOut, manualNotes, finalLateMinutes]);
 
     // Otomatis sinkronisasi used_leave_days pada hrm_profiles secara realtime dari ledger & pengajuan
     if (userId) {

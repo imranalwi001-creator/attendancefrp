@@ -783,7 +783,9 @@ export async function initDb() {
       ALTER TABLE hrm_attendances ADD COLUMN IF NOT EXISTS mangkir_penalty_amount NUMERIC(12,2) DEFAULT 0;
       ALTER TABLE hrm_attendances ADD COLUMN IF NOT EXISTS mangkir_kpi_flagged BOOLEAN DEFAULT true;
       ALTER TABLE hrm_overtime_records ADD COLUMN IF NOT EXISTS mangkir_deduction_amount NUMERIC(12,2) DEFAULT 0;
-      CREATE UNIQUE INDEX IF NOT EXISTS uq_hrm_attendances_user_date ON hrm_attendances (user_id, attendance_date);
+      -- Multi-shift attendance support: pastikan index unik tunggal (user_id, attendance_date) dihapus
+      -- agar karyawan yang melanjutkan shift berikutnya (misal Shift I Pengganti -> Shift II Resmi) bisa menyimpan baris presensi terpisah.
+      DROP INDEX IF EXISTS uq_hrm_attendances_user_date;
 
       -- ─── 22. MULTI-DAY LEAVE DAILY RELIEF SUBSTITUTES (1 SUBSTITUTE = 1 DAY MAX) ───
       CREATE TABLE IF NOT EXISTS hrm_leave_daily_substitutes (
