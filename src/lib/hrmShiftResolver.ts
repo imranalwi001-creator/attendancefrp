@@ -485,7 +485,7 @@ export function determineNextContinuousShift(
     };
   }
 
-  // 2. Shift I (07:30 - 15:30) -> Berlanjut ke Shift II (15:30 - 22:30)
+  // 2. Shift I (07:30 - 15:30) -> Berlanjut ke Shift II (15:30 - 22:30), atau Shift III jika sudah >= 20:30 WITA
   if (
     completedShiftCode.includes('SHF-I') ||
     completedShiftCode.includes('PAGI') ||
@@ -493,6 +493,22 @@ export function determineNextContinuousShift(
     completedShiftName.includes('SHIFT I(') ||
     completedShiftName.includes('SHIFT 1')
   ) {
+    const nowMins = currentTime.getHours() * 60 + currentTime.getMinutes();
+    if (nowMins >= 20 * 60 + 30 || nowMins < 5 * 60 + 30) {
+      const shift3 = allShifts.find(s => s.name?.toUpperCase().includes('SHIFT III') || s.name?.toUpperCase().includes('SHIFT 3') || s.code === 'MALAM' || s.code === 'M');
+      const start = (shift3?.startTime || '22:30').substring(0, 5);
+      const end = (shift3?.endTime || '07:30').substring(0, 5);
+      return {
+        isNextShiftAvailable: true,
+        nextShiftCode: 'SHF-III',
+        nextShiftName: shift3?.name || 'Shift III (22:30 - 07:30 WITA)',
+        nextShiftStart: start,
+        nextShiftEnd: end,
+        isNextShiftCrossDay: true,
+        isNextShiftWindowOpen: true,
+        nextShiftOpenTimeStr: '20:30 WITA',
+      };
+    }
     const shift2 = allShifts.find(s => s.name?.toUpperCase().includes('SHIFT II') || s.name?.toUpperCase().includes('SHIFT 2') || s.code === 'SIANG');
     const start = (shift2?.startTime || '15:30').substring(0, 5);
     const end = (shift2?.endTime || '22:30').substring(0, 5);
