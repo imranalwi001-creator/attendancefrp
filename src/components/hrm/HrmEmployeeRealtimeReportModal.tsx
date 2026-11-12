@@ -294,14 +294,14 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     const list = [...serverAttendances];
 
     if (attendance) {
-      const idx = list.findIndex(
-        (a) =>
-          (a.attendanceDate || (a as any).date) === (attendance.attendanceDate || (attendance as any).date || todayStr)
-      );
+      const attDate = attendance.attendanceDate || (attendance as any).date || todayStr;
+      const idx = attendance.id
+        ? list.findIndex((a) => a.id === attendance.id)
+        : list.findIndex((a) => (a.attendanceDate || (a as any).date) === attDate);
       if (idx !== -1) {
         list[idx] = { ...list[idx], ...attendance };
-      } else {
-        list.unshift({ ...attendance, attendanceDate: todayStr, date: todayStr as any });
+      } else if (attendance.id || !list.some((a) => (a.attendanceDate || (a as any).date) === attDate)) {
+        list.unshift({ ...attendance, attendanceDate: attDate, date: attDate as any });
       }
     }
 
@@ -365,10 +365,30 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         return dateStr >= sDate && dateStr <= eDate;
       });
 
-      // 3. Cari semua presensi pada tanggal ini (mendukung multi-shift dalam 1 hari, misal Shift Pengganti + Shift Asli)
+      // 3. Cari semua presensi pada tanggal ini (1 tanggal = 1 baris; jika ada Shift Asli + Shift Pengganti, pisahkan ke ABSEN & LEMBUR)
       const dayAtts = combinedAttendances
         .filter((a) => (a.attendanceDate || (a as any).date || '').slice(0, 10) === dateStr)
         .sort((a, b) => String(a.clockIn || '').localeCompare(String(b.clockIn || '')));
+
+      const isSubstituteAtt = (a: any) => {
+        const sName = String(a?.shiftName || a?.shift_name || '').toLowerCase();
+        const nText = String(a?.notes || '').toLowerCase();
+        return sName.includes('pengganti') || nText.includes('pengganti') || nText.includes('lembur');
+      };
+
+      let att: any = dayAtts[0];
+      let subAtt: any = undefined;
+      if (dayAtts.length > 1) {
+        const foundSub = dayAtts.find(isSubstituteAtt);
+        if (foundSub) {
+          subAtt = foundSub;
+          att = dayAtts.find((a) => a !== foundSub) || dayAtts[0];
+        } else {
+          // Jika tidak ada label 'pengganti' eksplisit, sesi yang cocok dengan jadwal resmi masuk ABSEN, sisanya masuk LEMBUR
+          att = dayAtts[dayAtts.length - 1];
+          subAtt = dayAtts[0];
+        }
+      }
 
       // 4. Cari lembur pada tanggal ini (sinkron PostgreSQL snake_case & camelCase)
       const ot = combinedOvertimes.find((o) => {
@@ -376,9 +396,6 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         return oDate === dateStr;
       });
 
-      const sessionsToRender = dayAtts.length > 0 ? dayAtts : [undefined];
-
-      sessionsToRender.forEach((att, attIdx) => {
       let absenMasuk = '-';
       let absenPulang = '-';
       let telatMnt = '-';
@@ -473,8 +490,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         memerintahkanKaur = '-';
       }
 
-      // Lembur / SPKL Realtime Sync (hanya lampirkan pada baris pertama di tanggal tersebut agar tidak duplikat)
-      if (ot && attIdx === 0) {
+      // Lembur / SPKL Realtime Sync (prioritaskan data ot, atau sesi presensi pengganti/lembur jika ada)
+      if (ot) {
         const rawStart = ot.startTime || ot.start_time || '';
         const rawEnd = ot.endTime || ot.end_time || '';
         lemburMulai = rawStart ? String(rawStart).substring(0, 5) : '-';
@@ -498,6 +515,25 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         } else if (ket === 'HADIR') {
           ket = 'HADIR + LEMBUR';
         }
+      } else if (subAtt && subAtt.clockIn) {
+        lemburMulai = String(subAtt.clockIn).substring(0, 5);
+        lemburSelesai = subAtt.clockOut ? String(subAtt.clockOut).substring(0, 5) : (isToday ? 'Bertugas' : '-');
+        if (subAtt.clockOut) {
+          const [inH, inM] = lemburMulai.split(':').map(Number);
+          const [outH, outM] = lemburSelesai.split(':').map(Number);
+          if (Number.isFinite(inH) && Number.isFinite(outH)) {
+            let diffMins = (outH * 60 + outM) - (inH * 60 + inM);
+            if (diffMins < 0) diffMins += 1440;
+            const hrs = Math.round((diffMins / 60) * 10) / 10;
+            realisasiJamLembur = hrs > 0 ? String(hrs) : '-';
+          }
+        }
+        const subLabel = subAtt.shiftName || 'Shift Pengganti';
+        const subTimeInfo = `${lemburMulai}${lemburSelesai !== '-' ? ` - ${lemburSelesai}` : ''}`;
+        if (ket === 'HADIR') ket = 'HADIR + LEMBUR';
+        uraianPekerjaan = uraianPekerjaan && uraianPekerjaan !== '-'
+          ? `${uraianPekerjaan} • Lembur Pengganti: ${subLabel} (${subTimeInfo})`
+          : `Lembur Pengganti: ${subLabel} (${subTimeInfo})`;
       } else if (att && (att as any).overtimeHours) {
         realisasiJamLembur = String((att as any).overtimeHours);
         if (ket === '-' || ket === 'OFF') ket = 'LEMBUR';
@@ -514,7 +550,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         const posMatch = uraianPekerjaan.match(/\[Pos:\s*([^\]]+)\]/i);
         if (posMatch) {
           const shiftPrefix = att?.shiftName ? `${att.shiftName} • ` : '';
-          uraianPekerjaan = `${shiftPrefix}Pos ${posMatch[1].trim()}`;
+          uraianPekerjaan = uraianPekerjaan.replace(/\[Pos:\s*([^\]]+)\]/i, `${shiftPrefix}Pos ${posMatch[1].trim()}`).trim();
         } else if (att?.shiftName && !uraianPekerjaan.includes(att.shiftName) && dayAtts.length > 1) {
           uraianPekerjaan = `${att.shiftName} • ${uraianPekerjaan}`;
         }
@@ -565,7 +601,6 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         memerintahkanKaur,
         ket,
         attRecord: att,
-      });
       });
     }
 
