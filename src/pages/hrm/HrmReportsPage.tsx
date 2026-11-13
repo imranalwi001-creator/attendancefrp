@@ -26,6 +26,7 @@ import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLembu
 import { HrmEditLemburModal } from '@/components/hrm/superadmin/HrmEditLemburModal';
 import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
 import { HrmEmployeeLeaveCorrectionModal } from '@/components/hrm/HrmEmployeeLeaveCorrectionModal';
+import { HrmTimeSheetPdfModal } from '@/components/hrm/HrmTimeSheetPdfModal';
 import defaultLogo from '@/assets/logo.png';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -153,6 +154,7 @@ export const HrmReportsPage: React.FC = () => {
   const [editOtModalOpen, setEditOtModalOpen] = useState(false);
   const [editingOtRecord, setEditingOtRecord] = useState<OvertimeRecord | null>(null);
   const [otPrintModalOpen, setOtPrintModalOpen] = useState(false);
+  const [timeSheetModalOpen, setTimeSheetModalOpen] = useState(false);
 
   // ── Payroll Tab State ───────────────────────────────────────────────────────
   const [payrollSearchQuery, setPayrollSearchQuery] = useState('');
@@ -1158,6 +1160,12 @@ export const HrmReportsPage: React.FC = () => {
                 <Plus size={14} /> + Input Lembur Manual
               </Button>
               <Button
+                onClick={() => setTimeSheetModalOpen(true)}
+                className="bg-indigo-700 hover:bg-indigo-800 text-white text-xs gap-1.5 h-9 rounded-xl font-bold shadow-sm"
+              >
+                <FileSpreadsheet size={14} /> Cetak Time Sheet Resmi FRP (PDF)
+              </Button>
+              <Button
                 variant="outline"
                 onClick={() => setOtPrintModalOpen(true)}
                 className="text-xs gap-1.5 h-9 rounded-xl"
@@ -1924,6 +1932,12 @@ export const HrmReportsPage: React.FC = () => {
                 <FileText size={14} /> Form ABSEN/SPL
               </Button>
               <Button
+                onClick={() => setTimeSheetModalOpen(true)}
+                className="bg-indigo-700 hover:bg-indigo-800 text-white text-xs gap-1.5 h-9 rounded-xl font-bold shadow-sm"
+              >
+                <FileSpreadsheet size={14} /> Time Sheet 41-Kolom (PDF)
+              </Button>
+              <Button
                 variant="outline"
                 onClick={exportAttendanceExcel}
                 className="text-xs gap-1.5 h-9 rounded-xl text-emerald-700 border-emerald-500/40 hover:bg-emerald-50"
@@ -2213,6 +2227,17 @@ export const HrmReportsPage: React.FC = () => {
         initialMonth={selectedMonth}
         attendances={attendances}
         allShifts={allShifts}
+      />
+
+      {/* 8. Master 41-Column Time Sheet & Overtime PDF Modal */}
+      <HrmTimeSheetPdfModal
+        open={timeSheetModalOpen}
+        onClose={() => setTimeSheetModalOpen(false)}
+        employees={employees}
+        attendances={attendances}
+        overtimes={overtimes}
+        leaves={leaves}
+        initialMonth={selectedMonth}
       />
 
       {/* 8. Inline Modal Input Presensi Manual */}
