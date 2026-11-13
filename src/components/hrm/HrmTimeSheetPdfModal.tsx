@@ -304,8 +304,8 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
             }
             return;
           } else {
-            dailyCells.push(isSchedOff ? '0' : '1');
-            if (!isSchedOff) totalHadir++;
+            // Status lain (e.g. 'belum absen'): jika belum masuk di hari kerja tetap '0'
+            dailyCells.push('0');
             return;
           }
         }
@@ -334,8 +334,10 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
             dailyCells.push('0');
           }
         } else {
-          dailyCells.push('1');
-          totalHadir++;
+          // Tanggal hari ini (jika belum absen) atau tanggal mendatang (seperti 14 dan seterusnya yang belum dimulai)
+          // Sesuai aturan pimpinan: Hari mendatang atau hari ini yang belum clock-in tetap '0'.
+          // Hanya berubah menjadi '1' jika sudah masuk di hari kerja (status hadir/terlambat/clock_in di atas).
+          dailyCells.push('0');
         }
       });
 
