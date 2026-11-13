@@ -1587,12 +1587,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     const isFieldOfficer =
       Boolean(user.isFieldSentinelEnabled) ||
       (Array.isArray(bankPosts) && bankPosts.length > 0) ||
-      ['aslamfaisal10okt@gmail.com', 'abangelsamsi@gmail.com', 'mtakdir46@gmail.com'].includes(
-        (user.email || '').toLowerCase()
-      ) ||
-      ['FRP 07065', 'FR.07.066', 'FRP.07.046', 'FR07065', 'FR07066', 'FR07046'].includes(
-        (user.nip || '').trim()
-      );
+      isLeadershipSpecialFieldOfficer(user);
 
     const handlePos = (pos: GeolocationPosition) => {
       const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };

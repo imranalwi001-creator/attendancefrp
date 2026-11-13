@@ -369,10 +369,17 @@ export const isLeadershipSpecialFieldOfficer = (userOrNipOrEmail: any): boolean 
     email.includes('fr07066') ||
     email.includes('fr07065') ||
     email.includes('fr07046') ||
-    id === '5dcb6ce4-2812-494f-bf84-2260e5207a1c' ||
+    email.includes('fr07027') ||
+    id === '5dcb6ce4-2812-494f-bf84-2260e5207a1c' || // Rusli Matching Bontoa
+    id === '0ad737f8-97f1-4a9e-bdd2-b0cc50ae1075' || // Rusli Wisma Makassar
     id === 'c323bc67-21ef-455b-bade-68e2337da062' ||
     id === 'f0aaf721-203c-4b45-b610-213204bc7ffe'
   ) {
+    return false;
+  }
+
+  // Jika NIP adalah FR07066 tetapi BUKAN akun resmi Samsi, tolak mutlak!
+  if (nip === 'FR07066' && email !== 'abangelsamsi@gmail.com' && !name.includes('samsi') && !name.includes('unga')) {
     return false;
   }
 
@@ -387,12 +394,12 @@ export const isLeadershipSpecialFieldOfficer = (userOrNipOrEmail: any): boolean 
   }
 
   // 3. Cek Nama Resmi
-  if (name.includes('aslam') || name.includes('samsi') || (name.includes('takdir') && !name.includes('rusdi'))) {
+  if (name.includes('aslam') || name.includes('samsi') || name.includes('unga') || (name.includes('takdir') && !name.includes('rusdi'))) {
     return true;
   }
 
-  // 4. Cek NIP Lengkap Mutlak (HANYA jika format NIP lengkap sesuai)
-  if (nip === 'FRP07065' || (nip === 'FR07066' && email === 'abangelsamsi@gmail.com') || nip === 'FRP07046') {
+  // 4. Cek NIP Lengkap Mutlak (HANYA jika format NIP lengkap sesuai dan milik Samsi)
+  if (nip === 'FRP07065' || (nip === 'FR07066' && (email === 'abangelsamsi@gmail.com' || name.includes('samsi') || name.includes('unga'))) || nip === 'FRP07046') {
     return true;
   }
 

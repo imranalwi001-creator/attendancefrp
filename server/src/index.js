@@ -374,7 +374,9 @@ export function isLeadershipSpecialFieldOfficer(user) {
     name = (user.full_name || user.fullName || user.name || '').toLowerCase().trim();
   }
 
-  // Guard eksklusif: Rusli, Honnes, Rusdi BUKAN 3 Petugas Lapangan Khusus Pimpinan!
+  const cleanNip = rawNip.replace(/[\s.]/g, '');
+
+  // Guard eksklusif: Rusli (FR07066 / FR07027), Honnes, Rusdi BUKAN 3 Petugas Lapangan Khusus Pimpinan!
   if (
     name.includes('rusli') ||
     name.includes('honnes') ||
@@ -382,11 +384,17 @@ export function isLeadershipSpecialFieldOfficer(user) {
     email.includes('fr07066') ||
     email.includes('fr07065') ||
     email.includes('fr07046') ||
-    id === '5dcb6ce4-2812-494f-bf84-2260e5207a1c' ||
-    id === '0ad737f8-97f1-4a9e-bdd2-b0cc50ae1075' ||
+    email.includes('fr07027') ||
+    id === '5dcb6ce4-2812-494f-bf84-2260e5207a1c' || // Rusli Matching Bontoa (Shipment)
+    id === '0ad737f8-97f1-4a9e-bdd2-b0cc50ae1075' || // Rusli Wisma Makassar (Rumah Tangga)
     id === 'c323bc67-21ef-455b-bade-68e2337da062' ||
     id === 'f0aaf721-203c-4b45-b610-213204bc7ffe'
   ) {
+    return false;
+  }
+
+  // Jika NIP adalah FR07066 tetapi BUKAN akun resmi Samsi, tolak seketika!
+  if (cleanNip === 'FR07066' && email !== 'abangelsamsi@gmail.com' && !name.includes('samsi') && !name.includes('unga')) {
     return false;
   }
 
@@ -411,9 +419,8 @@ export function isLeadershipSpecialFieldOfficer(user) {
     return true;
   }
 
-  // 4. Cek NIP Lengkap Mutlak (HANYA jika format NIP lengkap sesuai dan milik Samsi)
-  const cleanNip = rawNip.replace(/[\s.]/g, '');
-  if (cleanNip === 'FRP07065' || (cleanNip === 'FR07066' && (email === 'abangelsamsi@gmail.com' || name.includes('samsi'))) || cleanNip === 'FRP07046') {
+  // 4. Cek NIP Lengkap Mutlak (HANYA jika format NIP sesuai dan terbukti milik Samsi/Aslam/Takdir)
+  if (cleanNip === 'FRP07065' || (cleanNip === 'FR07066' && (email === 'abangelsamsi@gmail.com' || name.includes('samsi') || name.includes('unga'))) || cleanNip === 'FRP07046') {
     return true;
   }
 
@@ -3240,10 +3247,10 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
       }
     }
 
-    // 3. LOGIKA ROUTING APPROVAL KORLAP (MUH ASLAM FAISAL) DENGAN DELEGASI OTOMATIS
-    // Aslam membawahi 80 personil lapangan. Jika Aslam sedang cuti/libur (akhir pekan),
-    // wewenang persetujuan & notifikasi otomatis dialihkan (forward) ke LA UNGA SAMSI & TAKDIR.
-    // Laporan tembusan selalu masuk ke Bpk Reski Faisal (Pimpinan), Dirut, dan Superadmin.
+    // 3. LOGIKA ROUTING NOTIFIKASI FIRST-RESPONDER: KORLAP, K3, ADMIN, DAN SUPERADMIN (80 KARYAWAN REGULER)
+    // Sesuai aturan resmi PT FRP: Pengajuan 80 karyawan reguler (termasuk Rusli FR07066)
+    // HANYA ditujukan kepada Korlap, K3, Admin, dan Superadmin.
+    // 🛡️ DILARANG KERAS MENGIRIM KE PIMPINAN (082192755755) ATAU DIREKTUR UTAMA (082291998026)!
     let isAslamOffOrLeave = false;
     let aslamPhone = '085342470909';
     try {
@@ -3268,83 +3275,97 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
       console.warn('[Aslam Status Check Warning]:', err.message);
     }
 
-    if (!isDecision) {
-      if (isAslamOffOrLeave) {
-        // FORWARD KE LA UNGA SAMSI & TAKDIR KARENA ASLAM SEDANG CUTI/LIBUR
-        const forwardedMsg =
-          `🛡️ *DELEGASI OTOMATIS: KORLAP ASLAM SEDANG CUTI/LIBUR (PT FRP)*\n\n` +
-          `Halo Bapak Pengawas Lapangan (*LA UNGA SAMSI / TAKDIR*),\n` +
-          `Koordinator Lapangan (*Muh Aslam Faisal*) saat ini sedang berstatus *LIBUR / CUTI*.\n` +
-          `Sesuai instruksi Direksi, permohonan dinas anggota operasional *DIALIHKAN KEPADA ANDA* untuk ditinjau & disahkan:\n\n` +
-          `👤 Pemohon: *${applicant.fullName}* (${applicant.nip || '-'})\n` +
-          `🏢 Pos/Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
-          `📝 Jenis: *${submissionType}*\n` +
-          `📅 Detail: *${details}*\n` +
-          `💬 Alasan: "${reasonOrTask || '-'}"\n` +
-          (substitute?.fullName ? `🛡️ Usulan Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Pengganti Pos:* Belum ditetapkan (Butuh segera ditetapkan Pengawas)\n') +
-          `\n${globalQuotaText}` +
-          `⚡ *HUKUM ZERO VACANCY:* Pos dinas tidak boleh kosong tenaga kerja! Pekerjaan harus tetap berjalan lancar jika ada yang izin/cuti. Silakan segera buka portal HRM untuk menetapkan pengganti pos:\n` +
-          `🔗 Tautan: https://fawwazreskiperwira.com${approvalLink}`;
+    // Susun daftar nomor penerima resmi tingkat operasional:
+    const operationalRecipients = new Set();
+    operationalRecipients.add('081355904897'); // Superadmin selalu menerima salinan
 
-        // Kirim ke Samsi (088246270912) dan Takdir (085242606150)
-        await sendWhatsAppAlert({ phone: '088246270912', message: forwardedMsg }).catch(() => {});
-        await sendWhatsAppAlert({ phone: '085242606150', message: forwardedMsg }).catch(() => {});
-      } else {
-        // ASLAM AKTIF: KIRIM LANGSUNG KE ASLAM SELAKU KORLAP 80 KARYAWAN
-        const korlapMsg =
-          `📋 *TUGAS PERSETUJUAN KORLAP: PENGAJUAN ${submissionType} (PT FRP)*\n\n` +
-          `Halo *Muh Aslam Faisal* (Koordinator Lapangan),\n` +
-          `Anggota operasional yang Anda naungi (80 karyawan) telah mengajukan permohonan baru:\n\n` +
-          `👤 Pemohon: *${applicant.fullName}* (${applicant.nip || '-'})\n` +
-          `🏢 Pos/Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
-          `📝 Jenis: *${submissionType}*\n` +
-          `📅 Detail: *${details}*\n` +
-          `💬 Alasan: "${reasonOrTask || '-'}"\n` +
-          (substitute?.fullName ? `🛡️ Usulan Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Pengganti Pos:* Belum ditetapkan (Butuh penetapan Anda)\n') +
-          `\n${globalQuotaText}` +
-          `⚡ *ATURAN ZERO VACANCY:* Pekerjaan tidak boleh kosong tenaga kerja! Pekerjaan harus tetap berjalan lancar jika karyawan izin/sakit/cuti. Silakan segera tinjau dan tetapkan karyawan pengganti di portal HRM:\n` +
-          `🔗 Tautan: https://fawwazreskiperwira.com${approvalLink}`;
+    // Ambil nomor telepon staf K3 dan Admin resmi dari database
+    try {
+      const staffRes = await pool.query(`
+        SELECT DISTINCT p.phone, LOWER(r.name) as role_name
+        FROM hrm_profiles p
+        JOIN hrm_roles r ON p.role_id = r.id
+        WHERE (LOWER(r.name) IN ('k3', 'admin', 'hrd')
+           OR LOWER(r.label) LIKE '%k3%'
+           OR LOWER(r.label) LIKE '%admin%')
+          AND p.phone IS NOT NULL AND p.phone != '' AND p.is_active = true;
+      `);
+      for (const row of staffRes.rows) {
+        if (row.phone) operationalRecipients.add(row.phone.trim());
+      }
+    } catch (e) {
+      console.warn('[Operational Staff Query Warning]:', e.message);
+    }
 
-        await sendWhatsAppAlert({ phone: aslamPhone, message: korlapMsg }).catch(() => {});
+    // Default fallbacks jika database belum memiliki nomor:
+    // K3 (LA UNGA SAMSI): 088246270912
+    // Admin (Budi Prakoso): 081234567891
+    if (!Array.from(operationalRecipients).some(p => p.includes('088246270912') || p.includes('88246270912'))) {
+      operationalRecipients.add('088246270912');
+    }
+    if (!Array.from(operationalRecipients).some(p => p.includes('081234567891') || p.includes('81234567891'))) {
+      operationalRecipients.add('081234567891');
+    }
+
+    // Nomor Korlap (Muh Aslam Faisal) atau Pengawas Pengganti jika Korlap berhalangan
+    if (!isAslamOffOrLeave) {
+      operationalRecipients.add(aslamPhone);
+    } else {
+      operationalRecipients.add('088246270912'); // LA UNGA SAMSI
+      operationalRecipients.add('085242606150'); // TAKDIR
+    }
+
+    // 🛡️ FILTER MUTLAK ANTI-LEAK: Hapus nomor Pimpinan dan Dirut agar TIDAK PERNAH terkirim untuk 80 karyawan reguler
+    operationalRecipients.delete('082192755755');
+    operationalRecipients.delete('6282192755755');
+    operationalRecipients.delete('+6282192755755');
+    operationalRecipients.delete('082291998026');
+    operationalRecipients.delete('6282291998026');
+    operationalRecipients.delete('+6282291998026');
+
+    // Hindari duplikasi pesan ke pemohon dan personil pengganti
+    if (applicant?.phone) {
+      const cleanApp = applicant.phone.replace(/\D/g, '');
+      for (const p of operationalRecipients) {
+        if (p.replace(/\D/g, '') === cleanApp) operationalRecipients.delete(p);
+      }
+    }
+    if (substitute?.phone) {
+      const cleanSub = substitute.phone.replace(/\D/g, '');
+      for (const p of operationalRecipients) {
+        if (p.replace(/\D/g, '') === cleanSub) operationalRecipients.delete(p);
       }
     }
 
-    // 4. KIRIM LAPORAN / BROADCAST KE PIMPINAN, DIRUT & SUPERADMIN
-    const leadershipPhones = new Set([
-      '081355904897', // Superadmin
-      '082192755755', // Bpk Reski Faisal (Pimpinan)
-      '082291998026', // Bpk Alam AS simpuang ago, S.Sos (Direktur Utama)
-    ]);
-
-    let managementMsg = '';
+    let operationalMsg = '';
     if (!isDecision) {
-      managementMsg =
-        `📢 *LAPORAN PENGAJUAN ${submissionType} KARYAWAN LAPANGAN*\n\n` +
-        `👤 Pemohon: *${applicant.fullName}* (NIP: ${applicant.nip || '-'})\n` +
+      operationalMsg =
+        `📋 *PENGAJUAN ${submissionType} KARYAWAN LAPANGAN (PT FRP)*\n\n` +
+        `👤 Pemohon: *${applicant.fullName}* (${applicant.nip || '-'})\n` +
         `🏢 Pos/Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
         `📝 Jenis: *${submissionType}*\n` +
         `📅 Detail: *${details}*\n` +
-        `💬 Keterangan: "${reasonOrTask || '-'}"\n` +
-        (substitute?.fullName ? `🛡️ Usulan Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Petugas Pengganti:* Butuh penetapan Korlap (Zero Vacancy)\n') +
+        `💬 Alasan/Tugas: "${reasonOrTask || '-'}"\n` +
+        (substitute?.fullName ? `🛡️ Usulan Pengganti: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '⚠️ *Petugas Pengganti:* Butuh penetapan pengawas (Zero Vacancy)\n') +
         `\n${globalQuotaText}` +
-        `📌 Penanggung Jawab Approval: ${isAslamOffOrLeave ? '*LA UNGA SAMSI / TAKDIR* (Forwarded karena Korlap Aslam libur/cuti)' : '*Muh Aslam Faisal* (Korlap 80 Personil)'}\n` +
-        `\n⚡ *HUKUM ZERO VACANCY:* Pos dinas tidak boleh kosong! Pekerjaan harus tetap berjalan lancar.\n` +
-        `🔗 Tautan: https://fawwazreskiperwira.com${approvalLink}`;
+        `📌 *Persetujuan Tingkat 1 (First-Responder):* Korlap, K3, atau Admin salah satu dapat meninjau dan menyetujui di portal HRM:\n` +
+        `🔗 Tautan: https://fawwazreskiperwira.com${approvalLink}\n\n` +
+        `⚡ *HUKUM ZERO VACANCY:* Pos dinas tidak boleh kosong tenaga kerja!`;
     } else {
-      managementMsg =
+      operationalMsg =
         `📢 *KEPUTUSAN PENGAJUAN ${submissionType}: ${decisionStatus.toUpperCase()}*\n\n` +
-        `👤 Pemohon: *${applicant.fullName}* (NIP: ${applicant.nip || '-'})\n` +
+        `👤 Pemohon: *${applicant.fullName}* (${applicant.nip || '-'})\n` +
         `🏢 Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
         `📝 Jenis: *${submissionType}* (${details})\n` +
-        `⚖️ Keputusan: *${isApproved ? 'DISETUJUI' : 'DITOLAK'}* oleh *${approverName || 'Korlap'}*\n` +
+        `⚖️ Keputusan: *${isApproved ? 'DISETUJUI SAH' : 'DITOLAK'}* oleh *${approverName || 'Atasan Lapangan'}*\n` +
         (approvalNotes ? `💬 Catatan: "${approvalNotes}"\n` : '') +
         (substitute?.fullName ? `🛡️ Personil Pengganti Pos Resmi: *${substitute.fullName}*\n` : '') +
         (quota ? `\n📊 *Status Kuota Cuti Terkini:* Sisa ${quota.estRemaining ?? quota.currentRemaining} Hari (Terpakai: ${quota.usedDays} dari ${quota.annualQuota} Hari)\n` : '') +
-        `\n💾 Audit trail & radius pos pengganti telah otomatis disinkronkan di sistem HRM PT FRP.`;
+        `\n💾 Audit trail & status presensi telah otomatis disinkronkan di sistem HRM PT FRP.`;
     }
 
-    for (const phone of leadershipPhones) {
-      await sendWhatsAppAlert({ phone, message: managementMsg });
+    for (const phone of operationalRecipients) {
+      await sendWhatsAppAlert({ phone, message: operationalMsg }).catch(() => {});
     }
   } catch (err) {
     console.error('[notifyAllPartiesViaWhatsApp Error]:', err.message);
@@ -6270,13 +6291,7 @@ Izin pulang darurat diproses mandiri tanpa konfirmasi agar tidak menghambat pena
     }
 
     // 4. Jika karyawan adalah salah satu dari 3 Petugas Lapangan Khusus, teruskan juga ke Dirut & Pimpinan
-    const specialNips = ['FRP 07065', 'FR.07.066', 'FRP.07.046'];
-    const specialIds = [
-      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
-      '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
-      '0a49f92e-5733-4b72-947c-7361f9490632'  // TAKDIR
-    ];
-    const isSpecialOfficer = specialIds.includes(prof.id) || specialNips.includes(prof.nip?.trim());
+    const isSpecialOfficer = isExemptFieldOfficer(prof);
 
     if (isSpecialOfficer) {
       // Dirut: 082291998026
@@ -14995,13 +15010,7 @@ app.post('/api/attendances/submit-breach-report', async (req, res) => {
     const nowWita = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19) + ' WITA';
 
     // 6. Cek apakah termasuk 3 Petugas Lapangan Khusus
-    const specialNips = ['FRP 07065', 'FR.07.066', 'FRP.07.046'];
-    const specialIds = [
-      'ebf10b16-ab2f-4b53-ab22-b3ffc00694db', // Muh Aslam Faisal
-      '2ce41a19-0c65-45d3-913e-a68a02203fe2', // LA UNGA SAMSI
-      '0a49f92e-5733-4b72-947c-7361f9490632'  // TAKDIR
-    ];
-    const isSpecialOfficer = specialIds.includes(prof.id) || specialNips.includes(prof.nip?.trim());
+    const isSpecialOfficer = isExemptFieldOfficer(prof);
 
     if (isSpecialOfficer) {
       // Dispatch WhatsApp ke Dirut, Pimpinan, dan Superadmin (Tembusan)

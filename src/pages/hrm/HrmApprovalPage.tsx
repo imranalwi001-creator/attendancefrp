@@ -67,15 +67,29 @@ export const HrmApprovalPage: React.FC = () => {
   const isAdmin = isSuperAdmin || userRoleName.includes('admin') || userRoleName.includes('hrd');
   const canApprove = isSuperAdmin || isPimpinan || isKorlap || isDanru || isK3 || isAdmin || isLeadershipSpecialFieldOfficer(user);
 
-  // Cek apakah pemohon adalah Pejabat Pengawas (Korlap / Admin / K3)
+  // Cek apakah pemohon adalah Pejabat Pengawas (Korlap / Admin / K3) atau 3 Petugas Lapangan Khusus
   const isSupervisorApplicant = (userId: string, userNip?: string, forwardedToPimpinan?: boolean) => {
     if (forwardedToPimpinan) return true;
     const applicant = users.find((u) => u.id === userId || (userNip && u.nip === userNip));
     const roleCode = (applicant?.role || applicant?.roleName || '').toLowerCase();
+    const applicantName = (applicant?.fullName || applicant?.name || '').toLowerCase();
+    const applicantEmail = (applicant?.email || '').toLowerCase();
+
+    // 🛡️ Guard mutlak: Rusli (FR07066 / FR07027) BUKAN Pejabat Pengawas & BUKAN Petugas Khusus Direksi!
+    if (applicantName.includes('rusli') || applicantEmail.includes('fr07066') || applicantEmail.includes('fr07027')) {
+      return false;
+    }
+
+    // 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir)
+    if (isLeadershipSpecialFieldOfficer(applicant || { id: userId, nip: userNip })) {
+      return true;
+    }
+
     if (['korlap', 'admin', 'k3', 'koordinator'].includes(roleCode) || roleCode.includes('korlap') || roleCode.includes('k3')) {
       return true;
     }
-    const knownSupervisorNips = ['frp 07065', 'fr.07.066', 'fr07065', 'fr07066', 'adm001', 'emp008'];
+
+    const knownSupervisorNips = ['frp 07065', 'fr07065', 'adm001', 'emp008'];
     if (userNip && knownSupervisorNips.includes(userNip.toLowerCase().trim())) return true;
     return false;
   };
