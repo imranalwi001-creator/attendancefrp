@@ -54,6 +54,8 @@ import {
   SlidersHorizontal,
   Filter,
   Users,
+  Ship,
+  Home,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -213,6 +215,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
   // Navigasi Bulan & Kalender Presensi Per Karyawan
   const currentMonthStr = getTodayDateStr().slice(0, 7);
+  const pastMonthStr = React.useMemo(() => getPreviousYearMonth(currentMonthStr), [currentMonthStr]);
+  const futureMonthStr = React.useMemo(() => getNextYearMonth(currentMonthStr), [currentMonthStr]);
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
   const [selectedDayDate, setSelectedDayDate] = useState<string>(''); // YYYY-MM-DD atau '' (semua tanggal di bulan)
   const targetDayDate = selectedDayDate || getTodayDateStr();
@@ -897,8 +901,37 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     const SHIPMENT_BUDGET = 65000000;
     const WISMA_BUDGET = 4000000;
 
+    const shipmentEmployeesCount = hasSyncedNextArrears
+      ? Number(nextPayrollArrears.totals.shipment?.withOvertimeCount || 0)
+      : curMonthOvertimes.filter((o) => {
+          const u = users.find((usr) => usr.id === o.userId || usr.nip === o.userNip);
+          const grp = u ? getEmployeeCategoryGroup(u) : getEmployeeCategoryGroup(o.userNip || '');
+          return grp === 'SHIPMENT';
+        }).length;
+
+    const wismaEmployeesCount = hasSyncedNextArrears
+      ? Number(nextPayrollArrears.totals.rumahTangga?.withOvertimeCount || 0)
+      : curMonthOvertimes.filter((o) => {
+          const u = users.find((usr) => usr.id === o.userId || usr.nip === o.userNip);
+          const grp = u ? getEmployeeCategoryGroup(u) : getEmployeeCategoryGroup(o.userNip || '');
+          return grp === 'RUMAH TANGGA';
+        }).length;
+
+    const shipmentRemaining = Math.max(0, SHIPMENT_BUDGET - syncedShipmentSpent);
+    const shipmentPercent = Math.min(100, Math.round((syncedShipmentSpent / SHIPMENT_BUDGET) * 100));
+    const shipmentRemainingPercent = Math.max(0, 100 - shipmentPercent);
+    const isShipmentNearLimit = shipmentPercent >= 85;
+    const isShipmentExceeded = syncedShipmentSpent >= SHIPMENT_BUDGET;
+
+    const wismaRemaining = Math.max(0, WISMA_BUDGET - syncedWismaSpent);
+    const wismaPercent = Math.min(100, Math.round((syncedWismaSpent / WISMA_BUDGET) * 100));
+    const wismaRemainingPercent = Math.max(0, 100 - wismaPercent);
+    const isWismaNearLimit = wismaPercent >= 85;
+    const isWismaExceeded = syncedWismaSpent >= WISMA_BUDGET;
+
     const remainingBudget = Math.max(0, TOTAL_BUDGET - totalOvertimeSpent);
     const budgetPercent = Math.min(100, Math.round((totalOvertimeSpent / TOTAL_BUDGET) * 100));
+    const totalRemainingPercent = Math.max(0, 100 - budgetPercent);
 
     return {
       curMonth,
@@ -923,10 +956,25 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       totalArrearsOvertimeHours,
       shipmentSpent: syncedShipmentSpent,
       shipmentHours: syncedShipmentHours,
+      shipmentPaidHours: syncedShipmentPaidHours,
+      shipmentEmployeesCount,
+      shipmentRemaining,
+      shipmentPercent,
+      shipmentRemainingPercent,
+      isShipmentNearLimit,
+      isShipmentExceeded,
       wismaSpent: syncedWismaSpent,
       wismaHours: syncedWismaHours,
+      wismaPaidHours: syncedWismaPaidHours,
+      wismaEmployeesCount,
+      wismaRemaining,
+      wismaPercent,
+      wismaRemainingPercent,
+      isWismaNearLimit,
+      isWismaExceeded,
       remainingBudget,
       budgetPercent,
+      totalRemainingPercent,
       totalBaseSalary: byGroup.all.totalBaseSalary,
       totalBpjsDeduction: byGroup.all.totalBpjs,
       totalEstimatedNet: byGroup.all.totalNetSalary,
@@ -1444,7 +1492,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       <Card className="border-border/80 bg-gradient-to-br from-card via-card to-amber-500/5 rounded-2xl shadow-xs overflow-hidden">
         <CardContent className="p-4 sm:p-5">
           <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <div className="flex items-center gap-2 flex-wrap">
                 <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400 font-mono text-xs font-semibold px-2.5 py-0.5">
                   <Coins size={12} className="mr-1 inline" /> PLAFON ANGGARAN LEMBUR RESMI PT FRP
@@ -1452,61 +1500,303 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 <Badge className={financialStats.isExceeded ? 'bg-rose-600 text-white font-mono text-[11px]' : financialStats.isNearLimit ? 'bg-amber-600 text-white font-mono text-[11px]' : 'bg-emerald-600 text-white font-mono text-[11px]'}>
                   {financialStats.isExceeded ? 'KUOTA HABIS / KUNCI AKTIF' : financialStats.isNearLimit ? 'SIAGA ANGGARAN' : 'ANGGARAN AMAN'}
                 </Badge>
+                {selectedMonth === currentMonthStr && (
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-300 font-semibold text-[10px]">
+                    ● Bulan Berjalan ({financialStats.curMonthShort})
+                  </Badge>
+                )}
+                {selectedMonth === pastMonthStr && (
+                  <Badge variant="outline" className="bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-300 font-semibold text-[10px]">
+                    ⏪ Bulan Lalu ({financialStats.curMonthShort})
+                  </Badge>
+                )}
+                {selectedMonth === futureMonthStr && (
+                  <Badge variant="outline" className="bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-300 font-semibold text-[10px]">
+                    ⏩ Bulan Depan ({financialStats.curMonthShort})
+                  </Badge>
+                )}
+                {selectedMonth !== currentMonthStr && selectedMonth !== pastMonthStr && selectedMonth !== futureMonthStr && (
+                  <Badge variant="outline" className="bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-300 font-semibold text-[10px]">
+                    📅 Periode: {financialStats.curMonthShort}
+                  </Badge>
+                )}
               </div>
               <p className="text-xs text-muted-foreground">
-                Monitoring kuota lembur (80 Personil) &amp; estimasi payroll <strong>{financialStats.curMonthLabel}</strong> (Lembur Bulan Mundur N-1: <strong>{financialStats.arrearsMonthLabel}</strong>).
+                Monitoring kuota lembur (80 Personil) &amp; estimasi payroll bulan <strong>{financialStats.curMonthLabel}</strong> (Lembur Kerja: <strong>{financialStats.curMonthLabel}</strong> → Payroll <strong>{financialStats.nextPayrollMonthLabel}</strong>).
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 self-stretch lg:self-auto">
+              {/* Quick Period Selector (Bulan Lalu / Berjalan / Depan) */}
+              <div className="flex items-center gap-1 p-1 bg-muted/60 dark:bg-muted/30 rounded-xl border border-border/60 text-xs">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={selectedMonth === pastMonthStr ? 'default' : 'ghost'}
+                  onClick={() => { setSelectedMonth(pastMonthStr); setSelectedDayDate(''); }}
+                  className={`h-7 px-2.5 text-[11px] rounded-lg font-medium transition-all ${
+                    selectedMonth === pastMonthStr ? 'shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title={`Lihat Lembur Bulan Lalu (${formatYearMonthId(pastMonthStr)})`}
+                >
+                  ⏪ Bulan Lalu
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={selectedMonth === currentMonthStr ? 'default' : 'ghost'}
+                  onClick={() => { setSelectedMonth(currentMonthStr); setSelectedDayDate(''); }}
+                  className={`h-7 px-2.5 text-[11px] rounded-lg font-medium transition-all ${
+                    selectedMonth === currentMonthStr ? 'shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title={`Lihat Lembur Bulan Berjalan (${formatYearMonthId(currentMonthStr)})`}
+                >
+                  📍 Bulan Berjalan
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={selectedMonth === futureMonthStr ? 'default' : 'ghost'}
+                  onClick={() => { setSelectedMonth(futureMonthStr); setSelectedDayDate(''); }}
+                  className={`h-7 px-2.5 text-[11px] rounded-lg font-medium transition-all ${
+                    selectedMonth === futureMonthStr ? 'shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title={`Lihat Lembur Bulan Depan (${formatYearMonthId(futureMonthStr)})`}
+                >
+                  ⏩ Bulan Depan
+                </Button>
+
+                <div className="h-4 w-px bg-border/60 mx-0.5" />
+
+                <div className="flex items-center">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={handlePrevMonth}
+                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
+                    title="Mundur 1 Bulan"
+                  >
+                    <ChevronLeft size={14} />
+                  </Button>
+                  <span className="text-[11px] font-bold text-foreground px-1 font-mono min-w-[70px] text-center">
+                    {financialStats.curMonthShort}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleNextMonth}
+                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
+                    title="Maju 1 Bulan"
+                  >
+                    <ChevronRight size={14} />
+                  </Button>
+                </div>
+              </div>
+
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => navigate(`/admin/lembur?tab=arrears&payrollMonth=${encodeURIComponent(financialStats.nextPayrollMonth)}`)}
-                className="border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs h-9 px-3.5 rounded-xl font-semibold gap-1.5 transition-all w-full sm:w-auto"
+                className="border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs h-9 px-3 rounded-xl font-semibold gap-1.5 transition-all w-full sm:w-auto"
               >
                 <Coins size={14} />
-                <span>Proses Lembur {financialStats.curMonthShort} → Payroll {financialStats.nextPayrollMonthShort}</span>
+                <span>Proses Lembur → Payroll {financialStats.nextPayrollMonthShort}</span>
               </Button>
               <Button
                 type="button"
                 onClick={() => setFinancialRecapModalOpen(true)}
-                className="bg-amber-600 hover:bg-amber-700 text-white text-xs h-9 px-4 rounded-xl font-semibold gap-2 shadow-xs transition-all w-full sm:w-auto"
+                className="bg-amber-600 hover:bg-amber-700 text-white text-xs h-9 px-3.5 rounded-xl font-semibold gap-2 shadow-xs transition-all w-full sm:w-auto"
               >
                 <Coins size={14} />
-                <span>Buka Rekap Gaji &amp; Lembur Realtime</span>
+                <span>Rekap Realtime</span>
               </Button>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 pt-4 border-t border-border/60 text-xs">
-            <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
-              <span className="text-[11px] text-muted-foreground block">Plafon Sah Lembur (Total)</span>
-              <span className="text-base font-bold text-foreground font-mono">Rp 69.000.000</span>
-              <span className="text-[10px] text-muted-foreground block mt-0.5">Shipment: Rp 65 Jt • Wisma: Rp 4 Jt</span>
+          {/* Card Pemisahan Kuota Lembur: Shipment 65 Jt, Rumah Tangga 4 Jt, Total 69 Jt, dan Estimasi Payroll */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4 pt-4 border-t border-border/60 text-xs">
+            {/* 1. SHIPMENT (Plafon Rp 65 Jt - 47 Personil) */}
+            <div className="p-3.5 bg-muted/40 hover:bg-muted/60 rounded-xl border border-blue-500/30 shadow-xs flex flex-col justify-between transition-all">
+              <div>
+                <div className="flex items-center justify-between gap-1 mb-1.5">
+                  <span className="text-[11px] font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
+                    <Ship size={14} className="text-blue-600 shrink-0" />
+                    <span>Lembur Shipment (47 Org)</span>
+                  </span>
+                  <Badge variant="outline" className="text-[10px] font-mono font-semibold bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-300/40">
+                    Plafon Rp 65 Jt
+                  </Badge>
+                </div>
+
+                <div className="mt-1">
+                  <span className="text-[10px] text-muted-foreground block font-medium">Terpakai ({financialStats.curMonthShort}):</span>
+                  <span className="text-base font-bold text-foreground font-mono block mt-0.5">
+                    Rp {financialStats.shipmentSpent.toLocaleString('id-ID')}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground block mt-0.5">
+                    {financialStats.shipmentEmployeesCount} Org • {financialStats.shipmentHours}j real / {financialStats.shipmentPaidHours}j bayar ({financialStats.shipmentPercent}%)
+                  </span>
+                </div>
+
+                {/* Progress Bar Visual */}
+                <div className="w-full bg-muted rounded-full h-1.5 mt-2.5 overflow-hidden">
+                  <div
+                    className={`h-1.5 rounded-full transition-all ${
+                      financialStats.isShipmentExceeded
+                        ? 'bg-rose-600'
+                        : financialStats.isShipmentNearLimit
+                        ? 'bg-amber-500'
+                        : 'bg-blue-600'
+                    }`}
+                    style={{ width: `${Math.min(100, financialStats.shipmentPercent)}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-border/50 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-muted-foreground block">Sisa Anggaran:</span>
+                  <span className={`text-xs font-bold font-mono ${financialStats.shipmentRemaining === 0 ? 'text-rose-600' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                    Rp {financialStats.shipmentRemaining.toLocaleString('id-ID')}
+                  </span>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={`text-[9px] font-medium ${
+                    financialStats.isShipmentExceeded
+                      ? 'bg-rose-500/10 text-rose-600 border-rose-300'
+                      : financialStats.isShipmentNearLimit
+                      ? 'bg-amber-500/10 text-amber-600 border-amber-300'
+                      : 'bg-emerald-500/10 text-emerald-600 border-emerald-300'
+                  }`}
+                >
+                  {financialStats.isShipmentExceeded ? 'Habis' : `Sisa ${financialStats.shipmentRemainingPercent}%`}
+                </Badge>
+              </div>
             </div>
 
-            <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
-              <span className="text-[11px] text-muted-foreground block">Progres Lembur ({financialStats.curMonthShort} → {financialStats.nextPayrollMonthShort})</span>
-              <span className="text-base font-bold text-amber-600 dark:text-amber-400 font-mono">
-                Rp {financialStats.totalOvertimeSpent.toLocaleString('id-ID')}
-              </span>
-              <span className="text-[10px] text-muted-foreground block mt-0.5">
-                {financialStats.nextOvertimeEmployeesCount} Org • {financialStats.totalOvertimeHours}j real / {financialStats.totalOvertimePaidHours}j bayar ({financialStats.budgetPercent}%)
-              </span>
+            {/* 2. RUMAH TANGGA / WISMA (Plafon Rp 4 Jt - 33 Personil) */}
+            <div className="p-3.5 bg-muted/40 hover:bg-muted/60 rounded-xl border border-amber-500/30 shadow-xs flex flex-col justify-between transition-all">
+              <div>
+                <div className="flex items-center justify-between gap-1 mb-1.5">
+                  <span className="text-[11px] font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+                    <Home size={14} className="text-amber-600 shrink-0" />
+                    <span>Rumah Tangga (33 Org)</span>
+                  </span>
+                  <Badge variant="outline" className="text-[10px] font-mono font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300/40">
+                    Plafon Rp 4 Jt
+                  </Badge>
+                </div>
+
+                <div className="mt-1">
+                  <span className="text-[10px] text-muted-foreground block font-medium">Terpakai ({financialStats.curMonthShort}):</span>
+                  <span className="text-base font-bold text-foreground font-mono block mt-0.5">
+                    Rp {financialStats.wismaSpent.toLocaleString('id-ID')}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground block mt-0.5">
+                    {financialStats.wismaEmployeesCount} Org • {financialStats.wismaHours}j real / {financialStats.wismaPaidHours}j bayar ({financialStats.wismaPercent}%)
+                  </span>
+                </div>
+
+                {/* Progress Bar Visual */}
+                <div className="w-full bg-muted rounded-full h-1.5 mt-2.5 overflow-hidden">
+                  <div
+                    className={`h-1.5 rounded-full transition-all ${
+                      financialStats.isWismaExceeded
+                        ? 'bg-rose-600'
+                        : financialStats.isWismaNearLimit
+                        ? 'bg-amber-500'
+                        : 'bg-amber-600'
+                    }`}
+                    style={{ width: `${Math.min(100, financialStats.wismaPercent)}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-border/50 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-muted-foreground block">Sisa Anggaran:</span>
+                  <span className={`text-xs font-bold font-mono ${financialStats.wismaRemaining === 0 ? 'text-rose-600' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                    Rp {financialStats.wismaRemaining.toLocaleString('id-ID')}
+                  </span>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={`text-[9px] font-medium ${
+                    financialStats.isWismaExceeded
+                      ? 'bg-rose-500/10 text-rose-600 border-rose-300'
+                      : financialStats.isWismaNearLimit
+                      ? 'bg-amber-500/10 text-amber-600 border-amber-300'
+                      : 'bg-emerald-500/10 text-emerald-600 border-emerald-300'
+                  }`}
+                >
+                  {financialStats.isWismaExceeded ? 'Habis' : `Sisa ${financialStats.wismaRemainingPercent}%`}
+                </Badge>
+              </div>
             </div>
 
-            <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
-              <span className="text-[11px] text-muted-foreground block">Sisa Anggaran Lembur ({financialStats.curMonthShort})</span>
-              <span className={`text-base font-bold font-mono ${financialStats.remainingBudget === 0 ? 'text-rose-600' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                Rp {financialStats.remainingBudget.toLocaleString('id-ID')}
-              </span>
-              <span className="text-[10px] text-muted-foreground block mt-0.5">
-                {financialStats.remainingBudget === 0 ? 'Pencegahan overbudget aktif' : 'Kuota lembur masih tersedia'}
-              </span>
+            {/* 3. TOTAL KONSOLIDASI RESMI PT FRP (Plafon Rp 69 Jt - 80 Personil) */}
+            <div className="p-3.5 bg-muted/40 hover:bg-muted/60 rounded-xl border border-emerald-500/30 shadow-xs flex flex-col justify-between transition-all">
+              <div>
+                <div className="flex items-center justify-between gap-1 mb-1.5">
+                  <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5">
+                    <Coins size={14} className="text-emerald-600 shrink-0" />
+                    <span>Total Lembur (80 Org)</span>
+                  </span>
+                  <Badge variant="outline" className="text-[10px] font-mono font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-300/40">
+                    Plafon Rp 69 Jt
+                  </Badge>
+                </div>
+
+                <div className="mt-1">
+                  <span className="text-[10px] text-muted-foreground block font-medium">Total Terpakai ({financialStats.curMonthShort}):</span>
+                  <span className="text-base font-bold text-amber-600 dark:text-amber-400 font-mono block mt-0.5">
+                    Rp {financialStats.totalOvertimeSpent.toLocaleString('id-ID')}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground block mt-0.5">
+                    {financialStats.nextOvertimeEmployeesCount} Org • {financialStats.totalOvertimeHours}j real / {financialStats.totalOvertimePaidHours}j bayar ({financialStats.budgetPercent}%)
+                  </span>
+                </div>
+
+                {/* Progress Bar Visual */}
+                <div className="w-full bg-muted rounded-full h-1.5 mt-2.5 overflow-hidden">
+                  <div
+                    className={`h-1.5 rounded-full transition-all ${
+                      financialStats.isExceeded
+                        ? 'bg-rose-600'
+                        : financialStats.isNearLimit
+                        ? 'bg-amber-500'
+                        : 'bg-emerald-600'
+                    }`}
+                    style={{ width: `${Math.min(100, financialStats.budgetPercent)}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-border/50 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-muted-foreground block">Total Sisa Anggaran:</span>
+                  <span className={`text-xs font-bold font-mono ${financialStats.remainingBudget === 0 ? 'text-rose-600' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                    Rp {financialStats.remainingBudget.toLocaleString('id-ID')}
+                  </span>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={`text-[9px] font-medium ${
+                    financialStats.remainingBudget === 0
+                      ? 'bg-rose-500/10 text-rose-600 border-rose-300'
+                      : 'bg-emerald-500/10 text-emerald-600 border-emerald-300'
+                  }`}
+                >
+                  {financialStats.remainingBudget === 0 ? 'Penuh' : `Sisa ${financialStats.totalRemainingPercent}%`}
+                </Badge>
+              </div>
             </div>
 
-            <div className="p-3 bg-muted/40 rounded-xl border border-border/50">
+            {/* 4. ESTIMASI PAYROLL BULAN AKTIF */}
+            <div className="p-3.5 bg-muted/40 hover:bg-muted/60 rounded-xl border border-border/50 flex flex-col justify-between transition-all">
               {(() => {
                 const activeBucket =
                   payrollScopeGroup === 'SHIPMENT'
