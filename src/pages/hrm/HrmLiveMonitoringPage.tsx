@@ -3301,8 +3301,23 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filtered.map(({ user: u, attendance: att, status, absentSubtype, shift, totalLateMinutes, lateCount, totalAttCount, todayOvertimeHours, todayOvertimePay, monthlyOvertimeHours, monthlyOvertimePay, monthlyOvertimeCount }, idx) => {
+                  filtered.map(({ user: u, attendance: att, status, absentSubtype, shift, totalLateMinutes, lateCount, totalAttCount, todayOvertime, todayOvertimeHours, todayOvertimePay, monthlyOvertimeHours, monthlyOvertimePay, monthlyOvertimeCount }, idx) => {
                     const userAnomaly = radarSummary.items.find((i) => i.userId === u.id);
+
+                    // Deteksi Cerdas Kasus Lembur Sambung Mundur (Shift Pengganti Masuk Lebih Awal)
+                    const otStart = todayOvertime?.startTime ? String(todayOvertime.startTime).substring(0, 5) : '';
+                    const otEnd = todayOvertime?.endTime ? String(todayOvertime.endTime).substring(0, 5) : '';
+                    const schedStart = shift?.startTime ? String(shift.startTime).substring(0, 5) : '';
+                    const clockInStr = att?.clockIn ? String(att.clockIn).substring(0, 5) : '';
+                    const isSambungMundur = Boolean(
+                      todayOvertime &&
+                      todayOvertimeHours && todayOvertimeHours > 0 &&
+                      clockInStr &&
+                      schedStart &&
+                      otStart &&
+                      otStart < schedStart &&
+                      clockInStr < schedStart
+                    );
                     return (
                       <TableRow key={u.id} className="hover:bg-muted/30 transition-colors">
                         <TableCell className="text-center font-mono text-xs text-muted-foreground/80">
@@ -3423,12 +3438,21 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         {visibleColumns.status && (
                           <TableCell className="text-center">
                             {isDailyView ? (
-                              status === 'present' ? (
+                              isSambungMundur ? (
+                                <div className="inline-flex flex-col items-center gap-0.5">
+                                  <Badge className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-[10px] rounded-full px-2 py-0.5 shadow-xs gap-1">
+                                    <Clock size={10} /> Lembur Pengganti
+                                  </Badge>
+                                  <span className="text-[9.5px] font-mono text-muted-foreground">
+                                    Shift {shift?.code || 'Resmi'}: pk {schedStart}
+                                  </span>
+                                </div>
+                              ) : status === 'present' ? (
                                 <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
                                   Tepat Waktu
                                 </Badge>
                               ) : status === 'late' ? (
-                                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
+                                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-emerald-800 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
                                   Telat {att?.lateMinutes || 0}m
                                 </Badge>
                               ) : absentSubtype === 'off' ? (
@@ -3483,9 +3507,23 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         {visibleColumns.clockIn && (
                           <TableCell className="text-center">
                             {isDailyView ? (
-                              <span className={`font-mono text-xs ${att?.clockIn ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
-                                {att?.clockIn ? `${att.clockIn} WITA` : '-'}
-                              </span>
+                              isSambungMundur ? (
+                                <div className="inline-flex flex-col items-center">
+                                  <span className="font-mono text-xs font-bold text-amber-700 dark:text-amber-400">
+                                    {clockInStr} WITA
+                                  </span>
+                                  <span className="text-[9px] font-semibold text-amber-600 dark:text-amber-400">
+                                    (Masuk Lembur)
+                                  </span>
+                                  <span className="text-[8.5px] font-mono text-muted-foreground">
+                                    Resmi: {schedStart}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className={`font-mono text-xs ${att?.clockIn ? 'font-medium text-foreground' : 'text-muted-foreground/40'}`}>
+                                  {att?.clockIn ? `${att.clockIn} WITA` : '-'}
+                                </span>
+                              )
                             ) : (
                               lateCount > 0 ? (
                                 <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[11px] rounded-full px-2.5 py-0.5 font-medium">
@@ -3518,11 +3556,21 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                   <Badge className="bg-amber-500 hover:bg-amber-600 text-white font-mono text-[10px] px-2 py-0.5 gap-1 shadow-2xs">
                                     <Clock size={10} /> {todayOvertimeHours} Jam
                                   </Badge>
+                                  {otStart && otEnd && (
+                                    <span className="text-[9.5px] font-mono font-semibold text-foreground/80 mt-0.5">
+                                      {otStart} - {otEnd}
+                                    </span>
+                                  )}
                                   <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 font-mono mt-0.5" title="Kompensasi lembur hari ini">
                                     Rp {todayOvertimePay?.toLocaleString('id-ID')}
                                   </span>
+                                  {todayOvertime?.taskDescription && (
+                                    <span className="text-[9px] font-medium text-amber-800 dark:text-amber-300 max-w-[130px] truncate" title={todayOvertime.taskDescription}>
+                                      {todayOvertime.taskDescription}
+                                    </span>
+                                  )}
                                   {monthlyOvertimeHours > todayOvertimeHours && (
-                                    <span className="text-[9px] text-muted-foreground font-mono" title="Total akumulasi lembur bulan berjalan">
+                                    <span className="text-[9px] text-muted-foreground font-mono mt-0.5" title="Total akumulasi lembur bulan berjalan">
                                       Bln: {monthlyOvertimeHours}J (Rp {monthlyOvertimePay?.toLocaleString('id-ID')})
                                     </span>
                                   )}

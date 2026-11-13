@@ -399,6 +399,20 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           att = dayAtts[dayAtts.length - 1];
           subAtt = dayAtts[0];
         }
+      } else if (dayAtts.length === 1 && ot && sched && !sched.isOff && sched.startTime) {
+        // DETEKSI CERDAS: LEMBUR SAMBUNG MUNDUR
+        // (Karyawan datang lebih awal di shift pengganti sebelum shift resminya dimulai)
+        const singleAtt = dayAtts[0];
+        const singleClockIn = String(singleAtt.clockIn || '').substring(0, 5);
+        const otStart = String(ot.startTime || ot.start_time || '').substring(0, 5);
+        const schedStart = String(sched.startTime || '').substring(0, 5);
+
+        // Jika jam presensi berada di rentang shift lembur dan lebih awal dari shift resmi
+        // (Contoh: Honnes clock in 15:00, jam lembur 15:30, jadwal shift resmi Shift III 22:30)
+        if (otStart && schedStart && singleClockIn < schedStart && otStart < schedStart) {
+          subAtt = singleAtt; // Presensi ini dialokasikan ke kolom LEMBUR!
+          att = undefined;    // Shift resmi belum masuk (akan masuk nanti malam pk 22:30)
+        }
       }
 
       let absenMasuk = '-';
@@ -467,14 +481,23 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       }
       // PRIORITAS 4: Hari Ini (Belum Masuk Shift)
       else if (isToday) {
-        absenMasuk = '-';
-        absenPulang = '-';
-        ket = 'BELUM ABSEN';
-        if (sched?.shiftName) {
-          const startT = sched.startTime ? sched.startTime.substring(0, 5) : '07:30';
-          uraianPekerjaan = `${sched.shiftName} (Mulai ${startT} WITA)`;
+        if (subAtt) {
+          // Kasus Lembur Sambung Mundur: Karyawan sedang aktif di shift lembur pengganti, shift resmi dimulai nanti malam
+          const startT = sched?.startTime ? sched.startTime.substring(0, 5) : '07:30';
+          absenMasuk = sched?.shiftCode ? `${sched.shiftCode} (${startT})` : (sched?.startTime ? startT : '-');
+          absenPulang = 'Menunggu Jam Masuk';
+          ket = 'LEMBUR PENGGANTI';
+          uraianPekerjaan = sched?.shiftName ? `${sched.shiftName} (Mulai ${startT} WITA)` : 'Menunggu Jam Masuk Shift';
         } else {
-          uraianPekerjaan = 'Menunggu Jam Masuk Kerja';
+          absenMasuk = '-';
+          absenPulang = '-';
+          ket = 'BELUM ABSEN';
+          if (sched?.shiftName) {
+            const startT = sched.startTime ? sched.startTime.substring(0, 5) : '07:30';
+            uraianPekerjaan = `${sched.shiftName} (Mulai ${startT} WITA)`;
+          } else {
+            uraianPekerjaan = 'Menunggu Jam Masuk Kerja';
+          }
         }
         memerintahkanKaur = isSpecialTarget ? 'Pimpinan PT. FRP' : (employeeKaur || 'Korlap');
       }
@@ -499,8 +522,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       if (ot) {
         const rawStart = ot.startTime || ot.start_time || '';
         const rawEnd = ot.endTime || ot.end_time || '';
-        lemburMulai = rawStart ? String(rawStart).substring(0, 5) : '-';
-        lemburSelesai = rawEnd ? String(rawEnd).substring(0, 5) : '-';
+        lemburMulai = subAtt?.clockIn ? String(subAtt.clockIn).substring(0, 5) : (rawStart ? String(rawStart).substring(0, 5) : '-');
+        lemburSelesai = subAtt?.clockOut ? String(subAtt.clockOut).substring(0, 5) : (isToday ? 'Bertugas' : (rawEnd ? String(rawEnd).substring(0, 5) : '-'));
         const hours = Number(ot.approvedHours ?? ot.approved_hours ?? ot.durationHours ?? ot.duration_hours ?? 0);
         realisasiJamLembur = hours > 0 ? String(hours) : '-';
         const taskDesc = ot.taskDescription || ot.task_description || '';
@@ -519,6 +542,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           ket = 'LEMBUR';
         } else if (ket === 'HADIR') {
           ket = 'HADIR + LEMBUR';
+        } else if (subAtt && !att) {
+          ket = 'LEMBUR PENGGANTI';
         }
       } else if (subAtt && subAtt.clockIn) {
         lemburMulai = String(subAtt.clockIn).substring(0, 5);
