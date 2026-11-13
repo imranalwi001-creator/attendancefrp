@@ -915,10 +915,14 @@ async function buildPayrollArrearsOvertimeRecap(pool, payrollMonthKey) {
       const pendingOts = userOts.filter((r) => r.status === 'pending');
 
       const rawApprovedHours = approvedOts.reduce((s, r) => s + Number(r.approved_hours ?? r.duration_hours ?? 0), 0);
+      const recordedCompSum = Math.round(approvedOts.reduce((s, r) => s + Number(r.compensation_amount || 0), 0));
       const calc = calculateFwpOvertimeServer(p.effective_salary, rawApprovedHours, isDayShift, p.hourly_overtime_rate, p.division_name, approvedOts);
 
-      // Rumah Tangga: Effective wisma budget dibagi rata 33 orang; lebihnya Flexytime
-      let finalPay = calc.totalPay;
+      // Gunakan recordedCompSum dari SPKL jika ada, fallback ke calc.totalPay
+      let finalPay = recordedCompSum > 0 ? recordedCompSum : calc.totalPay;
+      const effectivePaidHours = recordedCompSum > 0 && calc.hourlyRate > 0
+        ? Number((recordedCompSum / calc.hourlyRate).toFixed(1))
+        : calc.paidHours;
       let flexytimeHours = 0;
       if (group === 'RUMAH TANGGA') {
         const capRp = budgetMeta.perWismaPersonCap;
@@ -952,7 +956,7 @@ async function buildPayrollArrearsOvertimeRecap(pool, payrollMonthKey) {
         spklPendingCount: pendingOts.length,
         rawApprovedHours: Number(rawApprovedHours.toFixed(2)),
         cappedRealHours: Number(calc.cappedRealHours.toFixed(2)),
-        paidHours: Number(calc.paidHours.toFixed(2)),
+        paidHours: Number(effectivePaidHours.toFixed(2)),
         flexytimeHours,
         rawCalculatedPay: finalPay,
         calculatedPay: finalPay,
