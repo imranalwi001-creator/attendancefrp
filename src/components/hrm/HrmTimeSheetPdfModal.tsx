@@ -52,10 +52,10 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
     setIsFetchingData(true);
     try {
       const [aRes, oRes, lRes, sRes] = await Promise.all([
-        fetch(`/api/attendances?month=${targetMonth}`),
-        fetch(`/api/overtime?month=${targetMonth}`),
-        fetch('/api/leaves'),
-        fetch(`/api/employee-schedules?month=${targetMonth}`),
+        fetch(`/api/attendances?month=${targetMonth}&_t=${Date.now()}`),
+        fetch(`/api/overtime?month=${targetMonth}&_t=${Date.now()}`),
+        fetch(`/api/leaves?_t=${Date.now()}`),
+        fetch(`/api/employee-schedules?month=${targetMonth}&_t=${Date.now()}`),
       ]);
       if (aRes.ok) {
         const aJson = await aRes.json();

@@ -228,44 +228,44 @@ export const HrmReportsPage: React.FC = () => {
 
       // 2. Fetch Attendances for selectedMonth
       try {
-        const aRes = await fetch(`/api/attendances?month=${selectedMonth}`);
+        const aRes = await fetch(`/api/attendances?month=${selectedMonth}&_t=${Date.now()}`);
         if (aRes.ok) {
           const aJson = await aRes.json();
           if (aJson.success && Array.isArray(aJson.data)) {
-            const frAtts = aJson.data.filter((a: any) => isOfficialFrEmployee(a.userNip));
+            const frAtts = aJson.data.filter((a: any) => isOfficialFrEmployee(a));
             setAttendances(frAtts);
           }
         }
       } catch (e) {
-        setAttendances(hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip)));
+        setAttendances(hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a)));
       }
 
       // 3. Fetch Overtimes
       try {
-        const oRes = await fetch('/api/overtime');
+        const oRes = await fetch(`/api/overtime?month=${selectedMonth}&_t=${Date.now()}`);
         if (oRes.ok) {
           const oJson = await oRes.json();
           if (oJson.success && Array.isArray(oJson.data)) {
-            const frOts = oJson.data.filter((o: any) => isOfficialFrEmployee(o.userNip));
+            const frOts = oJson.data.filter((o: any) => isOfficialFrEmployee(o));
             setOvertimes(frOts);
           }
         }
       } catch (e) {
-        setOvertimes(hrmService.getOvertimeRecords().filter((o) => isOfficialFrEmployee(o.userNip)));
+        setOvertimes(hrmService.getOvertimeRecords().filter((o) => isOfficialFrEmployee(o)));
       }
 
       // 4. Fetch Leaves
       try {
-        const lRes = await fetch('/api/leaves');
+        const lRes = await fetch(`/api/leaves?_t=${Date.now()}`);
         if (lRes.ok) {
           const lJson = await lRes.json();
           if (lJson.success && Array.isArray(lJson.data)) {
-            const frLeaves = lJson.data.filter((l: any) => isOfficialFrEmployee(l.userNip || l.userId));
+            const frLeaves = lJson.data.filter((l: any) => isOfficialFrEmployee(l));
             setLeaves(frLeaves);
           }
         }
       } catch (e) {
-        setLeaves(hrmService.getLeaves().filter((l) => isOfficialFrEmployee(l.userNip || l.userId)));
+        setLeaves(hrmService.getLeaves().filter((l) => isOfficialFrEmployee(l)));
       }
 
       setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
@@ -276,6 +276,23 @@ export const HrmReportsPage: React.FC = () => {
 
   useEffect(() => {
     loadData();
+  }, [loadData]);
+
+  // Event Listeners: Reaktif Otomatis saat presensi / lembur diubah di halaman mana pun
+  useEffect(() => {
+    const handleSync = () => {
+      loadData();
+    };
+    window.addEventListener('hrm_attendance_updated', handleSync);
+    window.addEventListener('hrm_overtime_updated', handleSync);
+    window.addEventListener('hrm_data_updated', handleSync);
+    window.addEventListener('focus', handleSync);
+    return () => {
+      window.removeEventListener('hrm_attendance_updated', handleSync);
+      window.removeEventListener('hrm_overtime_updated', handleSync);
+      window.removeEventListener('hrm_data_updated', handleSync);
+      window.removeEventListener('focus', handleSync);
+    };
   }, [loadData]);
 
   // Polling Real-time 30s

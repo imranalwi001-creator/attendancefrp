@@ -6681,6 +6681,9 @@ app.get('/api/attendances/today', async (req, res) => {
 });
 
 app.get('/api/attendances', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   const { date, month, startDate, endDate, userId, includePhoto, limit } = req.query;
   try {
     const isFullPhoto = includePhoto === 'true';
@@ -7956,6 +7959,9 @@ app.get('/api/holidays/check/:date', async (req, res) => {
 
 // ─── 8. LEAVE REQUESTS (PENGAJUAN IZIN / CUTI / SAKIT) ───────────────────────
 app.get('/api/leaves', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   const { userId, status, divisionId } = req.query;
   try {
     let query = `
@@ -10586,6 +10592,9 @@ app.put('/api/leaves/:id/status', async (req, res) => {
 
 // ─── 9. OVERTIME REQUESTS (SURAT PERINTAH LEMBUR) ─────────────────────────────
 app.get('/api/overtime', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   const { userId, status, divisionId, month, startDate, endDate } = req.query;
   try {
     let query = `
@@ -14158,6 +14167,9 @@ app.get('/api/analytics/self', async (req, res) => {
 
 // GET /api/employee-schedules - Retrieve scheduled shifts with optional filters
 app.get('/api/employee-schedules', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   const { month, year, divisionId, userId, date } = req.query;
   try {
     let query = `

@@ -205,7 +205,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
     // Fetch attendances dari API
     const attPromise = api
-      .get<{ success: boolean; data?: any[] }>(`/attendances?userId=${encodeURIComponent(user.id)}`)
+      .get<{ success: boolean; data?: any[] }>(`/attendances?userId=${encodeURIComponent(user.id)}&_t=${Date.now()}`)
       .then((res) => {
         if (!isMounted) return;
         if (res && res.success && Array.isArray(res.data)) {
@@ -229,7 +229,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
     // Fetch overtimes dari API & LocalStorage
     const otPromise = api
-      .get<{ success: boolean; data?: any[] }>(`/overtime?userId=${encodeURIComponent(user.id)}`)
+      .get<{ success: boolean; data?: any[] }>(`/overtime?userId=${encodeURIComponent(user.id)}&_t=${Date.now()}`)
       .then((res) => {
         if (!isMounted) return;
         if (res && res.success && Array.isArray(res.data)) {
@@ -247,7 +247,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
     // Fetch leaves dari API & LocalStorage
     const leavePromise = api
-      .get<{ success: boolean; data?: any[] }>(`/leaves?userId=${encodeURIComponent(user.id)}`)
+      .get<{ success: boolean; data?: any[] }>(`/leaves?userId=${encodeURIComponent(user.id)}&_t=${Date.now()}`)
       .then((res) => {
         if (!isMounted) return;
         if (res && res.success && Array.isArray(res.data)) {
@@ -265,7 +265,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
     // Fetch schedules (Matriks Roster Karyawan) dari API
     const schedPromise = api
-      .get<{ success: boolean; data?: any[] }>(`/employee-schedules?userId=${encodeURIComponent(user.id)}&month=${selectedMonth}`)
+      .get<{ success: boolean; data?: any[] }>(`/employee-schedules?userId=${encodeURIComponent(user.id)}&month=${selectedMonth}&_t=${Date.now()}`)
       .then((res) => {
         if (!isMounted) return;
         if (res && res.success && Array.isArray(res.data)) {
@@ -1117,6 +1117,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         toast.success(`Presensi tanggal ${editingRow.tanggal} berhasil dicatat`);
       }
 
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hrm_attendance_updated'));
+        window.dispatchEvent(new CustomEvent('hrm_data_updated'));
+      }
       setRefreshTrigger((k) => k + 1);
       setEditingRow(null);
     } catch (err: any) {
@@ -1135,6 +1139,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     try {
       await hrmService.deleteAttendance(editingRow.attRecord.id);
       toast.success(`Catatan presensi tanggal ${editingRow.tanggal} berhasil dihapus`);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hrm_attendance_updated'));
+        window.dispatchEvent(new CustomEvent('hrm_data_updated'));
+      }
       setRefreshTrigger((k) => k + 1);
       setEditingRow(null);
     } catch (err: any) {

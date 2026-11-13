@@ -514,17 +514,24 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const fetchLiveAttendancesFast = async () => {
     try {
       const today = getTodayDateStr();
-      const res = await fetch(`/api/attendances?date=${today}`);
-      if (res.ok) {
-        const json = await res.json();
+      const currentMonth = today.slice(0, 7);
+      const [resToday, resMonth] = await Promise.all([
+        fetch(`/api/attendances?date=${today}&_t=${Date.now()}`),
+        fetch(`/api/attendances?month=${currentMonth}&_t=${Date.now()}`),
+      ]);
+      if (resToday.ok) {
+        const json = await resToday.json();
         if (json.success && Array.isArray(json.data)) {
-          const freshTodayAtts: AttendanceRecord[] = json.data.filter((a) => isOfficialFrEmployee(a.userNip));
+          const freshTodayAtts: AttendanceRecord[] = json.data.filter((a) => isOfficialFrEmployee(a));
           setAttendances(freshTodayAtts);
-          setAllAttendances((prev) => {
-            const map = new Map(prev.map((a) => [a.id, a]));
-            freshTodayAtts.forEach((a) => map.set(a.id, a));
-            return Array.from(map.values()).filter((a) => isOfficialFrEmployee(a.userNip));
-          });
+        }
+      }
+      if (resMonth.ok) {
+        const jsonM = await resMonth.json();
+        if (jsonM.success && Array.isArray(jsonM.data)) {
+          const freshMonthAtts: AttendanceRecord[] = jsonM.data.filter((a) => isOfficialFrEmployee(a));
+          setAllAttendances(freshMonthAtts);
+          hrmService.saveAttendances(freshMonthAtts);
         }
       }
     } catch (e) {
@@ -545,6 +552,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     const handleUpdated = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
+        fetchLiveAttendancesFast();
         syncFromLocalCache();
       }, 300);
     };
