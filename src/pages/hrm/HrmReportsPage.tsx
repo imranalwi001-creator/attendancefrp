@@ -1,10 +1,31 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { AttendanceRecord, Division, AppSettings, OfficeLocation, OvertimeRecord, UserProfile, Shift, isOfficialFrEmployee, LeaveRequest, EmployeeCategoryGroup, getEmployeeCategoryGroup, getEmployeeCategoryLabel } from '@/types/hrm';
+import { api } from '@/services/apiClient';
+import {
+  AttendanceRecord,
+  AttendanceStatus,
+  Division,
+  AppSettings,
+  OfficeLocation,
+  OvertimeRecord,
+  UserProfile,
+  Shift,
+  isOfficialFrEmployee,
+  LeaveRequest,
+  EmployeeCategoryGroup,
+  getEmployeeCategoryGroup,
+  getEmployeeCategoryLabel,
+  PayrollSlip,
+} from '@/types/hrm';
 import { HrmAbsenSplModal } from '@/components/hrm/HrmAbsenSplModal';
 import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMonthlyCalendarModal';
 import { HrmLeaveOvertimeLiabilityView } from '@/components/hrm/HrmLeaveOvertimeLiabilityView';
+import { HrmSalarySlipModal } from '@/components/hrm/HrmSalarySlipModal';
+import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
+import { HrmEditLemburModal } from '@/components/hrm/superadmin/HrmEditLemburModal';
+import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
+import { HrmEmployeeLeaveCorrectionModal } from '@/components/hrm/HrmEmployeeLeaveCorrectionModal';
 import defaultLogo from '@/assets/logo.png';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -16,6 +37,7 @@ import {
   FileText,
   Building2,
   CheckCircle2,
+  XCircle,
   Clock,
   Calendar,
   X,
@@ -33,2553 +55,1652 @@ import {
   RotateCw,
   Users,
   ShieldCheck,
+  Plus,
+  Pencil,
+  Trash2,
+  AlertTriangle,
+  Info,
+  CalendarCheck,
+  Paperclip,
+  ArrowRight,
+  Sparkles,
 } from 'lucide-react';
-import { HrmSpecialOctoberPayrollReport } from '@/components/hrm/HrmSpecialOctoberPayrollReport';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DatePicker } from '@/components/ui/date-picker';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-} from 'recharts';
+import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
+
+export type ReportTab = 'overtime' | 'payroll' | 'leaves' | 'attendance' | 'liability';
 
 export const HrmReportsPage: React.FC = () => {
   const { user } = useHrmAuth();
-  const [activeTab, setActiveTab] = useState<'attendance' | 'overtime' | 'liability' | 'special-october'>('attendance');
+  const [activeTab, setActiveTab] = useState<ReportTab>('overtime');
   const [attendances, setAttendances] = useState<AttendanceRecord[]>([]);
   const [overtimes, setOvertimes] = useState<OvertimeRecord[]>([]);
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
+  const [employees, setEmployees] = useState<UserProfile[]>([]);
+  const [allShifts, setAllShifts] = useState<Shift[]>([]);
   const [appSettings, setAppSettings] = useState<AppSettings>(hrmService.getAppSettings());
   const [office, setOffice] = useState<OfficeLocation>(hrmService.getOfficeLocation());
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string>(() => new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
 
-  // Attendance Filters & Monthly Navigation (Synchronized with Active Fiscal Period)
+  // Universal Navigation & Fiscal Period
   const fiscalPeriod = hrmService.getFiscalPeriod();
   const defaultFiscalMonthStr = `${fiscalPeriod.activeYear}-${String(fiscalPeriod.activeMonth).padStart(2, '0')}`;
   const currentMonthStr = getTodayDateStr().slice(0, 7);
   const [selectedMonth, setSelectedMonth] = useState<string>(defaultFiscalMonthStr || currentMonthStr);
-  const [attendanceViewMode, setAttendanceViewMode] = useState<'recap' | 'logs'>('recap');
-  const [selectedDate, setSelectedDate] = useState<string>(''); // Default kosong agar menampilkan data bulan terpilih
   const [filterCategory, setFilterCategory] = useState<'all' | EmployeeCategoryGroup>('all');
   const [filterDivision, setFilterDivision] = useState<string>('all');
-  const [filterBiometrik, setFilterBiometrik] = useState<'all' | 'active' | 'unregistered'>('all');
-  const [lastSyncTime, setLastSyncTime] = useState<string>(() => new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isFetchingMonth, setIsFetchingMonth] = useState<boolean>(false);
-  const [calendarModalOpen, setCalendarModalOpen] = useState<boolean>(false);
-  const [selectedCalendarUser, setSelectedCalendarUser] = useState<UserProfile | null>(null);
-  const [allShifts, setAllShifts] = useState<Shift[]>([]);
 
-  // Overtime Filters
-  const [selectedOtDate, setSelectedOtDate] = useState<string>('');
-  const [filterOtCategory, setFilterOtCategory] = useState<'all' | EmployeeCategoryGroup>('all');
-  const [filterOtDivision, setFilterOtDivision] = useState<string>('all');
-  const [filterOtStatus, setFilterOtStatus] = useState<string>('all');
-  const [filterOtPayment, setFilterOtPayment] = useState<string>('all');
-  const [otSearchQuery, setOtSearchQuery] = useState('');
-
-  // Professional Print Modal State
-  const [printModalOpen, setPrintModalOpen] = useState(false);
-  const [otPrintModalOpen, setOtPrintModalOpen] = useState(false);
-  const [absenSplModalOpen, setAbsenSplModalOpen] = useState(false);
-  const [employees, setEmployees] = useState<UserProfile[]>([]);
-  const [leaderSignName, setLeaderSignName] = useState('Drs. Hendra Setiawan, M.M.');
-  const [hrdSignName, setHrdSignName] = useState(user?.fullName || 'Budi Santoso, S.Psi.');
-  const [financeSignName, setFinanceSignName] = useState('Siti Aminah, S.E.');
-
-  const printAreaRef = useRef<HTMLDivElement>(null);
-  const otPrintAreaRef = useRef<HTMLDivElement>(null);
-
-  // Parsing Tahun & Bulan Terpilih
-  const [selectedYearNum, selectedMonthNum] = React.useMemo(() => {
+  // Month Math Helpers
+  const [selectedYearNum, selectedMonthNum] = useMemo(() => {
     const parts = (selectedMonth || currentMonthStr).split('-').map(Number);
     return [parts[0] || new Date().getFullYear(), parts[1] || new Date().getMonth() + 1];
   }, [selectedMonth, currentMonthStr]);
 
-  const selectedMonthLabel = React.useMemo(() => {
+  const selectedMonthLabel = useMemo(() => {
     const d = new Date(selectedYearNum, selectedMonthNum - 1, 1);
     return d.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
   }, [selectedYearNum, selectedMonthNum]);
 
-  // Fetch data presensi dari PostgreSQL API saat bulan berganti
-  const fetchMonthAttendances = React.useCallback(async (monthStr: string) => {
+  const prevMonthStr = useMemo(() => {
+    let y = selectedYearNum;
+    let m = selectedMonthNum - 1;
+    if (m < 1) {
+      m = 12;
+      y -= 1;
+    }
+    return `${y}-${String(m).padStart(2, '0')}`;
+  }, [selectedYearNum, selectedMonthNum]);
+
+  const prevMonthLabel = useMemo(() => {
+    const [y, m] = prevMonthStr.split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+  }, [prevMonthStr]);
+
+  const nextMonthStr = useMemo(() => {
+    let y = selectedYearNum;
+    let m = selectedMonthNum + 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+    return `${y}-${String(m).padStart(2, '0')}`;
+  }, [selectedYearNum, selectedMonthNum]);
+
+  const nextMonthLabel = useMemo(() => {
+    const [y, m] = nextMonthStr.split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+  }, [nextMonthStr]);
+
+  const goToPrevMonth = () => setSelectedMonth(prevMonthStr);
+  const goToCurrentMonth = () => setSelectedMonth(currentMonthStr);
+  const goToNextMonth = () => setSelectedMonth(nextMonthStr);
+
+  // ── Overtime Tab State ──────────────────────────────────────────────────────
+  const [otSearchQuery, setOtSearchQuery] = useState('');
+  const [filterOtStatus, setFilterOtStatus] = useState<string>('all');
+  const [filterOtPayment, setFilterOtPayment] = useState<string>('all');
+  const [manualOtModalOpen, setManualOtModalOpen] = useState(false);
+  const [editOtModalOpen, setEditOtModalOpen] = useState(false);
+  const [editingOtRecord, setEditingOtRecord] = useState<OvertimeRecord | null>(null);
+  const [otPrintModalOpen, setOtPrintModalOpen] = useState(false);
+
+  // ── Payroll Tab State ───────────────────────────────────────────────────────
+  const [payrollSearchQuery, setPayrollSearchQuery] = useState('');
+  const [salarySlipModalOpen, setSalarySlipModalOpen] = useState(false);
+  const [selectedPayrollSlip, setSelectedPayrollSlip] = useState<PayrollSlip | null>(null);
+
+  // ── Leaves Tab State ────────────────────────────────────────────────────────
+  const [leaveSearchQuery, setLeaveSearchQuery] = useState('');
+  const [leaveSubView, setLeaveSubView] = useState<'requests' | 'ledger'>('requests');
+  const [manualLeaveModalOpen, setManualLeaveModalOpen] = useState(false);
+  const [leaveCorrectionModalOpen, setLeaveCorrectionModalOpen] = useState(false);
+  const [selectedCorrectionUser, setSelectedCorrectionUser] = useState<UserProfile | null>(null);
+
+  // ── Attendance Tab State ────────────────────────────────────────────────────
+  const [attendanceViewMode, setAttendanceViewMode] = useState<'recap' | 'logs'>('recap');
+  const [attSearchQuery, setAttSearchQuery] = useState('');
+  const [attDateFilter, setAttDateFilter] = useState('');
+  const [absenSplModalOpen, setAbsenSplModalOpen] = useState(false);
+  const [calendarModalOpen, setCalendarModalOpen] = useState(false);
+  const [selectedCalendarUser, setSelectedCalendarUser] = useState<UserProfile | null>(null);
+  const [printModalOpen, setPrintModalOpen] = useState(false);
+
+  // Inline Manual Attendance Modal State
+  const [manualAttOpen, setManualAttOpen] = useState(false);
+  const [manualAttUserId, setManualAttUserId] = useState('');
+  const [manualAttDate, setManualAttDate] = useState(getTodayDateStr());
+  const [manualAttStatus, setManualAttStatus] = useState<AttendanceStatus>('hadir');
+  const [manualAttClockIn, setManualAttClockIn] = useState('07:30');
+  const [manualAttClockOut, setManualAttClockOut] = useState('16:30');
+  const [manualAttNotes, setManualAttNotes] = useState('');
+  const [isSubmittingAtt, setIsSubmittingAtt] = useState(false);
+
+  // Inline Attendance Correction Modal State
+  const [correctAttOpen, setCorrectAttOpen] = useState(false);
+  const [selectedAttRecord, setSelectedAttRecord] = useState<AttendanceRecord | null>(null);
+  const [corrStatus, setCorrStatus] = useState<AttendanceStatus>('hadir');
+  const [corrClockIn, setCorrClockIn] = useState('');
+  const [corrClockOut, setCorrClockOut] = useState('');
+  const [corrLateMinutes, setCorrLateMinutes] = useState(0);
+  const [corrNotes, setCorrNotes] = useState('');
+
+  // Signatures for formal printouts
+  const [leaderSignName, setLeaderSignName] = useState('Alam AS simpuang ago, S.Sos');
+  const [hrdSignName, setHrdSignName] = useState(user?.fullName || 'Bpk Reski Faisal');
+  const [financeSignName, setFinanceSignName] = useState('Bagian Keuangan / Payroll FRP');
+
+  // Load Data from APIs & Store
+  const loadData = useCallback(async () => {
     try {
-      setIsFetchingMonth(true);
-      const res = await fetch(`/api/attendances?month=${monthStr}`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data)) {
-          const monthAtts: AttendanceRecord[] = json.data.filter((a: any) => isOfficialFrEmployee(a.userNip));
-          setAttendances((prev) => {
-            const map = new Map(prev.map((a) => [a.id, a]));
-            monthAtts.forEach((a) => map.set(a.id, a));
-            return Array.from(map.values());
-          });
-        }
-      }
-    } catch (e) {
-      console.warn('[ReportsPage] Fetch month attendances warning:', e);
-    } finally {
-      setIsFetchingMonth(false);
-    }
-  }, []);
+      setIsLoading(true);
+      setDivisions(hrmService.getDivisions());
+      setAppSettings(hrmService.getAppSettings());
+      setOffice(hrmService.getOfficeLocation());
+      setAllShifts(hrmService.getShifts());
 
-  const loadData = async () => {
-    setAttendances(hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip)));
-    setOvertimes(hrmService.getOvertimeRecords().filter((o) => isOfficialFrEmployee(o.userNip)));
-    setLeaves(hrmService.getLeaves().filter((l) => isOfficialFrEmployee(l.userNip || l.userId)));
-    setDivisions(hrmService.getDivisions());
-    setAppSettings(hrmService.getAppSettings());
-    setOffice(hrmService.getOfficeLocation());
-    setEmployees(hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)));
-    setAllShifts(hrmService.getShifts());
-    fetchMonthAttendances(selectedMonth);
-
-    // Refresh data karyawan langsung dari API PostgreSQL
-    try {
-      const res = await fetch('/api/users');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data)) {
-          const frUsers = json.data.filter((u: any) => u.isActive && isOfficialFrEmployee(u));
-          if (frUsers.length > 0) {
-            setEmployees(frUsers);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[ReportsPage] Fetch fresh users warning:', e);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  useEffect(() => {
-    fetchMonthAttendances(selectedMonth);
-  }, [selectedMonth, fetchMonthAttendances]);
-
-  // Polling sinkronisasi otomatis realtime (setiap 30 detik) dari database PWA karyawan
-  useEffect(() => {
-    const timer = setInterval(() => {
-      fetchMonthAttendances(selectedMonth);
-      setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
-    }, 30000);
-    return () => clearInterval(timer);
-  }, [selectedMonth, fetchMonthAttendances]);
-
-  // Navigasi Bulan
-  const handlePrevMonth = () => {
-    let nextY = selectedYearNum;
-    let nextM = selectedMonthNum - 1;
-    if (nextM < 1) {
-      nextM = 12;
-      nextY -= 1;
-    }
-    const newMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
-    setSelectedMonth(newMonthStr);
-    setSelectedDate('');
-  };
-
-  const handleNextMonth = () => {
-    let nextY = selectedYearNum;
-    let nextM = selectedMonthNum + 1;
-    if (nextM > 12) {
-      nextM = 1;
-      nextY += 1;
-    }
-    const newMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
-    setSelectedMonth(newMonthStr);
-    setSelectedDate('');
-  };
-
-  const handleResetToCurrentMonth = () => {
-    setSelectedMonth(currentMonthStr);
-    setSelectedDate('');
-  };
-
-  // Matriks Rekapitulasi Presensi Bulanan Per Karyawan
-  const monthlyEmployeeRecap = React.useMemo(() => {
-    const recapList = employees.map((emp) => {
-      const isFaceEnrolled = Boolean(
-        emp.isFaceEnrolled ||
-        emp.faceEnrolledPhoto ||
-        (emp.faceDescriptor && (emp.faceDescriptor as any).length > 0) ||
-        (emp as any).is_face_enrolled
-      );
-
-      const empNipNorm = (emp.nip || '').replace(/[\s.]/g, '').toUpperCase();
-      const empAtts = attendances.filter((a) => {
-        const aNipNorm = (a.userNip || '').replace(/[\s.]/g, '').toUpperCase();
-        const isEmp =
-          (a.userId && emp.id && a.userId === emp.id) ||
-          (empNipNorm && aNipNorm && empNipNorm === aNipNorm) ||
-          a.userId === emp.nip ||
-          (a.userNip && a.userNip === emp.nip);
-        const aDate = a.attendanceDate || (a as any).date;
-        const inMonth = aDate && aDate.startsWith(selectedMonth);
-        return isEmp && inMonth;
-      });
-
-      // Filter Overtime yang telah disetujui (SPKL sah) untuk bulan ini
-      const empOvertimes = overtimes.filter((o) => {
-        const oNipNorm = (o.userNip || '').replace(/[\s.]/g, '').toUpperCase();
-        const isEmp =
-          (o.userId && emp.id && o.userId === emp.id) ||
-          (empNipNorm && oNipNorm && empNipNorm === oNipNorm) ||
-          o.userId === emp.nip ||
-          (o.userNip && o.userNip === emp.nip);
-        const inMonth = o.date && o.date.startsWith(selectedMonth);
-        return isEmp && inMonth && o.status === 'approved';
-      });
-
-      // Filter Cuti & Sakit dari data Leaves yang telah disetujui
-      const empApprovedLeaves = leaves.filter((l) => {
-        const lNipNorm = ((l as any).userNip || '').replace(/[\s.]/g, '').toUpperCase();
-        const isEmp =
-          (l.userId && emp.id && l.userId === emp.id) ||
-          (empNipNorm && lNipNorm && empNipNorm === lNipNorm) ||
-          l.userId === emp.nip ||
-          ((l as any).userNip && (l as any).userNip === emp.nip);
-        const inMonth = (l.startDate && l.startDate.startsWith(selectedMonth)) || (l.endDate && l.endDate.startsWith(selectedMonth));
-        return isEmp && inMonth && l.status === 'approved';
-      });
-
-      // Hitung Hari Cuti, Sakit, Izin secara akurat & bebas duplikasi tanggal
-      const cutiDates = new Set<string>();
-      const sakitDates = new Set<string>();
-      const izinDates = new Set<string>();
-
-      empAtts.forEach((a) => {
-        const dt = a.attendanceDate || (a as any).date;
-        if (!dt) return;
-        if (a.status === 'cuti') cutiDates.add(dt);
-        if (a.status === 'sakit') sakitDates.add(dt);
-        if (a.status === 'izin') izinDates.add(dt);
-      });
-
-      empApprovedLeaves.forEach((l) => {
-        const type = (l.leaveType || '').toLowerCase();
-        try {
-          const start = new Date(l.startDate);
-          const end = new Date(l.endDate);
-          for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-            const ymd = d.toISOString().slice(0, 10);
-            if (ymd.startsWith(selectedMonth)) {
-              if (type === 'sakit') {
-                sakitDates.add(ymd);
-              } else if (type === 'izin') {
-                izinDates.add(ymd);
-              } else {
-                cutiDates.add(ymd);
-              }
-            }
-          }
-        } catch (e) {
-          console.warn('Error parsing leave dates:', e);
-        }
-      });
-
-      // ── ATURAN BAKU KARYAWAN BELUM REGISTRASI WAJAH ──
-      // Jika karyawan belum melakukan perekaman wajah biometrik (akun baru / proses pendaftaran):
-      // Status biometrik: "Belum Aktif (Belum Registrasi Wajah)".
-      // Sesuai mandat pimpinan: TIDAK BERLAKU akumulasi mangkir/alpa berjalan, denda, atau metrik kehadiran.
-      const categoryGroup = getEmployeeCategoryGroup(emp);
-      const categoryGroupLabel = getEmployeeCategoryLabel(categoryGroup);
-
-      if (!isFaceEnrolled) {
-        return {
-          user: emp,
-          isFaceEnrolled: false,
-          categoryGroup,
-          categoryGroupLabel,
-          statusBiometrikLabel: 'Belum Aktif (Belum Registrasi Wajah)',
-          statusBadge: 'Belum Registrasi',
-          totalAttendances: 0,
-          onTimeCount: 0,
-          lateCount: 0,
-          totalLateMinutes: 0,
-          lateDeduction: 0,
-          cutiCount: 0,
-          sakitCount: 0,
-          izinCount: 0,
-          overtimeHours: 0,
-          totalWorkHours: 0,
-          perimeterBreachCount: 0,
-          alpaCount: 0,
-          keterangan: 'Menunggu Registrasi Biometrik Wajah',
-          attendances: [],
-        };
-      }
-
-      // Karyawan Aktif Terdaftar Wajah
-      const onTimeCount = empAtts.filter((a) => a.status === 'hadir').length;
-      const lateAtts = empAtts.filter((a) => a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0));
-      const lateCount = lateAtts.length;
-      const totalLateMinutes = empAtts.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
-      const lateDeduction = totalLateMinutes * 1000;
-
-      // Hitung akumulasi jam kerja bersih (tidak termasuk 1 jam istirahat sesuai standar Depnaker & PT FRP)
-      let totalNetWorkMinutes = 0;
-      empAtts.forEach((a) => {
-        if (a.status !== 'hadir' && a.status !== 'terlambat' && a.status !== 'lembur') return;
-
-        let dayNetMins = 0;
-        if (a.clockIn && a.clockOut && a.clockIn !== '-' && a.clockOut !== '-') {
-          const inParts = a.clockIn.split(':').map(Number);
-          const outParts = a.clockOut.split(':').map(Number);
-          if (inParts.length >= 2 && outParts.length >= 2) {
-            const inMins = inParts[0] * 60 + inParts[1];
-            const outMins = outParts[0] * 60 + outParts[1];
-            const grossMins = Math.max(0, outMins - inMins);
-            // Sesuai UU Ketenagakerjaan: waktu istirahat 1 jam tidak dihitung jam kerja jika bekerja >= 4 jam
-            dayNetMins = grossMins >= 240 ? Math.max(0, grossMins - 60) : grossMins;
-          }
-        }
-        if (dayNetMins === 0 && a.workDurationMinutes && a.workDurationMinutes > 0) {
-          dayNetMins = a.workDurationMinutes;
-        }
-        totalNetWorkMinutes += dayNetMins;
-      });
-      const totalWorkHours = Number((totalNetWorkMinutes / 60).toFixed(1));
-      const perimeterBreachCount = empAtts.reduce((sum, a) => sum + (a.perimeterBreachCount || (a.isPerimeterBreached ? 1 : 0)), 0);
-
-      const otFromRecords = empOvertimes.reduce((sum, o) => sum + (o.durationHours || 0), 0);
-      const otFromAtts = empAtts.reduce((sum, a) => sum + (a.overtimeHours || 0), 0);
-      const overtimeHours = Number(Math.max(otFromRecords, otFromAtts).toFixed(1));
-
-      const alpaCount = empAtts.filter((a) => a.status === 'alfa' || a.status === 'mangkir').length;
-
-      return {
-        user: emp,
-        isFaceEnrolled: true,
-        categoryGroup,
-        categoryGroupLabel,
-        statusBiometrikLabel: 'Aktif (Wajah Terdaftar)',
-        statusBadge: 'Aktif Terdaftar',
-        totalAttendances: onTimeCount + lateCount,
-        onTimeCount,
-        lateCount,
-        totalLateMinutes,
-        lateDeduction,
-        cutiCount: cutiDates.size,
-        sakitCount: sakitDates.size,
-        izinCount: izinDates.size,
-        overtimeHours,
-        totalWorkHours,
-        perimeterBreachCount,
-        alpaCount,
-        keterangan: 'Aktif Bekerja',
-        attendances: empAtts,
-      };
-    });
-
-    // ── SMART PRIORITIZED SORTING BERDASARKAN KELOMPOK OPERASIONAL RESMI ──
-    // 1. Rumah Tangga (FR07001–FR07033)
-    // 2. Shipment (FR07034–FR07080)
-    // 3. Karyawan Tetap (Takdir, Aslam, Samsi)
-    // 4. Lainnya
-    const getCategoryPriority = (grp: EmployeeCategoryGroup): number => {
-      if (grp === 'RUMAH TANGGA') return 1;
-      if (grp === 'SHIPMENT') return 2;
-      if (grp === 'KARYAWAN TETAP') return 3;
-      return 4;
-    };
-
-    const extractNipNumber = (nip: string): number => {
-      const m = (nip || '').replace(/[\s.]/g, '').toUpperCase().match(/FR(?:07)?(\d+)/);
-      return m ? parseInt(m[1], 10) : 9999;
-    };
-
-    return recapList.sort((a, b) => {
-      const pA = getCategoryPriority(a.categoryGroup);
-      const pB = getCategoryPriority(b.categoryGroup);
-      if (pA !== pB) return pA - pB;
-      const numA = extractNipNumber(a.user.nip);
-      const numB = extractNipNumber(b.user.nip);
-      if (numA !== numB) return numA - numB;
-      return a.user.nip.localeCompare(b.user.nip);
-    });
-  }, [employees, attendances, overtimes, leaves, selectedMonth]);
-
-  const filteredMonthlyRecap = React.useMemo(() => {
-    return monthlyEmployeeRecap.filter((item) => {
-      const matchCategory = filterCategory === 'all' || item.categoryGroup === filterCategory;
-      const matchDiv = filterDivision === 'all' || (item.user.divisionName || '').toLowerCase() === filterDivision.toLowerCase() || item.user.divisionId === filterDivision;
-      const matchBio =
-        filterBiometrik === 'all' ||
-        (filterBiometrik === 'active' && item.isFaceEnrolled) ||
-        (filterBiometrik === 'unregistered' && !item.isFaceEnrolled);
-      const matchSearch =
-        item.user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.user.nip.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchCategory && matchDiv && matchBio && matchSearch;
-    });
-  }, [monthlyEmployeeRecap, filterCategory, filterDivision, filterBiometrik, searchQuery]);
-
-  // Statistik Jumlah Karyawan Per Kelompok
-  const categoryCounts = React.useMemo(() => {
-    let rt = 0;
-    let ship = 0;
-    let tetap = 0;
-    monthlyEmployeeRecap.forEach((r) => {
-      if (r.categoryGroup === 'RUMAH TANGGA') rt++;
-      else if (r.categoryGroup === 'SHIPMENT') ship++;
-      else if (r.categoryGroup === 'KARYAWAN TETAP') tetap++;
-    });
-    return {
-      all: monthlyEmployeeRecap.length,
-      rumahTangga: rt,
-      shipment: ship,
-      karyawanTetap: tetap,
-    };
-  }, [monthlyEmployeeRecap]);
-
-  // Export Rekapitulasi Bulanan Seluruh Karyawan ke Excel (.xlsx) dengan Pemisahan Khusus Kelompok
-  const exportMonthlyRecapToExcel = () => {
-    const buildExportRows = (items: typeof monthlyEmployeeRecap) =>
-      items.map((r, idx) => ({
-        No: idx + 1,
-        'Kelompok / Kategori': r.categoryGroupLabel,
-        'Periode Bulan': selectedMonthLabel,
-        NIP: r.user.nip,
-        'Nama Karyawan': r.user.fullName,
-        Divisi: r.user.divisionName || '-',
-        'Status Biometrik': r.statusBiometrikLabel,
-        'Total Kehadiran': r.isFaceEnrolled ? r.totalAttendances : '-',
-        'Hadir Tepat Waktu': r.isFaceEnrolled ? r.onTimeCount : '-',
-        'Hadir Terlambat': r.isFaceEnrolled ? r.lateCount : '-',
-        'Total Menit Terlambat': r.isFaceEnrolled ? r.totalLateMinutes : '-',
-        'Cuti (Hari)': r.isFaceEnrolled ? r.cutiCount : '-',
-        'Sakit (Hari)': r.isFaceEnrolled ? r.sakitCount : '-',
-        'Lembur (Jam SPKL)': r.isFaceEnrolled ? r.overtimeHours : '-',
-        'Akumulasi Jam Kerja (Jam)': r.isFaceEnrolled ? r.totalWorkHours : '-',
-        'Alpa / Mangkir (Hari)': r.isFaceEnrolled ? r.alpaCount : '-',
-        'Estimasi Denda Terlambat (Rp)': r.isFaceEnrolled ? r.lateDeduction : 0,
-        Keterangan: r.keterangan,
-      }));
-
-    const colWidths = [
-      { wch: 6 },
-      { wch: 34 },
-      { wch: 18 },
-      { wch: 14 },
-      { wch: 26 },
-      { wch: 22 },
-      { wch: 30 },
-      { wch: 14 },
-      { wch: 16 },
-      { wch: 16 },
-      { wch: 20 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 18 },
-      { wch: 24 },
-      { wch: 18 },
-      { wch: 26 },
-      { wch: 32 },
-    ];
-
-    const workbook = XLSX.utils.book_new();
-
-    if (filterCategory === 'all') {
-      // 1. Sheet Semua Karyawan
-      const allWs = XLSX.utils.json_to_sheet(buildExportRows(filteredMonthlyRecap));
-      allWs['!cols'] = colWidths;
-      XLSX.utils.book_append_sheet(workbook, allWs, `Semua Personel (${filteredMonthlyRecap.length})`.slice(0, 31));
-
-      // 2. Sheet Khusus Rumah Tangga (FR07001–FR07033)
-      const rtItems = monthlyEmployeeRecap.filter((r) => r.categoryGroup === 'RUMAH TANGGA');
-      if (rtItems.length > 0) {
-        const rtWs = XLSX.utils.json_to_sheet(buildExportRows(rtItems));
-        rtWs['!cols'] = colWidths;
-        XLSX.utils.book_append_sheet(workbook, rtWs, `Rumah Tangga (${rtItems.length})`);
-      }
-
-      // 3. Sheet Khusus Shipment (FR07034–FR07080)
-      const shipItems = monthlyEmployeeRecap.filter((r) => r.categoryGroup === 'SHIPMENT');
-      if (shipItems.length > 0) {
-        const shipWs = XLSX.utils.json_to_sheet(buildExportRows(shipItems));
-        shipWs['!cols'] = colWidths;
-        XLSX.utils.book_append_sheet(workbook, shipWs, `Shipment (${shipItems.length})`);
-      }
-
-      // 4. Sheet Khusus Karyawan Tetap (Takdir, Aslam, Samsi)
-      const tetapItems = monthlyEmployeeRecap.filter((r) => r.categoryGroup === 'KARYAWAN TETAP');
-      if (tetapItems.length > 0) {
-        const tetapWs = XLSX.utils.json_to_sheet(buildExportRows(tetapItems));
-        tetapWs['!cols'] = colWidths;
-        XLSX.utils.book_append_sheet(workbook, tetapWs, `Karyawan Tetap (${tetapItems.length})`);
-      }
-
-      XLSX.writeFile(workbook, `Rekapitulasi_Presensi_Lengkap_Per_Kelompok_${selectedMonth}.xlsx`);
-    } else {
-      // Sheet Terfilter sesuai pilihan kategori
-      const sheetTitle =
-        filterCategory === 'RUMAH TANGGA'
-          ? 'Rumah Tangga FR07001-33'
-          : filterCategory === 'SHIPMENT'
-          ? 'Shipment FR07034-80'
-          : filterCategory === 'KARYAWAN TETAP'
-          ? 'Karyawan Tetap (Pimpinan)'
-          : `Rekap ${selectedMonth}`;
-
-      const ws = XLSX.utils.json_to_sheet(buildExportRows(filteredMonthlyRecap));
-      ws['!cols'] = colWidths;
-      XLSX.utils.book_append_sheet(workbook, ws, sheetTitle.slice(0, 31));
-      XLSX.writeFile(workbook, `Rekapitulasi_Presensi_${filterCategory}_${selectedMonth}.xlsx`);
-    }
-  };
-
-  // Unduh PDF Rekapitulasi Presensi, Keterlambatan, Cuti, Sakit, Jam Kerja & Lembur Bulanan
-  const handleDownloadMonthlyRecapPdf = async () => {
-    try {
-      // 1. Tarik pembaruan data presensi dan profil realtime detik ini juga dari PostgreSQL VPS
-      setIsFetchingMonth(true);
+      // 1. Fetch Users
       try {
-        const [attRes, userRes] = await Promise.all([
-          fetch(`/api/attendances?month=${selectedMonth}`),
-          fetch('/api/users'),
-        ]);
-        if (attRes.ok) {
-          const json = await attRes.json();
-          if (json.success && Array.isArray(json.data)) {
-            const monthAtts: AttendanceRecord[] = json.data.filter((a: any) => isOfficialFrEmployee(a.userNip));
-            setAttendances((prev) => {
-              const map = new Map(prev.map((a) => [a.id, a]));
-              monthAtts.forEach((a) => map.set(a.id, a));
-              return Array.from(map.values());
-            });
-          }
-        }
-        if (userRes.ok) {
-          const uJson = await userRes.json();
+        const uRes = await fetch('/api/users');
+        if (uRes.ok) {
+          const uJson = await uRes.json();
           if (uJson.success && Array.isArray(uJson.data)) {
             const frUsers = uJson.data.filter((u: any) => u.isActive && isOfficialFrEmployee(u));
             if (frUsers.length > 0) setEmployees(frUsers);
           }
         }
-        setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
-      } catch (syncErr) {
-        console.warn('Realtime sync before PDF error:', syncErr);
-      } finally {
-        setIsFetchingMonth(false);
+      } catch (e) {
+        setEmployees(hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u)));
       }
 
-      const doc = new jsPDF({
-        orientation: 'landscape',
-        unit: 'mm',
-        format: 'a4',
-      });
-
-      const pageWidth = 297;
-      const pageHeight = 210;
-      const marginX = 10;
-      const contentWidth = pageWidth - marginX * 2; // 277mm
-
-      // Helper konversi gambar ke dataURL canvas
-      const loadImgData = (src: string): Promise<string> => {
-        return new Promise((resolve) => {
-          if (!src || src.startsWith('data:')) {
-            resolve(src);
-            return;
-          }
-          const img = new Image();
-          img.crossOrigin = 'Anonymous';
-          img.onload = () => {
-            try {
-              const canvas = document.createElement('canvas');
-              canvas.width = img.naturalWidth || img.width;
-              canvas.height = img.naturalHeight || img.height;
-              const ctx = canvas.getContext('2d');
-              if (ctx) {
-                ctx.drawImage(img, 0, 0);
-                resolve(canvas.toDataURL('image/png'));
-              } else {
-                resolve(src);
-              }
-            } catch {
-              resolve(src);
-            }
-          };
-          img.onerror = () => resolve(src);
-          img.src = src;
-        });
-      };
-
-      // 1. KOP SURAT RESMI PT. FAWWAZ RESKI PERWIRA & LOGO
-      const logoSrc = appSettings?.companyLogo || defaultLogo;
+      // 2. Fetch Attendances for selectedMonth
       try {
-        const logoData = await loadImgData(logoSrc);
-        if (logoData) {
-          doc.addImage(logoData, 'PNG', marginX + 1, 6, 13, 13);
+        const aRes = await fetch(`/api/attendances?month=${selectedMonth}`);
+        if (aRes.ok) {
+          const aJson = await aRes.json();
+          if (aJson.success && Array.isArray(aJson.data)) {
+            const frAtts = aJson.data.filter((a: any) => isOfficialFrEmployee(a.userNip));
+            setAttendances(frAtts);
+          }
         }
       } catch (e) {
-        console.warn('Gagal memuat logo untuk PDF:', e);
+        setAttendances(hrmService.getAttendances().filter((a) => isOfficialFrEmployee(a.userNip)));
       }
 
-      // Keterangan Instansi di samping logo
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(12.5);
-      doc.setTextColor(15, 23, 42); // slate-900
-      doc.text('PT. FAWWAZ RESKI PERWIRA', marginX + 16, 10);
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.5);
-      doc.setTextColor(4, 120, 87); // emerald-700
-      doc.text('PENGELOLAAN FASILITAS OPERASIONAL & SUMBER DAYA KARYAWAN', marginX + 16, 14);
-
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(6.5);
-      doc.setTextColor(100, 116, 139); // slate-500
-      doc.text('Bontoa, Minasatene, Pangkajene and Islands Regency, South Sulawesi • Web: fawwazreskiperwira.com', marginX + 16, 17.5);
-
-      // Kanan Kop: Judul Dokumen & Periode
-      const categoryTitleLabel =
-        filterCategory === 'all'
-          ? 'SEMUA KELOMPOK (83 PERSONEL)'
-          : filterCategory === 'RUMAH TANGGA'
-          ? 'RUMAH TANGGA (FR07001–FR07033)'
-          : filterCategory === 'SHIPMENT'
-          ? 'SHIPMENT (FR07034–FR07080)'
-          : 'KARYAWAN TETAP (TAKDIR, ASLAM, SAMSI)';
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.setTextColor(15, 23, 42);
-      doc.text('REKAPITULASI PRESENSI, CUTI, SAKIT & LEMBUR', pageWidth - marginX - 1, 10, { align: 'right' });
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8.5);
-      doc.setTextColor(29, 78, 216); // blue-700
-      doc.text(`PERIODE: ${selectedMonthLabel.toUpperCase()}`, pageWidth - marginX - 1, 14, { align: 'right' });
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(6.5);
-      doc.setTextColor(4, 120, 87); // emerald-700
-      doc.text(`KELOMPOK: ${categoryTitleLabel}`, pageWidth - marginX - 1, 17.5, { align: 'right' });
-
-      // Garis Ganda Pembatas Kop Surat
-      doc.setDrawColor(15, 23, 42);
-      doc.setLineWidth(0.35);
-      doc.line(marginX, 20.5, pageWidth - marginX, 20.5);
-
-      doc.setLineWidth(0.12);
-      doc.line(marginX, 21.2, pageWidth - marginX, 21.2);
-
-      // 2. EXECUTIVE KPI OVERVIEW CARDS (5 KOTAK RINGKASAN METRIK BULANAN)
-      const kpiY = 23;
-      const kpiH = 13.5;
-      const gap = 2.5;
-      const cardW = (contentWidth - gap * 4) / 5; // ~53.4mm
-
-      const totalEmployeesCount = filteredMonthlyRecap.length;
-      const activeEnrolledCount = filteredMonthlyRecap.filter((r) => r.isFaceEnrolled).length;
-      const pendingEnrollmentCount = filteredMonthlyRecap.filter((r) => !r.isFaceEnrolled).length;
-      const grandTotalHadir = filteredMonthlyRecap.reduce((sum, r) => sum + r.totalAttendances, 0);
-      const grandTotalOnTime = filteredMonthlyRecap.reduce((sum, r) => sum + r.onTimeCount, 0);
-      const grandTotalLate = filteredMonthlyRecap.reduce((sum, r) => sum + r.lateCount, 0);
-      const grandTotalLateMinutes = filteredMonthlyRecap.reduce((sum, r) => sum + r.totalLateMinutes, 0);
-      const grandTotalCuti = filteredMonthlyRecap.reduce((sum, r) => sum + r.cutiCount, 0);
-      const grandTotalSakit = filteredMonthlyRecap.reduce((sum, r) => sum + r.sakitCount, 0);
-      const grandTotalAlpa = filteredMonthlyRecap.reduce((sum, r) => sum + r.alpaCount, 0);
-      const grandTotalOtHours = Number(filteredMonthlyRecap.reduce((sum, r) => sum + r.overtimeHours, 0).toFixed(1));
-      const grandTotalWorkHours = Number(filteredMonthlyRecap.reduce((sum, r) => sum + r.totalWorkHours, 0).toFixed(1));
-
-      const kpiCards = [
-        {
-          label: 'TOTAL PERSONEL RESMI',
-          val: `${totalEmployeesCount} Orang`,
-          sub: filterCategory === 'all' ? 'Seluruh Personel FRP' : categoryTitleLabel.split('(')[0].trim(),
-          bg: [248, 250, 252],
-          border: [203, 213, 225],
-          valColor: [15, 23, 42],
-        },
-        {
-          label: 'STATUS BIOMETRIK WAJAH',
-          val: `${activeEnrolledCount} Aktif / ${pendingEnrollmentCount} Belum`,
-          sub: activeEnrolledCount === totalEmployeesCount ? '100% Terverifikasi' : `${pendingEnrollmentCount} Belum Registrasi`,
-          bg: [240, 253, 244],
-          border: [187, 247, 208],
-          valColor: [22, 101, 52],
-        },
-        {
-          label: 'KEHADIRAN & KETEPATAN',
-          val: `${grandTotalHadir} Hadir (${grandTotalOnTime} Tepat)`,
-          sub: `${grandTotalLate}x Terlambat (${grandTotalLateMinutes} mnt)`,
-          bg: [239, 246, 255],
-          border: [191, 219, 254],
-          valColor: [29, 78, 216],
-        },
-        {
-          label: 'CUTI, SAKIT & ALPA',
-          val: `${grandTotalCuti} Cuti / ${grandTotalSakit} Sakit`,
-          sub: grandTotalAlpa > 0 ? `${grandTotalAlpa} Alpa Terakumulasi` : '0 Alpa (Disiplin Terjaga)',
-          bg: [254, 252, 232],
-          border: [254, 240, 138],
-          valColor: [133, 77, 14],
-        },
-        {
-          label: 'TOTAL JAM KERJA & LEMBUR',
-          val: `${grandTotalWorkHours} Jam Kerja`,
-          sub: `${grandTotalOtHours} Jam Lembur Sah SPKL`,
-          bg: [255, 247, 237],
-          border: [254, 215, 170],
-          valColor: [154, 52, 18],
-        },
-      ];
-
-      kpiCards.forEach((c, i) => {
-        const curX = marginX + i * (cardW + gap);
-        doc.setFillColor(c.bg[0], c.bg[1], c.bg[2]);
-        doc.setDrawColor(c.border[0], c.border[1], c.border[2]);
-        doc.setLineWidth(0.2);
-        doc.roundedRect(curX, kpiY, cardW, kpiH, 1, 1, 'FD');
-
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(5.8);
-        doc.setTextColor(100, 116, 139);
-        doc.text(c.label, curX + 2.5, kpiY + 3.4);
-
-        doc.setFontSize(8.2);
-        doc.setTextColor(c.valColor[0], c.valColor[1], c.valColor[2]);
-        doc.text(c.val, curX + 2.5, kpiY + 7.6);
-
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(5.5);
-        doc.setTextColor(100, 116, 139);
-        doc.text(c.sub, curX + 2.5, kpiY + 11.2);
-      });
-
-      // 3. TABEL UTAMA REKAPITULASI (jspdf-autotable)
-      const tableHead = [
-        [
-          'NO',
-          'NIP',
-          'NAMA KARYAWAN',
-          'KELOMPOK',
-          'DIVISI / PENUGASAN',
-          'STATUS BIOMETRIK',
-          'HADIR',
-          'TERLAMBAT',
-          'CUTI',
-          'SAKIT',
-          'LEMBUR',
-          'JAM KERJA',
-          'ALPA',
-          'KETERANGAN',
-        ],
-      ];
-
-      const tableBody = filteredMonthlyRecap.map((r, idx) => {
-        const isEnrolled = r.isFaceEnrolled;
-        const shortKelompok =
-          r.categoryGroup === 'RUMAH TANGGA'
-            ? 'Rumah Tangga'
-            : r.categoryGroup === 'SHIPMENT'
-            ? 'Shipment'
-            : r.categoryGroup === 'KARYAWAN TETAP'
-            ? 'Karyawan Tetap'
-            : 'Lainnya';
-
-        return [
-          String(idx + 1),
-          r.user.nip,
-          (r.user.fullName || '').toUpperCase(),
-          shortKelompok,
-          r.user.divisionName || '-',
-          isEnrolled ? 'Aktif (Terdaftar)' : 'Belum Registrasi Wajah',
-          isEnrolled ? `${r.totalAttendances} Hari` : '-',
-          isEnrolled ? (r.lateCount > 0 ? `${r.lateCount}x (${r.totalLateMinutes}m)` : '-') : '-',
-          isEnrolled ? (r.cutiCount > 0 ? `${r.cutiCount} Hari` : '-') : '-',
-          isEnrolled ? (r.sakitCount > 0 ? `${r.sakitCount} Hari` : '-') : '-',
-          isEnrolled ? (r.overtimeHours > 0 ? `${r.overtimeHours} Jam` : '-') : '-',
-          isEnrolled ? `${r.totalWorkHours} Jam` : '-',
-          isEnrolled ? (r.alpaCount > 0 ? `${r.alpaCount} Hari` : '-') : '-',
-          isEnrolled ? r.keterangan : 'Menunggu Registrasi Wajah',
-        ];
-      });
-
-      // Baris Total Akumulasi (Foot Row)
-      const tableFoot = [
-        [
-          'TOTAL',
-          '',
-          `TOTAL KESELURUHAN (${filteredMonthlyRecap.length} PERSONEL)`,
-          '',
-          '',
-          `${activeEnrolledCount} Aktif / ${pendingEnrollmentCount} Belum`,
-          `${grandTotalHadir} Hari`,
-          `${grandTotalLate}x (${grandTotalLateMinutes}m)`,
-          `${grandTotalCuti} Hari`,
-          `${grandTotalSakit} Hari`,
-          `${grandTotalOtHours} Jam`,
-          `${grandTotalWorkHours} Jam`,
-          `${grandTotalAlpa} Hari`,
-          '-',
-        ],
-      ];
-
-      autoTable(doc, {
-        head: tableHead,
-        body: tableBody,
-        foot: tableFoot,
-        startY: 38.5,
-        margin: { left: marginX, right: marginX, bottom: 25 },
-        theme: 'grid',
-        styles: {
-          font: 'helvetica',
-          fontSize: 6.8,
-          cellPadding: 1.6,
-          lineColor: [226, 232, 240],
-          lineWidth: 0.15,
-          valign: 'middle',
-          textColor: [30, 41, 59],
-        },
-        headStyles: {
-          fillColor: [15, 23, 42], // slate-900
-          textColor: [255, 255, 255],
-          fontStyle: 'bold',
-          fontSize: 6.8,
-          halign: 'center',
-          cellPadding: 2,
-        },
-        footStyles: {
-          fillColor: [241, 245, 249],
-          textColor: [15, 23, 42],
-          fontStyle: 'bold',
-          fontSize: 6.8,
-          cellPadding: 2,
-        },
-        columnStyles: {
-          0: { cellWidth: 7, halign: 'center' }, // NO
-          1: { cellWidth: 19, halign: 'center', fontStyle: 'bold' }, // NIP
-          2: { cellWidth: 38, halign: 'left', fontStyle: 'bold' }, // NAMA
-          3: { cellWidth: 25, halign: 'center', fontStyle: 'bold' }, // KELOMPOK
-          4: { cellWidth: 28, halign: 'left' }, // DIVISI
-          5: { cellWidth: 28, halign: 'center', fontStyle: 'bold' }, // STATUS BIOMETRIK
-          6: { cellWidth: 13, halign: 'center' }, // HADIR
-          7: { cellWidth: 18, halign: 'center' }, // TERLAMBAT
-          8: { cellWidth: 12, halign: 'center' }, // CUTI
-          9: { cellWidth: 12, halign: 'center' }, // SAKIT
-          10: { cellWidth: 15, halign: 'center' }, // LEMBUR
-          11: { cellWidth: 17, halign: 'center' }, // JAM KERJA
-          12: { cellWidth: 13, halign: 'center' }, // ALPA
-          13: { cellWidth: 32, halign: 'left' }, // KETERANGAN
-        },
-        didParseCell: (data) => {
-          // Highlight kolom kelompok (kolom index 3)
-          if (data.section === 'body' && data.column.index === 3) {
-            const rawVal = String(data.cell.raw || '');
-            if (rawVal.includes('Rumah Tangga')) {
-              data.cell.styles.textColor = [4, 120, 87]; // emerald-700
-              data.cell.styles.fillColor = [236, 253, 245]; // emerald-50
-            } else if (rawVal.includes('Shipment')) {
-              data.cell.styles.textColor = [3, 105, 161]; // sky-700
-              data.cell.styles.fillColor = [240, 249, 255]; // sky-50
-            } else if (rawVal.includes('Tetap')) {
-              data.cell.styles.textColor = [126, 34, 206]; // purple-700
-              data.cell.styles.fillColor = [250, 245, 255]; // purple-50
-            }
+      // 3. Fetch Overtimes
+      try {
+        const oRes = await fetch('/api/overtime');
+        if (oRes.ok) {
+          const oJson = await oRes.json();
+          if (oJson.success && Array.isArray(oJson.data)) {
+            const frOts = oJson.data.filter((o: any) => isOfficialFrEmployee(o.userNip));
+            setOvertimes(frOts);
           }
-          // Highlight kolom status biometrik (kolom index 5)
-          if (data.section === 'body' && data.column.index === 5) {
-            const rawVal = String(data.cell.raw || '');
-            if (rawVal.includes('Aktif')) {
-              data.cell.styles.textColor = [22, 101, 52]; // green-800
-              data.cell.styles.fillColor = [240, 253, 244]; // green-50
-            } else {
-              data.cell.styles.textColor = [194, 65, 12]; // amber-700
-              data.cell.styles.fillColor = [254, 243, 199]; // amber-100
-            }
-          }
-          // Highlight baris karyawan yang belum terdaftar agar metrik '-' berwarna lembut
-          if (data.section === 'body') {
-            const rowData = filteredMonthlyRecap[data.row.index];
-            if (rowData && !rowData.isFaceEnrolled) {
-              if (data.column.index >= 6 && data.column.index <= 12) {
-                data.cell.styles.textColor = [148, 163, 184]; // muted slate-400
-              }
-              if (data.column.index === 13) {
-                data.cell.styles.textColor = [194, 65, 12]; // amber note
-                data.cell.styles.fontStyle = 'italic';
-              }
-            } else if (rowData && rowData.isFaceEnrolled) {
-              // Jika ada keterlambatan (kolom index 7)
-              if (data.column.index === 7 && rowData.lateCount > 0) {
-                data.cell.styles.textColor = [180, 83, 9];
-                data.cell.styles.fontStyle = 'bold';
-              }
-              // Jika ada lembur (kolom index 10)
-              if (data.column.index === 10 && rowData.overtimeHours > 0) {
-                data.cell.styles.textColor = [194, 65, 12];
-                data.cell.styles.fontStyle = 'bold';
-              }
-              // Jika ada alpa (kolom index 12)
-              if (data.column.index === 12 && rowData.alpaCount > 0) {
-                data.cell.styles.textColor = [225, 29, 72];
-                data.cell.styles.fontStyle = 'bold';
-              }
-            }
-          }
-        },
-      });
-
-      // Ambil posisi akhir tabel
-      const finalY = (doc as any).lastAutoTable?.finalY || 160;
-
-      // Cek apakah sisa halaman cukup untuk tanda tangan (butuh ~34mm)
-      let signY = finalY + 7;
-      if (signY + 32 > pageHeight - 12) {
-        doc.addPage();
-        signY = 20;
+        }
+      } catch (e) {
+        setOvertimes(hrmService.getOvertimeRecords().filter((o) => isOfficialFrEmployee(o.userNip)));
       }
 
-      // Catatan Penjelasan Resmi di atas tanda tangan
-      doc.setFont('helvetica', 'italic');
-      doc.setFontSize(6.2);
-      doc.setTextColor(100, 116, 139);
-      doc.text(
-        '* Catatan Kebijakan: Karyawan berstatus "Belum Registrasi Wajah" adalah akun baru/dalam proses pendaftaran yang belum diwajibkan absensi biometrik, sehingga TIDAK dikenakan sanksi mangkir/alpa berjalan.',
-        marginX,
-        signY
-      );
-
-      signY += 5;
-
-      // 4. DUAL-TIER LEGAL SIGNATURE BLOCK (3 KOLOM PENGESAHAN RESMI)
-      const colW = (contentWidth - 20) / 3;
-      const col1X = marginX + 5;
-      const col2X = marginX + colW + 10;
-      const col3X = marginX + colW * 2 + 15;
-
-      // Kolom 1: HR & Administrasi
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(6.8);
-      doc.setTextColor(71, 85, 105);
-      doc.text('Diperiksa & Divalidasi oleh,', col1X, signY);
-      doc.setFont('helvetica', 'bold');
-      doc.text('HR & Administrasi Operasional', col1X, signY + 3.8);
-
-      doc.setFont('helvetica', 'italic');
-      doc.setFontSize(5.8);
-      doc.setTextColor(148, 163, 184);
-      doc.text('( Tanda Tangan & Verifikasi Sistem )', col1X, signY + 7.5);
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.5);
-      doc.setTextColor(15, 23, 42);
-      doc.text(hrdSignName || 'Budi Prakoso, S.Psi.', col1X, signY + 22);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(6.2);
-      doc.setTextColor(100, 116, 139);
-      doc.text('Dept. Human Capital & General', col1X, signY + 25);
-
-      // Kolom 2: Pimpinan PT. FRP
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(6.8);
-      doc.setTextColor(71, 85, 105);
-      doc.text('Mengetahui,', col2X, signY);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Pimpinan PT. FAWWAZ RESKI PERWIRA', col2X, signY + 3.8);
-
-      doc.setFont('helvetica', 'italic');
-      doc.setFontSize(5.8);
-      doc.setTextColor(148, 163, 184);
-      doc.text('( Tanda Tangan & Cap Resmi )', col2X, signY + 7.5);
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.5);
-      doc.setTextColor(15, 23, 42);
-      doc.text('RESKI FAISAL', col2X, signY + 22);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(6.2);
-      doc.setTextColor(100, 116, 139);
-      doc.text('Pimpinan PT. FRP', col2X, signY + 25);
-
-      // Kolom 3: Direktur Utama
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(6.8);
-      doc.setTextColor(71, 85, 105);
-      doc.text('Menyetujui,', col3X, signY);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Direktur Utama PT. FAWWAZ RESKI PERWIRA', col3X, signY + 3.8);
-
-      doc.setFont('helvetica', 'italic');
-      doc.setFontSize(5.8);
-      doc.setTextColor(148, 163, 184);
-      doc.text('( Tanda Tangan & Cap Perusahaan )', col3X, signY + 7.5);
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.5);
-      doc.setTextColor(15, 23, 42);
-      doc.text('ALAM AS SIMPUANG AGO, S.Sos', col3X, signY + 22);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(6.2);
-      doc.setTextColor(100, 116, 139);
-      doc.text('Direktur Utama', col3X, signY + 25);
-
-      // 5. FOOTER TIMESTAMP & PAGE NUMBERING (SEMUA HALAMAN)
-      const pageCount = (doc as any).internal.getNumberOfPages();
-      const printDateStr = new Date().toLocaleString('id-ID', {
-        timeZone: 'Asia/Makassar',
-        day: '2-digit',
-        month: 'long',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      });
-
-      for (let i = 1; i <= pageCount; i++) {
-        doc.setPage(i);
-        doc.setDrawColor(226, 232, 240);
-        doc.setLineWidth(0.15);
-        doc.line(marginX, pageHeight - 8, pageWidth - marginX, pageHeight - 8);
-
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(5.8);
-        doc.setTextColor(148, 163, 184);
-        doc.text(
-          `Dokumen Resmi Terverifikasi Sistem HRM PT. FAWWAZ RESKI PERWIRA • Waktu Cetak (WITA): ${printDateStr} WITA`,
-          marginX,
-          pageHeight - 5
-        );
-        doc.text(`Halaman ${i} dari ${pageCount}`, pageWidth - marginX, pageHeight - 5, { align: 'right' });
+      // 4. Fetch Leaves
+      try {
+        const lRes = await fetch('/api/leaves');
+        if (lRes.ok) {
+          const lJson = await lRes.json();
+          if (lJson.success && Array.isArray(lJson.data)) {
+            const frLeaves = lJson.data.filter((l: any) => isOfficialFrEmployee(l.userNip || l.userId));
+            setLeaves(frLeaves);
+          }
+        }
+      } catch (e) {
+        setLeaves(hrmService.getLeaves().filter((l) => isOfficialFrEmployee(l.userNip || l.userId)));
       }
 
-      // Download File PDF
-      const filename = `Rekapitulasi_Presensi_Bulanan_FRP_${selectedMonth}.pdf`;
-      doc.save(filename);
-    } catch (error) {
-      console.error('Gagal generate PDF Rekap Bulanan:', error);
+      setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedMonth]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Polling Real-time 30s
+  useEffect(() => {
+    const timer = setInterval(() => {
+      loadData();
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [loadData]);
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // TAB 1: OVERTIME (LEMBUR SPKL) & BUDGET CALCULATIONS
+  // ══════════════════════════════════════════════════════════════════════════════
+  const monthOvertimes = useMemo(() => {
+    return overtimes.filter((o) => o.date && o.date.startsWith(selectedMonth));
+  }, [overtimes, selectedMonth]);
+
+  const approvedMonthOvertimes = useMemo(() => {
+    return monthOvertimes.filter((o) => o.status === 'approved');
+  }, [monthOvertimes]);
+
+  const shipmentApprovedOts = useMemo(() => {
+    return approvedMonthOvertimes.filter((o) => getEmployeeCategoryGroup(o.userNip || o.userId) === 'SHIPMENT');
+  }, [approvedMonthOvertimes]);
+
+  const wismaApprovedOts = useMemo(() => {
+    return approvedMonthOvertimes.filter((o) => getEmployeeCategoryGroup(o.userNip || o.userId) === 'RUMAH TANGGA');
+  }, [approvedMonthOvertimes]);
+
+  // Nominal Calculations
+  const shipmentUsed = useMemo(() => {
+    return shipmentApprovedOts.reduce((sum, o) => sum + (Number(o.totalPay || o.compensationAmount) || 0), 0);
+  }, [shipmentApprovedOts]);
+
+  const wismaUsed = useMemo(() => {
+    return wismaApprovedOts.reduce((sum, o) => sum + (Number(o.totalPay || o.compensationAmount) || 0), 0);
+  }, [wismaApprovedOts]);
+
+  const shipmentCap = 65000000; // Plafon Resmi Shipment: Rp 65 Juta
+  const wismaCap = 4000000;    // Plafon Resmi Rumah Tangga: Rp 4 Juta
+  const totalCap = 69000000;   // Plafon Resmi Total: Rp 69 Juta
+
+  const shipmentRemaining = Math.max(0, shipmentCap - shipmentUsed);
+  const wismaRemaining = Math.max(0, wismaCap - wismaUsed);
+  const totalUsed = shipmentUsed + wismaUsed;
+  const totalRemaining = Math.max(0, totalCap - totalUsed);
+
+  const shipmentPct = Math.min(100, Math.round((shipmentUsed / shipmentCap) * 100));
+  const wismaPct = Math.min(100, Math.round((wismaUsed / wismaCap) * 100));
+  const totalPct = Math.min(100, Math.round((totalUsed / totalCap) * 100));
+
+  // Filtered Overtime List for Table
+  const filteredOtList = useMemo(() => {
+    return monthOvertimes.filter((o) => {
+      const cat = getEmployeeCategoryGroup(o.userNip || o.userId);
+      if (filterCategory !== 'all' && cat !== filterCategory) return false;
+      if (filterDivision !== 'all' && o.divisionName !== filterDivision) return false;
+      if (filterOtStatus !== 'all' && o.status !== filterOtStatus) return false;
+      if (filterOtPayment !== 'all') {
+        const pay = o.paymentStatus || 'unpaid';
+        if (pay !== filterOtPayment) return false;
+      }
+      if (otSearchQuery.trim()) {
+        const q = otSearchQuery.toLowerCase();
+        const mName = (o.userName || '').toLowerCase().includes(q);
+        const mNip = (o.userNip || '').toLowerCase().includes(q);
+        const mTask = (o.taskDescription || '').toLowerCase().includes(q);
+        if (!mName && !mNip && !mTask) return false;
+      }
+      return true;
+    });
+  }, [monthOvertimes, filterCategory, filterDivision, filterOtStatus, filterOtPayment, otSearchQuery]);
+
+  // Handlers for Overtime CRUD
+  const handleUpdateOtStatus = async (id: string, newStatus: 'approved' | 'rejected') => {
+    try {
+      const res: any = await api.put(`/overtime/${id}/status`, {
+        status: newStatus,
+        approvedByName: user?.fullName || 'Super Admin',
+      });
+      if (res?.success) {
+        toast.success(`Pengajuan lembur berhasil ${newStatus === 'approved' ? 'disetujui' : 'ditolak'}`);
+        loadData();
+      } else {
+        toast.error(res?.error || 'Gagal memperbarui status');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Gagal memperbarui status lembur');
     }
   };
 
-  const filteredList = attendances.filter((a) => {
-    const aDate = a.attendanceDate || (a as any).date;
-    const matchMonth = aDate && aDate.startsWith(selectedMonth);
-    const matchDate = !selectedDate || aDate === selectedDate;
-    const matchDiv = filterDivision === 'all' || (a.divisionName || '').toLowerCase() === filterDivision.toLowerCase();
-    const matchStatus = filterStatus === 'all' || a.status === filterStatus;
-    const matchSearch =
-      (a.userName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (a.userNip || '').toLowerCase().includes(searchQuery.toLowerCase());
-    return matchMonth && matchDate && matchDiv && matchStatus && matchSearch;
-  });
+  const handleDeleteOt = async (id: string, name: string) => {
+    if (!window.confirm(`Yakin ingin menghapus catatan lembur untuk ${name}?`)) return;
+    try {
+      const res: any = await api.delete(`/overtime/${id}`);
+      if (res?.success) {
+        toast.success('Catatan lembur berhasil dihapus');
+        loadData();
+      } else {
+        toast.error(res?.error || 'Gagal menghapus lembur');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Gagal menghapus lembur');
+    }
+  };
 
-  const totalRecords = filteredList.length;
-  const onTimeCount = filteredList.filter((a) => a.status === 'hadir').length;
-  const lateCount = filteredList.filter((a) => a.status === 'terlambat').length;
-  const totalLateMins = filteredList.reduce((acc, a) => acc + (a.lateMinutes || 0), 0);
-  const totalWorkMins = filteredList.reduce((acc, a) => acc + (a.workDurationMinutes || 0), 0);
-  const totalWorkHours = (totalWorkMins / 60).toFixed(1);
+  // ══════════════════════════════════════════════════════════════════════════════
+  // TAB 2: PAYROLL (PENGGAJIAN) CALCULATIONS
+  // ══════════════════════════════════════════════════════════════════════════════
+  // Aturan Resmi: Lembur N-1 (dari bulan sebelumnya) otomatis cair di bulan selectedMonth
+  const prevMonthApprovedOts = useMemo(() => {
+    return overtimes.filter((o) => o.date && o.date.startsWith(prevMonthStr) && o.status === 'approved');
+  }, [overtimes, prevMonthStr]);
 
-  const exportToExcel = () => {
-    const dataToExport = filteredList.map((a, idx) => ({
+  const payrollRows = useMemo(() => {
+    return employees
+      .filter((emp) => {
+        const cat = getEmployeeCategoryGroup(emp.nip || emp.id);
+        if (filterCategory !== 'all' && cat !== filterCategory) return false;
+        if (filterDivision !== 'all' && emp.divisionName !== filterDivision) return false;
+        if (payrollSearchQuery.trim()) {
+          const q = payrollSearchQuery.toLowerCase();
+          const mName = (emp.fullName || '').toLowerCase().includes(q);
+          const mNip = (emp.nip || '').toLowerCase().includes(q);
+          if (!mName && !mNip) return false;
+        }
+        return true;
+      })
+      .map((emp) => {
+        const group = getEmployeeCategoryGroup(emp.nip || emp.id);
+        const empNipNorm = (emp.nip || '').replace(/[\s.]/g, '').toUpperCase();
+
+        // Overtime N-1 for this employee
+        const empPrevOts = prevMonthApprovedOts.filter((o) => {
+          const oNipNorm = (o.userNip || '').replace(/[\s.]/g, '').toUpperCase();
+          return (empNipNorm && oNipNorm && empNipNorm === oNipNorm) || o.userId === emp.id || o.userNip === emp.nip;
+        });
+
+        const overtimeHours = empPrevOts.reduce((sum, o) => sum + (Number(o.durationHours) || 0), 0);
+        const overtimePay = empPrevOts.reduce((sum, o) => sum + (Number(o.totalPay || o.compensationAmount) || 0), 0);
+
+        // Attendance stats in selectedMonth
+        const empAtts = attendances.filter((a) => {
+          const aNipNorm = (a.userNip || '').replace(/[\s.]/g, '').toUpperCase();
+          const inMonth = (a.attendanceDate || '').startsWith(selectedMonth);
+          return inMonth && ((empNipNorm && aNipNorm && empNipNorm === aNipNorm) || a.userId === emp.id || a.userNip === emp.nip);
+        });
+
+        const hadirDays = empAtts.filter((a) => a.status === 'hadir').length;
+        const alpaDays = empAtts.filter((a) => a.status === 'mangkir').length;
+        const lateMins = empAtts.reduce((s, a) => s + (Number(a.lateMinutes) || 0), 0);
+
+        // Special handling for Karyawan Tetap (Muh Aslam Faisal, La Unga Samsi, Takdir):
+        // Upah Harian Rp 140.000 / hari, Tanpa BPJS & Lembur
+        const isKaryawanTetap = group === 'KARYAWAN TETAP';
+        const baseSalary = isKaryawanTetap ? (hadirDays > 0 ? hadirDays * 140000 : 25 * 140000) : (Number(emp.salary) || 4045050);
+
+        // Potongan Resmi PT FRP:
+        // BPJS TK 3% (121.351), BPJS Kes 1% (40.450), Alpa, PPh 21 = Rp 0
+        const bpjsTk = isKaryawanTetap ? 0 : 121351;
+        const bpjsKes = isKaryawanTetap ? 0 : 40450;
+        const alpaDeduction = isKaryawanTetap ? 0 : alpaDays * (4045050 / 25);
+        const lateDeduction = isKaryawanTetap ? lateMins * 1000 : 0;
+        const totalDeductions = bpjsTk + bpjsKes + alpaDeduction + lateDeduction;
+
+        const effectiveOvertimePay = isKaryawanTetap ? 0 : overtimePay;
+        const netSalary = Math.round(baseSalary + effectiveOvertimePay - totalDeductions);
+
+        return {
+          employee: emp,
+          group,
+          isKaryawanTetap,
+          baseSalary,
+          overtimeHours,
+          overtimePay: effectiveOvertimePay,
+          bpjsTk,
+          bpjsKes,
+          alpaDays,
+          alpaDeduction,
+          lateMins,
+          lateDeduction,
+          totalDeductions,
+          netSalary,
+          hadirDays,
+        };
+      });
+  }, [employees, filterCategory, filterDivision, payrollSearchQuery, prevMonthApprovedOts, attendances, selectedMonth]);
+
+  const totalPayrollGross = useMemo(() => {
+    return payrollRows.reduce((sum, r) => sum + r.baseSalary + r.overtimePay, 0);
+  }, [payrollRows]);
+
+  const totalPayrollDeductions = useMemo(() => {
+    return payrollRows.reduce((sum, r) => sum + r.totalDeductions, 0);
+  }, [payrollRows]);
+
+  const totalPayrollNet = useMemo(() => {
+    return payrollRows.reduce((sum, r) => sum + r.netSalary, 0);
+  }, [payrollRows]);
+
+  const totalOvertimeArrearsPay = useMemo(() => {
+    return payrollRows.reduce((sum, r) => sum + r.overtimePay, 0);
+  }, [payrollRows]);
+
+  const handleOpenSlip = (row: any) => {
+    const slipObj: PayrollSlip = {
+      id: `slip-${row.employee.id}-${selectedMonth}`,
+      periodId: `period-${selectedMonth}`,
+      userId: row.employee.id,
+      userNip: row.employee.nip || '-',
+      userName: row.employee.fullName,
+      divisionName: row.employee.divisionName || '-',
+      periodLabel: selectedMonthLabel,
+      baseSalary: row.baseSalary,
+      overtimeHours: row.overtimeHours,
+      overtimePay: row.overtimePay,
+      lateDeduction: row.lateDeduction,
+      totalLateMinutes: row.lateMins,
+      absentCount: row.alpaDays,
+      absenceDeduction: row.alpaDeduction,
+      allowancesTotal: 0,
+      deductionsTotal: row.totalDeductions,
+      netSalary: row.netSalary,
+      status: 'approved',
+      bankName: row.employee.bankName || 'Bank Mandiri',
+      bankAccount: row.employee.bankAccount || '-',
+      bankAccountHolder: row.employee.fullName,
+    };
+    setSelectedPayrollSlip(slipObj);
+    setSalarySlipModalOpen(true);
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // TAB 3: LEAVES (CUTI & IZIN) CALCULATIONS
+  // ══════════════════════════════════════════════════════════════════════════════
+  const monthLeaves = useMemo(() => {
+    return leaves.filter((l) => {
+      const inMonth = (l.startDate && l.startDate.startsWith(selectedMonth)) || (l.endDate && l.endDate.startsWith(selectedMonth));
+      return inMonth;
+    });
+  }, [leaves, selectedMonth]);
+
+  const filteredLeaves = useMemo(() => {
+    return monthLeaves.filter((l) => {
+      const cat = getEmployeeCategoryGroup((l as any).userNip || l.userId);
+      if (filterCategory !== 'all' && cat !== filterCategory) return false;
+      if (leaveSearchQuery.trim()) {
+        const q = leaveSearchQuery.toLowerCase();
+        const mName = ((l as any).userName || '').toLowerCase().includes(q);
+        const mNip = ((l as any).userNip || '').toLowerCase().includes(q);
+        const mReason = (l.reason || '').toLowerCase().includes(q);
+        if (!mName && !mNip && !mReason) return false;
+      }
+      return true;
+    });
+  }, [monthLeaves, filterCategory, leaveSearchQuery]);
+
+  const handleUpdateLeaveStatus = async (id: string, status: 'approved' | 'rejected') => {
+    try {
+      const res: any = await api.put(`/leaves/${id}/status`, {
+        status,
+        approvalNotes: `Diproses oleh ${user?.fullName || 'Superadmin'}`,
+      });
+      if (res?.success) {
+        toast.success(`Pengajuan cuti berhasil ${status === 'approved' ? 'disetujui' : 'ditolak'}`);
+        loadData();
+      } else {
+        toast.error(res?.error || 'Gagal memperbarui status cuti');
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Gagal memperbarui cuti');
+    }
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // TAB 4: ATTENDANCE & LATENESS CALCULATIONS
+  // ══════════════════════════════════════════════════════════════════════════════
+  const monthAttendances = useMemo(() => {
+    return attendances.filter((a) => (a.attendanceDate || (a as any).date || '').startsWith(selectedMonth));
+  }, [attendances, selectedMonth]);
+
+  // Monthly Employee Recap Matrix
+  const monthlyRecap = useMemo(() => {
+    return employees
+      .filter((emp) => {
+        const cat = getEmployeeCategoryGroup(emp.nip || emp.id);
+        if (filterCategory !== 'all' && cat !== filterCategory) return false;
+        if (filterDivision !== 'all' && emp.divisionName !== filterDivision) return false;
+        if (attSearchQuery.trim()) {
+          const q = attSearchQuery.toLowerCase();
+          const mName = (emp.fullName || '').toLowerCase().includes(q);
+          const mNip = (emp.nip || '').toLowerCase().includes(q);
+          if (!mName && !mNip) return false;
+        }
+        return true;
+      })
+      .map((emp) => {
+        const empNipNorm = (emp.nip || '').replace(/[\s.]/g, '').toUpperCase();
+        const empAtts = monthAttendances.filter((a) => {
+          const aNipNorm = (a.userNip || '').replace(/[\s.]/g, '').toUpperCase();
+          return (empNipNorm && aNipNorm && empNipNorm === aNipNorm) || a.userId === emp.id || a.userNip === emp.nip;
+        });
+
+        const hadir = empAtts.filter((a) => a.status === 'hadir').length;
+        const telat = empAtts.filter((a) => (a.lateMinutes || 0) > 0).length;
+        const totalLateMins = empAtts.reduce((s, a) => s + (Number(a.lateMinutes) || 0), 0);
+        const alpa = empAtts.filter((a) => a.status === 'mangkir').length;
+        const cuti = empAtts.filter((a) => a.status === 'cuti').length;
+        const sakit = empAtts.filter((a) => a.status === 'sakit').length;
+        const izin = empAtts.filter((a) => a.status === 'izin').length;
+        const off = empAtts.filter((a) => a.status === 'off' || a.status === 'libur').length;
+
+        const isFaceEnrolled = Boolean(
+          emp.isFaceEnrolled || emp.faceEnrolledPhoto || (emp.faceDescriptor && (emp.faceDescriptor as any).length > 0)
+        );
+
+        return {
+          employee: emp,
+          group: getEmployeeCategoryGroup(emp.nip || emp.id),
+          hadir,
+          telat,
+          totalLateMins,
+          alpa,
+          cuti,
+          sakit,
+          izin,
+          off,
+          isFaceEnrolled,
+        };
+      });
+  }, [employees, filterCategory, filterDivision, attSearchQuery, monthAttendances]);
+
+  // Ranking Keterlambatan
+  const latenessRanking = useMemo(() => {
+    return monthlyRecap.filter((r) => r.totalLateMins > 0).sort((a, b) => b.totalLateMins - a.totalLateMins);
+  }, [monthlyRecap]);
+
+  // Handlers for Manual Attendance
+  const handleSaveManualAttendance = async () => {
+    if (!manualAttUserId) {
+      toast.error('Pilih karyawan terlebih dahulu');
+      return;
+    }
+    try {
+      setIsSubmittingAtt(true);
+      const res: any = await api.post('/attendances/manual-entry', {
+        userId: manualAttUserId,
+        attendanceDate: manualAttDate,
+        status: manualAttStatus,
+        clockIn: manualAttClockIn,
+        clockOut: manualAttClockOut,
+        notes: manualAttNotes || 'Presensi Manual Superadmin',
+      });
+      if (res?.success) {
+        toast.success('Presensi manual berhasil dicatat');
+        setManualAttOpen(false);
+        loadData();
+      } else {
+        toast.error(res?.error || 'Gagal menyimpan presensi');
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Gagal input presensi');
+    } finally {
+      setIsSubmittingAtt(false);
+    }
+  };
+
+  const handleSaveCorrection = async () => {
+    if (!selectedAttRecord) return;
+    try {
+      setIsSubmittingAtt(true);
+      const res: any = await api.put(`/attendances/${selectedAttRecord.id}/manual-correct`, {
+        status: corrStatus,
+        clockIn: corrClockIn,
+        clockOut: corrClockOut,
+        lateMinutes: corrLateMinutes,
+        notes: corrNotes,
+      });
+      if (res?.success) {
+        toast.success('Koreksi presensi berhasil disimpan');
+        setCorrectAttOpen(false);
+        loadData();
+      } else {
+        toast.error(res?.error || 'Gagal menyimpan koreksi');
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Gagal koreksi presensi');
+    } finally {
+      setIsSubmittingAtt(false);
+    }
+  };
+
+  // Export to Excel Helpers
+  const exportOvertimeExcel = () => {
+    const data = filteredOtList.map((o, idx) => ({
       No: idx + 1,
-      Tanggal: a.attendanceDate,
-      NIP: a.userNip,
-      'Nama Karyawan': a.userName,
-      Divisi: a.divisionName || '-',
-      'Jam Masuk': a.clockIn || '-',
-      'Jam Pulang': a.clockOut || '-',
-      'Durasi Kerja (Menit)': a.workDurationMinutes || 0,
-      'Durasi Kerja (Jam)': ((a.workDurationMinutes || 0) / 60).toFixed(2),
-      'Terlambat (Menit)': a.lateMinutes || 0,
-      'Disiplin Perimeter': a.isPerimeterBreached ? `TERDETEKSI (${a.perimeterBreachCount || 1}x Keluar)` : 'PATUH (NIHIL)',
-      'Waktu Luar Perimeter (Menit)': a.timeOutsideMinutes || 0,
-      'Status Kunci Checkout': a.isLocked ? 'TERKUNCI' : 'NORMAL',
-      Status: (a.status || '').toUpperCase(),
-      Catatan: a.notes || '-',
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Laporan Presensi');
-
-    worksheet['!cols'] = [
-      { wch: 6 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 24 },
-      { wch: 22 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 20 },
-      { wch: 18 },
-      { wch: 18 },
-      { wch: 14 },
-      { wch: 30 },
-    ];
-
-    XLSX.writeFile(workbook, `Rekap_Presensi_${selectedDate || 'Semua'}.xlsx`);
-  };
-
-  const exportToCsv = () => {
-    const headers = ['No', 'Tanggal', 'NIP', 'Nama Karyawan', 'Divisi', 'Jam Masuk', 'Jam Pulang', 'Durasi (Menit)', 'Terlambat (Menit)', 'Disiplin Perimeter', 'Status Kunci', 'Status', 'Catatan'];
-    const rows = filteredList.map((a, idx) => [
-      idx + 1,
-      a.attendanceDate,
-      `"${a.userNip}"`,
-      `"${a.userName}"`,
-      `"${a.divisionName || '-'}"`,
-      a.clockIn || '-',
-      a.clockOut || '-',
-      a.workDurationMinutes || 0,
-      a.lateMinutes || 0,
-      a.isPerimeterBreached ? `"TERDETEKSI (${a.perimeterBreachCount || 1}x)"` : '"PATUH"',
-      a.isLocked ? '"TERKUNCI"' : '"NORMAL"',
-      a.status,
-      `"${a.notes || '-'}"`,
-    ]);
-
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `Rekap_Presensi_${selectedDate || 'Semua'}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handlePrintDocument = () => {
-    window.print();
-  };
-
-  // ==========================================
-  // OVERTIME DATA & EXPORT LOGIC
-  // ==========================================
-  const filteredOtList = overtimes.filter((o) => {
-    const matchCat = filterOtCategory === 'all' || getEmployeeCategoryGroup(o.userNip || o.userId) === filterOtCategory;
-    const matchDate = !selectedOtDate || o.date === selectedOtDate;
-    const matchDiv = filterOtDivision === 'all' || o.divisionName?.toLowerCase() === filterOtDivision.toLowerCase();
-    const matchStatus = filterOtStatus === 'all' || o.status === filterOtStatus;
-    const matchPayment = filterOtPayment === 'all' || o.paymentStatus === filterOtPayment;
-    const matchSearch =
-      (o.userName || '').toLowerCase().includes(otSearchQuery.toLowerCase()) ||
-      (o.userNip || '').toLowerCase().includes(otSearchQuery.toLowerCase()) ||
-      (o.taskDescription || '').toLowerCase().includes(otSearchQuery.toLowerCase());
-    return matchCat && matchDate && matchDiv && matchStatus && matchPayment && matchSearch;
-  });
-
-  // Chart data for attendance
-  const divisionChartData = divisions.map((d) => {
-    const divAttendances = filteredList.filter(
-      (a) => a.divisionId === d.id || ((a.divisionName || '').toLowerCase() === (d.name || '').toLowerCase())
-    );
-    const tepatWaktu = divAttendances.filter((a) => a.status === 'hadir').length;
-    const terlambat = divAttendances.filter((a) => a.status === 'terlambat').length;
-    return {
-      name: d.name,
-      tepatWaktu,
-      terlambat,
-    };
-  });
-
-  const totalOtRecords = filteredOtList.length;
-  const totalOtHours = Number(filteredOtList.reduce((acc, o) => acc + (o.durationHours || 0), 0).toFixed(1));
-  const totalOtPay = filteredOtList.reduce((acc, o) => acc + Number(o.totalPay ?? o.compensationAmount ?? 0), 0);
-  const approvedOtPay = filteredOtList
-    .filter((o) => o.status === 'approved')
-    .reduce((acc, o) => acc + Number(o.totalPay ?? o.compensationAmount ?? 0), 0);
-  const paidOtPay = filteredOtList
-    .filter((o) => o.paymentStatus === 'paid' || o.paymentStatus === 'included_in_payroll')
-    .reduce((acc, o) => acc + Number(o.totalPay ?? o.compensationAmount ?? 0), 0);
-  const pendingOtCount = filteredOtList.filter((o) => o.status === 'pending').length;
-
-  const otDivisionChartData = divisions.map((d) => {
-    const divOts = filteredOtList.filter(
-      (o) => o.divisionId === d.id || ((o.divisionName || '').toLowerCase() === (d.name || '').toLowerCase())
-    );
-    const hours = divOts.reduce((sum, o) => sum + (o.durationHours || 0), 0);
-    const pay = divOts.reduce((sum, o) => sum + Number(o.totalPay ?? o.compensationAmount ?? 0), 0);
-    return {
-      name: d.name,
-      hours: Number(hours.toFixed(1)),
-      pay,
-    };
-  });
-
-  // Selected Month Lateness Summary (Realtime & Historical Synchronized)
-  const currentMonthAttendances = attendances.filter((a) => (a.attendanceDate || (a as any).date)?.startsWith(selectedMonth));
-  const lateRecordsMonth = currentMonthAttendances.filter((a) => a.status === 'terlambat' || (a.lateMinutes && a.lateMinutes > 0));
-
-  const employeeLatenessMap = new Map<string, {
-    userName: string;
-    userNip: string;
-    divisionName: string;
-    lateCount: number;
-    totalLateMinutes: number;
-  }>();
-
-  lateRecordsMonth.forEach((a) => {
-    const key = a.userId;
-    const existing = employeeLatenessMap.get(key) || {
-      userName: a.userName,
-      userNip: a.userNip,
-      divisionName: a.divisionName || '-',
-      lateCount: 0,
-      totalLateMinutes: 0,
-    };
-    existing.lateCount += 1;
-    existing.totalLateMinutes += (a.lateMinutes || 0);
-    employeeLatenessMap.set(key, existing);
-  });
-
-  const employeeLatenessList = Array.from(employeeLatenessMap.values()).sort((a, b) => b.totalLateMinutes - a.totalLateMinutes);
-  const totalLateMinutesMonth = employeeLatenessList.reduce((sum, e) => sum + e.totalLateMinutes, 0);
-  const totalEstimatedDeduction = totalLateMinutesMonth * 1000;
-
-  const exportOtToExcel = () => {
-    const dataToExport = filteredOtList.map((o, idx) => ({
-      No: idx + 1,
-      'Kelompok / Kategori': getEmployeeCategoryLabel(getEmployeeCategoryGroup(o.userNip || o.userId)),
       Tanggal: o.date,
       NIP: o.userNip,
-      'Nama Karyawan': o.userName,
+      Nama: o.userName,
+      Kelompok: getEmployeeCategoryLabel(getEmployeeCategoryGroup(o.userNip || o.userId)),
       Divisi: o.divisionName || '-',
       'Jam Mulai': o.startTime,
       'Jam Selesai': o.endTime,
-      'Kategori Hari': o.isWeekendHoliday ? 'Hari Libur / Akhir Pekan' : 'Hari Kerja Normal',
       'Durasi (Jam)': o.durationHours,
-      'Tarif / Jam (Rp)': Number(o.hourlyRate ?? o.rateApplied ?? 30000),
-      'Multiplier': `${o.rateMultiplier || 1}x`,
-      'Total Uang Lembur (Rp)': Number(o.totalPay ?? o.compensationAmount ?? 0),
+      'Jam Bayar': o.durationHours,
+      'Total Uang Lembur (Rp)': Number(o.totalPay || o.compensationAmount || 0),
       'Uraian Tugas': o.taskDescription,
-      'Status Persetujuan': o.status.toUpperCase(),
-      'Status Pencairan': o.paymentStatus === 'paid' ? 'DITRANSFER' : o.paymentStatus === 'included_in_payroll' ? 'MASUK SLIP GAJI' : 'BELUM CAIR',
-      'Disetujui Oleh': o.approvedByName || '-',
-      'Catatan': o.approvalNotes || '-',
+      Status: o.status.toUpperCase(),
+      Pencairan: o.paymentStatus === 'paid' ? 'LUNAS' : o.paymentStatus === 'included_in_payroll' ? 'MASUK SLIP' : 'BELUM CAIR',
     }));
-
-    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Rekap Lembur');
-    XLSX.writeFile(workbook, `Rekap_Uang_Lembur_${filterOtCategory}_${selectedOtDate || 'Semua'}.xlsx`);
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Rekap Lembur');
+    XLSX.writeFile(wb, `Rekap_Lembur_FRP_${selectedMonth}.xlsx`);
   };
 
-  const exportOtToCsv = () => {
-    const headers = [
-      'No',
-      'Tanggal',
-      'NIP',
-      'Nama Karyawan',
-      'Divisi',
-      'Jam Mulai',
-      'Jam Selesai',
-      'Kategori Hari',
-      'Durasi Jam',
-      'Tarif Per Jam',
-      'Total Uang Lembur',
-      'Uraian Tugas',
-      'Status Persetujuan',
-      'Status Pencairan',
-    ];
-
-    const rows = filteredOtList.map((o, idx) => [
-      idx + 1,
-      o.date,
-      o.userNip,
-      `"${o.userName}"`,
-      `"${o.divisionName || '-'}"`,
-      o.startTime,
-      o.endTime,
-      o.isWeekendHoliday ? 'Hari Libur' : 'Hari Kerja',
-      o.durationHours,
-      o.hourlyRate,
-      o.totalPay,
-      `"${o.taskDescription.replace(/"/g, '""')}"`,
-      o.status,
-      o.paymentStatus,
-    ]);
-
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `Rekap_Uang_Lembur_${selectedOtDate || 'Semua'}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const exportPayrollExcel = () => {
+    const data = payrollRows.map((r, idx) => ({
+      No: idx + 1,
+      NIP: r.employee.nip,
+      Nama: r.employee.fullName,
+      Kelompok: getEmployeeCategoryLabel(r.group),
+      Divisi: r.employee.divisionName || '-',
+      'Gaji Pokok (Rp)': r.baseSalary,
+      'Uang Lembur N-1 (Rp)': r.overtimePay,
+      'BPJS Ketenagakerjaan 3% (Rp)': r.bpjsTk,
+      'BPJS Kesehatan 1% (Rp)': r.bpjsKes,
+      'Potongan Alpa (Rp)': r.alpaDeduction,
+      'Potongan PPh 21 (Rp)': 0,
+      'Gaji Bersih / THP (Rp)': r.netSalary,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Rekap Payroll');
+    XLSX.writeFile(wb, `Rekap_Payroll_FRP_${selectedMonth}.xlsx`);
   };
 
-  const statusPieData = [
-    { name: 'Tepat Waktu', value: onTimeCount, color: '#0d9488' },
-    { name: 'Terlambat', value: lateCount, color: '#f59e0b' },
-  ];
+  const exportAttendanceExcel = () => {
+    const data = monthlyRecap.map((r, idx) => ({
+      No: idx + 1,
+      NIP: r.employee.nip,
+      Nama: r.employee.fullName,
+      Kelompok: getEmployeeCategoryLabel(r.group),
+      Divisi: r.employee.divisionName || '-',
+      Hadir: r.hadir,
+      'Terlambat (Kali)': r.telat,
+      'Total Menit Telat': r.totalLateMins,
+      Alpa: r.alpa,
+      Cuti: r.cuti,
+      Sakit: r.sakit,
+      Izin: r.izin,
+      'Off / Libur': r.off,
+      'Biometrik Wajah': r.isFaceEnrolled ? 'Terdaftar' : 'Belum Registrasi',
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Rekap Presensi');
+    XLSX.writeFile(wb, `Rekap_Presensi_FRP_${selectedMonth}.xlsx`);
+  };
 
   return (
     <div className="space-y-6">
-      {/* Header & Dual Tab Navigation */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* TOP UNIVERSAL HEADER & CONTROLLER BAR */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-card border border-border p-4 md:p-5 rounded-2xl shadow-xs">
         <div>
-          <h1 className="text-2xl font-bold text-foreground tracking-tight flex items-center gap-2">
-            {activeTab === 'special-october' ? (
-        <HrmSpecialOctoberPayrollReport />
-      ) : activeTab === 'attendance' ? (
-              <FileSpreadsheet className="w-6 h-6 text-primary" />
-            ) : activeTab === 'overtime' ? (
-              <Coins className="w-6 h-6 text-primary" />
-            ) : (
-              <Wallet className="w-6 h-6 text-primary" />
-            )}
-            {activeTab === 'attendance'
-              ? 'Rekapitulasi & Laporan Kehadiran'
-              : activeTab === 'overtime'
-              ? 'Laporan Rekapitulasi & Anggaran Lembur'
-              : 'Audit Saldo Cuti & Kewajiban Lembur'}
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs font-semibold">
+              PUSAT REKAP &amp; CRUD TERPADU
+            </Badge>
+            <span className="text-xs text-muted-foreground flex items-center gap-1 font-mono">
+              <RotateCw size={11} className={isLoading ? 'animate-spin text-primary' : 'text-muted-foreground'} />
+              Sync: {lastSyncTime}
+            </span>
+          </div>
+          <h1 className="text-2xl font-black text-foreground tracking-tight mt-1 flex items-center gap-2">
+            PT. FAWWAZ RESKI PERWIRA
           </h1>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            {activeTab === 'attendance'
-              ? 'Laporan presensi lengkap dengan visualisasi data, ekspor Excel/CSV, dan cetak dokumen resmi ber-kop surat.'
-              : activeTab === 'overtime'
-              ? 'Laporan rincian jam lembur, tarif per jam, total kompensasi uang lembur, dan pencairan slip gaji.'
-              : 'Pantau sisa hak cuti tahunan, jam lembur belum terbayar, dan valuasi liabilitas nominal (rupiah) per karyawan & divisi.'}
+          <p className="text-muted-foreground text-xs md:text-sm mt-0.5">
+            Pengawasan, Laporan Resmi, dan Eksekusi CRUD Operasional: Lembur (SPKL), Penggajian (Payroll), Cuti/Izin, dan Presensi.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Tab Switcher */}
-          <div className="flex items-center gap-1 p-1 bg-muted/60 border border-border rounded-xl">
+        {/* Quick Month Switcher (1-Click: Bulan Lalu, Berjalan, Depan) */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <div className="flex items-center gap-1 bg-muted/70 p-1 rounded-xl border border-border">
             <button
               type="button"
-              onClick={() => setActiveTab('attendance')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                activeTab === 'attendance'
-                  ? 'bg-card text-foreground shadow-xs border border-border/80'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
+              onClick={goToPrevMonth}
+              title={`Beralih ke Bulan Lalu (${prevMonthLabel})`}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-background/80 transition-all flex items-center gap-1"
             >
-              <FileSpreadsheet className="w-3.5 h-3.5 text-primary" />
-              <span>Presensi</span>
+              <ChevronLeft size={14} />
+              <span className="hidden sm:inline">Bulan Lalu:</span>
+              <span className="font-semibold">{prevMonthLabel.split(' ')[0]}</span>
             </button>
 
             <button
               type="button"
-              onClick={() => setActiveTab('overtime')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                activeTab === 'overtime'
-                  ? 'bg-card text-foreground shadow-xs border border-border/80'
-                  : 'text-muted-foreground hover:text-foreground'
+              onClick={goToCurrentMonth}
+              title="Beralih ke Bulan Berjalan"
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
+                selectedMonth === currentMonthStr
+                  ? 'bg-primary text-primary-foreground shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-background/80'
               }`}
             >
-              <Coins className="w-3.5 h-3.5 text-primary" />
-              <span>Lembur & Anggaran</span>
+              <span>📍 Bulan Berjalan</span>
             </button>
 
             <button
               type="button"
-              onClick={() => setActiveTab('special-october')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                activeTab === 'special-october'
-                  ? 'bg-card text-foreground shadow-xs border border-border/80'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
+              onClick={goToNextMonth}
+              title={`Beralih ke Bulan Depan (${nextMonthLabel})`}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-background/80 transition-all flex items-center gap-1"
             >
-              <ShieldCheck className="w-3.5 h-3.5 text-indigo-500" />
-              <span>Gaji Khusus Lapangan (Okt 2026)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('liability')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                activeTab === 'liability'
-                  ? 'bg-card text-foreground shadow-xs border border-border/80'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <Wallet className="w-3.5 h-3.5 text-primary" />
-              <span>Saldo Cuti & Lembur (Kewajiban)</span>
+              <span className="hidden sm:inline">Bulan Depan:</span>
+              <span className="font-semibold">{nextMonthLabel.split(' ')[0]}</span>
+              <ChevronRight size={14} />
             </button>
           </div>
 
-          {activeTab === 'attendance' ? (
-            <>
-              <Button
-                onClick={() => setAbsenSplModalOpen(true)}
-                className="bg-teal-700 hover:bg-teal-600 text-white text-xs gap-2 font-semibold shadow-sm rounded-xl h-9 border border-teal-500/40"
-              >
-                <FileText className="w-4 h-4 text-teal-200" /> Form ABSEN/SPL Resmi
-              </Button>
-              <Button
-                onClick={() => setPrintModalOpen(true)}
-                className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs gap-2 font-medium shadow-sm rounded-xl h-9"
-              >
-                <Printer className="w-4 h-4" /> Cetak Dokumen Resmi
-              </Button>
-              <Button
-                variant="outline"
-                onClick={exportMonthlyRecapToExcel}
-                className="text-xs gap-1.5 rounded-xl h-9 font-semibold border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 shadow-xs"
-                title={`Ekspor Rekapitulasi Presensi Bulanan Seluruh Karyawan (${selectedMonthLabel})`}
-              >
-                <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> Rekap Bulanan (.xlsx)
-              </Button>
-              <Button
-                variant="outline"
-                onClick={exportToExcel}
-                className="text-xs gap-1.5 rounded-xl h-9 font-medium"
-                title="Ekspor Log Presensi Harian"
-              >
-                <FileDown className="w-4 h-4 text-primary" /> Log Excel
-              </Button>
-              <Button
-                variant="outline"
-                onClick={exportToCsv}
-                className="text-xs gap-1.5 rounded-xl h-9 font-medium"
-              >
-                <Download className="w-4 h-4 text-primary" /> CSV
-              </Button>
-            </>
-          ) : activeTab === 'overtime' ? (
-            <>
-              <Button
-                onClick={() => setOtPrintModalOpen(true)}
-                className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs gap-2 font-medium shadow-sm rounded-xl h-9"
-              >
-                <Printer className="w-4 h-4" /> Cetak Dokumen Lembur
-              </Button>
-              <Button
-                variant="outline"
-                onClick={exportOtToExcel}
-                className="text-xs gap-2 rounded-xl h-9 font-medium"
-              >
-                <FileDown className="w-4 h-4 text-primary" /> Excel (.xlsx)
-              </Button>
-              <Button
-                variant="outline"
-                onClick={exportOtToCsv}
-                className="text-xs gap-2 rounded-xl h-9 font-medium"
-              >
-                <Download className="w-4 h-4 text-primary" /> CSV
-              </Button>
-            </>
-          ) : null}
+          {/* Month Picker for Custom Months */}
+          <div className="flex items-center gap-1">
+            <Input
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => e.target.value && setSelectedMonth(e.target.value)}
+              className="h-9 text-xs rounded-xl w-36 font-mono font-medium"
+            />
+          </div>
         </div>
       </div>
-      {activeTab === 'attendance' ? (
-        <>
-          {/* Summary Metrics - Clean & Uniform */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <Card className="border-border bg-card rounded-xl shadow-sm">
-              <CardContent className="p-4">
-                <p className="text-xs font-medium text-muted-foreground">Total Rekap Presensi</p>
-                <p className="text-2xl font-bold text-foreground mt-1">
-                  {totalRecords} <span className="text-xs font-normal text-muted-foreground">Catatan</span>
-                </p>
-              </CardContent>
-            </Card>
 
-            <Card className="border-border bg-card rounded-xl shadow-sm">
-              <CardContent className="p-4">
-                <p className="text-xs font-medium text-muted-foreground">Hadir Tepat Waktu</p>
-                <p className="text-2xl font-bold text-primary mt-1">{onTimeCount}</p>
-              </CardContent>
-            </Card>
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* GLOBAL GROUP SELECTOR PILLS (Semua, Shipment, Rumah Tangga, Tetap) */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-2 bg-muted/40 rounded-2xl border border-border">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs font-bold text-muted-foreground px-2">Kelompok Resmi:</span>
+          <button
+            type="button"
+            onClick={() => setFilterCategory('all')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              filterCategory === 'all'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'text-muted-foreground hover:text-foreground hover:bg-background/60'
+            }`}
+          >
+            <Users size={13} />
+            <span>Semua Personil ({employees.length})</span>
+          </button>
 
-            <Card className="border-border bg-card rounded-xl shadow-sm">
-              <CardContent className="p-4">
-                <p className="text-xs font-medium text-muted-foreground">Total Keterlambatan</p>
-                <p className="text-2xl font-bold text-amber-600 mt-1">
-                  {lateCount} <span className="text-xs font-normal text-muted-foreground">({totalLateMins} Menit)</span>
-                </p>
-              </CardContent>
-            </Card>
+          <button
+            type="button"
+            onClick={() => setFilterCategory('SHIPMENT')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              filterCategory === 'SHIPMENT'
+                ? 'bg-sky-600 text-white shadow-xs'
+                : 'text-muted-foreground hover:text-sky-600 hover:bg-sky-500/10'
+            }`}
+          >
+            <span>🚢</span>
+            <span>Shipment (47 Orang • FR07034–80)</span>
+          </button>
 
-            <Card className="border-border bg-card rounded-xl shadow-sm">
-              <CardContent className="p-4">
-                <p className="text-xs font-medium text-muted-foreground">Akumulasi Jam Kerja</p>
-                <p className="text-2xl font-bold text-foreground mt-1">
-                  {totalWorkHours} <span className="text-xs font-normal text-muted-foreground">Jam</span>
-                </p>
-              </CardContent>
-            </Card>
-          </div>
+          <button
+            type="button"
+            onClick={() => setFilterCategory('RUMAH TANGGA')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              filterCategory === 'RUMAH TANGGA'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10'
+            }`}
+          >
+            <span>🏡</span>
+            <span>Rumah Tangga (33 Orang • FR07001–33)</span>
+          </button>
 
-          {/* Visual Analytics Row */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Card className="lg:col-span-2 border-border bg-card rounded-xl shadow-sm">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-                      <TrendingUp className="w-4 h-4 text-primary" /> Kehadiran Karyawan Berdasarkan Divisi
-                    </CardTitle>
-                    <CardDescription className="text-xs">
-                      Perbandingan kehadiran tepat waktu dan keterlambatan per departemen
-                    </CardDescription>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-2">
-                <div className="h-[220px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={divisionChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                      <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} />
-                      <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: 'hsl(var(--card))',
-                          borderColor: 'hsl(var(--border))',
-                          borderRadius: '8px',
-                          fontSize: '12px',
-                        }}
-                      />
-                      <Bar dataKey="tepatWaktu" fill="#0d9488" radius={[4, 4, 0, 0]} name="Tepat Waktu" />
-                      <Bar dataKey="terlambat" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Terlambat" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
+          <button
+            type="button"
+            onClick={() => setFilterCategory('KARYAWAN TETAP')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              filterCategory === 'KARYAWAN TETAP'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-muted-foreground hover:text-purple-600 hover:bg-purple-500/10'
+            }`}
+          >
+            <span>⭐</span>
+            <span>Karyawan Tetap (3 Orang Lapangan)</span>
+          </button>
+        </div>
 
-            <Card className="border-border bg-card rounded-xl shadow-sm flex flex-col justify-between">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-primary" /> Rasio Ketepatan Waktu
-                </CardTitle>
-                <CardDescription className="text-xs">
-                  Persentase disiplin jam hadir masuk kerja
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4 pt-2">
-                <div className="flex items-center justify-center h-[130px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={statusPieData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={38}
-                        outerRadius={58}
-                        paddingAngle={4}
-                        dataKey="value"
-                      >
-                        {statusPieData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-center text-xs">
-                  <div className="p-2 rounded-lg bg-primary/10 border border-primary/20">
-                    <p className="text-muted-foreground text-[10px]">Tepat Waktu</p>
-                    <p className="font-bold text-primary text-base">
-                      {totalRecords > 0 ? Math.round((onTimeCount / totalRecords) * 100) : 0}%
-                    </p>
-                  </div>
-                  <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                    <p className="text-muted-foreground text-[10px]">Terlambat</p>
-                    <p className="font-bold text-amber-600 text-base">
-                      {totalRecords > 0 ? Math.round((lateCount / totalRecords) * 100) : 0}%
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+        {/* Division Dropdown */}
+        <div className="w-48">
+          <Select value={filterDivision} onValueChange={setFilterDivision}>
+            <SelectTrigger className="text-xs rounded-xl h-8">
+              <SelectValue placeholder="Semua Divisi / Pos" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Semua Divisi / Pos</SelectItem>
+              {divisions.map((d) => (
+                <SelectItem key={d.id} value={d.name}>
+                  {d.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
 
-          {/* ── INTERACTIVE MONTH NAVIGATOR & VIEW MODE SWITCHER ── */}
-          <Card className="border-primary/30 bg-gradient-to-r from-card via-card to-primary/5 rounded-2xl shadow-xs overflow-hidden">
-            <CardContent className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              {/* Month Navigator Controls */}
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center gap-1 bg-muted/80 p-1 rounded-xl border border-border">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handlePrevMonth}
-                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
-                    title="Bulan Sebelumnya"
-                  >
-                    <ChevronLeft size={16} />
-                  </Button>
-                  <div className="flex items-center gap-1.5 px-3 font-semibold text-xs text-foreground min-w-[140px] justify-center">
-                    <Calendar className="w-3.5 h-3.5 text-primary" />
-                    <span>{selectedMonthLabel}</span>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleNextMonth}
-                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
-                    title="Bulan Berikutnya"
-                  >
-                    <ChevronRight size={16} />
-                  </Button>
-                </div>
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* 5 MAIN TABS SWITCHER */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-border pb-2">
+        <button
+          type="button"
+          onClick={() => setActiveTab('overtime')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            activeTab === 'overtime'
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+          }`}
+        >
+          <Coins size={15} />
+          <span>💰 Rekapan &amp; CRUD Lembur (SPKL)</span>
+        </button>
 
-                {selectedMonth !== currentMonthStr && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleResetToCurrentMonth}
-                    className="h-7 px-2.5 text-xs rounded-xl border-primary/30 text-primary hover:bg-primary/10 font-medium gap-1"
-                  >
-                    <RotateCw size={11} />
-                    Bulan Berjalan
-                  </Button>
-                )}
+        <button
+          type="button"
+          onClick={() => setActiveTab('payroll')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            activeTab === 'payroll'
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+          }`}
+        >
+          <Wallet size={15} />
+          <span>💵 Rekapan &amp; CRUD Payroll</span>
+        </button>
 
-                <Badge variant="outline" className="text-xs bg-muted/40 font-mono border-border">
-                  {isFetchingMonth ? 'Sinkronisasi PostgreSQL...' : `${filteredMonthlyRecap.length} Karyawan`}
-                </Badge>
-              </div>
+        <button
+          type="button"
+          onClick={() => setActiveTab('leaves')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            activeTab === 'leaves'
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+          }`}
+        >
+          <CalendarDays size={15} />
+          <span>🏖️ Rekapan &amp; CRUD Cuti / Izin</span>
+        </button>
 
-              {/* View Mode Toggle: Rekap Bulanan Karyawan vs Rincian Log Harian */}
-              <div className="flex items-center gap-1 bg-muted/80 p-1 rounded-xl border border-border self-end sm:self-auto">
-                <Button
-                  size="sm"
-                  variant={attendanceViewMode === 'recap' ? 'default' : 'ghost'}
-                  onClick={() => setAttendanceViewMode('recap')}
-                  className="h-7 px-2.5 text-xs rounded-lg font-medium gap-1.5"
-                >
-                  <Users size={12} />
-                  <span>Rekapan Bulanan Karyawan</span>
-                </Button>
-                <Button
-                  size="sm"
-                  variant={attendanceViewMode === 'logs' ? 'default' : 'ghost'}
-                  onClick={() => setAttendanceViewMode('logs')}
-                  className="h-7 px-2.5 text-xs rounded-lg font-medium gap-1.5"
-                >
-                  <FileText size={12} />
-                  <span>Log Detail Harian</span>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+        <button
+          type="button"
+          onClick={() => setActiveTab('attendance')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            activeTab === 'attendance'
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+          }`}
+        >
+          <FileSpreadsheet size={15} />
+          <span>⏱️ Presensi &amp; Keterlambatan</span>
+        </button>
 
-          {/* ── SUB-VIEW 1: REKAPAN BULANAN PER KARYAWAN ── */}
-          {attendanceViewMode === 'recap' ? (
-            <div className="space-y-4">
-              {/* Quick Segmented Category Switcher Pills */}
-              <div className="flex flex-wrap items-center gap-2 p-1.5 bg-muted/60 rounded-2xl border border-border">
-                <button
-                  type="button"
-                  onClick={() => setFilterCategory('all')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                    filterCategory === 'all'
-                      ? 'bg-primary text-primary-foreground shadow-xs'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-background/60'
-                  }`}
-                >
-                  <Users size={13} />
-                  <span>Semua Kelompok</span>
-                  <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4 ml-1">
-                    {categoryCounts.all}
-                  </Badge>
-                </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('liability')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            activeTab === 'liability'
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+          }`}
+        >
+          <ShieldAlert size={15} />
+          <span>⚖️ Audit Kewajiban &amp; Cuti</span>
+        </button>
+      </div>
 
-                <button
-                  type="button"
-                  onClick={() => setFilterCategory('RUMAH TANGGA')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                    filterCategory === 'RUMAH TANGGA'
-                      ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10'
-                  }`}
-                >
-                  <span>🏠</span>
-                  <span>Rumah Tangga</span>
-                  <Badge
-                    variant="outline"
-                    className={`text-[10px] py-0 px-1.5 h-4 ml-1 ${
-                      filterCategory === 'RUMAH TANGGA'
-                        ? 'bg-white/20 text-white border-transparent'
-                        : 'border-emerald-300 text-emerald-700 dark:text-emerald-400'
-                    }`}
-                  >
-                    {categoryCounts.rumahTangga} (FR07001–FR07033)
-                  </Badge>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setFilterCategory('SHIPMENT')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                    filterCategory === 'SHIPMENT'
-                      ? 'bg-sky-600 text-white shadow-xs'
-                      : 'text-muted-foreground hover:text-sky-600 hover:bg-sky-500/10'
-                  }`}
-                >
-                  <span>🚢</span>
-                  <span>Shipment</span>
-                  <Badge
-                    variant="outline"
-                    className={`text-[10px] py-0 px-1.5 h-4 ml-1 ${
-                      filterCategory === 'SHIPMENT'
-                        ? 'bg-white/20 text-white border-transparent'
-                        : 'border-sky-300 text-sky-700 dark:text-sky-400'
-                    }`}
-                  >
-                    {categoryCounts.shipment} (FR07034–FR07080)
-                  </Badge>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setFilterCategory('KARYAWAN TETAP')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                    filterCategory === 'KARYAWAN TETAP'
-                      ? 'bg-purple-600 text-white shadow-xs'
-                      : 'text-muted-foreground hover:text-purple-600 hover:bg-purple-500/10'
-                  }`}
-                >
-                  <span>⭐</span>
-                  <span>Karyawan Tetap</span>
-                  <Badge
-                    variant="outline"
-                    className={`text-[10px] py-0 px-1.5 h-4 ml-1 ${
-                      filterCategory === 'KARYAWAN TETAP'
-                        ? 'bg-white/20 text-white border-transparent'
-                        : 'border-purple-300 text-purple-700 dark:text-purple-400'
-                    }`}
-                  >
-                    {categoryCounts.karyawanTetap} (Takdir, Aslam, Samsi)
-                  </Badge>
-                </button>
-              </div>
-
-              {/* Filter Bar Rekapan */}
-              <Card className="border-border bg-card rounded-xl shadow-xs">
-                <CardContent className="p-3">
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-4 gap-2.5">
-                      <div className="relative">
-                        <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-                        <Input
-                          type="text"
-                          placeholder="Cari nama karyawan, NIP..."
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          className="pl-9 text-xs rounded-xl h-9"
-                        />
-                      </div>
-                      <Select value={filterCategory} onValueChange={(v: any) => setFilterCategory(v)}>
-                        <SelectTrigger className="text-xs rounded-xl h-9">
-                          <SelectValue placeholder="Semua Kelompok" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Semua Kelompok ({categoryCounts.all})</SelectItem>
-                          <SelectItem value="RUMAH TANGGA">🏠 Rumah Tangga ({categoryCounts.rumahTangga}) [FR07001-33]</SelectItem>
-                          <SelectItem value="SHIPMENT">🚢 Shipment ({categoryCounts.shipment}) [FR07034-80]</SelectItem>
-                          <SelectItem value="KARYAWAN TETAP">⭐ Karyawan Tetap ({categoryCounts.karyawanTetap}) [Takdir, Aslam, Samsi]</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <Select value={filterDivision} onValueChange={setFilterDivision}>
-                        <SelectTrigger className="text-xs rounded-xl h-9">
-                          <SelectValue placeholder="Semua Divisi" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Semua Divisi</SelectItem>
-                          {divisions.map((d) => (
-                            <SelectItem key={d.id} value={d.name}>
-                              {d.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Select value={filterBiometrik} onValueChange={(v: any) => setFilterBiometrik(v)}>
-                        <SelectTrigger className="text-xs rounded-xl h-9">
-                          <SelectValue placeholder="Status Biometrik" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Semua Status (83 Personel)</SelectItem>
-                          <SelectItem value="active">Aktif Terdaftar Saja (3)</SelectItem>
-                          <SelectItem value="unregistered">Belum Registrasi Wajah Saja (80)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          loadData();
-                          setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
-                        }}
-                        disabled={isFetchingMonth}
-                        className="h-9 px-2.5 text-xs rounded-xl border-border hover:bg-muted font-medium gap-1.5 shrink-0"
-                        title="Tarik data presensi realtime terbaru dari database PWA karyawan"
-                      >
-                        <RotateCw size={12} className={isFetchingMonth ? 'animate-spin text-primary' : 'text-muted-foreground'} />
-                        <span className="hidden md:inline">{isFetchingMonth ? 'Sinkron...' : 'Sinkron Realtime'}</span>
-                      </Button>
-
-                      <Button
-                        variant="default"
-                        size="sm"
-                        onClick={handleDownloadMonthlyRecapPdf}
-                        disabled={isFetchingMonth}
-                        className="h-9 px-3.5 text-xs rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold gap-1.5 shadow-sm"
-                      >
-                        <FileDown className="w-3.5 h-3.5" />
-                        <span>Unduh Rekap Bulanan (PDF)</span>
-                      </Button>
-
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={exportMonthlyRecapToExcel}
-                        className="h-9 px-3 text-xs rounded-xl border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 font-semibold gap-1.5"
-                      >
-                        <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-                        <span className="hidden sm:inline">Ekspor Excel (.xlsx)</span>
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Tabel Matriks Rekapitulasi Presensi Bulanan Seluruh Karyawan */}
-              <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
-                <div className="p-4 border-b border-border flex items-center justify-between">
-                  <div>
-                    <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                      <Users className="w-4 h-4 text-primary" />
-                      Rekapitulasi Presensi Bulanan Karyawan ({selectedMonthLabel})
-                    </h2>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Ringkasan kehadiran, status biometrik, frekuensi keterlambatan, cuti, sakit, lembur, dan audit disiplin seluruh personel aktif terbagi rapi per kelompok.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] text-muted-foreground hidden md:inline">
-                      Sinkron Database: <span className="font-mono text-foreground font-medium">{lastSyncTime}</span>
-                    </span>
-                    <Badge variant="outline" className="text-xs font-mono bg-muted/40 border-border">
-                      {filteredMonthlyRecap.length} Personel
-                    </Badge>
-                  </div>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left">
-                    <thead className="bg-muted/50 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
-                      <tr>
-                        <th className="py-3 px-2 text-center font-semibold w-8">#</th>
-                        <th className="py-3 px-3 font-semibold min-w-[180px]">Karyawan</th>
-                        <th className="py-3 px-3 font-semibold min-w-[140px]">Kelompok / Grup</th>
-                        <th className="py-3 px-3 font-semibold min-w-[110px]">Divisi</th>
-                        <th className="py-3 px-3 text-center font-semibold min-w-[130px]">Status Biometrik</th>
-                        <th className="py-3 px-2 text-center font-semibold">Hadir</th>
-                        <th className="py-3 px-2 text-center font-semibold">Telat</th>
-                        <th className="py-3 px-2 text-center font-semibold">Cuti</th>
-                        <th className="py-3 px-2 text-center font-semibold">Sakit</th>
-                        <th className="py-3 px-2 text-center font-semibold">Lembur</th>
-                        <th className="py-3 px-2 text-center font-semibold">Jam Kerja</th>
-                        <th className="py-3 px-2 text-center font-semibold">Alpa</th>
-                        <th className="py-3 px-3 text-center font-semibold w-24">Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {filteredMonthlyRecap.length === 0 ? (
-                        <tr>
-                          <td colSpan={13} className="py-8 text-center text-muted-foreground">
-                            Tidak ada data karyawan yang cocok dengan kriteria pencarian.
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredMonthlyRecap.map((r, idx) => (
-                          <tr key={r.user.id} className="hover:bg-muted/30 transition-colors">
-                            <td className="py-3 px-2 text-center font-mono text-muted-foreground">{idx + 1}</td>
-                            <td className="py-3 px-3">
-                              <div className="flex items-center gap-2.5">
-                                <div className="w-7 h-7 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
-                                  {r.user.fullName.charAt(0)}
-                                </div>
-                                <div>
-                                  <p className="font-semibold text-foreground">{r.user.fullName}</p>
-                                  <p className="text-[10px] text-muted-foreground font-mono">{r.user.nip}</p>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="py-3 px-3">
-                              {r.categoryGroup === 'RUMAH TANGGA' ? (
-                                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
-                                  <span>🏠</span>
-                                  <span>Rumah Tangga</span>
-                                </Badge>
-                              ) : r.categoryGroup === 'SHIPMENT' ? (
-                                <Badge variant="outline" className="bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-400 border-sky-200 dark:border-sky-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
-                                  <span>🚢</span>
-                                  <span>Shipment</span>
-                                </Badge>
-                              ) : r.categoryGroup === 'KARYAWAN TETAP' ? (
-                                <Badge variant="outline" className="bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400 border-purple-200 dark:border-purple-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
-                                  <span>⭐</span>
-                                  <span>Karyawan Tetap</span>
-                                </Badge>
-                              ) : (
-                                <Badge variant="outline" className="text-[10px] rounded-full text-muted-foreground">
-                                  Lainnya
-                                </Badge>
-                              )}
-                            </td>
-                            <td className="py-3 px-3 text-muted-foreground text-xs">
-                              {r.user.divisionName || '-'}
-                            </td>
-                            <td className="py-3 px-3 text-center">
-                              {r.isFaceEnrolled ? (
-                                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 text-[10px] rounded-full font-medium gap-1">
-                                  <CheckCircle2 size={10} className="text-emerald-600" />
-                                  Aktif Terdaftar
-                                </Badge>
-                              ) : (
-                                <Badge variant="outline" className="bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border-amber-200 dark:border-amber-800 text-[10px] rounded-full font-medium gap-1" title="Karyawan belum melakukan pendaftaran wajah biometrik (tidak berlaku mangkir/alpa).">
-                                  <ShieldAlert size={10} className="text-amber-600" />
-                                  Belum Registrasi Wajah
-                                </Badge>
-                              )}
-                            </td>
-                            <td className="py-3 px-2 text-center font-mono font-semibold text-foreground">
-                              {r.isFaceEnrolled ? `${r.totalAttendances} Hari` : <span className="text-muted-foreground/40 font-normal">-</span>}
-                            </td>
-                            <td className="py-3 px-2 text-center">
-                              {r.isFaceEnrolled ? (
-                                r.lateCount > 0 ? (
-                                  <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] rounded-full">
-                                    {r.lateCount}x ({r.totalLateMinutes}m)
-                                  </Badge>
-                                ) : (
-                                  <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
-                                )
-                              ) : (
-                                <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
-                              )}
-                            </td>
-                            <td className="py-3 px-2 text-center">
-                              {r.isFaceEnrolled ? (
-                                r.cutiCount > 0 ? (
-                                  <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] rounded-full">
-                                    {r.cutiCount} Hari
-                                  </Badge>
-                                ) : (
-                                  <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
-                                )
-                              ) : (
-                                <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
-                              )}
-                            </td>
-                            <td className="py-3 px-2 text-center">
-                              {r.isFaceEnrolled ? (
-                                r.sakitCount > 0 ? (
-                                  <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-200 text-[10px] rounded-full">
-                                    {r.sakitCount} Hari
-                                  </Badge>
-                                ) : (
-                                  <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
-                                )
-                              ) : (
-                                <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
-                              )}
-                            </td>
-                            <td className="py-3 px-2 text-center font-mono">
-                              {r.isFaceEnrolled ? (
-                                r.overtimeHours > 0 ? (
-                                  <span className="font-bold text-orange-600">{r.overtimeHours} Jam</span>
-                                ) : (
-                                  <span className="text-muted-foreground/40">-</span>
-                                )
-                              ) : (
-                                <span className="text-muted-foreground/40">-</span>
-                              )}
-                            </td>
-                            <td className="py-3 px-2 text-center font-mono text-foreground">
-                              {r.isFaceEnrolled ? `${r.totalWorkHours} Jam` : <span className="text-muted-foreground/40">-</span>}
-                            </td>
-                            <td className="py-3 px-2 text-center">
-                              {r.isFaceEnrolled ? (
-                                r.alpaCount > 0 ? (
-                                  <Badge variant="destructive" className="text-[10px] rounded-full">
-                                    {r.alpaCount} Hari
-                                  </Badge>
-                                ) : (
-                                  <span className="text-muted-foreground/40 font-mono text-[11px]">-</span>
-                                )
-                              ) : (
-                                <span className="text-muted-foreground/40 font-mono text-[11px]" title="Tidak dikenakan alpa">-</span>
-                              )}
-                            </td>
-                            <td className="py-3 px-3 text-center">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 px-2.5 text-[11px] rounded-lg gap-1 border-primary/30 text-primary hover:bg-primary/10 font-medium"
-                                onClick={() => {
-                                  setSelectedCalendarUser(r.user);
-                                  setCalendarModalOpen(true);
-                                }}
-                                title={`Buka Kalender Presensi Bulanan ${r.user.fullName}`}
-                              >
-                                <CalendarDays size={12} />
-                                <span>Kalender</span>
-                              </Button>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-            </div>
-          ) : (
-            /* ── SUB-VIEW 2: RINCIAN LOG DETAIL HARIAN ── */
-            <div className="space-y-4">
-              {/* Filter Toolbar */}
-              <Card className="border-border bg-card rounded-xl shadow-sm">
-                <CardContent className="p-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                    <div className="relative">
-                      <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-                      <Input
-                        type="text"
-                        placeholder="Cari karyawan, NIP..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-9 text-xs rounded-xl h-9"
-                      />
-                    </div>
-
-                    <div>
-                      <DatePicker
-                        value={selectedDate}
-                        onChange={(v) => setSelectedDate(v)}
-                        placeholder="Filter tanggal spesifik..."
-                      />
-                    </div>
-
-                    <div>
-                      <Select value={filterDivision} onValueChange={setFilterDivision}>
-                        <SelectTrigger className="text-xs rounded-xl h-9">
-                          <SelectValue placeholder="Semua Divisi" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Semua Divisi</SelectItem>
-                          {divisions.map((d) => (
-                            <SelectItem key={d.id} value={d.name}>
-                              {d.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div>
-                      <Select value={filterStatus} onValueChange={setFilterStatus}>
-                        <SelectTrigger className="text-xs rounded-xl h-9">
-                          <SelectValue placeholder="Status Kehadiran" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Semua Status</SelectItem>
-                          <SelectItem value="hadir">Hadir Tepat Waktu</SelectItem>
-                          <SelectItem value="terlambat">Terlambat</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Data Table */}
-              <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
-                <div className="p-4 border-b border-border flex items-center justify-between">
-                  <div>
-                    <h2 className="text-sm font-semibold text-foreground">Rincian Data Log Presensi ({selectedMonthLabel})</h2>
-                    <p className="text-xs text-muted-foreground">
-                      Menampilkan {filteredList.length} data presensi sesuai kriteria filter
-                    </p>
-                  </div>
-                  {selectedDate && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setSelectedDate('')}
-                      className="text-xs text-muted-foreground hover:text-foreground h-8"
-                    >
-                      <X className="w-3.5 h-3.5 mr-1" /> Tampilkan Semua Tanggal Bulan Ini
-                    </Button>
-                  )}
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left">
-                    <thead className="bg-muted/50 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
-                      <tr>
-                        <th className="py-3 px-4 font-semibold">Tanggal</th>
-                        <th className="py-3 px-4 font-semibold">Karyawan</th>
-                        <th className="py-3 px-4 font-semibold">Divisi</th>
-                        <th className="py-3 px-4 font-semibold">Jam Masuk</th>
-                        <th className="py-3 px-4 font-semibold">Jam Pulang</th>
-                        <th className="py-3 px-4 font-semibold">Keterlambatan</th>
-                        <th className="py-3 px-4 font-semibold">Disiplin Perimeter</th>
-                        <th className="py-3 px-4 font-semibold">Status</th>
-                        <th className="py-3 px-4 font-semibold">Catatan</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {filteredList.length === 0 ? (
-                        <tr>
-                          <td colSpan={9} className="py-8 text-center text-muted-foreground">
-                            Tidak ada data log presensi yang cocok dengan kriteria pencarian.
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredList.map((a) => (
-                          <tr key={a.id} className="hover:bg-muted/30 transition-colors">
-                            <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">
-                              {a.attendanceDate}
-                            </td>
-                            <td className="py-3 px-4">
-                              <p className="font-semibold text-foreground">{a.userName}</p>
-                              <p className="text-[10px] text-muted-foreground font-mono">{a.userNip}</p>
-                            </td>
-                            <td className="py-3 px-4 text-muted-foreground">{a.divisionName || '-'}</td>
-                            <td className="py-3 px-4 font-mono text-foreground font-medium">
-                              {a.clockIn || '-'}
-                            </td>
-                            <td className="py-3 px-4 font-mono text-foreground">
-                              {a.clockOut || '-'}
-                            </td>
-                            <td className="py-3 px-4">
-                              {a.lateMinutes > 0 ? (
-                                <span className="text-amber-600 font-medium">{a.lateMinutes} Menit</span>
-                              ) : (
-                                <span className="text-muted-foreground">-</span>
-                              )}
-                            </td>
-                            <td className="py-3 px-4 whitespace-nowrap">
-                              {a.isPerimeterBreached || a.isLocked ? (
-                                <Badge variant="outline" className="bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[10px] gap-1 font-semibold">
-                                  <ShieldAlert size={10} /> {a.perimeterBreachCount || 1}x Keluar
-                                </Badge>
-                              ) : (
-                                <span className="text-[11px] text-emerald-600 font-medium">✓ Patuh</span>
-                              )}
-                            </td>
-                            <td className="py-3 px-4 whitespace-nowrap">
-                              {a.status === 'hadir' ? (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary/10 text-primary">Hadir</span>
-                              ) : a.status === 'terlambat' ? (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-600">Terlambat</span>
-                              ) : (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-muted text-muted-foreground">{a.status}</span>
-                              )}
-                            </td>
-                            <td className="py-3 px-4 text-muted-foreground max-w-xs truncate text-[11px]">
-                              {a.notes || '-'}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-            </div>
-          )}
-        </>
-      ) : activeTab === 'overtime' ? (
-        /* OVERTIME REPORT VIEW */
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* TAB 1: OVERTIME (LEMBUR SPKL) & BUDGET SEPARATION */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'overtime' && (
         <div className="space-y-6">
-          {/* Overtime KPI Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <Card className="border-border bg-card rounded-xl shadow-sm">
-              <CardContent className="p-4">
+          {/* Official Budget Separation Cards: Shipment 65 Jt vs Wisma 4 Jt */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Card Shipment: Plafon Rp 65 Jt */}
+            <Card className="border-sky-500/30 bg-card rounded-2xl shadow-xs overflow-hidden relative">
+              <div className="h-1.5 w-full bg-sky-500" />
+              <CardContent className="p-4 space-y-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs font-medium text-muted-foreground">Total Jam Lembur</p>
-                  <Clock className="w-4 h-4 text-primary/70" />
+                  <span className="text-xs font-bold text-sky-700 dark:text-sky-400 flex items-center gap-1.5">
+                    🚢 GRUP SHIPMENT (47 Personil)
+                  </span>
+                  <Badge variant="outline" className={`text-[10px] font-bold ${
+                    shipmentUsed > 60000000
+                      ? 'bg-rose-500/10 text-rose-700 border-rose-500/30'
+                      : shipmentUsed > 55000000
+                      ? 'bg-amber-500/10 text-amber-700 border-amber-500/30'
+                      : 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30'
+                  }`}>
+                    {shipmentUsed > 60000000 ? 'Strict Gate' : shipmentUsed > 55000000 ? 'Early Warning' : 'Aman'}
+                  </Badge>
                 </div>
-                <p className="text-2xl font-bold text-foreground mt-1 font-mono">
-                  {totalOtHours} <span className="text-xs font-normal text-muted-foreground font-sans">Jam</span>
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">
-                  Dari {totalOtRecords} pengajuan lembur
-                </p>
-              </CardContent>
-            </Card>
 
-            <Card className="border-border bg-card rounded-xl shadow-sm">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-medium text-muted-foreground">Total Anggaran Lembur</p>
-                  <Coins className="w-4 h-4 text-primary/70" />
-                </div>
-                <p className="text-xl sm:text-2xl font-bold text-primary mt-1 font-mono">
-                  Rp {totalOtPay.toLocaleString('id-ID')}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">
-                  Estimasi kompensasi total
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border bg-card rounded-xl shadow-sm">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-medium text-muted-foreground">Lembur Disetujui</p>
-                  <CheckCheck className="w-4 h-4 text-emerald-600/70" />
-                </div>
-                <p className="text-xl sm:text-2xl font-bold text-foreground mt-1 font-mono">
-                  Rp {approvedOtPay.toLocaleString('id-ID')}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">
-                  Siap diproses / dicairkan
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border bg-card rounded-xl shadow-sm">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-medium text-muted-foreground">Realisasi Pencairan</p>
-                  <Wallet className="w-4 h-4 text-primary/70" />
-                </div>
-                <p className="text-xl sm:text-2xl font-bold text-foreground mt-1 font-mono">
-                  Rp {paidOtPay.toLocaleString('id-ID')}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">
-                  Sudah masuk payroll / transfer
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Overtime Analytics Graphic */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Card className="lg:col-span-2 border-border bg-card rounded-xl shadow-sm">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-baseline justify-between">
                   <div>
-                    <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-                      <TrendingUp className="w-4 h-4 text-primary" /> Distribusi Biaya & Jam Lembur Per Divisi
-                    </CardTitle>
-                    <CardDescription className="text-xs">
-                      Akumulasi total jam lembur yang dilakukan oleh karyawan pada setiap divisi
-                    </CardDescription>
+                    <span className="text-[11px] text-muted-foreground block">Plafon Anggaran Sah:</span>
+                    <span className="text-xl font-black font-mono text-foreground">
+                      Rp {shipmentCap.toLocaleString('id-ID')}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[11px] text-muted-foreground block">Terpakai ({shipmentPct}%):</span>
+                    <span className="text-lg font-bold font-mono text-sky-600">
+                      Rp {shipmentUsed.toLocaleString('id-ID')}
+                    </span>
                   </div>
                 </div>
-              </CardHeader>
-              <CardContent className="pt-2">
-                <div className="h-[220px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={otDivisionChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                      <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} />
-                      <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: 'hsl(var(--card))',
-                          borderColor: 'hsl(var(--border))',
-                          borderRadius: '8px',
-                          fontSize: '12px',
-                        }}
-                        formatter={(value: any, name: string) => [
-                          name === 'hours' ? `${value} Jam` : `Rp ${Number(value).toLocaleString('id-ID')}`,
-                          name === 'hours' ? 'Total Jam Lembur' : 'Total Biaya (Rp)',
-                        ]}
-                      />
-                      <Bar dataKey="hours" fill="#0d9488" radius={[4, 4, 0, 0]} name="hours" />
-                    </BarChart>
-                  </ResponsiveContainer>
+
+                {/* Progress Bar */}
+                <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                  <div
+                    className={`h-full transition-all rounded-full ${
+                      shipmentUsed > 60000000 ? 'bg-rose-500' : shipmentUsed > 55000000 ? 'bg-amber-500' : 'bg-sky-500'
+                    }`}
+                    style={{ width: `${shipmentPct}%` }}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-border">
+                  <span className="text-muted-foreground">Sisa Anggaran:</span>
+                  <span className="font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                    Rp {shipmentRemaining.toLocaleString('id-ID')}
+                  </span>
                 </div>
               </CardContent>
             </Card>
 
-            <Card className="border-border bg-card rounded-xl shadow-sm flex flex-col justify-between">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-                  <Coins className="w-4 h-4 text-primary" /> Status Finansial Lembur
-                </CardTitle>
-                <CardDescription className="text-xs">
-                  Ringkasan alokasi & status antrean
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4 pt-2">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-amber-500" /> Pending Persetujuan:
-                    </span>
-                    <span className="font-bold font-mono text-foreground">{pendingOtCount} Pengajuan</span>
-                  </div>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500" /> Total Disetujui:
-                    </span>
-                    <span className="font-bold font-mono text-foreground">
-                      {filteredOtList.filter((o) => o.status === 'approved').length} Pengajuan
+            {/* Card Rumah Tangga: Plafon Rp 4 Jt */}
+            <Card className="border-emerald-500/30 bg-card rounded-2xl shadow-xs overflow-hidden relative">
+              <div className="h-1.5 w-full bg-emerald-500" />
+              <CardContent className="p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                    🏡 RUMAH TANGGA (33 Personil)
+                  </span>
+                  <Badge variant="outline" className="text-[10px] font-bold bg-emerald-500/10 text-emerald-700 border-emerald-500/30">
+                    {wismaUsed > 4000000 ? 'Overbudget' : 'Aman'}
+                  </Badge>
+                </div>
+
+                <div className="flex items-baseline justify-between">
+                  <div>
+                    <span className="text-[11px] text-muted-foreground block">Plafon Anggaran Sah:</span>
+                    <span className="text-xl font-black font-mono text-foreground">
+                      Rp {wismaCap.toLocaleString('id-ID')}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-rose-500" /> Ditolak / Tidak Sah:
-                    </span>
-                    <span className="font-bold font-mono text-foreground">
-                      {filteredOtList.filter((o) => o.status === 'rejected').length} Pengajuan
+                  <div className="text-right">
+                    <span className="text-[11px] text-muted-foreground block">Terpakai ({wismaPct}%):</span>
+                    <span className="text-lg font-bold font-mono text-emerald-600">
+                      Rp {wismaUsed.toLocaleString('id-ID')}
                     </span>
                   </div>
                 </div>
 
-                <div className="p-3 bg-primary/5 rounded-xl border border-primary/20 space-y-1">
-                  <p className="text-[11px] font-semibold text-primary">Rata-rata Tarif & Kompensasi</p>
-                  <p className="text-xs text-foreground">
-                    Rata-rata per pengajuan: <span className="font-bold font-mono">Rp {filteredOtList.length ? Math.round(totalOtPay / filteredOtList.length).toLocaleString('id-ID') : 0}</span>
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">
-                    Tarif dasar lembur: Rp 25.000 / jam (2.0x saat akhir pekan)
-                  </p>
+                {/* Progress Bar */}
+                <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500 transition-all rounded-full"
+                    style={{ width: `${wismaPct}%` }}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-border">
+                  <span className="text-muted-foreground">Sisa Anggaran:</span>
+                  <span className="font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                    Rp {wismaRemaining.toLocaleString('id-ID')}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Total Resmi PT FRP: Plafon Rp 69 Jt */}
+            <Card className="border-primary/30 bg-card rounded-2xl shadow-xs overflow-hidden relative">
+              <div className="h-1.5 w-full bg-primary" />
+              <CardContent className="p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-primary flex items-center gap-1.5">
+                    💼 TOTAL RESMI PERUSAHAAN
+                  </span>
+                  <Badge variant="outline" className="text-[10px] font-bold bg-primary/10 text-primary border-primary/30">
+                    80 Personil Sah
+                  </Badge>
+                </div>
+
+                <div className="flex items-baseline justify-between">
+                  <div>
+                    <span className="text-[11px] text-muted-foreground block">Total Plafon:</span>
+                    <span className="text-xl font-black font-mono text-foreground">
+                      Rp {totalCap.toLocaleString('id-ID')}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[11px] text-muted-foreground block">Total Terpakai:</span>
+                    <span className="text-lg font-bold font-mono text-primary">
+                      Rp {totalUsed.toLocaleString('id-ID')}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Progress Bar */}
+                <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                  <div
+                    className="h-full bg-primary transition-all rounded-full"
+                    style={{ width: `${totalPct}%` }}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-border">
+                  <span className="text-muted-foreground">Total Sisa Anggaran:</span>
+                  <span className="font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                    Rp {totalRemaining.toLocaleString('id-ID')}
+                  </span>
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Overtime Filter Toolbar */}
-          <div className="space-y-3">
-            {/* Quick Segmented Category Switcher Pills untuk Lembur */}
-            <div className="flex flex-wrap items-center gap-2 p-1.5 bg-muted/60 rounded-2xl border border-border">
-              <button
-                type="button"
-                onClick={() => setFilterOtCategory('all')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                  filterOtCategory === 'all'
-                    ? 'bg-primary text-primary-foreground shadow-xs'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-background/60'
-                }`}
-              >
-                <Users size={13} />
-                <span>Semua Kelompok</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterOtCategory('RUMAH TANGGA')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                  filterOtCategory === 'RUMAH TANGGA'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10'
-                }`}
-              >
-                <span>🏠</span>
-                <span>Rumah Tangga (FR07001–FR07033)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterOtCategory('SHIPMENT')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                  filterOtCategory === 'SHIPMENT'
-                    ? 'bg-sky-600 text-white shadow-xs'
-                    : 'text-muted-foreground hover:text-sky-600 hover:bg-sky-500/10'
-                }`}
-              >
-                <span>🚢</span>
-                <span>Shipment (FR07034–FR07080)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterOtCategory('KARYAWAN TETAP')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                  filterOtCategory === 'KARYAWAN TETAP'
-                    ? 'bg-purple-600 text-white shadow-xs'
-                    : 'text-muted-foreground hover:text-purple-600 hover:bg-purple-500/10'
-                }`}
-              >
-                <span>⭐</span>
-                <span>Karyawan Tetap (Takdir, Aslam, Samsi)</span>
-              </button>
+          {/* Arrears Synchronized Banner */}
+          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between text-xs text-amber-900 dark:text-amber-200">
+            <div className="flex items-center gap-2">
+              <Info size={16} className="text-amber-600 shrink-0" />
+              <span>
+                <strong>Aturan Baku Payroll N-1:</strong> Realisasi lembur sah bulan <strong>{selectedMonthLabel}</strong> sebesar <strong>Rp {totalUsed.toLocaleString('id-ID')}</strong> akan otomatis masuk dan dibayarkan pada slip gaji periode <strong>{nextMonthLabel}</strong>.
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setActiveTab('payroll')}
+              className="h-7 text-[11px] gap-1 font-semibold rounded-lg border-amber-500/40 text-amber-800 dark:text-amber-300 hover:bg-amber-500/20"
+            >
+              Lihat di Tab Payroll <ArrowRight size={12} />
+            </Button>
+          </div>
+
+          {/* Overtime Toolbar & CRUD Buttons */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex flex-1 items-center gap-2">
+              <div className="relative flex-1 max-w-sm">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Cari NIP, nama karyawan, tugas..."
+                  value={otSearchQuery}
+                  onChange={(e) => setOtSearchQuery(e.target.value)}
+                  className="pl-9 h-9 text-xs rounded-xl"
+                />
+              </div>
+
+              <Select value={filterOtStatus} onValueChange={setFilterOtStatus}>
+                <SelectTrigger className="w-36 h-9 text-xs rounded-xl">
+                  <SelectValue placeholder="Status Approval" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Status</SelectItem>
+                  <SelectItem value="approved">Disetujui</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="rejected">Ditolak</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
-            <Card className="border-border bg-card rounded-xl shadow-sm">
-              <CardContent className="p-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3">
-                  {/* Search */}
-                  <div className="relative">
-                    <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-                    <Input
-                      type="text"
-                      placeholder="Cari karyawan, NIP, tugas..."
-                      value={otSearchQuery}
-                      onChange={(e) => setOtSearchQuery(e.target.value)}
-                      className="pl-9 text-xs rounded-xl h-9"
-                    />
-                  </div>
-
-                  {/* Filter Kategori */}
-                  <div>
-                    <Select value={filterOtCategory} onValueChange={(v: any) => setFilterOtCategory(v)}>
-                      <SelectTrigger className="text-xs rounded-xl h-9">
-                        <SelectValue placeholder="Kelompok Karyawan" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Semua Kelompok</SelectItem>
-                        <SelectItem value="RUMAH TANGGA">🏠 Rumah Tangga (FR07001-33)</SelectItem>
-                        <SelectItem value="SHIPMENT">🚢 Shipment (FR07034-80)</SelectItem>
-                        <SelectItem value="KARYAWAN TETAP">⭐ Karyawan Tetap (Pimpinan)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Filter Tanggal */}
-                  <div>
-                    <DatePicker
-                      value={selectedOtDate}
-                      onChange={(v) => setSelectedOtDate(v)}
-                      placeholder="Filter tanggal..."
-                    />
-                  </div>
-
-                  {/* Filter Divisi */}
-                  <div>
-                    <Select value={filterOtDivision} onValueChange={setFilterOtDivision}>
-                      <SelectTrigger className="text-xs rounded-xl h-9">
-                        <SelectValue placeholder="Semua Divisi" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Semua Divisi</SelectItem>
-                        {divisions.map((d) => (
-                          <SelectItem key={d.id} value={d.name}>
-                            {d.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Filter Status Approval */}
-                  <div>
-                    <Select value={filterOtStatus} onValueChange={setFilterOtStatus}>
-                      <SelectTrigger className="text-xs rounded-xl h-9">
-                        <SelectValue placeholder="Status Persetujuan" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Semua Status Approval</SelectItem>
-                        <SelectItem value="pending">Pending</SelectItem>
-                        <SelectItem value="approved">Disetujui</SelectItem>
-                        <SelectItem value="rejected">Ditolak</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Filter Status Pembayaran */}
-                  <div>
-                    <Select value={filterOtPayment} onValueChange={setFilterOtPayment}>
-                      <SelectTrigger className="text-xs rounded-xl h-9">
-                        <SelectValue placeholder="Status Pencairan" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Semua Pencairan</SelectItem>
-                        <SelectItem value="unpaid">Belum Cair</SelectItem>
-                        <SelectItem value="included_in_payroll">Masuk Slip Gaji</SelectItem>
-                        <SelectItem value="paid">Sudah Ditransfer</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => setManualOtModalOpen(true)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 h-9 rounded-xl font-bold shadow-sm"
+              >
+                <Plus size={14} /> + Input Lembur Manual
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setOtPrintModalOpen(true)}
+                className="text-xs gap-1.5 h-9 rounded-xl"
+              >
+                <Printer size={14} /> Cetak Rekap SPL
+              </Button>
+              <Button
+                variant="outline"
+                onClick={exportOvertimeExcel}
+                className="text-xs gap-1.5 h-9 rounded-xl text-emerald-700 border-emerald-500/40 hover:bg-emerald-50"
+              >
+                <FileSpreadsheet size={14} /> Ekspor Excel (.xlsx)
+              </Button>
+            </div>
           </div>
 
-          {/* Realtime Current Month Lateness Recap Card */}
-          <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
+          {/* Overtime Table with Full CRUD Action Buttons */}
+          <Card className="border-border bg-card rounded-2xl shadow-xs overflow-hidden">
             <div className="p-4 border-b border-border flex items-center justify-between">
               <div>
-                <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-amber-600" />
-                  <h2 className="text-sm font-semibold text-foreground">
-                    Rekapitulasi Keterlambatan Bulan {selectedMonthLabel}
-                  </h2>
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Monitoring akumulasi menit keterlambatan terhadap batas toleransi shift dan estimasi potongan denda payroll.
+                <h3 className="text-sm font-bold text-foreground">Daftar Rekapitulasi &amp; CRUD Surat Perintah Kerja Lembur (SPKL)</h3>
+                <p className="text-xs text-muted-foreground">
+                  Menampilkan {filteredOtList.length} data lembur periode {selectedMonthLabel}
                 </p>
               </div>
-              <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-500/30 text-[10px] font-mono">
-                {selectedMonth === currentMonthStr ? 'Real-Time' : 'Arsip Bulanan'}
-              </Badge>
             </div>
 
-            <CardContent className="p-4 space-y-4">
-              {/* Summary Metrics */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="p-3 bg-muted/40 rounded-xl border border-border">
-                  <span className="text-muted-foreground text-xs block">Karyawan Terlambat</span>
-                  <span className="text-lg font-bold text-foreground font-mono">{employeeLatenessList.length} Orang</span>
-                  <span className="text-[10px] text-muted-foreground block">({lateRecordsMonth.length} kali kejadian di {selectedMonthLabel})</span>
-                </div>
-                <div className="p-3 bg-muted/40 rounded-xl border border-border">
-                  <span className="text-muted-foreground text-xs block">Akumulasi Keterlambatan</span>
-                  <span className="text-lg font-bold text-amber-600 font-mono">{totalLateMinutesMonth} Menit</span>
-                  <span className="text-[10px] text-muted-foreground block">Melebihi batas toleransi shift</span>
-                </div>
-                <div className="p-3 bg-muted/40 rounded-xl border border-border">
-                  <span className="text-muted-foreground text-xs block">Estimasi Potongan Denda Payroll</span>
-                  <span className="text-lg font-bold text-rose-600 font-mono">Rp {totalEstimatedDeduction.toLocaleString('id-ID')}</span>
-                  <span className="text-[10px] text-muted-foreground block">@Rp 1.000 / menit keterlambatan</span>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+                  <tr>
+                    <th className="py-3 px-3 font-semibold text-center w-8">No</th>
+                    <th className="py-3 px-3 font-semibold">Tanggal</th>
+                    <th className="py-3 px-3 font-semibold">Karyawan</th>
+                    <th className="py-3 px-3 font-semibold">Pos / Divisi</th>
+                    <th className="py-3 px-3 font-semibold text-center">Waktu &amp; Durasi</th>
+                    <th className="py-3 px-3 font-semibold text-center">Pengali</th>
+                    <th className="py-3 px-3 font-semibold text-right">Uang Lembur (Rp)</th>
+                    <th className="py-3 px-3 font-semibold">Keperluan Tugas</th>
+                    <th className="py-3 px-3 font-semibold text-center">Status</th>
+                    <th className="py-3 px-3 font-semibold text-center">Aksi CRUD</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {filteredOtList.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="py-8 text-center text-muted-foreground italic">
+                        Tidak ada catatan lembur pada filter ini untuk bulan {selectedMonthLabel}.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredOtList.map((o, idx) => {
+                      const grp = getEmployeeCategoryGroup(o.userNip || o.userId);
+                      return (
+                        <tr key={o.id} className="hover:bg-muted/30 transition-colors">
+                          <td className="py-3 px-3 text-center font-mono text-muted-foreground">{idx + 1}</td>
+                          <td className="py-3 px-3 font-mono font-medium whitespace-nowrap">
+                            <div>{o.date}</div>
+                            {o.isWeekendHoliday ? (
+                              <Badge variant="outline" className="text-[9px] bg-amber-500/10 text-amber-700 border-amber-500/30">
+                                OFF / Libur (2x)
+                              </Badge>
+                            ) : (
+                              <span className="text-[10px] text-muted-foreground">Hari Kerja</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-foreground block">{o.userName}</span>
+                            <span className="text-[10px] font-mono text-muted-foreground">{o.userNip}</span>
+                            <span className={`inline-block mt-0.5 text-[9px] px-1.5 py-0.2 rounded font-semibold ${
+                              grp === 'SHIPMENT' ? 'bg-sky-100 text-sky-800' : 'bg-emerald-100 text-emerald-800'
+                            }`}>
+                              {grp === 'SHIPMENT' ? '🚢 Shipment' : '🏡 Rumah Tangga'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-muted-foreground font-medium">{o.divisionName || '-'}</td>
+                          <td className="py-3 px-3 text-center whitespace-nowrap">
+                            <div className="font-mono text-foreground font-bold">{o.startTime?.slice(0,5)} - {o.endTime?.slice(0,5)}</div>
+                            <span className="text-[10px] text-muted-foreground">{o.durationHours} Jam</span>
+                          </td>
+                          <td className="py-3 px-3 text-center font-mono font-bold text-foreground">
+                            {o.rateMultiplier || (o.isWeekendHoliday ? 2.0 : 1.5)}x
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono font-extrabold text-foreground">
+                            Rp {Number(o.totalPay || o.compensationAmount || 0).toLocaleString('id-ID')}
+                          </td>
+                          <td className="py-3 px-3 max-w-xs text-[11px] text-muted-foreground truncate" title={o.taskDescription}>
+                            {o.taskDescription}
+                          </td>
+                          <td className="py-3 px-3 text-center whitespace-nowrap">
+                            <Badge variant="outline" className={`text-[10px] uppercase font-bold ${
+                              o.status === 'approved'
+                                ? 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30'
+                                : o.status === 'rejected'
+                                ? 'bg-rose-500/10 text-rose-700 border-rose-500/30'
+                                : 'bg-amber-500/10 text-amber-700 border-amber-500/30'
+                            }`}>
+                              {o.status === 'approved' ? 'Disetujui' : o.status === 'rejected' ? 'Ditolak' : 'Pending'}
+                            </Badge>
+                          </td>
+                          <td className="py-3 px-3 text-center whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1">
+                              {o.status === 'pending' && (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => handleUpdateOtStatus(o.id, 'approved')}
+                                    className="h-7 px-2 text-[10px] text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+                                    title="Setujui Lembur"
+                                  >
+                                    <CheckCircle2 size={13} />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => handleUpdateOtStatus(o.id, 'rejected')}
+                                    className="h-7 px-2 text-[10px] text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                                    title="Tolak Lembur"
+                                  >
+                                    <XCircle size={13} />
+                                  </Button>
+                                </>
+                              )}
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => {
+                                  setEditingOtRecord(o);
+                                  setEditOtModalOpen(true);
+                                }}
+                                className="h-7 px-2 text-xs text-primary hover:bg-primary/10"
+                                title="Edit Catatan Lembur"
+                              >
+                                <Pencil size={13} />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleDeleteOt(o.id, o.userName)}
+                                className="h-7 px-2 text-xs text-destructive hover:bg-destructive/10"
+                                title="Hapus Lembur"
+                              >
+                                <Trash2 size={13} />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* TAB 2: PAYROLL (PENGGAJIAN) RECAP & CRUD */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'payroll' && (
+        <div className="space-y-6">
+          {/* Payroll Financial Summary Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Total Beban Gaji Pokok</span>
+              <span className="text-xl font-black font-mono text-foreground mt-1 block">
+                Rp {payrollRows.reduce((s, r) => s + r.baseSalary, 0).toLocaleString('id-ID')}
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">
+                {payrollRows.length} Karyawan Terdaftar
+              </span>
+            </Card>
+
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Total Lembur N-1 ({prevMonthLabel.split(' ')[0]})</span>
+              <span className="text-xl font-black font-mono text-primary mt-1 block">
+                Rp {totalOvertimeArrearsPay.toLocaleString('id-ID')}
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">
+                Sinkron dari realisasi SPKL bulan lalu
+              </span>
+            </Card>
+
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Total Potongan (BPJS 4% + Alpa)</span>
+              <span className="text-xl font-black font-mono text-rose-600 mt-1 block">
+                Rp {totalPayrollDeductions.toLocaleString('id-ID')}
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">
+                PPh 21 = Rp 0 (Bebas Potongan Pajak)
+              </span>
+            </Card>
+
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Total Gaji Bersih (THP)</span>
+              <span className="text-xl font-black font-mono text-emerald-600 mt-1 block">
+                Rp {totalPayrollNet.toLocaleString('id-ID')}
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">
+                Siap dicairkan / ditransfer
+              </span>
+            </Card>
+          </div>
+
+          {/* Payroll Toolbar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="relative flex-1 max-w-sm">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Cari nama karyawan, NIP, divisi..."
+                value={payrollSearchQuery}
+                onChange={(e) => setPayrollSearchQuery(e.target.value)}
+                className="pl-9 h-9 text-xs rounded-xl"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={loadData}
+                className="text-xs gap-1.5 h-9 rounded-xl"
+              >
+                <RotateCw size={14} /> Sinkronkan Payroll
+              </Button>
+              <Button
+                variant="outline"
+                onClick={exportPayrollExcel}
+                className="text-xs gap-1.5 h-9 rounded-xl text-emerald-700 border-emerald-500/40 hover:bg-emerald-50"
+              >
+                <FileSpreadsheet size={14} /> Ekspor Excel (.xlsx)
+              </Button>
+            </div>
+          </div>
+
+          {/* Payroll Master Table */}
+          <Card className="border-border bg-card rounded-2xl shadow-xs overflow-hidden">
+            <div className="p-4 border-b border-border flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-foreground">
+                  Rekapitulasi Penggajian Karyawan Periode {selectedMonthLabel}
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Perhitungan Upah Pokok Tunggal, Uang Lembur Bulan Mundur N-1 ({prevMonthLabel}), BPJS 3% + 1%, dan Alpa.
+                </p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+                  <tr>
+                    <th className="py-3 px-3 font-semibold text-center w-8">No</th>
+                    <th className="py-3 px-3 font-semibold">Karyawan</th>
+                    <th className="py-3 px-3 font-semibold">Kelompok</th>
+                    <th className="py-3 px-3 font-semibold">Pos / Divisi</th>
+                    <th className="py-3 px-3 font-semibold text-right">Upah Pokok</th>
+                    <th className="py-3 px-3 font-semibold text-right">Lembur N-1</th>
+                    <th className="py-3 px-3 font-semibold text-right">BPJS TK (3%)</th>
+                    <th className="py-3 px-3 font-semibold text-right">BPJS Kes (1%)</th>
+                    <th className="py-3 px-3 font-semibold text-right">Pot. Alpa</th>
+                    <th className="py-3 px-3 font-semibold text-right font-bold text-foreground">Gaji Bersih (THP)</th>
+                    <th className="py-3 px-3 font-semibold text-center">Aksi Slip</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {payrollRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} className="py-8 text-center text-muted-foreground italic">
+                        Tidak ada data penggajian yang sesuai kriteria filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    payrollRows.map((r, idx) => (
+                      <tr key={r.employee.id} className="hover:bg-muted/30 transition-colors">
+                        <td className="py-3 px-3 text-center font-mono text-muted-foreground">{idx + 1}</td>
+                        <td className="py-3 px-3">
+                          <span className="font-bold text-foreground block">{r.employee.fullName}</span>
+                          <span className="text-[10px] font-mono text-muted-foreground">{r.employee.nip}</span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className={`inline-block text-[10px] px-2 py-0.5 rounded font-semibold ${
+                            r.group === 'SHIPMENT'
+                              ? 'bg-sky-100 text-sky-800'
+                              : r.group === 'RUMAH TANGGA'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-purple-100 text-purple-800'
+                          }`}>
+                            {r.group === 'SHIPMENT' ? '🚢 Shipment' : r.group === 'RUMAH TANGGA' ? '🏡 Wisma' : '⭐ Tetap'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-muted-foreground">{r.employee.divisionName || '-'}</td>
+                        <td className="py-3 px-3 text-right font-mono font-medium">
+                          Rp {r.baseSalary.toLocaleString('id-ID')}
+                          {r.isKaryawanTetap && (
+                            <span className="block text-[9px] text-muted-foreground font-sans">
+                              (@Rp 140rb • {r.hadirDays} hr)
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-bold text-primary">
+                          {r.overtimePay > 0 ? `Rp ${r.overtimePay.toLocaleString('id-ID')}` : '-'}
+                          {r.overtimeHours > 0 && (
+                            <span className="block text-[9px] text-muted-foreground font-sans">
+                              ({r.overtimeHours.toFixed(1)} Jam)
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono text-muted-foreground">
+                          {r.bpjsTk > 0 ? `Rp ${r.bpjsTk.toLocaleString('id-ID')}` : '-'}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono text-muted-foreground">
+                          {r.bpjsKes > 0 ? `Rp ${r.bpjsKes.toLocaleString('id-ID')}` : '-'}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono text-rose-600">
+                          {r.alpaDeduction > 0 ? `Rp ${r.alpaDeduction.toLocaleString('id-ID')}` : '-'}
+                          {r.alpaDays > 0 && (
+                            <span className="block text-[9px] text-rose-500 font-sans">
+                              ({r.alpaDays} Hari Alpa)
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-black text-emerald-700 dark:text-emerald-400 text-sm">
+                          Rp {r.netSalary.toLocaleString('id-ID')}
+                        </td>
+                        <td className="py-3 px-3 text-center whitespace-nowrap">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleOpenSlip(r)}
+                            className="h-7 px-2.5 text-xs gap-1 font-semibold rounded-lg border-primary/40 text-primary hover:bg-primary/10"
+                          >
+                            <Eye size={12} /> Buka Slip Gaji
+                          </Button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* TAB 3: LEAVES (CUTI & IZIN) RECAP & CRUD */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'leaves' && (
+        <div className="space-y-6">
+          {/* Leaves KPI Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Hak Cuti Tahunan Baku</span>
+              <span className="text-2xl font-black font-mono text-foreground mt-1 block">12 Hari</span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">Use-It-Or-Lose-It (Tidak Diuangkan)</span>
+            </Card>
+
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Pengajuan Cuti ({selectedMonthLabel.split(' ')[0]})</span>
+              <span className="text-2xl font-black font-mono text-primary mt-1 block">
+                {monthLeaves.filter((l) => l.leaveType === 'cuti').length} Berkas
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">
+                {monthLeaves.filter((l) => l.leaveType === 'cuti' && l.status === 'approved').length} Disetujui
+              </span>
+            </Card>
+
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Izin / Sakit ({selectedMonthLabel.split(' ')[0]})</span>
+              <span className="text-2xl font-black font-mono text-amber-600 mt-1 block">
+                {monthLeaves.filter((l) => l.leaveType !== 'cuti').length} Pengajuan
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">Disertai surat dokter / tugas</span>
+            </Card>
+
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Petugas Pengganti Pos (Relief)</span>
+              <span className="text-2xl font-black font-mono text-sky-600 mt-1 block">
+                {monthLeaves.filter((l) => (l as any).substituteName).length} Petugas
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">Larangan berturut-turut dipatuhi</span>
+            </Card>
+          </div>
+
+          {/* Leaves Toolbar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-1 max-w-sm">
+              <div className="relative flex-1">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Cari nama karyawan, alasan cuti..."
+                  value={leaveSearchQuery}
+                  onChange={(e) => setLeaveSearchQuery(e.target.value)}
+                  className="pl-9 h-9 text-xs rounded-xl"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="flex bg-muted p-1 rounded-xl text-xs font-semibold mr-2 border border-border">
+                <button
+                  type="button"
+                  onClick={() => setLeaveSubView('requests')}
+                  className={`px-3 py-1.5 rounded-lg transition-all ${
+                    leaveSubView === 'requests' ? 'bg-primary text-primary-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  📋 Daftar Pengajuan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLeaveSubView('ledger')}
+                  className={`px-3 py-1.5 rounded-lg transition-all ${
+                    leaveSubView === 'ledger' ? 'bg-primary text-primary-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  📊 Buku Saldo Cuti (12 Hari)
+                </button>
+              </div>
+
+              <Button
+                onClick={() => setManualLeaveModalOpen(true)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 h-9 rounded-xl font-bold shadow-sm"
+              >
+                <Plus size={14} /> + Input Cuti / Izin
+              </Button>
+            </div>
+          </div>
+
+          {/* SubView 1: Daftar Pengajuan Cuti/Izin */}
+          {leaveSubView === 'requests' && (
+            <Card className="border-border bg-card rounded-2xl shadow-xs overflow-hidden">
+              <div className="p-4 border-b border-border flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-foreground">
+                    Riwayat Pengajuan Cuti, Izin &amp; Sakit Bulan {selectedMonthLabel}
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Menampilkan {filteredLeaves.length} berkas pengajuan izin &amp; cuti
+                  </p>
                 </div>
               </div>
 
-              {/* Lateness Detail Table */}
-              <div className="rounded-xl border border-border overflow-hidden">
+              <div className="overflow-x-auto">
                 <table className="w-full text-xs text-left">
-                  <thead className="bg-muted/50 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+                  <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
                     <tr>
-                      <th className="py-2.5 px-3 font-semibold">Karyawan</th>
-                      <th className="py-2.5 px-3 font-semibold">Divisi</th>
-                      <th className="py-2.5 px-3 font-semibold text-center">Frekuensi Telat</th>
-                      <th className="py-2.5 px-3 font-semibold text-center">Total Menit</th>
-                      <th className="py-2.5 px-3 font-semibold text-right">Estimasi Potongan (Rp)</th>
+                      <th className="py-3 px-3 font-semibold text-center w-8">No</th>
+                      <th className="py-3 px-3 font-semibold">Karyawan</th>
+                      <th className="py-3 px-3 font-semibold">Tipe</th>
+                      <th className="py-3 px-3 font-semibold">Rentang Tanggal</th>
+                      <th className="py-3 px-3 font-semibold text-center">Durasi</th>
+                      <th className="py-3 px-3 font-semibold">Alasan / Keterangan</th>
+                      <th className="py-3 px-3 font-semibold">Petugas Pengganti (Relief)</th>
+                      <th className="py-3 px-3 font-semibold text-center">Status</th>
+                      <th className="py-3 px-3 font-semibold text-center">Aksi</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {employeeLatenessList.length === 0 ? (
+                    {filteredLeaves.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-6 text-center text-muted-foreground">
-                          Luar biasa! Tidak ada catatan keterlambatan di {selectedMonthLabel}.
+                        <td colSpan={9} className="py-8 text-center text-muted-foreground italic">
+                          Tidak ada pengajuan cuti/izin pada kriteria filter untuk bulan {selectedMonthLabel}.
                         </td>
                       </tr>
                     ) : (
-                      employeeLatenessList.map((emp) => (
-                        <tr key={emp.userNip} className="hover:bg-muted/30">
-                          <td className="py-2.5 px-3">
-                            <span className="font-semibold text-foreground block">{emp.userName}</span>
-                            <span className="text-[10px] text-muted-foreground font-mono">{emp.userNip}</span>
+                      filteredLeaves.map((l, idx) => (
+                        <tr key={l.id} className="hover:bg-muted/30 transition-colors">
+                          <td className="py-3 px-3 text-center font-mono text-muted-foreground">{idx + 1}</td>
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-foreground block">{(l as any).userName || l.userId}</span>
+                            <span className="text-[10px] font-mono text-muted-foreground">{(l as any).userNip || '-'}</span>
                           </td>
-                          <td className="py-2.5 px-3 text-muted-foreground">{emp.divisionName}</td>
-                          <td className="py-2.5 px-3 text-center">
-                            <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 border-amber-500/20">
-                              {emp.lateCount}x Kejadian
+                          <td className="py-3 px-3">
+                            <span className={`inline-block text-[10px] px-2 py-0.5 rounded font-bold uppercase ${
+                              l.leaveType === 'cuti'
+                                ? 'bg-sky-100 text-sky-800'
+                                : l.leaveType === 'sakit'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {l.leaveType}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 font-mono whitespace-nowrap">
+                            {l.startDate} s/d {l.endDate}
+                          </td>
+                          <td className="py-3 px-3 text-center font-mono font-bold">
+                            {l.durationDays || 1} Hari
+                          </td>
+                          <td className="py-3 px-3 max-w-xs text-muted-foreground truncate" title={l.reason}>
+                            {l.reason}
+                          </td>
+                          <td className="py-3 px-3">
+                            {(l as any).substituteName ? (
+                              <div>
+                                <span className="font-semibold text-foreground block">{(l as any).substituteName}</span>
+                                <span className="text-[9px] text-emerald-600 font-mono">Pengganti Pos Terverifikasi</span>
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground italic">Tanpa Pengganti</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-center whitespace-nowrap">
+                            <Badge variant="outline" className={`text-[10px] uppercase font-bold ${
+                              l.status === 'approved'
+                                ? 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30'
+                                : l.status === 'rejected'
+                                ? 'bg-rose-500/10 text-rose-700 border-rose-500/30'
+                                : 'bg-amber-500/10 text-amber-700 border-amber-500/30'
+                            }`}>
+                              {l.status === 'approved' ? 'Disetujui' : l.status === 'rejected' ? 'Ditolak' : 'Menunggu'}
                             </Badge>
                           </td>
-                          <td className="py-2.5 px-3 text-center font-mono font-bold text-amber-600">
-                            {emp.totalLateMinutes} mnt
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-600">
-                            Rp {(emp.totalLateMinutes * 1000).toLocaleString('id-ID')}
+                          <td className="py-3 px-3 text-center whitespace-nowrap">
+                            {l.status === 'pending' ? (
+                              <div className="flex items-center justify-center gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleUpdateLeaveStatus(l.id, 'approved')}
+                                  className="h-7 px-2 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 text-xs"
+                                  title="Setujui Cuti"
+                                >
+                                  <CheckCircle2 size={13} /> Setujui
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleUpdateLeaveStatus(l.id, 'rejected')}
+                                  className="h-7 px-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50 text-xs"
+                                  title="Tolak Cuti"
+                                >
+                                  <XCircle size={13} /> Tolak
+                                </Button>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-muted-foreground font-mono">Selesai</span>
+                            )}
                           </td>
                         </tr>
                       ))
@@ -2587,608 +1708,495 @@ export const HrmReportsPage: React.FC = () => {
                   </tbody>
                 </table>
               </div>
-            </CardContent>
-          </Card>
+            </Card>
+          )}
 
-          {/* Overtime Detailed Table */}
-          <Card className="border-border bg-card rounded-xl shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-border flex items-center justify-between">
-              <div>
-                <h2 className="text-sm font-semibold text-foreground">Rincian Perhitungan Lembur Karyawan</h2>
-                <p className="text-xs text-muted-foreground">
-                  Menampilkan {filteredOtList.length} data lembur terfilter
-                </p>
+          {/* SubView 2: Buku Saldo Cuti (Quota Ledger) */}
+          {leaveSubView === 'ledger' && (
+            <Card className="border-border bg-card rounded-2xl shadow-xs overflow-hidden">
+              <div className="p-4 border-b border-border flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-foreground">
+                    Buku Saldo Cuti Tahunan Karyawan (12 Hari Baku • Use-It-Or-Lose-It)
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Sisa cuti yang tidak diambil bersifat hangus pada akhir tahun dan tidak dapat dikonversi menjadi uang tunai.
+                  </p>
+                </div>
               </div>
-              {selectedOtDate && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setSelectedOtDate('')}
-                  className="text-xs text-muted-foreground hover:text-foreground h-8"
-                >
-                  <X className="w-3.5 h-3.5 mr-1" /> Reset Tanggal
-                </Button>
-              )}
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+                    <tr>
+                      <th className="py-3 px-3 font-semibold text-center w-8">No</th>
+                      <th className="py-3 px-3 font-semibold">Karyawan</th>
+                      <th className="py-3 px-3 font-semibold">Kelompok</th>
+                      <th className="py-3 px-3 font-semibold text-center">Hak Cuti Awal</th>
+                      <th className="py-3 px-3 font-semibold text-center">Cuti Terpakai</th>
+                      <th className="py-3 px-3 font-semibold text-center font-bold text-foreground">Sisa Saldo Cuti</th>
+                      <th className="py-3 px-3 font-semibold text-center">Status Kebijakan</th>
+                      <th className="py-3 px-3 font-semibold text-center">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {employees
+                      .filter((emp) => {
+                        const cat = getEmployeeCategoryGroup(emp.nip || emp.id);
+                        if (filterCategory !== 'all' && cat !== filterCategory) return false;
+                        return true;
+                      })
+                      .map((emp, idx) => {
+                        const quota = emp.leaveQuota || 12;
+                        const used = emp.leaveUsed || 0;
+                        const remaining = Math.max(0, quota - used);
+                        const grp = getEmployeeCategoryGroup(emp.nip || emp.id);
+
+                        return (
+                          <tr key={emp.id} className="hover:bg-muted/30 transition-colors">
+                            <td className="py-3 px-3 text-center font-mono text-muted-foreground">{idx + 1}</td>
+                            <td className="py-3 px-3">
+                              <span className="font-bold text-foreground block">{emp.fullName}</span>
+                              <span className="text-[10px] font-mono text-muted-foreground">{emp.nip}</span>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className={`inline-block text-[10px] px-2 py-0.5 rounded font-semibold ${
+                                grp === 'SHIPMENT' ? 'bg-sky-100 text-sky-800' : 'bg-emerald-100 text-emerald-800'
+                              }`}>
+                                {grp === 'SHIPMENT' ? '🚢 Shipment' : '🏡 Rumah Tangga'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-center font-mono font-medium">{quota} Hari</td>
+                            <td className="py-3 px-3 text-center font-mono font-bold text-amber-600">{used} Hari</td>
+                            <td className="py-3 px-3 text-center font-mono font-black text-emerald-700 dark:text-emerald-400 text-sm">
+                              {remaining} Hari
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              <span className="text-[10px] text-muted-foreground font-semibold">
+                                Hangus 31 Des
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  setSelectedCorrectionUser(emp);
+                                  setLeaveCorrectionModalOpen(true);
+                                }}
+                                className="h-7 px-2.5 text-xs gap-1 rounded-lg border-primary/40 text-primary hover:bg-primary/10"
+                              >
+                                <Pencil size={12} /> Koreksi Kuota
+                              </Button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* TAB 4: ATTENDANCE & LATENESS (PRESENSI & KETERLAMBATAN) */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'attendance' && (
+        <div className="space-y-6">
+          {/* Attendance KPI Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Total Catatan Hadir</span>
+              <span className="text-2xl font-black font-mono text-primary mt-1 block">
+                {monthAttendances.filter((a) => a.status === 'hadir').length}
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">Bulan {selectedMonthLabel}</span>
+            </Card>
+
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Total Keterlambatan</span>
+              <span className="text-2xl font-black font-mono text-amber-600 mt-1 block">
+                {latenessRanking.reduce((s, r) => s + r.totalLateMins, 0)} Menit
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">
+                {latenessRanking.length} Karyawan Terlambat
+              </span>
+            </Card>
+
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Total Alpa / Mangkir</span>
+              <span className="text-2xl font-black font-mono text-rose-600 mt-1 block">
+                {monthAttendances.filter((a) => a.status === 'mangkir').length} Hari
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">Dikenakan potongan payroll</span>
+            </Card>
+
+            <Card className="border-border bg-card rounded-2xl shadow-xs p-4">
+              <span className="text-xs text-muted-foreground font-medium block">Total Cuti &amp; Izin Sah</span>
+              <span className="text-2xl font-black font-mono text-sky-600 mt-1 block">
+                {monthAttendances.filter((a) => a.status === 'cuti' || a.status === 'izin' || a.status === 'sakit').length} Hari
+              </span>
+              <span className="text-[10px] text-muted-foreground block mt-0.5">Tercatat dalam kalender</span>
+            </Card>
+          </div>
+
+          {/* Lateness Ranking Card */}
+          {latenessRanking.length > 0 && (
+            <Card className="border-amber-500/30 bg-amber-500/5 rounded-2xl shadow-xs p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Clock size={16} className="text-amber-600" />
+                  <h3 className="text-sm font-bold text-foreground">
+                    Rekapitulasi Keterlambatan Teratas Bulan {selectedMonthLabel}
+                  </h3>
+                </div>
+                <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 border-amber-500/30">
+                  @Rp 1.000 / menit potongan
+                </Badge>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
+                {latenessRanking.slice(0, 4).map((r) => (
+                  <div key={r.employee.id} className="p-2.5 bg-card rounded-xl border border-border flex items-center justify-between">
+                    <div>
+                      <span className="font-bold text-xs text-foreground block">{r.employee.fullName}</span>
+                      <span className="text-[10px] text-muted-foreground font-mono">{r.telat}x kejadian</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-mono font-bold text-amber-600 text-xs block">{r.totalLateMins} mnt</span>
+                      <span className="text-[10px] text-rose-600 font-mono">Rp {(r.totalLateMins * 1000).toLocaleString('id-ID')}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* Attendance Toolbar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-1 max-w-sm">
+              <div className="relative flex-1">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Cari karyawan di rekap presensi..."
+                  value={attSearchQuery}
+                  onChange={(e) => setAttSearchQuery(e.target.value)}
+                  className="pl-9 h-9 text-xs rounded-xl"
+                />
+              </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left">
-                <thead className="bg-muted/50 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
-                  <tr>
-                    <th className="py-3 px-4 font-semibold">Tanggal & Hari</th>
-                    <th className="py-3 px-4 font-semibold">Karyawan</th>
-                    <th className="py-3 px-4 font-semibold">Kelompok</th>
-                    <th className="py-3 px-4 font-semibold">Divisi</th>
-                    <th className="py-3 px-4 font-semibold">Waktu & Durasi</th>
-                    <th className="py-3 px-4 font-semibold">Tarif / Jam</th>
-                    <th className="py-3 px-4 font-semibold">Total Uang Lembur</th>
-                    <th className="py-3 px-4 font-semibold">Tugas & Aktivitas</th>
-                    <th className="py-3 px-4 font-semibold">Approval</th>
-                    <th className="py-3 px-4 font-semibold">Pencairan</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {filteredOtList.length === 0 ? (
+            <div className="flex items-center gap-2">
+              <div className="flex bg-muted p-1 rounded-xl text-xs font-semibold mr-2 border border-border">
+                <button
+                  type="button"
+                  onClick={() => setAttendanceViewMode('recap')}
+                  className={`px-3 py-1.5 rounded-lg transition-all ${
+                    attendanceViewMode === 'recap' ? 'bg-primary text-primary-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  📅 Matriks Rekap Bulanan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAttendanceViewMode('logs')}
+                  className={`px-3 py-1.5 rounded-lg transition-all ${
+                    attendanceViewMode === 'logs' ? 'bg-primary text-primary-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  📝 Log Presensi Harian
+                </button>
+              </div>
+
+              <Button
+                onClick={() => setManualAttOpen(true)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 h-9 rounded-xl font-bold shadow-sm"
+              >
+                <Plus size={14} /> + Presensi Manual
+              </Button>
+              <Button
+                onClick={() => setAbsenSplModalOpen(true)}
+                className="bg-teal-700 hover:bg-teal-600 text-white text-xs gap-1.5 h-9 rounded-xl font-semibold border border-teal-500/40"
+              >
+                <FileText size={14} /> Form ABSEN/SPL
+              </Button>
+              <Button
+                variant="outline"
+                onClick={exportAttendanceExcel}
+                className="text-xs gap-1.5 h-9 rounded-xl text-emerald-700 border-emerald-500/40 hover:bg-emerald-50"
+              >
+                <FileSpreadsheet size={14} /> Ekspor Excel (.xlsx)
+              </Button>
+            </div>
+          </div>
+
+          {/* View 1: Matriks Rekapitulasi Bulanan Per Karyawan */}
+          {attendanceViewMode === 'recap' && (
+            <Card className="border-border bg-card rounded-2xl shadow-xs overflow-hidden">
+              <div className="p-4 border-b border-border flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-foreground">
+                    Matriks Rekapitulasi Presensi Bulanan Per Karyawan ({selectedMonthLabel})
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Akumulasi Hadir, Terlambat, Alpa, Cuti, dan Status Perekaman Biometrik Wajah.
+                  </p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
                     <tr>
-                      <td colSpan={10} className="py-8 text-center text-muted-foreground">
-                        Tidak ada catatan lembur yang sesuai dengan kriteria filter.
-                      </td>
+                      <th className="py-3 px-3 font-semibold text-center w-8">No</th>
+                      <th className="py-3 px-3 font-semibold">Karyawan</th>
+                      <th className="py-3 px-3 font-semibold">Kelompok</th>
+                      <th className="py-3 px-3 font-semibold">Pos / Divisi</th>
+                      <th className="py-3 px-3 font-semibold text-center">Hadir</th>
+                      <th className="py-3 px-3 font-semibold text-center">Telat (Menit)</th>
+                      <th className="py-3 px-3 font-semibold text-center">Alpa</th>
+                      <th className="py-3 px-3 font-semibold text-center">Cuti</th>
+                      <th className="py-3 px-3 font-semibold text-center">Sakit</th>
+                      <th className="py-3 px-3 font-semibold text-center">Izin</th>
+                      <th className="py-3 px-3 font-semibold text-center">Off / Libur</th>
+                      <th className="py-3 px-3 font-semibold text-center">Biometrik</th>
+                      <th className="py-3 px-3 font-semibold text-center">Aksi Kalender</th>
                     </tr>
-                  ) : (
-                    filteredOtList.map((o) => {
-                      const otCat = getEmployeeCategoryGroup(o.userNip || o.userId);
-                      return (
-                      <tr key={o.id} className="hover:bg-muted/30 transition-colors">
-                        <td className="py-3 px-4 font-medium text-foreground whitespace-nowrap">
-                          <div>{o.date}</div>
-                          {o.isWeekendHoliday ? (
-                            <Badge variant="outline" className="bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20 text-[9px] mt-0.5">
-                              Akhir Pekan (2x)
-                            </Badge>
-                          ) : (
-                            <span className="text-[10px] text-muted-foreground">Hari Kerja</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4">
-                          <p className="font-semibold text-foreground">{o.userName}</p>
-                          <p className="text-[10px] text-muted-foreground font-mono">{o.userNip}</p>
-                        </td>
-                        <td className="py-3 px-4">
-                          {otCat === 'RUMAH TANGGA' ? (
-                            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
-                              <span>🏠</span>
-                              <span>Rumah Tangga</span>
-                            </Badge>
-                          ) : otCat === 'SHIPMENT' ? (
-                            <Badge variant="outline" className="bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-400 border-sky-200 dark:border-sky-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
-                              <span>🚢</span>
-                              <span>Shipment</span>
-                            </Badge>
-                          ) : otCat === 'KARYAWAN TETAP' ? (
-                            <Badge variant="outline" className="bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400 border-purple-200 dark:border-purple-800 text-[10px] rounded-full font-medium gap-1 shrink-0">
-                              <span>⭐</span>
-                              <span>Karyawan Tetap</span>
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                              Lainnya
-                            </Badge>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 text-muted-foreground">{o.divisionName || '-'}</td>
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          <div className="font-mono text-foreground font-medium">{o.startTime} - {o.endTime}</div>
-                          <div className="text-[10px] text-primary font-medium">{o.durationHours} Jam Lembur</div>
-                        </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          <div className="font-mono text-foreground">Rp {Number(o.hourlyRate ?? o.rateApplied ?? 30000).toLocaleString('id-ID')}</div>
-                          <div className="text-[10px] text-muted-foreground">Mult: {o.rateMultiplier || 1}x</div>
-                        </td>
-                        <td className="py-3 px-4 whitespace-nowrap font-mono font-bold text-primary">
-                          Rp {Number(o.totalPay ?? o.compensationAmount ?? 0).toLocaleString('id-ID')}
-                        </td>
-                        <td className="py-3 px-4 max-w-xs truncate text-[11px] text-muted-foreground">
-                          {o.taskDescription}
-                        </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          {o.status === 'approved' ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-600">
-                              Disetujui
-                            </span>
-                          ) : o.status === 'rejected' ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-500/10 text-rose-600">
-                              Ditolak
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-600">
-                              Pending
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          {o.paymentStatus === 'paid' ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary/10 text-primary">
-                              Ditransfer
-                            </span>
-                          ) : o.paymentStatus === 'included_in_payroll' ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-500/10 text-blue-600">
-                              Slip Gaji
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-muted text-muted-foreground">
-                              Belum Cair
-                            </span>
-                          )}
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {monthlyRecap.length === 0 ? (
+                      <tr>
+                        <td colSpan={13} className="py-8 text-center text-muted-foreground italic">
+                          Tidak ada data rekap presensi yang sesuai kriteria filter.
                         </td>
                       </tr>
-                    );
-                  })
-                )}
-              </tbody>
-              </table>
-            </div>
-          </Card>
+                    ) : (
+                      monthlyRecap.map((r, idx) => (
+                        <tr key={r.employee.id} className="hover:bg-muted/30 transition-colors">
+                          <td className="py-3 px-3 text-center font-mono text-muted-foreground">{idx + 1}</td>
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-foreground block">{r.employee.fullName}</span>
+                            <span className="text-[10px] font-mono text-muted-foreground">{r.employee.nip}</span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`inline-block text-[10px] px-2 py-0.5 rounded font-semibold ${
+                              r.group === 'SHIPMENT'
+                                ? 'bg-sky-100 text-sky-800'
+                                : r.group === 'RUMAH TANGGA'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-purple-100 text-purple-800'
+                            }`}>
+                              {r.group === 'SHIPMENT' ? '🚢 Shipment' : r.group === 'RUMAH TANGGA' ? '🏡 Wisma' : '⭐ Tetap'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-muted-foreground">{r.employee.divisionName || '-'}</td>
+                          <td className="py-3 px-3 text-center font-mono font-bold text-primary">{r.hadir}</td>
+                          <td className="py-3 px-3 text-center font-mono font-medium text-amber-600">
+                            {r.telat > 0 ? `${r.telat}x (${r.totalLateMins}m)` : '-'}
+                          </td>
+                          <td className="py-3 px-3 text-center font-mono font-bold text-rose-600">{r.alpa > 0 ? r.alpa : '-'}</td>
+                          <td className="py-3 px-3 text-center font-mono text-sky-600">{r.cuti > 0 ? r.cuti : '-'}</td>
+                          <td className="py-3 px-3 text-center font-mono text-amber-600">{r.sakit > 0 ? r.sakit : '-'}</td>
+                          <td className="py-3 px-3 text-center font-mono text-muted-foreground">{r.izin > 0 ? r.izin : '-'}</td>
+                          <td className="py-3 px-3 text-center font-mono text-muted-foreground">{r.off > 0 ? r.off : '-'}</td>
+                          <td className="py-3 px-3 text-center">
+                            {r.isFaceEnrolled ? (
+                              <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 border-emerald-500/30 text-[9px]">
+                                Terdaftar
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="bg-slate-100 text-slate-600 border-slate-300 text-[9px]">
+                                Belum Registrasi
+                              </Badge>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-center whitespace-nowrap">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setSelectedCalendarUser(r.employee);
+                                setCalendarModalOpen(true);
+                              }}
+                              className="h-7 px-2.5 text-xs gap-1 font-semibold rounded-lg border-primary/40 text-primary hover:bg-primary/10"
+                            >
+                              <Calendar size={12} /> Kalender 31 Hari
+                            </Button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
+          {/* View 2: Log Presensi Harian */}
+          {attendanceViewMode === 'logs' && (
+            <Card className="border-border bg-card rounded-2xl shadow-xs overflow-hidden">
+              <div className="p-4 border-b border-border flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-foreground">Log Presensi Harian (Detail Masuk / Pulang)</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Menampilkan seluruh transaksi clock-in/out bulan {selectedMonthLabel}
+                  </p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b border-border">
+                    <tr>
+                      <th className="py-3 px-3 font-semibold text-center w-8">No</th>
+                      <th className="py-3 px-3 font-semibold">Tanggal</th>
+                      <th className="py-3 px-3 font-semibold">Karyawan</th>
+                      <th className="py-3 px-3 font-semibold">Pos / Divisi</th>
+                      <th className="py-3 px-3 font-semibold text-center">Jam Masuk</th>
+                      <th className="py-3 px-3 font-semibold text-center">Jam Pulang</th>
+                      <th className="py-3 px-3 font-semibold text-center">Terlambat</th>
+                      <th className="py-3 px-3 font-semibold text-center">Geofence</th>
+                      <th className="py-3 px-3 font-semibold text-center">Status</th>
+                      <th className="py-3 px-3 font-semibold text-center">Aksi Koreksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {monthAttendances.slice(0, 100).map((a, idx) => (
+                      <tr key={a.id} className="hover:bg-muted/30 transition-colors">
+                        <td className="py-3 px-3 text-center font-mono text-muted-foreground">{idx + 1}</td>
+                        <td className="py-3 px-3 font-mono whitespace-nowrap">{a.attendanceDate}</td>
+                        <td className="py-3 px-3">
+                          <span className="font-bold text-foreground block">{a.userName}</span>
+                          <span className="text-[10px] font-mono text-muted-foreground">{a.userNip}</span>
+                        </td>
+                        <td className="py-3 px-3 text-muted-foreground">{a.divisionName || '-'}</td>
+                        <td className="py-3 px-3 text-center font-mono font-bold text-foreground">{a.clockIn || '-'}</td>
+                        <td className="py-3 px-3 text-center font-mono font-bold text-foreground">{a.clockOut || '-'}</td>
+                        <td className="py-3 px-3 text-center font-mono font-medium text-amber-600">
+                          {a.lateMinutes > 0 ? `${a.lateMinutes} mnt` : '-'}
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          {a.isPerimeterBreached ? (
+                            <Badge variant="outline" className="bg-rose-500/10 text-rose-700 border-rose-500/30 text-[9px]">
+                              Melanggar
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 border-emerald-500/30 text-[9px]">
+                              Patuh Pos
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-center uppercase font-bold text-[10px]">
+                          <span className={`px-2 py-0.5 rounded ${
+                            a.status === 'hadir' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-800'
+                          }`}>
+                            {a.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setSelectedAttRecord(a);
+                              setCorrStatus(a.status);
+                              setCorrClockIn(a.clockIn || '07:30');
+                              setCorrClockOut(a.clockOut || '16:30');
+                              setCorrLateMinutes(a.lateMinutes || 0);
+                              setCorrNotes(a.notes || '');
+                              setCorrectAttOpen(true);
+                            }}
+                            className="h-7 px-2 text-xs text-primary hover:bg-primary/10 gap-1 font-semibold"
+                          >
+                            <Pencil size={12} /> Koreksi
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
         </div>
-      ) : (
-        /* LEAVE & OVERTIME LIABILITY VIEW (PER EMPLOYEE, PER DIVISION & COMPANY-WIDE) */
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* TAB 5: LIABILITY & LEAVE OVERTIME VALUATION */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'liability' && (
         <HrmLeaveOvertimeLiabilityView />
       )}
 
-      {/* Professional Formal Print Dialog Modal */}
-      <Dialog open={printModalOpen} onOpenChange={setPrintModalOpen}>
-        <DialogContent className="max-w-4xl rounded-2xl max-h-[92vh] overflow-y-auto p-0">
-          {/* Action Bar inside modal */}
-          <div className="p-4 bg-muted/40 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3 sticky top-0 bg-background/95 backdrop-blur z-20">
-            <div className="flex items-center gap-2">
-              <Printer className="w-5 h-5 text-primary" />
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">Pratinjau Cetak Dokumen Resmi</h3>
-                <p className="text-[11px] text-muted-foreground">Tata letak formal A4 siap cetak atau disimpan sebagai PDF</p>
-              </div>
-            </div>
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* MODALS SECTION */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
 
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPrintModalOpen(false)}
-                className="text-xs rounded-xl"
-              >
-                Tutup
-              </Button>
-              <Button
-                size="sm"
-                onClick={handlePrintDocument}
-                className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs gap-1.5 rounded-xl shadow-sm"
-              >
-                <Printer className="w-3.5 h-3.5" /> Cetak Sekarang (Print / PDF)
-              </Button>
-            </div>
-          </div>
+      {/* 1. Modal Manual Lembur */}
+      <HrmManualLemburModal
+        open={manualOtModalOpen}
+        onClose={() => setManualOtModalOpen(false)}
+        onSuccess={() => {
+          setManualOtModalOpen(false);
+          loadData();
+        }}
+      />
 
-          {/* PRINTABLE OFFICIAL DOCUMENT SHEET */}
-          <div id="printable-report-sheet" className="p-8 sm:p-12 bg-white text-slate-900 font-sans space-y-6">
-            {/* KOP SURAT FORMAL */}
-            <div className="flex items-center gap-5 pb-3">
-              <img
-                src={appSettings.logoUrl || defaultLogo}
-                alt="Logo Instansi"
-                className="w-20 h-20 object-contain shrink-0"
-              />
-              <div className="flex-1 text-center pr-10">
-                <h2 className="text-xl font-bold uppercase tracking-wide text-slate-900 leading-snug">
-                  {appSettings.appName || 'HRM ATTENDANCE SYSTEM'}
-                </h2>
-                <p className="text-xs text-slate-700 font-medium mt-0.5">
-                  DEPARTEMEN SUMBER DAYA MANUSIA & MANAJEMEN OPERASIONAL
-                </p>
-                <p className="text-[11px] text-slate-600 mt-1">
-                  {office.address || 'Gedung Graha HRM, Jl. Jenderal Sudirman Kav. 52-53, Jakarta'}
-                </p>
-                <p className="text-[10px] text-slate-500 font-mono">
-                  Telp: (021) 555-0199 • Email: hrd@perusahaan.local • Web: www.hrm-system.local
-                </p>
-              </div>
-            </div>
+      {/* 2. Modal Edit Lembur */}
+      <HrmEditLemburModal
+        open={editOtModalOpen}
+        onClose={() => {
+          setEditOtModalOpen(false);
+          setEditingOtRecord(null);
+        }}
+        record={editingOtRecord}
+        onSuccess={() => {
+          setEditOtModalOpen(false);
+          setEditingOtRecord(null);
+          loadData();
+        }}
+      />
 
-            {/* GARIS GANDA KOP SURAT */}
-            <div className="border-t-2 border-slate-900 pt-0.5">
-              <div className="border-t border-slate-700" />
-            </div>
+      {/* 3. Modal Manual Leave (Cuti/Izin) */}
+      <HrmManualLeaveModal
+        open={manualLeaveModalOpen}
+        onClose={() => setManualLeaveModalOpen(false)}
+        onSuccess={() => {
+          setManualLeaveModalOpen(false);
+          loadData();
+        }}
+      />
 
-            {/* JUDUL DOKUMEN & METADATA */}
-            <div className="text-center py-2 space-y-1">
-              <h3 className="text-sm font-bold uppercase tracking-wider underline text-slate-900">
-                LAPORAN REKAPITULASI PRESENSI & KEDISIPLINAN PEGAWAI
-              </h3>
-              <p className="text-[11px] font-mono text-slate-600">
-                Nomor Berkas: HRM/LAP-PRES/{selectedDate ? selectedDate.replace(/-/g, '') : 'ALL'}/{totalRecords}
-              </p>
-            </div>
+      {/* 4. Modal Leave Quota Correction */}
+      <HrmEmployeeLeaveCorrectionModal
+        isOpen={leaveCorrectionModalOpen}
+        onClose={() => {
+          setLeaveCorrectionModalOpen(false);
+          setSelectedCorrectionUser(null);
+        }}
+        user={selectedCorrectionUser}
+        allUsers={employees}
+        onSaved={() => {
+          setLeaveCorrectionModalOpen(false);
+          setSelectedCorrectionUser(null);
+          loadData();
+        }}
+      />
 
-            {/* TABEL KETERANGAN PERIODE */}
-            <div className="grid grid-cols-2 gap-4 text-xs bg-slate-50 p-3 rounded border border-slate-200">
-              <div>
-                <p><span className="text-slate-500 font-medium">Periode Tanggal:</span> <strong className="text-slate-800">{selectedDate || 'Semua Periode'}</strong></p>
-                <p><span className="text-slate-500 font-medium">Unit Kerja / Divisi:</span> <strong className="text-slate-800">{filterDivision === 'all' ? 'Seluruh Divisi' : filterDivision}</strong></p>
-              </div>
-              <div className="text-right">
-                <p><span className="text-slate-500 font-medium">Waktu Cetak:</span> <strong className="text-slate-800">{new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</strong></p>
-                <p><span className="text-slate-500 font-medium">Dicetak Oleh:</span> <strong className="text-slate-800">{user?.fullName || 'Administrator'} ({user?.nip})</strong></p>
-              </div>
-            </div>
+      {/* 5. Official Salary Slip Modal */}
+      <HrmSalarySlipModal
+        slip={selectedPayrollSlip}
+        open={salarySlipModalOpen}
+        onClose={() => {
+          setSalarySlipModalOpen(false);
+          setSelectedPayrollSlip(null);
+        }}
+      />
 
-            {/* RINGKASAN DATA STATISTIK */}
-            <div className="grid grid-cols-4 gap-2 text-center text-xs">
-              <div className="p-2 border border-slate-200 rounded">
-                <p className="text-[10px] text-slate-500 uppercase">Total Kehadiran</p>
-                <p className="font-bold text-sm text-slate-900">{totalRecords} Orang</p>
-              </div>
-              <div className="p-2 border border-slate-200 rounded">
-                <p className="text-[10px] text-slate-500 uppercase">Tepat Waktu</p>
-                <p className="font-bold text-sm text-teal-700">{onTimeCount} Orang</p>
-              </div>
-              <div className="p-2 border border-slate-200 rounded">
-                <p className="text-[10px] text-slate-500 uppercase">Terlambat</p>
-                <p className="font-bold text-sm text-amber-700">{lateCount} Orang</p>
-              </div>
-              <div className="p-2 border border-slate-200 rounded">
-                <p className="text-[10px] text-slate-500 uppercase">Total Jam Kerja</p>
-                <p className="font-bold text-sm text-slate-900">{totalWorkHours} Jam</p>
-              </div>
-            </div>
-
-            {/* TABEL DATA FORMAL */}
-            <div className="border border-slate-300 rounded overflow-hidden">
-              <table className="w-full text-left text-[11px] border-collapse">
-                <thead className="bg-slate-100 border-b border-slate-300 text-slate-800 font-semibold uppercase text-[10px]">
-                  <tr>
-                    <th className="py-2 px-2.5 border-r border-slate-300 text-center w-8">No</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300">Tanggal</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300">NIP</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300">Nama Karyawan</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300">Divisi</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300 text-center">Masuk</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300 text-center">Pulang</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300 text-center">Durasi</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300 text-center">Terlambat</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300 text-center">Perimeter</th>
-                    <th className="py-2 px-2.5 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-slate-800">
-                  {filteredList.length === 0 ? (
-                    <tr>
-                      <td colSpan={11} className="py-4 text-center text-slate-500 italic">
-                        Tidak ada catatan presensi pada kriteria ini.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredList.map((a, idx) => (
-                      <tr key={a.id} className={idx % 2 === 1 ? 'bg-slate-50/50' : 'bg-white'}>
-                        <td className="py-1.5 px-2 border-r border-slate-200 text-center font-mono">{idx + 1}</td>
-                        <td className="py-1.5 px-2 border-r border-slate-200 font-mono text-[10px]">{a.attendanceDate}</td>
-                        <td className="py-1.5 px-2 border-r border-slate-200 font-mono text-[10px]">{a.userNip}</td>
-                        <td className="py-1.5 px-2 border-r border-slate-200 font-medium">{a.userName}</td>
-                        <td className="py-1.5 px-2 border-r border-slate-200 text-[10px]">{a.divisionName || '-'}</td>
-                        <td className="py-1.5 px-2 border-r border-slate-200 text-center font-mono text-[10px]">{a.clockIn || '-'}</td>
-                        <td className="py-1.5 px-2 border-r border-slate-200 text-center font-mono text-[10px]">{a.clockOut || '-'}</td>
-                        <td className="py-1.5 px-2 border-r border-slate-200 text-center text-[10px]">
-                          {Math.floor((a.workDurationMinutes || 0) / 60)}j {(a.workDurationMinutes || 0) % 60}m
-                        </td>
-                        <td className="py-1.5 px-2 border-r border-slate-200 text-center text-[10px]">
-                          {a.lateMinutes > 0 ? `${a.lateMinutes} mnt` : '-'}
-                        </td>
-                        <td className="py-1.5 px-2 border-r border-slate-200 text-center text-[10px] font-medium">
-                          {a.isPerimeterBreached ? (
-                            <span className="text-rose-600 font-bold">⚠️ Melanggar</span>
-                          ) : (
-                            <span className="text-emerald-700">Patuh</span>
-                          )}
-                        </td>
-                        <td className="py-1.5 px-2 text-center text-[10px] uppercase font-semibold">
-                          {a.status}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {/* BLOK TANDA TANGAN FORMAL */}
-            <div className="pt-8 grid grid-cols-2 text-center text-xs">
-              {/* Kolom Pimpinan */}
-              <div className="space-y-16">
-                <div>
-                  <p className="font-semibold text-slate-900">Mengetahui / Menyetujui,</p>
-                  <p className="text-slate-600 text-[11px]">Pimpinan / Direktur Operasional</p>
-                </div>
-                <div>
-                  <p className="font-bold underline text-slate-900 text-xs">{leaderSignName}</p>
-                  <p className="text-[10px] text-slate-500">NIP: DIR-2024-001</p>
-                </div>
-              </div>
-
-              {/* Kolom HRD */}
-              <div className="space-y-16">
-                <div>
-                  <p className="font-semibold text-slate-900">
-                    Jakarta, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
-                  </p>
-                  <p className="text-slate-600 text-[11px]">Dibuat Oleh: HRD & Personalia</p>
-                </div>
-                <div>
-                  <p className="font-bold underline text-slate-900 text-xs">{hrdSignName}</p>
-                  <p className="text-[10px] text-slate-500">NIP: {user?.nip || 'HRD-001'}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <DialogFooter className="p-4 bg-muted/20 border-t border-border">
-            <div className="flex items-center justify-between w-full">
-              <span className="text-xs text-muted-foreground">
-                Total {filteredList.length} baris data disiapkan untuk cetak.
-              </span>
-              <Button
-                onClick={handlePrintDocument}
-                className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs gap-1.5 rounded-xl shadow-sm"
-              >
-                <Printer className="w-3.5 h-3.5" /> Cetak Dokumen / Unduh PDF
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Professional Formal Overtime Print Dialog Modal */}
-      <Dialog open={otPrintModalOpen} onOpenChange={setOtPrintModalOpen}>
-        <DialogContent className="max-w-4xl rounded-2xl max-h-[92vh] overflow-y-auto p-0">
-          {/* Action Bar inside modal */}
-          <div className="p-4 bg-muted/40 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3 sticky top-0 bg-background/95 backdrop-blur z-20">
-            <div className="flex items-center gap-2">
-              <Printer className="w-5 h-5 text-primary" />
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">Pratinjau Cetak Dokumen Rekapitulasi Lembur</h3>
-                <p className="text-[11px] text-muted-foreground">Tata letak formal A4 siap cetak dan pertanggungjawaban pencairan anggaran</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setOtPrintModalOpen(false)}
-                className="text-xs rounded-xl"
-              >
-                Tutup
-              </Button>
-              <Button
-                size="sm"
-                onClick={handlePrintDocument}
-                className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs gap-1.5 rounded-xl shadow-sm"
-              >
-                <Printer className="w-3.5 h-3.5" /> Cetak Sekarang (Print / PDF)
-              </Button>
-            </div>
-          </div>
-
-          {/* PRINTABLE OFFICIAL OVERTIME SHEET */}
-          <div id="printable-overtime-sheet" className="p-8 sm:p-12 bg-white text-slate-900 font-sans space-y-6">
-            {/* KOP SURAT FORMAL */}
-            <div className="flex items-center gap-5 pb-3">
-              <img
-                src={appSettings.logoUrl || defaultLogo}
-                alt="Logo Instansi"
-                className="w-20 h-20 object-contain shrink-0"
-              />
-              <div className="flex-1 text-center pr-10">
-                <h2 className="text-xl font-bold uppercase tracking-wide text-slate-900 leading-snug">
-                  {appSettings.appName || 'HRM ATTENDANCE SYSTEM'}
-                </h2>
-                <p className="text-xs text-slate-700 font-medium mt-0.5">
-                  DEPARTEMEN SUMBER DAYA MANUSIA & KEUANGAN OPERASIONAL
-                </p>
-                <p className="text-[11px] text-slate-600 mt-1">
-                  {office.address || 'Gedung Graha HRM, Jl. Jenderal Sudirman Kav. 52-53, Jakarta'}
-                </p>
-                <p className="text-[10px] text-slate-500 font-mono">
-                  Telp: (021) 555-0199 • Email: hrd@perusahaan.local • Web: www.hrm-system.local
-                </p>
-              </div>
-            </div>
-
-            {/* GARIS PEMISAH KOP SURAT GANDA */}
-            <div className="border-t-2 border-slate-900 pt-0.5 border-b border-slate-400" />
-
-            {/* JUDUL DAN META DOKUMEN */}
-            <div className="text-center space-y-1">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 underline">
-                BERITA ACARA REKAPITULASI BIAYA & SURAT PERINTAH KERJA LEMBUR
-              </h3>
-              <p className="text-[11px] text-slate-600 font-mono">
-                Nomor Dokumen: SPL/BIAYA/{new Date().getFullYear()}/{String(new Date().getMonth() + 1).padStart(2, '0')}/HRM
-              </p>
-            </div>
-
-            {/* INFO PERIODE & FILTER */}
-            <div className="grid grid-cols-2 text-xs border border-slate-300 rounded-lg p-3 bg-slate-50 text-slate-700">
-              <div className="space-y-1">
-                <p>
-                  <span className="font-semibold text-slate-900">Periode Lembur:</span>{' '}
-                  {selectedOtDate || 'Semua Tanggal Catatan'}
-                </p>
-                <p>
-                  <span className="font-semibold text-slate-900">Filter Departemen / Divisi:</span>{' '}
-                  {filterOtDivision === 'all' ? 'Seluruh Divisi Terdaftar' : filterOtDivision}
-                </p>
-              </div>
-              <div className="space-y-1 text-right sm:text-left">
-                <p>
-                  <span className="font-semibold text-slate-900">Tanggal Cetak:</span>{' '}
-                  {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-                </p>
-                <p>
-                  <span className="font-semibold text-slate-900">Total Pengajuan Lembur:</span>{' '}
-                  {filteredOtList.length} Catatan ({totalOtHours} Jam Total)
-                </p>
-              </div>
-            </div>
-
-            {/* TABEL DATA FORMAL */}
-            <div className="border border-slate-300 rounded-lg overflow-hidden">
-              <table className="w-full text-left text-[10.5px] border-collapse">
-                <thead className="bg-slate-100 border-b border-slate-300 font-bold text-slate-900 uppercase tracking-tight">
-                  <tr>
-                    <th className="py-2 px-2.5 text-center border-r border-slate-300 w-8">No</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300">Tanggal</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300">NIP & Nama Karyawan</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300">Divisi</th>
-                    <th className="py-2 px-2.5 text-center border-r border-slate-300">Waktu</th>
-                    <th className="py-2 px-2.5 text-center border-r border-slate-300">Durasi</th>
-                    <th className="py-2 px-2.5 text-right border-r border-slate-300">Tarif / Jam</th>
-                    <th className="py-2 px-2.5 text-right border-r border-slate-300">Uang Lembur (Rp)</th>
-                    <th className="py-2 px-2.5 border-r border-slate-300">Uraian Tugas</th>
-                    <th className="py-2 px-2.5 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {filteredOtList.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="py-6 text-center text-slate-500 italic">
-                        Tidak ada data rekapan lembur yang memenuhi kriteria.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredOtList.map((o, idx) => (
-                      <tr key={o.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                        <td className="py-2 px-2 text-center border-r border-slate-200 font-mono text-[10px]">
-                          {idx + 1}
-                        </td>
-                        <td className="py-2 px-2.5 border-r border-slate-200 font-mono whitespace-nowrap">
-                          {o.date}
-                        </td>
-                        <td className="py-2 px-2.5 border-r border-slate-200">
-                          <p className="font-semibold text-slate-900">{o.userName}</p>
-                          <p className="text-[9.5px] text-slate-500 font-mono">{o.userNip}</p>
-                        </td>
-                        <td className="py-2 px-2.5 border-r border-slate-200">{o.divisionName || '-'}</td>
-                        <td className="py-2 px-2 text-center border-r border-slate-200 font-mono text-[10px] whitespace-nowrap">
-                          {o.startTime} - {o.endTime}
-                        </td>
-                        <td className="py-2 px-2 text-center border-r border-slate-200 font-mono font-medium">
-                          {o.durationHours} Jam
-                        </td>
-                        <td className="py-2 px-2.5 text-right border-r border-slate-200 font-mono whitespace-nowrap">
-                          Rp {Number(o.hourlyRate ?? o.rateApplied ?? 30000).toLocaleString('id-ID')}
-                          {o.rateMultiplier > 1 && <span className="text-[9px] text-amber-700 ml-1">({o.rateMultiplier}x)</span>}
-                        </td>
-                        <td className="py-2 px-2.5 text-right border-r border-slate-200 font-mono font-bold text-slate-900 whitespace-nowrap">
-                          Rp {Number(o.totalPay ?? o.compensationAmount ?? 0).toLocaleString('id-ID')}
-                        </td>
-                        <td className="py-2 px-2.5 border-r border-slate-200 max-w-xs text-[10px] text-slate-600">
-                          {o.taskDescription}
-                        </td>
-                        <td className="py-2 px-2 text-center whitespace-nowrap">
-                          <span className={`px-1.5 py-0.5 rounded text-[9.5px] font-semibold ${
-                            o.status === 'approved'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : o.status === 'rejected'
-                              ? 'bg-rose-100 text-rose-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}>
-                            {o.status === 'approved' ? 'DISETUJUI' : o.status === 'rejected' ? 'DITOLAK' : 'PENDING'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {/* RINGKASAN BIAYA ANGGARAN */}
-            <div className="border border-slate-300 rounded-lg p-4 bg-slate-50 space-y-2 text-xs">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-slate-700">
-                <div>
-                  <p className="text-[10px] text-slate-500 uppercase font-bold">Total Catatan</p>
-                  <p className="font-bold text-slate-900 text-sm font-mono">{filteredOtList.length} Pengajuan</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-slate-500 uppercase font-bold">Total Jam Kerja</p>
-                  <p className="font-bold text-slate-900 text-sm font-mono">{totalOtHours} Jam</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-slate-500 uppercase font-bold">Biaya Lembur Sah</p>
-                  <p className="font-bold text-emerald-800 text-sm font-mono">Rp {Number(approvedOtPay || 0).toLocaleString('id-ID')}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-slate-500 uppercase font-bold">Total Nilai Anggaran</p>
-                  <p className="font-bold text-slate-900 text-base font-mono">Rp {Number(totalOtPay || 0).toLocaleString('id-ID')}</p>
-                </div>
-              </div>
-            </div>
-
-            {/* BLOK TANDA TANGAN FORMAL 3 PIHAK */}
-            <div className="pt-8 grid grid-cols-3 text-center text-xs">
-              {/* Kolom Pimpinan */}
-              <div className="space-y-16">
-                <div>
-                  <p className="font-semibold text-slate-900">Mengetahui & Menyetujui,</p>
-                  <p className="text-slate-600 text-[11px]">Direktur Operasional</p>
-                </div>
-                <div>
-                  <p className="font-bold underline text-slate-900 text-xs">{leaderSignName}</p>
-                  <p className="text-[10px] text-slate-500">NIP: DIR-2024-001</p>
-                </div>
-              </div>
-
-              {/* Kolom Keuangan */}
-              <div className="space-y-16">
-                <div>
-                  <p className="font-semibold text-slate-900">Diverifikasi Oleh,</p>
-                  <p className="text-slate-600 text-[11px]">Bagian Keuangan / Payroll</p>
-                </div>
-                <div>
-                  <p className="font-bold underline text-slate-900 text-xs">{financeSignName}</p>
-                  <p className="text-[10px] text-slate-500">NIP: KEU-2024-012</p>
-                </div>
-              </div>
-
-              {/* Kolom HRD */}
-              <div className="space-y-16">
-                <div>
-                  <p className="font-semibold text-slate-900">
-                    Jakarta, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
-                  </p>
-                  <p className="text-slate-600 text-[11px]">Dibuat Oleh: HRD & Personalia</p>
-                </div>
-                <div>
-                  <p className="font-bold underline text-slate-900 text-xs">{hrdSignName}</p>
-                  <p className="text-[10px] text-slate-500">NIP: {user?.nip || 'HRD-001'}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <DialogFooter className="p-4 bg-muted/20 border-t border-border">
-            <div className="flex items-center justify-between w-full">
-              <span className="text-xs text-muted-foreground">
-                Total {filteredOtList.length} baris rekapan lembur disiapkan untuk cetak.
-              </span>
-              <Button
-                onClick={handlePrintDocument}
-                className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs gap-1.5 rounded-xl shadow-sm"
-              >
-                <Printer className="w-3.5 h-3.5" /> Cetak Dokumen / Unduh PDF
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Official Form ABSEN/SPL Modal */}
+      {/* 6. Form ABSEN/SPL Modal */}
       <HrmAbsenSplModal
         isOpen={absenSplModalOpen}
         onClose={() => setAbsenSplModalOpen(false)}
@@ -3197,7 +2205,7 @@ export const HrmReportsPage: React.FC = () => {
         overtimes={overtimes}
       />
 
-      {/* Modal Kalender Presensi Bulanan Karyawan */}
+      {/* 7. Employee Monthly Calendar Modal */}
       <HrmEmployeeMonthlyCalendarModal
         isOpen={calendarModalOpen}
         onClose={() => setCalendarModalOpen(false)}
@@ -3206,6 +2214,201 @@ export const HrmReportsPage: React.FC = () => {
         attendances={attendances}
         allShifts={allShifts}
       />
+
+      {/* 8. Inline Modal Input Presensi Manual */}
+      <Dialog open={manualAttOpen} onOpenChange={setManualAttOpen}>
+        <DialogContent className="max-w-md rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <Plus size={16} className="text-emerald-600" /> Input Presensi Manual Karyawan
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Gunakan jika karyawan mengalami kendala perangkat atau lupa melakukan check-in/out.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 text-xs">
+            <div>
+              <Label className="text-xs">Pilih Karyawan</Label>
+              <Select value={manualAttUserId} onValueChange={setManualAttUserId}>
+                <SelectTrigger className="h-9 text-xs rounded-xl mt-1">
+                  <SelectValue placeholder="Pilih Karyawan..." />
+                </SelectTrigger>
+                <SelectContent className="max-h-60">
+                  {employees.map((emp) => (
+                    <SelectItem key={emp.id} value={emp.id}>
+                      {emp.nip} • {emp.fullName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs">Tanggal</Label>
+                <Input
+                  type="date"
+                  value={manualAttDate}
+                  onChange={(e) => setManualAttDate(e.target.value)}
+                  className="h-9 text-xs rounded-xl mt-1 font-mono"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Status Kehadiran</Label>
+                <Select value={manualAttStatus} onValueChange={(v: any) => setManualAttStatus(v)}>
+                  <SelectTrigger className="h-9 text-xs rounded-xl mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="hadir">Hadir</SelectItem>
+                    <SelectItem value="izin">Izin</SelectItem>
+                    <SelectItem value="sakit">Sakit</SelectItem>
+                    <SelectItem value="cuti">Cuti</SelectItem>
+                    <SelectItem value="mangkir">Alpa</SelectItem>
+                    <SelectItem value="off">Off / Libur</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs">Jam Masuk (Clock-In)</Label>
+                <Input
+                  type="time"
+                  value={manualAttClockIn}
+                  onChange={(e) => setManualAttClockIn(e.target.value)}
+                  className="h-9 text-xs rounded-xl mt-1 font-mono"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Jam Pulang (Clock-Out)</Label>
+                <Input
+                  type="time"
+                  value={manualAttClockOut}
+                  onChange={(e) => setManualAttClockOut(e.target.value)}
+                  className="h-9 text-xs rounded-xl mt-1 font-mono"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-xs">Catatan / Alasan Penambahan Manual</Label>
+              <Input
+                type="text"
+                placeholder="Contoh: Lupa scan wajah saat penugasan darurat..."
+                value={manualAttNotes}
+                onChange={(e) => setManualAttNotes(e.target.value)}
+                className="h-9 text-xs rounded-xl mt-1"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setManualAttOpen(false)} className="rounded-xl text-xs">
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSaveManualAttendance}
+              disabled={isSubmittingAtt}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs gap-1"
+            >
+              Simpan Presensi
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 9. Inline Modal Koreksi Presensi */}
+      <Dialog open={correctAttOpen} onOpenChange={setCorrectAttOpen}>
+        <DialogContent className="max-w-md rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <Pencil size={16} className="text-primary" /> Koreksi Catatan Presensi
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              {selectedAttRecord?.userName} ({selectedAttRecord?.userNip}) • Tanggal: {selectedAttRecord?.attendanceDate}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 text-xs">
+            <div>
+              <Label className="text-xs">Status Kehadiran</Label>
+              <Select value={corrStatus} onValueChange={(v: any) => setCorrStatus(v)}>
+                <SelectTrigger className="h-9 text-xs rounded-xl mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hadir">Hadir</SelectItem>
+                  <SelectItem value="izin">Izin</SelectItem>
+                  <SelectItem value="sakit">Sakit</SelectItem>
+                  <SelectItem value="cuti">Cuti</SelectItem>
+                  <SelectItem value="mangkir">Alpa</SelectItem>
+                  <SelectItem value="off">Off / Libur</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs">Jam Masuk (Clock-In)</Label>
+                <Input
+                  type="time"
+                  value={corrClockIn}
+                  onChange={(e) => setCorrClockIn(e.target.value)}
+                  className="h-9 text-xs rounded-xl mt-1 font-mono"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Jam Pulang (Clock-Out)</Label>
+                <Input
+                  type="time"
+                  value={corrClockOut}
+                  onChange={(e) => setCorrClockOut(e.target.value)}
+                  className="h-9 text-xs rounded-xl mt-1 font-mono"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-xs">Keterlambatan (Menit)</Label>
+              <Input
+                type="number"
+                value={corrLateMinutes}
+                onChange={(e) => setCorrLateMinutes(Number(e.target.value))}
+                className="h-9 text-xs rounded-xl mt-1 font-mono"
+              />
+            </div>
+
+            <div>
+              <Label className="text-xs">Catatan Koreksi</Label>
+              <Input
+                type="text"
+                placeholder="Alasan koreksi data presensi..."
+                value={corrNotes}
+                onChange={(e) => setCorrNotes(e.target.value)}
+                className="h-9 text-xs rounded-xl mt-1"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setCorrectAttOpen(false)} className="rounded-xl text-xs">
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSaveCorrection}
+              disabled={isSubmittingAtt}
+              className="bg-primary text-primary-foreground rounded-xl text-xs"
+            >
+              Simpan Koreksi
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
