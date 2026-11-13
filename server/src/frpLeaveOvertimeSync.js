@@ -730,14 +730,69 @@ function getPreviousMonthKey(payrollMonthKey) {
   return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
 }
 
-function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRate) {
+function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRate, divisionName = '', ots = []) {
   const effectiveSalary = Number(baseSalary || 4045050);
   const hourlyRate = overrideRate && overrideRate > 0 ? Number(overrideRate) : (effectiveSalary / 173);
   const maxRealHours = isDayShift ? 56 : 30;
   const cappedRealHours = Math.min(Number(rawHours || 0), maxRealHours);
-  const paidHours = cappedRealHours * 2;
+
+  const divUpper = String(divisionName || '').toUpperCase();
+  const isMatching = divUpper.includes('MATCHING');
+
+  let paidHours = 0;
+  let totalBreakDeductionHours = 0;
+
+  if (Array.isArray(ots) && ots.length > 0) {
+    for (const ot of ots) {
+      const h = Number(ot.approved_hours ?? ot.duration_hours ?? 0);
+      if (h <= 0) continue;
+      const desc = String(ot.task_description || '').toLowerCase();
+      const reason = String(ot.reason || '').toLowerCase();
+      const isReliefOrOff = Boolean(
+        ot.leave_request_id ||
+        desc.includes('pengganti') ||
+        desc.includes('sambung') ||
+        desc.includes('relief') ||
+        desc.includes('cuti') ||
+        desc.includes('off') ||
+        desc.includes('libur') ||
+        reason.includes('pengganti') ||
+        reason.includes('sambung') ||
+        reason.includes('relief') ||
+        reason.includes('cuti') ||
+        reason.includes('off') ||
+        reason.includes('libur')
+      );
+
+      if (isReliefOrOff) {
+        // Lembur Pengganti Shift (Hari Kerja / OFF / Tanggal Merah):
+        // • Timbangan & Segel: Tanpa potongan istirahat (0 jam) & langsung pengali 2.0x
+        // • Matching: Dipotong 1 jam istirahat & langsung pengali 2.0x
+        // • Keduanya: TIDAK dikenakan pengali 1.5x
+        let breakDed = 0;
+        if (isMatching && h > 1) {
+          breakDed = 1;
+        }
+        totalBreakDeductionHours += breakDed;
+        const effectiveH = Math.max(0, h - breakDed);
+        paidHours += effectiveH * 2.0;
+      } else {
+        // Lembur hari kerja biasa (Kelebihan jam harian seperti Shift 7-7):
+        // Berlaku untuk seluruh divisi Shipment:
+        // • Jam ke-1: Pengali 1.5x
+        // • Jam ke-2 & ke-3 (dan seterusnya): Pengali 2.0x
+        const h1 = Math.min(1, h);
+        const h2 = Math.max(0, h - 1);
+        paidHours += (h1 * 1.5) + (h2 * 2.0);
+      }
+    }
+  } else {
+    // Fallback jika tidak ada breakdown per record lembur
+    paidHours = cappedRealHours * 2;
+  }
+
   const totalPay = Math.round(paidHours * hourlyRate);
-  return { hourlyRate, maxRealHours, cappedRealHours, paidHours, totalPay };
+  return { hourlyRate, maxRealHours, cappedRealHours, paidHours, totalPay, totalBreakDeductionHours };
 }
 
 function resolveEffectiveBudgets(targetPayrollMonth, linkedPeriod) {
@@ -860,7 +915,7 @@ async function buildPayrollArrearsOvertimeRecap(pool, payrollMonthKey) {
       const pendingOts = userOts.filter((r) => r.status === 'pending');
 
       const rawApprovedHours = approvedOts.reduce((s, r) => s + Number(r.approved_hours ?? r.duration_hours ?? 0), 0);
-      const calc = calculateFwpOvertimeServer(p.effective_salary, rawApprovedHours, isDayShift, p.hourly_overtime_rate);
+      const calc = calculateFwpOvertimeServer(p.effective_salary, rawApprovedHours, isDayShift, p.hourly_overtime_rate, p.division_name, approvedOts);
 
       // Rumah Tangga: Effective wisma budget dibagi rata 33 orang; lebihnya Flexytime
       let finalPay = calc.totalPay;

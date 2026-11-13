@@ -49,7 +49,7 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
 
   // Form Fields
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [shiftPreset, setShiftPreset] = useState<'shift1' | 'shift2' | 'shift3' | 'dayshift' | 'darurat' | 'custom'>('shift1');
+  const [shiftPreset, setShiftPreset] = useState<'shift77_pagi' | 'shift77_malam' | 'shift1' | 'shift2' | 'shift3' | 'dayshift' | 'darurat' | 'custom'>('shift1');
   const [startTime, setStartTime] = useState<string>('07:30');
   const [endTime, setEndTime] = useState<string>('15:30');
   const [durationHours, setDurationHours] = useState<number>(8.0);
@@ -111,9 +111,19 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
   }, [open, selectedUserId, date]);
 
   // Handle Preset Change Sesuai Jam Dinas Baku PT FRP
-  const applyPreset = (preset: 'shift1' | 'shift2' | 'shift3' | 'dayshift' | 'darurat' | 'custom') => {
+  const applyPreset = (preset: 'shift77_pagi' | 'shift77_malam' | 'shift1' | 'shift2' | 'shift3' | 'dayshift' | 'darurat' | 'custom') => {
     setShiftPreset(preset);
     switch (preset) {
+      case 'shift77_pagi':
+        setStartTime('07:30');
+        setEndTime('19:30');
+        setDurationHours(12.0);
+        break;
+      case 'shift77_malam':
+        setStartTime('19:30');
+        setEndTime('07:30');
+        setDurationHours(12.0);
+        break;
       case 'shift1':
         setStartTime('07:30');
         setEndTime('15:30');
@@ -307,24 +317,81 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
     }
   };
 
-  // Calculate Overtime Estimate for Superadmin Dashboard
-  const hourlyRate = selectedUser?.overtimeRateOverride || 23381.79;
-  let estimatedPay = 0;
-  if (!isWeekendHoliday) {
-    if (durationHours <= 1) {
-      estimatedPay = Math.round(durationHours * 1.5 * hourlyRate);
+  // Deteksi Divisi & Sifat Lembur Sesuai Kebijakan Direksi PT FRP
+  const divUpper = (selectedUser?.divisionName || '').toUpperCase();
+  const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
+  const isMatching = divUpper.includes('MATCHING');
+
+  // Apakah tugas pengganti pos / sambung shift / di hari OFF / tanggal merah
+  const isReliefDuty = React.useMemo(() => {
+    const desc = (taskDescription || '').toLowerCase();
+    const isOffSchedule = Boolean(userCurrentShift?.isOff);
+    return (
+      isOffSchedule ||
+      isWeekendHoliday ||
+      desc.includes('pengganti') ||
+      desc.includes('sambung') ||
+      desc.includes('relief') ||
+      desc.includes('cuti') ||
+      desc.includes('off') ||
+      desc.includes('libur')
+    );
+  }, [taskDescription, userCurrentShift, isWeekendHoliday]);
+
+  // Perhitungan Presisi Sesuai Aturan Baku PT FRP:
+  // 1. Timbangan & Segel: Lembur pengganti shift di hari kerja atau di hari off/tgl merah:
+  //    -> TANPA POTONGAN ISTIRAHAT (0 jam) dan LANGSUNG PENGALI 2.0x.
+  // 2. Matching: Lembur pengganti shift / hari OFF:
+  //    -> POTONGAN ISTIRAHAT 1 JAM dan LANGSUNG PENGALI 2.0x pada sisa jam efektif.
+  // 3. Kelebihan jam kerja reguler harian (seperti Shift 7-7 kelebihan 3 jam di hari kerja biasa):
+  //    -> 1 jam pertama @ 1.5x, jam berikutnya @ 2.0x.
+  const overtimeCalculation = React.useMemo(() => {
+    const rate = selectedUser?.overtimeRateOverride || 23381.79;
+    let breakDeduction = 0;
+    let effectiveHours = durationHours;
+    let payHours = 0;
+    let ruleAppliedLabel = '';
+
+    if (isReliefDuty) {
+      if (isTimbanganOrSegel) {
+        breakDeduction = 0; // Tanpa potongan istirahat (0 jam)
+        effectiveHours = durationHours;
+        payHours = effectiveHours * 2.0; // Langsung pengali 2.0x (tanpa 1.5x)
+        ruleAppliedLabel = 'Timbangan & Segel (Pengganti): 0 Jam Potongan Istirahat, Langsung Pengali 2.0x';
+      } else if (isMatching) {
+        breakDeduction = durationHours > 1 ? 1 : 0; // Potongan 1 jam istirahat
+        effectiveHours = Math.max(0, durationHours - breakDeduction);
+        payHours = effectiveHours * 2.0; // Langsung pengali 2.0x pada sisa jam efektif
+        ruleAppliedLabel = 'Matching (Pengganti / OFF): Potongan Istirahat 1 Jam, Langsung Pengali 2.0x';
+      } else {
+        breakDeduction = 0;
+        effectiveHours = durationHours;
+        payHours = effectiveHours * 2.0;
+        ruleAppliedLabel = 'Pengganti Shift / Hari Libur: Pengali 2.0x';
+      }
     } else {
-      estimatedPay = Math.round((1 * 1.5 * hourlyRate) + ((durationHours - 1) * 2.0 * hourlyRate));
+      breakDeduction = 0;
+      effectiveHours = durationHours;
+      const h1 = Math.min(1, durationHours);
+      const h2 = Math.max(0, durationHours - 1);
+      payHours = (h1 * 1.5) + (h2 * 2.0);
+      ruleAppliedLabel = 'Hari Kerja Reguler: Jam Ke-1 (1.5x) + Jam Ke-2 & Seterusnya (2.0x)';
     }
-  } else {
-    if (durationHours <= 7) {
-      estimatedPay = Math.round(durationHours * 2.0 * hourlyRate);
-    } else if (durationHours <= 8) {
-      estimatedPay = Math.round((7 * 2.0 * hourlyRate) + ((durationHours - 7) * 3.0 * hourlyRate));
-    } else {
-      estimatedPay = Math.round((7 * 2.0 * hourlyRate) + (1 * 3.0 * hourlyRate) + ((durationHours - 8) * 4.0 * hourlyRate));
-    }
-  }
+
+    const estimatedPay = Math.round(payHours * rate);
+
+    return {
+      hourlyRate: rate,
+      breakDeduction,
+      effectiveHours,
+      payHours: Number(payHours.toFixed(1)),
+      estimatedPay,
+      ruleAppliedLabel,
+    };
+  }, [selectedUser, isReliefDuty, isTimbanganOrSegel, isMatching, durationHours]);
+
+  const estimatedPay = overtimeCalculation.estimatedPay;
+  const hourlyRate = overtimeCalculation.hourlyRate;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -457,6 +524,24 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
                     Karyawan Wisma Biring Ere: Budget lembur dibatasi <strong>Rp 4.000.000 / 33 org</strong> (Rp 121.212/orang). Kelebihan jam dialihkan ke <strong>Flexytime (Libur)</strong> bulan berjalan.
                   </p>
                 )}
+
+                {/* Indikator Khusus Divisi */}
+                {isTimbanganOrSegel && (
+                  <div className="mt-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-[10px] flex items-start gap-1.5 font-medium">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Aturan Baku Divisi Timbangan & Segel:</strong> Lembur pengganti shift di hari kerja atau di hari off/tanggal merah <strong>TANPA POTONGAN ISTIRAHAT (0 jam)</strong> dan <strong>LANGSUNG PENGALI 2,0x</strong>.
+                    </span>
+                  </div>
+                )}
+                {isMatching && (
+                  <div className="mt-2 p-2 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-800 dark:text-indigo-300 text-[10px] flex items-start gap-1.5 font-medium">
+                    <Info className="w-3.5 h-3.5 text-indigo-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Aturan Baku Divisi Matching:</strong> Lembur pengganti shift atau saat hari off/tanggal merah dikenakan <strong>POTONGAN ISTIRAHAT 1 JAM</strong> dan seluruh sisa jam efektif <strong>LANGSUNG PENGALI 2,0x</strong>.
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -547,8 +632,10 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
               <span>Preset Standar Durasi Lembur FRP</span>
               <span className="text-primary font-bold">{durationHours} Jam Lembur</span>
             </Label>
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
               {[
+                { id: 'shift77_pagi', label: 'Shift 7-7 Pagi (12J)', hours: 12 },
+                { id: 'shift77_malam', label: 'Shift 7-7 Malam (12J)', hours: 12 },
                 { id: 'shift1', label: 'Shift 1 (8 Jam)', hours: 8 },
                 { id: 'shift2', label: 'Shift 2 (7 Jam)', hours: 7 },
                 { id: 'shift3', label: 'Shift 3 (9 Jam)', hours: 9 },
@@ -708,24 +795,52 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
           </div>
 
           {/* 8. Estimasi Finansial Superadmin (Hanya tampil di Dashboard Superadmin) */}
-          <div className="p-3 rounded-xl bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-purple-500/10 border border-emerald-500/20 flex items-center justify-between">
-            <div className="space-y-0.5">
-              <p className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1">
-                <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                Estimasi Upah Lembur (Dashboard Superadmin)
-              </p>
-              <p className="text-[10px] text-muted-foreground">
-                Tarif Pokok: Rp {Math.round(hourlyRate).toLocaleString('id-ID')}/jam • Sesuai PP 35/2021
-              </p>
+          <div className="p-3 rounded-xl bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-purple-500/10 border border-emerald-500/30 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <p className="text-[11px] font-bold text-foreground flex items-center gap-1.5">
+                  <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Kalkulasi Upah Lembur Real-Time (Dashboard Superadmin)</span>
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  Tarif Pokok FRP: Rp {Math.round(hourlyRate).toLocaleString('id-ID')}/jam • Basis 1/173
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-lg font-extrabold font-mono text-emerald-600 dark:text-emerald-400">
+                  Rp {estimatedPay.toLocaleString('id-ID')}
+                </p>
+                <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-mono">
+                  {overtimeCalculation.payHours} Jam Bayar
+                </Badge>
+              </div>
             </div>
-            <div className="text-right">
-              <p className="text-base font-extrabold font-mono text-emerald-600 dark:text-emerald-400">
-                Rp {estimatedPay.toLocaleString('id-ID')}
-              </p>
-              <p className="text-[9px] text-muted-foreground">
-                *Tampilan nominal tersembunyi di PWA karyawan
-              </p>
+
+            {/* Rincian Parameter Perhitungan */}
+            <div className="grid grid-cols-4 gap-1.5 pt-1.5 border-t border-border/60 text-center font-mono">
+              <div className="p-1.5 rounded-lg bg-background/80 border border-border/60">
+                <p className="text-[9px] text-muted-foreground font-sans">Jam Riil</p>
+                <p className="text-xs font-bold text-foreground">{durationHours} J</p>
+              </div>
+              <div className="p-1.5 rounded-lg bg-background/80 border border-border/60">
+                <p className="text-[9px] text-muted-foreground font-sans">Pot. Istirahat</p>
+                <p className="text-xs font-bold text-amber-600">
+                  {overtimeCalculation.breakDeduction > 0 ? `-${overtimeCalculation.breakDeduction} J` : '0 J (Utuh)'}
+                </p>
+              </div>
+              <div className="p-1.5 rounded-lg bg-background/80 border border-border/60">
+                <p className="text-[9px] text-muted-foreground font-sans">Jam Efektif</p>
+                <p className="text-xs font-bold text-blue-600">{overtimeCalculation.effectiveHours} J</p>
+              </div>
+              <div className="p-1.5 rounded-lg bg-background/80 border border-border/60">
+                <p className="text-[9px] text-muted-foreground font-sans">Jam Dikalikan</p>
+                <p className="text-xs font-bold text-emerald-600">{overtimeCalculation.payHours} J</p>
+              </div>
             </div>
+
+            <p className="text-[10px] text-muted-foreground leading-tight italic pt-0.5">
+              📌 {overtimeCalculation.ruleAppliedLabel}
+            </p>
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0 pt-2 border-t border-border">

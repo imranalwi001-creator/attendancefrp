@@ -10809,24 +10809,44 @@ app.post('/api/overtime', async (req, res) => {
       if (holCheck.rows.length > 0) isHolidayOrWeekend = true;
     }
 
-    // Formula Lembur Berjenjang Resmi Kepmenakertrans No. 102/2004 & PP 35/2021
+    // Formula Lembur Berjenjang & Aturan Khusus Sub-Divisi PT FRP
+    const divUpper = String(userProfile.division_name || '').toUpperCase();
+    const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
+    const isMatching = divUpper.includes('MATCHING');
+    const descLower = String(taskDescription || '').toLowerCase();
+    const isReliefDuty = Boolean(
+      isHolidayOrWeekend ||
+      descLower.includes('pengganti') ||
+      descLower.includes('sambung') ||
+      descLower.includes('relief') ||
+      descLower.includes('cuti') ||
+      descLower.includes('off') ||
+      descLower.includes('libur')
+    );
+
     let comp = 0;
-    if (!isHolidayOrWeekend) {
-      // Hari Kerja: Jam ke-1 = 1.5x, jam ke-2+ = 2.0x
-      if (hours <= 1) {
-        comp = Math.round(hours * 1.5 * officialRate);
+    let payHours = 0;
+    if (isReliefDuty) {
+      if (isTimbanganOrSegel) {
+        // Divisi Timbangan & Segel: Lembur pengganti shift di hari kerja atau hari off/tgl merah
+        // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
+        payHours = hours * 2.0;
+      } else if (isMatching) {
+        // Divisi Matching: Lembur pengganti / OFF dipotong 1 jam istirahat dan langsung pengali 2.0x
+        const breakDed = hours > 1 ? 1 : 0;
+        payHours = Math.max(0, hours - breakDed) * 2.0;
       } else {
-        comp = Math.round((1 * 1.5 * officialRate) + ((hours - 1) * 2.0 * officialRate));
+        // Standar hari libur / tugas pengganti divisi lain
+        payHours = hours * 2.0;
       }
+      comp = Math.round(payHours * officialRate);
     } else {
-      // Hari Libur / Off Shift: Jam 1-7 = 2.0x, Jam 8 = 3.0x, Jam 9+ = 4.0x
-      if (hours <= 7) {
-        comp = Math.round(hours * 2.0 * officialRate);
-      } else if (hours <= 8) {
-        comp = Math.round((7 * 2.0 * officialRate) + ((hours - 7) * 3.0 * officialRate));
-      } else {
-        comp = Math.round((7 * 2.0 * officialRate) + (1 * 3.0 * officialRate) + ((hours - 8) * 4.0 * officialRate));
-      }
+      // Lembur kelebihan jam harian di hari kerja biasa (seperti Shift 7-7)
+      // Jam ke-1 @ 1.5x, jam ke-2 & ke-3 @ 2.0x
+      const h1 = Math.min(1, hours);
+      const h2 = Math.max(0, hours - 1);
+      payHours = (h1 * 1.5) + (h2 * 2.0);
+      comp = Math.round(payHours * officialRate);
     }
 
     // Verifikasi Guardrail Anti-Overbudget Lembur PT FRP (Total Rp 76 Jt: Shipment Rp 72 Jt, Wisma Rp 4 Jt)
@@ -10992,21 +11012,43 @@ app.put('/api/overtime/:id/status', async (req, res) => {
       if (holCheck.rows.length > 0) isHolidayOrWeekend = true;
     }
 
+    const divUpper = String(ot.division_name || '').toUpperCase();
+    const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
+    const isMatching = divUpper.includes('MATCHING');
+    const descLower = String(ot.task_description || '').toLowerCase();
+    const isReliefDuty = Boolean(
+      isHolidayOrWeekend ||
+      descLower.includes('pengganti') ||
+      descLower.includes('sambung') ||
+      descLower.includes('relief') ||
+      descLower.includes('cuti') ||
+      descLower.includes('off') ||
+      descLower.includes('libur')
+    );
+
     let compensation = 0;
-    if (!isHolidayOrWeekend) {
-      if (finalHours <= 1) {
-        compensation = Math.round(finalHours * 1.5 * officialRate);
+    let payHours = 0;
+    if (isReliefDuty) {
+      if (isTimbanganOrSegel) {
+        // Divisi Timbangan & Segel: Lembur pengganti shift di hari kerja atau hari off/tgl merah
+        // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
+        payHours = finalHours * 2.0;
+      } else if (isMatching) {
+        // Divisi Matching: Lembur pengganti / OFF dipotong 1 jam istirahat dan langsung pengali 2.0x
+        const breakDed = finalHours > 1 ? 1 : 0;
+        payHours = Math.max(0, finalHours - breakDed) * 2.0;
       } else {
-        compensation = Math.round((1 * 1.5 * officialRate) + ((finalHours - 1) * 2.0 * officialRate));
+        // Standar hari libur / tugas pengganti divisi lain
+        payHours = finalHours * 2.0;
       }
+      compensation = Math.round(payHours * officialRate);
     } else {
-      if (finalHours <= 7) {
-        compensation = Math.round(finalHours * 2.0 * officialRate);
-      } else if (finalHours <= 8) {
-        compensation = Math.round((7 * 2.0 * officialRate) + ((finalHours - 7) * 3.0 * officialRate));
-      } else {
-        compensation = Math.round((7 * 2.0 * officialRate) + (1 * 3.0 * officialRate) + ((finalHours - 8) * 4.0 * officialRate));
-      }
+      // Lembur kelebihan jam harian di hari kerja biasa (seperti Shift 7-7)
+      // Jam ke-1 @ 1.5x, jam ke-2 & ke-3 @ 2.0x
+      const h1 = Math.min(1, finalHours);
+      const h2 = Math.max(0, finalHours - 1);
+      payHours = (h1 * 1.5) + (h2 * 2.0);
+      compensation = Math.round(payHours * officialRate);
     }
 
     // Verifikasi Guardrail Anti-Overbudget Lembur PT FRP
@@ -11125,21 +11167,43 @@ app.put('/api/overtime/:id', async (req, res) => {
       if (holCheck.rows.length > 0) isHolidayOrWeekend = true;
     }
 
+    const divUpper = String(ot.division_name || '').toUpperCase();
+    const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
+    const isMatching = divUpper.includes('MATCHING');
+    const descLower = String(ot.task_description || '').toLowerCase();
+    const isReliefDuty = Boolean(
+      isHolidayOrWeekend ||
+      descLower.includes('pengganti') ||
+      descLower.includes('sambung') ||
+      descLower.includes('relief') ||
+      descLower.includes('cuti') ||
+      descLower.includes('off') ||
+      descLower.includes('libur')
+    );
+
     let compensation = 0;
-    if (!isHolidayOrWeekend) {
-      if (finalHours <= 1) {
-        compensation = Math.round(finalHours * 1.5 * officialRate);
+    let payHours = 0;
+    if (isReliefDuty) {
+      if (isTimbanganOrSegel) {
+        // Divisi Timbangan & Segel: Lembur pengganti shift di hari kerja atau hari off/tgl merah
+        // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
+        payHours = finalHours * 2.0;
+      } else if (isMatching) {
+        // Divisi Matching: Lembur pengganti / OFF dipotong 1 jam istirahat dan langsung pengali 2.0x
+        const breakDed = finalHours > 1 ? 1 : 0;
+        payHours = Math.max(0, finalHours - breakDed) * 2.0;
       } else {
-        compensation = Math.round((1 * 1.5 * officialRate) + ((finalHours - 1) * 2.0 * officialRate));
+        // Standar hari libur / tugas pengganti divisi lain
+        payHours = finalHours * 2.0;
       }
+      compensation = Math.round(payHours * officialRate);
     } else {
-      if (finalHours <= 7) {
-        compensation = Math.round(finalHours * 2.0 * officialRate);
-      } else if (finalHours <= 8) {
-        compensation = Math.round((7 * 2.0 * officialRate) + ((finalHours - 7) * 3.0 * officialRate));
-      } else {
-        compensation = Math.round((7 * 2.0 * officialRate) + (1 * 3.0 * officialRate) + ((finalHours - 8) * 4.0 * officialRate));
-      }
+      // Lembur kelebihan jam harian di hari kerja biasa (seperti Shift 7-7)
+      // Jam ke-1 @ 1.5x, jam ke-2 & ke-3 @ 2.0x
+      const h1 = Math.min(1, finalHours);
+      const h2 = Math.max(0, finalHours - 1);
+      payHours = (h1 * 1.5) + (h2 * 2.0);
+      compensation = Math.round(payHours * officialRate);
     }
 
     // Verifikasi Budget Guardrail jika disetujui
