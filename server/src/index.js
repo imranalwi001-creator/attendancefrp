@@ -8565,9 +8565,47 @@ async function assignReliefSubstituteHelper({
     );
   }
 
-  // 3. Catat di hrm_shift_substitutions (Zero Unmanned Post Table)
+  // 3. Hitung Jam Tugas & Kompensasi Pengganti Sesuai Kebijakan Divisi PT FRP
+  let appliedStartTime = '15:30';
+  let appliedEndTime = '22:30';
+  let appliedDuration = 7.0;
+  let shiftId = originalUser.shift_id || null;
+  let shiftCode = 'S';
+  let shiftName = 'Shift II (15:30 - 22:30 WITA)';
+
+  try {
+    const origSchedRes = await pool.query(
+      `SELECT * FROM hrm_employee_schedules WHERE user_id = $1 AND schedule_date = $2 LIMIT 1`,
+      [originalUserId, targetStart]
+    );
+    if (origSchedRes.rows.length > 0 && !origSchedRes.rows[0].is_off) {
+      const os = origSchedRes.rows[0];
+      shiftId = os.shift_id || shiftId;
+      shiftCode = os.shift_code || shiftCode;
+      shiftName = os.shift_name || shiftName;
+      startTime = os.start_time ? os.start_time.substring(0, 5) : startTime;
+      endTime = os.end_time ? os.end_time.substring(0, 5) : endTime;
+      durationHours = os.duration_hours || durationHours;
+      appliedStartTime = startTime;
+      appliedEndTime = endTime;
+      appliedDuration = durationHours;
+    }
+  } catch (durErr) {
+    console.error('[assignReliefSubstituteHelper Duration Check Error]:', durErr.message);
+  }
+
   const hourlyRate = parseFloat(reliefUser.hourly_overtime_rate || 23381.79);
-  const overtimeAmount = Math.round(hourlyRate * 8.0);
+  const divUpper = String(reliefUser.division_name || '').toUpperCase();
+  const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
+  const isMatching = divUpper.includes('MATCHING');
+
+  let breakDed = 0;
+  if (isMatching && appliedDuration > 1) {
+    breakDed = 1;
+  }
+  const effectiveHours = Math.max(0, appliedDuration - breakDed);
+  const payHours = effectiveHours * 2.0; // Lembur pengganti: langsung 2.0x tanpa 1.5x
+  const overtimeAmount = Math.round(payHours * hourlyRate);
 
   const subRes = await pool.query(
     `INSERT INTO hrm_shift_substitutions (
@@ -8576,8 +8614,8 @@ async function assignReliefSubstituteHelper({
       status, notes, approved_by
     ) VALUES (
       $1, $2, $3, $4::date, 'leave_relief',
-      $5, 'overtime', 8.0, $6, $7,
-      'approved', $8, $9
+      $5, 'overtime', $6, $7, $8,
+      'approved', $9, $10
     ) RETURNING *;`,
     [
       originalUserId,
@@ -8585,6 +8623,7 @@ async function assignReliefSubstituteHelper({
       originalUser.shift_id || '00000000-0000-0000-0000-000000000000',
       targetStart,
       leaveId || null,
+      appliedDuration,
       hourlyRate,
       overtimeAmount,
       notes || `Tugas Pengganti Pos Resmi (${originalUser.full_name})`,
@@ -8594,9 +8633,6 @@ async function assignReliefSubstituteHelper({
 
   // 3B. Sinkronkan Jadwal Shift di hrm_employee_schedules:
   // Karyawan pengganti (reliefUserId) mengambil alih shift kerja originalUser di tanggal cuti
-  let appliedStartTime = '15:30';
-  let appliedEndTime = '22:30';
-  let appliedDuration = 7.0;
   try {
     const sDateObj = new Date(targetStart);
     const eDateObj = new Date(targetEnd);
@@ -8608,25 +8644,22 @@ async function assignReliefSubstituteHelper({
         [originalUserId, curDateStr]
       );
       
-      let shiftId = originalUser.shift_id || null;
-      let shiftCode = 'S';
-      let shiftName = 'Shift II (15:30 - 22:30 WITA)';
-      let startTime = '15:30';
-      let endTime = '22:30';
-      let durationHours = 7.0;
+      let curShiftId = shiftId;
+      let curShiftCode = shiftCode;
+      let curShiftName = shiftName;
+      let curStart = appliedStartTime;
+      let curEnd = appliedEndTime;
+      let curDuration = appliedDuration;
 
       if (origSchedRes.rows.length > 0 && !origSchedRes.rows[0].is_off) {
         const os = origSchedRes.rows[0];
-        shiftId = os.shift_id || shiftId;
-        shiftCode = os.shift_code || shiftCode;
-        shiftName = os.shift_name || shiftName;
-        startTime = os.start_time ? os.start_time.substring(0, 5) : startTime;
-        endTime = os.end_time ? os.end_time.substring(0, 5) : endTime;
-        durationHours = os.duration_hours || durationHours;
+        curShiftId = os.shift_id || curShiftId;
+        curShiftCode = os.shift_code || curShiftCode;
+        curShiftName = os.shift_name || curShiftName;
+        curStart = os.start_time ? os.start_time.substring(0, 5) : curStart;
+        curEnd = os.end_time ? os.end_time.substring(0, 5) : curEnd;
+        curDuration = os.duration_hours || curDuration;
       }
-      appliedStartTime = startTime;
-      appliedEndTime = endTime;
-      appliedDuration = durationHours;
 
       const reliefSchedRes = await pool.query(
         `SELECT * FROM hrm_employee_schedules WHERE user_id = $1 AND schedule_date = $2 LIMIT 1`,
@@ -8655,12 +8688,12 @@ async function assignReliefSubstituteHelper({
         `, [
           reliefUserId,
           curDateStr,
-          shiftId,
-          shiftCode,
-          `${shiftName} - Pengganti ${originalUser.full_name}`,
-          startTime,
-          endTime,
-          durationHours,
+          curShiftId,
+          curShiftCode,
+          `${curShiftName} - Pengganti ${originalUser.full_name}`,
+          curStart,
+          curEnd,
+          curDuration,
           `Tugas Pengganti Pos ${originalUser.full_name} (Cuti Resmi)`
         ]);
       }
@@ -8684,10 +8717,10 @@ async function assignReliefSubstituteHelper({
   try {
     await pool.query(
       `INSERT INTO hrm_overtime_records (
-        user_id, date, start_time, end_time, duration_hours, rate_applied, compensation_amount,
+        user_id, date, start_time, end_time, duration_hours, approved_hours, rate_applied, compensation_amount,
         task_description, status, source, leave_request_id, approved_by, overtime_phase
       ) VALUES (
-        $1, $2::date, $3, $4, $5, $6, $7,
+        $1, $2::date, $3, $4, $5, $5, $6, $7,
         $8, 'approved', 'shift_relief', $9, $10, 'completed'
       ) RETURNING *;`,
       [
@@ -11170,7 +11203,7 @@ app.put('/api/overtime/:id', async (req, res) => {
     const divUpper = String(ot.division_name || '').toUpperCase();
     const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
     const isMatching = divUpper.includes('MATCHING');
-    const descLower = String(ot.task_description || '').toLowerCase();
+    const descLower = String(finalDesc || '').toLowerCase();
     const isReliefDuty = Boolean(
       isHolidayOrWeekend ||
       descLower.includes('pengganti') ||
