@@ -330,6 +330,9 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
       isOffSchedule ||
       isWeekendHoliday ||
       desc.includes('pengganti') ||
+      desc.includes('mengganti') ||
+      desc.includes('menggantikan') ||
+      desc.includes('ganti') ||
       desc.includes('sambung') ||
       desc.includes('relief') ||
       desc.includes('cuti') ||

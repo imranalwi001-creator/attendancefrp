@@ -63,6 +63,7 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
   const [activeAttendances, setActiveAttendances] = useState<AttendanceRecord[]>(attendances || []);
   const [activeOvertimes, setActiveOvertimes] = useState<OvertimeRecord[]>(overtimes || []);
   const [activeLeaves, setActiveLeaves] = useState<LeaveRequest[]>(leaves || []);
+  const [activeSchedules, setActiveSchedules] = useState<any[]>([]);
   const [isFetchingData, setIsFetchingData] = useState<boolean>(false);
   const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string>('');
 
@@ -81,10 +82,11 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
   const fetchLatestMatrixData = React.useCallback(async (targetMonth: string) => {
     setIsFetchingData(true);
     try {
-      const [aRes, oRes, lRes] = await Promise.all([
+      const [aRes, oRes, lRes, sRes] = await Promise.all([
         fetch(`/api/attendances?month=${targetMonth}`),
         fetch(`/api/overtime?month=${targetMonth}`),
         fetch('/api/leaves'),
+        fetch(`/api/employee-schedules?month=${targetMonth}`),
       ]);
       if (aRes.ok) {
         const aJson = await aRes.json();
@@ -102,6 +104,12 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         const lJson = await lRes.json();
         if (lJson.success && Array.isArray(lJson.data)) {
           setActiveLeaves(lJson.data);
+        }
+      }
+      if (sRes.ok) {
+        const sJson = await sRes.json();
+        if (sJson.success && Array.isArray(sJson.data)) {
+          setActiveSchedules(sJson.data);
         }
       }
       setLastSyncTimestamp(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
@@ -239,7 +247,14 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         return isApp && (lUserId === empIdStr || (empNipNorm && lNip && empNipNorm === lNip));
       });
 
-      // 3. Overtimes in Month (Sinkron Otomatis dari Input Manual & PWA)
+      // 3. Employee Shift Schedules (Roster Database)
+      const empSchedules = activeSchedules.filter((s) => {
+        const sNip = ((s as any).userNip || (s as any).user_nip || (s as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
+        const sUserId = ((s as any).userId || (s as any).user_id || '').toString();
+        return sUserId === empIdStr || (empNipNorm && sNip && empNipNorm === sNip);
+      });
+
+      // 4. Overtimes in Month (Sinkron Otomatis dari Input Manual & PWA)
       const empOts = activeOvertimes.filter((o) => {
         const oNip = ((o as any).user_nip || (o as any).userNip || (o as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
         const oUserId = ((o as any).user_id || (o as any).userId || '').toString();
@@ -272,11 +287,27 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
           return;
         }
 
-        // B. Cek Record Presensi Harian di Database
+        // B. Cek Jadwal Roster Resmi (Roster OFF = 0, BUKAN A!)
+        const sched = empSchedules.find((s) => {
+          const dt = (s.scheduleDate || s.schedule_date || s.date || '').slice(0, 10);
+          return dt === d.dateStr;
+        });
+        const isSchedOff = Boolean(
+          sched && (sched.isOff || sched.is_off || sched.shiftCode === 'OFF' || sched.shift_code === 'OFF')
+        );
+
+        // C. Cek Record Presensi Harian di Database
         const att = empAtts.find((a) => {
           const dt = ((a as any).attendance_date_str || (a as any).attendance_date || (a as any).attendanceDate || (a as any).date || '').toString().slice(0, 10);
           return dt === d.dateStr;
         });
+
+        // D. Cek Lembur di Hari Ini (Jika ada lembur pengganti/hari libur)
+        const otOnDay = empOts.find((o) => {
+          const dt = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
+          return dt === d.dateStr;
+        });
+
         if (att) {
           const st = (att.status || '').toLowerCase().trim();
           if (st === 'cuti') {
@@ -287,89 +318,166 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
             attendanceCells.push({ val: 'I', isHoliday: d.isWeekend });
           } else if (st === 'mangkir' || st === 'alpa') {
             attendanceCells.push({ val: 'A', isHoliday: d.isWeekend });
-          } else if (st === 'off' || st === 'libur') {
+          } else if (isSchedOff || st === 'off' || st === 'libur') {
             attendanceCells.push({ val: '0', isHoliday: d.isWeekend });
           } else if (st === 'hadir' || st === 'terlambat' || (att as any).clock_in || (att as any).clockIn) {
-            attendanceCells.push({ val: '1', isHoliday: d.isWeekend });
-            totalHariKerja++;
+            if (isSchedOff) {
+              attendanceCells.push({ val: '0', isHoliday: d.isWeekend });
+            } else {
+              attendanceCells.push({ val: '1', isHoliday: d.isWeekend });
+              totalHariKerja++;
+            }
           } else {
-            attendanceCells.push({ val: '1', isHoliday: d.isWeekend });
-            totalHariKerja++;
+            attendanceCells.push({ val: isSchedOff ? '0' : '1', isHoliday: d.isWeekend });
+            if (!isSchedOff) totalHariKerja++;
           }
           return;
         }
 
-        // C. Fallback Cerdas Presensi:
+        // E. Jika jadwal resmi di Roster adalah OFF (atau ada lembur pengganti di hari libur): 100% adalah '0', BUKAN 'A'
+        if (isSchedOff) {
+          attendanceCells.push({ val: '0', isHoliday: d.isWeekend || true });
+          return;
+        }
+
+        // F. Fallback Presensi:
         if (d.isWeekend) {
           attendanceCells.push({ val: '0', isHoliday: true });
         } else if (d.dateStr < todayWitaStr) {
-          // Hari kerja lampau tanpa presensi dan tanpa cuti = ALPA / MANGKIR (A)
-          attendanceCells.push({ val: 'A', isHoliday: false });
+          // Hari kerja lampau: jika ada jadwal shift kerja aktif (bukan OFF) dan tidak ada presensi -> ALPA / MANGKIR (A)
+          if (sched && !sched.isOff) {
+            attendanceCells.push({ val: 'A', isHoliday: false });
+          } else if (!sched) {
+            if (otOnDay) {
+              attendanceCells.push({ val: '0', isHoliday: false });
+            } else {
+              attendanceCells.push({ val: 'A', isHoliday: false });
+            }
+          } else {
+            attendanceCells.push({ val: '0', isHoliday: false });
+          }
         } else {
-          // Hari ini atau jadwal kerja mendatang = 1
+          // Hari ini atau jadwal kerja mendatang
           attendanceCells.push({ val: '1', isHoliday: false });
           totalHariKerja++;
         }
       });
 
-      // Baris Pengali: 1.5, 2 (Hari Kerja), 2 (Libur / Relief Pengganti), 3, 4
-      const buildMultiplierRow = (targetMult: number, isReliefRow: boolean) => {
-        const cells: { hours: number; rawOt?: OvertimeRecord; isYellow: boolean }[] = [];
-        let rowReal = 0;
-        let rowPaid = 0;
+      // 5 Baris Pengali Lembur Per Karyawan Sesuai Aturan Resmi PT FRP:
+      // Row 1: 1.5x (Kelebihan jam hari kerja reguler ke-1)
+      // Row 2: 2.0x (Kelebihan jam hari kerja reguler ke-2 dst)
+      // Row 3: 2.0x (Libur / Relief Pengganti - Kolom Kuning)
+      // Row 4: 3.0x
+      // Row 5: 4.0x
 
-        daysMeta.forEach((d) => {
-          const matchOt = empOts.find((o) => {
-            const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
-            if (oDateStr !== d.dateStr) return false;
+      const cells15: { hours: number; rawOt?: OvertimeRecord; isYellow: boolean }[] = [];
+      const cells2w: { hours: number; rawOt?: OvertimeRecord; isYellow: boolean }[] = [];
+      const cells2r: { hours: number; rawOt?: OvertimeRecord; isYellow: boolean }[] = [];
+      const cells3: { hours: number; rawOt?: OvertimeRecord; isYellow: boolean }[] = [];
+      const cells4: { hours: number; rawOt?: OvertimeRecord; isYellow: boolean }[] = [];
 
-            const desc = ((o as any).task_description || (o as any).taskDescription || '').toLowerCase();
-            const isReliefOrHoliday =
-              Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday) ||
-              d.isWeekend ||
-              desc.includes('pengganti') ||
-              desc.includes('relief') ||
-              desc.includes('sambung') ||
-              desc.includes('libur') ||
-              desc.includes('off') ||
-              desc.includes('cuti');
+      let row15Real = 0, row15Paid = 0;
+      let row2wReal = 0, row2wPaid = 0;
+      let row2rReal = 0, row2rPaid = 0;
+      let row3Real = 0, row3Paid = 0;
+      let row4Real = 0, row4Paid = 0;
 
-            const explicitMult = Number((o as any).rate_multiplier || (o as any).rateMultiplier);
+      const empDiv = ((emp.divisionName || (emp as any).division_name || (emp as any).seksi || emp.jobTitle || '')).toLowerCase();
+      const isTimbanganOrSegel = empDiv.includes('timbangan') || empDiv.includes('segel');
+      const isMatching = empDiv.includes('matching');
 
-            if (isReliefRow) {
-              // Relief / Holiday 2.0x row
-              if (explicitMult === 2.0) return isReliefOrHoliday;
-              return isReliefOrHoliday;
-            } else if (targetMult === 2.0) {
-              // Weekday 2.0x row
-              if (explicitMult === 2.0) return !isReliefOrHoliday;
-              return !isReliefOrHoliday && !d.isWeekend;
-            } else if (targetMult === 1.5) {
-              if (explicitMult === 1.5) return true;
-              return !isReliefOrHoliday && !d.isWeekend;
-            } else {
-              return explicitMult === targetMult;
-            }
-          });
+      daysMeta.forEach((d) => {
+        const schedOnDay = empSchedules.find((s) => (s.scheduleDate || s.schedule_date || '').slice(0, 10) === d.dateStr);
+        const isSchedOff = Boolean(schedOnDay && (schedOnDay.isOff || schedOnDay.is_off || schedOnDay.shiftCode === 'OFF' || schedOnDay.shift_code === 'OFF'));
 
-          if (matchOt) {
-            const h = parseFloat((matchOt as any).duration_hours || (matchOt as any).durationHours || (matchOt as any).approved_hours || (matchOt as any).approvedHours || 0);
-            rowReal += h;
-            rowPaid += h * targetMult;
-            cells.push({ hours: h, rawOt: matchOt, isYellow: isReliefRow || d.isWeekend });
-          } else {
-            cells.push({ hours: 0, isYellow: isReliefRow && d.isWeekend });
-          }
+        const matchOt = empOts.find((o) => {
+          const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
+          return oDateStr === d.dateStr;
         });
 
-        return { mult: targetMult, label: isReliefRow ? '2 (Libur/Relief)' : `${targetMult}`, cells, rowReal, rowPaid };
-      };
+        let h15 = 0, h2w = 0, h2r = 0, h3 = 0, h4 = 0;
 
-      const row15 = buildMultiplierRow(1.5, false);
-      const row2Weekday = buildMultiplierRow(2.0, false);
-      const row2Relief = buildMultiplierRow(2.0, true);
-      const row3 = buildMultiplierRow(3.0, false);
-      const row4 = buildMultiplierRow(4.0, false);
+        if (matchOt) {
+          const rawHours = parseFloat((matchOt as any).duration_hours || (matchOt as any).durationHours || (matchOt as any).approved_hours || (matchOt as any).approvedHours || 0);
+          const desc = ((matchOt as any).task_description || (matchOt as any).taskDescription || '').toLowerCase();
+
+          const isReliefOrHoliday =
+            Boolean((matchOt as any).is_weekend_holiday || (matchOt as any).isWeekendHoliday) ||
+            isSchedOff ||
+            d.isWeekend ||
+            desc.includes('pengganti') ||
+            desc.includes('mengganti') ||
+            desc.includes('menggantikan') ||
+            desc.includes('ganti') ||
+            desc.includes('relief') ||
+            desc.includes('sambung') ||
+            desc.includes('libur') ||
+            desc.includes('off') ||
+            desc.includes('cuti') ||
+            desc.includes('pos');
+
+          const explicitMult = Number((matchOt as any).rate_multiplier || (matchOt as any).rateMultiplier);
+
+          if (explicitMult === 3.0) {
+            h3 = rawHours;
+          } else if (explicitMult === 4.0) {
+            h4 = rawHours;
+          } else if (isReliefOrHoliday) {
+            // ATURAN BAKU KHUSUS LEMBUR PENGGANTI SHIFT / LIBUR / OFF:
+            // 1. Divisi Timbangan & Segel: Tanpa potongan istirahat (0 jam) & TANPA PENGALI 1.5x. Seluruh jam langsung 2.0x!
+            // 2. Divisi Matching: Dikenakan potongan istirahat 1 jam jika jam tugas penuh (>= 8 jam) & TANPA PENGALI 1.5x. Seluruh jam langsung 2.0x!
+            // 3. Divisi lain pengganti/libur: Langsung pengali 2.0x di baris Libur/Relief.
+            // PENGALI 1.5x TIDAK BERLAKU (h15 = 0, h2w = 0)!
+            let effectiveHours = rawHours;
+            if (isMatching) {
+              if (rawHours >= 8) {
+                effectiveHours = rawHours - 1; // Potongan istirahat 1 jam
+              } else {
+                effectiveHours = rawHours;
+              }
+            } else if (isTimbanganOrSegel) {
+              effectiveHours = rawHours; // Utuh tanpa potongan istirahat
+            } else {
+              effectiveHours = rawHours;
+            }
+
+            h2r = effectiveHours;
+          } else {
+            // ATURAN BAKU KELEBIHAN JAM REGULER DI HARI KERJA (Shift 7-7 dsb):
+            // 1 jam pertama @ 1.5x, jam ke-2 & berikutnya @ 2.0x Hari Kerja
+            h15 = Math.min(1, rawHours);
+            h2w = Math.max(0, rawHours - 1);
+          }
+        }
+
+        // Push ke masing-masing baris (Tanpa Duplikasi / Alokasi Presisi)
+        cells15.push({ hours: h15, rawOt: matchOt, isYellow: false });
+        row15Real += h15;
+        row15Paid += h15 * 1.5;
+
+        cells2w.push({ hours: h2w, rawOt: matchOt, isYellow: false });
+        row2wReal += h2w;
+        row2wPaid += h2w * 2.0;
+
+        const isYellowCell = isSchedOff || d.isWeekend;
+        cells2r.push({ hours: h2r, rawOt: matchOt, isYellow: isYellowCell || h2r > 0 });
+        row2rReal += h2r;
+        row2rPaid += h2r * 2.0;
+
+        cells3.push({ hours: h3, rawOt: matchOt, isYellow: false });
+        row3Real += h3;
+        row3Paid += h3 * 3.0;
+
+        cells4.push({ hours: h4, rawOt: matchOt, isYellow: false });
+        row4Real += h4;
+        row4Paid += h4 * 4.0;
+      });
+
+      const row15 = { mult: 1.5, label: '1.5', cells: cells15, rowReal: row15Real, rowPaid: row15Paid };
+      const row2Weekday = { mult: 2.0, label: '2', cells: cells2w, rowReal: row2wReal, rowPaid: row2wPaid };
+      const row2Relief = { mult: 2.0, label: '2 (Libur/Relief)', cells: cells2r, rowReal: row2rReal, rowPaid: row2rPaid };
+      const row3 = { mult: 3.0, label: '3', cells: cells3, rowReal: row3Real, rowPaid: row3Paid };
+      const row4 = { mult: 4.0, label: '4', cells: cells4, rowReal: row4Real, rowPaid: row4Paid };
 
       // Subtotal Karyawan (Peach Row)
       const subtotalDailyHours: number[] = [];
@@ -408,7 +516,7 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         totalLemburPaid,
       };
     });
-  }, [targetEmployees, activeAttendances, activeLeaves, activeOvertimes, selectedMonth, daysMeta]);
+  }, [targetEmployees, activeAttendances, activeLeaves, activeOvertimes, activeSchedules, selectedMonth, daysMeta]);
 
   // Grand Totals for Bottom Row
   const grandTotals = useMemo(() => {
@@ -508,6 +616,11 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
 
       setCellEditOpen(false);
       setEditTarget(null);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hrm_overtime_updated'));
+        window.dispatchEvent(new CustomEvent('hrm_data_updated'));
+      }
+      fetchLatestMatrixData(selectedMonth);
       if (onDataChanged) onDataChanged();
     } catch (err: any) {
       toast.error(err.message || 'Gagal menyimpan catatan lembur');

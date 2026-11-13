@@ -35,6 +35,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
   const [activeAttendances, setActiveAttendances] = useState<AttendanceRecord[]>(attendances || []);
   const [activeOvertimes, setActiveOvertimes] = useState<OvertimeRecord[]>(overtimes || []);
   const [activeLeaves, setActiveLeaves] = useState<LeaveRequest[]>(leaves || []);
+  const [activeSchedules, setActiveSchedules] = useState<any[]>([]);
   const [isFetchingData, setIsFetchingData] = useState<boolean>(false);
 
   React.useEffect(() => {
@@ -50,10 +51,11 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
   const fetchLatestTimeSheetData = React.useCallback(async (targetMonth: string) => {
     setIsFetchingData(true);
     try {
-      const [aRes, oRes, lRes] = await Promise.all([
+      const [aRes, oRes, lRes, sRes] = await Promise.all([
         fetch(`/api/attendances?month=${targetMonth}`),
         fetch(`/api/overtime?month=${targetMonth}`),
         fetch('/api/leaves'),
+        fetch(`/api/employee-schedules?month=${targetMonth}`),
       ]);
       if (aRes.ok) {
         const aJson = await aRes.json();
@@ -71,6 +73,12 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         const lJson = await lRes.json();
         if (lJson.success && Array.isArray(lJson.data)) {
           setActiveLeaves(lJson.data);
+        }
+      }
+      if (sRes.ok) {
+        const sJson = await sRes.json();
+        if (sJson.success && Array.isArray(sJson.data)) {
+          setActiveSchedules(sJson.data);
         }
       }
     } catch (err) {
@@ -178,7 +186,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
       const empIdStr = (emp.id || '').toString();
       const nipDisplay = emp.nip ? (emp.nip.includes('.') ? emp.nip : emp.nip.replace(/(FR)(07)(\d+)/, '$1.$2.$3')) : `FR.07.${String(idx + 34).padStart(3, '0')}`;
 
-      // Attendances in selectedMonth (Normalisasi Defensif Snake & Camel Case)
+      // 1. Attendances in selectedMonth (Normalisasi Defensif Snake & Camel Case)
       const empAtts = activeAttendances.filter((a) => {
         const aNipNorm = ((a as any).user_nip || (a as any).userNip || (a as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
         const aUserId = ((a as any).user_id || (a as any).userId || '').toString();
@@ -187,7 +195,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         return inMonth && (aUserId === empIdStr || (empNipNorm && aNipNorm && empNipNorm === aNipNorm));
       });
 
-      // Approved leaves
+      // 2. Approved leaves
       const empLeaves = activeLeaves.filter((l) => {
         const lNipNorm = ((l as any).user_nip || (l as any).userNip || (l as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
         const lUserId = ((l as any).user_id || (l as any).userId || '').toString();
@@ -195,7 +203,14 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         return isApp && (lUserId === empIdStr || (empNipNorm && lNipNorm && empNipNorm === lNipNorm));
       });
 
-      // Approved overtimes
+      // 3. Employee shift schedules (Roster Database)
+      const empSchedules = activeSchedules.filter((s) => {
+        const sNip = ((s as any).userNip || (s as any).user_nip || (s as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
+        const sUserId = ((s as any).userId || (s as any).user_id || '').toString();
+        return sUserId === empIdStr || (empNipNorm && sNip && empNipNorm === sNip);
+      });
+
+      // 4. Approved overtimes
       const empOts = activeOvertimes.filter((o) => {
         const oNipNorm = ((o as any).user_nip || (o as any).userNip || (o as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
         const oUserId = ((o as any).user_id || (o as any).userId || '').toString();
@@ -215,7 +230,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
       const todayYmd = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
 
       daysMeta.forEach((d) => {
-        // 1. Check leave
+        // A. Check leave
         const leaveOnDay = empLeaves.find((l) => {
           const s = ((l as any).start_date || (l as any).startDate || '').toString().slice(0, 10);
           const e = ((l as any).end_date || (l as any).endDate || '').toString().slice(0, 10);
@@ -238,22 +253,30 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
           }
         }
 
-        // 2. Check attendance
+        // B. Cek Jadwal Roster Resmi (Roster OFF = 0, BUKAN A!)
+        const sched = empSchedules.find((s) => {
+          const dt = (s.scheduleDate || s.schedule_date || s.date || '').slice(0, 10);
+          return dt === d.dateStr;
+        });
+        const isSchedOff = Boolean(
+          sched && (sched.isOff || sched.is_off || sched.shiftCode === 'OFF' || sched.shift_code === 'OFF')
+        );
+
+        // C. Check attendance record in DB
         const attOnDay = empAtts.find((a) => {
           const dt = ((a as any).attendance_date_str || (a as any).attendance_date || (a as any).attendanceDate || (a as any).date || '').toString().slice(0, 10);
           return dt === d.dateStr;
         });
+
+        // D. Check overtime on day
+        const otOnDay = empOts.find((o) => {
+          const dt = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
+          return dt === d.dateStr;
+        });
+
         if (attOnDay) {
           const st = (attOnDay.status || '').toLowerCase().trim();
-          if (st === 'hadir' || st === 'terlambat' || (attOnDay as any).clock_in || (attOnDay as any).clockIn) {
-            dailyCells.push('1');
-            totalHadir++;
-            return;
-          } else if (st === 'mangkir' || st === 'alpa') {
-            dailyCells.push('A');
-            countA++;
-            return;
-          } else if (st === 'cuti') {
+          if (st === 'cuti') {
             dailyCells.push('CT');
             countCT++;
             return;
@@ -265,57 +288,125 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
             dailyCells.push('I');
             countI++;
             return;
-          } else if (st === 'off' || st === 'libur') {
+          } else if (st === 'mangkir' || st === 'alpa') {
+            dailyCells.push('A');
+            countA++;
+            return;
+          } else if (isSchedOff || st === 'off' || st === 'libur') {
             dailyCells.push('0');
+            return;
+          } else if (st === 'hadir' || st === 'terlambat' || (attOnDay as any).clock_in || (attOnDay as any).clockIn) {
+            if (isSchedOff) {
+              dailyCells.push('0');
+            } else {
+              dailyCells.push('1');
+              totalHadir++;
+            }
+            return;
+          } else {
+            dailyCells.push(isSchedOff ? '0' : '1');
+            if (!isSchedOff) totalHadir++;
             return;
           }
         }
 
-        // 3. Fallback: Weekend / Off pattern
+        // E. Jika jadwal di Roster adalah OFF: 100% adalah '0', BUKAN 'A'
+        if (isSchedOff) {
+          dailyCells.push('0');
+          return;
+        }
+
+        // F. Fallback: Weekend / Off pattern
         if (d.isWeekend) {
           dailyCells.push('0');
         } else if (d.dateStr < todayYmd) {
-          // Already passed without attendance -> Alpa / Mangkir (A)
-          dailyCells.push('A');
-          countA++;
+          if (sched && !sched.isOff) {
+            dailyCells.push('A');
+            countA++;
+          } else if (!sched) {
+            if (otOnDay) {
+              dailyCells.push('0');
+            } else {
+              dailyCells.push('A');
+              countA++;
+            }
+          } else {
+            dailyCells.push('0');
+          }
         } else {
-          // Normal scheduled workday
           dailyCells.push('1');
           totalHadir++;
         }
       });
 
-      // Overtime Real & Overtime Paid
+      // Overtime Real & Overtime Paid Sesuai Aturan Baku PT FRP
       let realHours = 0;
       let paidHours = 0;
       let totalPay = 0;
 
+      const empDiv = ((emp.divisionName || (emp as any).division_name || (emp as any).seksi || emp.jobTitle || '')).toLowerCase();
+      const isTimbanganOrSegel = empDiv.includes('timbangan') || empDiv.includes('segel');
+      const isMatching = empDiv.includes('matching');
+
       empOts.forEach((o) => {
         const rawDur = parseFloat((o as any).duration_hours || (o as any).durationHours || (o as any).approved_hours || (o as any).approvedHours || 0);
-        realHours += rawDur;
-
         const desc = ((o as any).task_description || (o as any).taskDescription || '').toLowerCase();
+        const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
+        const schedOnDay = empSchedules.find((s) => (s.scheduleDate || s.schedule_date || '').slice(0, 10) === oDateStr);
+        const isSchedOff = Boolean(schedOnDay && (schedOnDay.isOff || schedOnDay.is_off || schedOnDay.shiftCode === 'OFF' || schedOnDay.shift_code === 'OFF'));
+
         const isReliefOrHoliday =
           Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday) ||
+          isSchedOff ||
           desc.includes('pengganti') ||
+          desc.includes('mengganti') ||
+          desc.includes('menggantikan') ||
+          desc.includes('ganti') ||
           desc.includes('relief') ||
           desc.includes('sambung') ||
           desc.includes('libur') ||
           desc.includes('off') ||
-          desc.includes('cuti');
+          desc.includes('cuti') ||
+          desc.includes('pos');
 
         const explicitMult = Number((o as any).rate_multiplier || (o as any).rateMultiplier);
-        const mult = explicitMult > 0 ? explicitMult : (isReliefOrHoliday ? 2.0 : 1.5);
 
-        // Paid hours
-        const empPaid = rawDur * mult;
+        let effectiveHours = rawDur;
+        let empPaid = 0;
+
+        if (explicitMult === 3.0) {
+          empPaid = rawDur * 3.0;
+          realHours += rawDur;
+        } else if (explicitMult === 4.0) {
+          empPaid = rawDur * 4.0;
+          realHours += rawDur;
+        } else if (isReliefOrHoliday) {
+          // Aturan Baku Pengganti / OFF:
+          // Timbangan/Segel: Tanpa potongan istirahat, pengali 2.0x
+          // Matching: Potongan istirahat 1 jam jika jam tugas penuh (>= 8 jam), pengali 2.0x
+          if (isMatching) {
+            effectiveHours = rawDur >= 8 ? rawDur - 1 : rawDur;
+          } else if (isTimbanganOrSegel) {
+            effectiveHours = rawDur;
+          } else {
+            effectiveHours = rawDur;
+          }
+          empPaid = effectiveHours * 2.0;
+          realHours += effectiveHours;
+        } else {
+          // Kelebihan Jam Hari Kerja Biasa: Jam ke-1 @ 1.5x, jam berikutnya @ 2.0x
+          const h1 = Math.min(1, rawDur);
+          const h2 = Math.max(0, rawDur - 1);
+          empPaid = (h1 * 1.5) + (h2 * 2.0);
+          realHours += rawDur;
+        }
+
+        paidHours += empPaid;
         const comp = parseFloat((o as any).compensation_amount || (o as any).compensationAmount || (o as any).totalPay || 0);
         if (comp > 0) {
           totalPay += comp;
-          paidHours += empPaid;
         } else {
           totalPay += Math.round(empPaid * HOURLY_RATE);
-          paidHours += empPaid;
         }
       });
 
@@ -343,7 +434,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         totalUpahLembur: totalPay,
       };
     });
-  }, [targetEmployees, activeAttendances, activeLeaves, activeOvertimes, selectedMonth, daysMeta, HOURLY_RATE]);
+  }, [targetEmployees, activeAttendances, activeLeaves, activeOvertimes, activeSchedules, selectedMonth, daysMeta, HOURLY_RATE]);
 
   // Grand Totals
   const grandTotals = useMemo(() => {
