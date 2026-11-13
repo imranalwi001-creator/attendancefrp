@@ -56,6 +56,7 @@ import {
   Users,
   Ship,
   Home,
+  Sparkles,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -91,6 +92,8 @@ import { HrmEmployeeMonthlyCalendarModal } from '@/components/hrm/HrmEmployeeMon
 import { HrmEmployeeRealtimeReportModal } from '@/components/hrm/HrmEmployeeRealtimeReportModal';
 import { HrmMonthlyFinancialRecapModal } from '@/components/hrm/HrmMonthlyFinancialRecapModal';
 import { HrmEmployeeQuickProfileModal } from '@/components/hrm/HrmEmployeeQuickProfileModal';
+import { HrmTimeSheetPdfModal } from '@/components/hrm/HrmTimeSheetPdfModal';
+import { HrmSplMultiplierMatrixModal } from '@/components/hrm/HrmSplMultiplierMatrixModal';
 
 export const HrmLiveMonitoringPage: React.FC = () => {
   const { user } = useHrmAuth();
@@ -229,6 +232,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [selectedReportShift, setSelectedReportShift] = useState<any>(null);
   const navigate = useNavigate();
   const [financialRecapModalOpen, setFinancialRecapModalOpen] = useState<boolean>(false);
+  const [timeSheetModalOpen, setTimeSheetModalOpen] = useState<boolean>(false);
+  const [splMatrixModalOpen, setSplMatrixModalOpen] = useState<boolean>(false);
   const [payrollScopeGroup, setPayrollScopeGroup] = useState<'ALL' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP'>('ALL');
   const [nextPayrollArrears, setNextPayrollArrears] = useState<any>(null);
   const [quickProfileModalOpen, setQuickProfileModalOpen] = useState<boolean>(false);
@@ -1606,11 +1611,29 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               </Button>
               <Button
                 type="button"
+                onClick={() => setTimeSheetModalOpen(true)}
+                className="bg-indigo-700 hover:bg-indigo-800 text-white text-xs h-9 px-3 rounded-xl font-semibold gap-1.5 shadow-xs transition-all w-full sm:w-auto"
+                title="Buka Time Sheet Resmi Tenaga Alih Daya PT FRP (41 Kolom PDF/Excel)"
+              >
+                <FileSpreadsheet size={14} />
+                <span>Time Sheet 41-Kolom</span>
+              </Button>
+              <Button
+                type="button"
+                onClick={() => setSplMatrixModalOpen(true)}
+                className="bg-amber-600 hover:bg-amber-700 text-white text-xs h-9 px-3 rounded-xl font-semibold gap-1.5 shadow-xs transition-all w-full sm:w-auto"
+                title="Buka Matriks Input SPL 7-Row (Sinkron Database, PWA & Lembur)"
+              >
+                <Sparkles size={14} />
+                <span>Matriks Input SPL</span>
+              </Button>
+              <Button
+                type="button"
                 onClick={() => setFinancialRecapModalOpen(true)}
-                className="bg-amber-600 hover:bg-amber-700 text-white text-xs h-9 px-3.5 rounded-xl font-semibold gap-2 shadow-xs transition-all w-full sm:w-auto"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9 px-3.5 rounded-xl font-semibold gap-2 shadow-xs transition-all w-full sm:w-auto"
               >
                 <Coins size={14} />
-                <span>Rekap Realtime</span>
+                <span>Rekap Gaji &amp; Lembur</span>
               </Button>
             </div>
           </div>
@@ -4434,6 +4457,29 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             geofenceDistance: photoData.geofenceDistance,
           });
         }}
+      />
+
+      {/* Modal Master 41-Column Time Sheet & Overtime PDF */}
+      <HrmTimeSheetPdfModal
+        open={timeSheetModalOpen}
+        onClose={() => setTimeSheetModalOpen(false)}
+        employees={users}
+        attendances={allAttendances}
+        overtimes={overtimes}
+        leaves={approvedLeaves}
+        initialMonth={selectedMonth}
+      />
+
+      {/* Modal Interactive 7-Sub-Row SPL Multiplier Matrix */}
+      <HrmSplMultiplierMatrixModal
+        open={splMatrixModalOpen}
+        onClose={() => setSplMatrixModalOpen(false)}
+        employees={users}
+        attendances={allAttendances}
+        overtimes={overtimes}
+        leaves={approvedLeaves}
+        initialMonth={selectedMonth}
+        onDataChanged={loadData}
       />
     </div>
   );

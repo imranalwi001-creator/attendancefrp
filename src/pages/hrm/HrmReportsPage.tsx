@@ -27,6 +27,7 @@ import { HrmEditLemburModal } from '@/components/hrm/superadmin/HrmEditLemburMod
 import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
 import { HrmEmployeeLeaveCorrectionModal } from '@/components/hrm/HrmEmployeeLeaveCorrectionModal';
 import { HrmTimeSheetPdfModal } from '@/components/hrm/HrmTimeSheetPdfModal';
+import { HrmSplMultiplierMatrixModal } from '@/components/hrm/HrmSplMultiplierMatrixModal';
 import defaultLogo from '@/assets/logo.png';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -155,6 +156,7 @@ export const HrmReportsPage: React.FC = () => {
   const [editingOtRecord, setEditingOtRecord] = useState<OvertimeRecord | null>(null);
   const [otPrintModalOpen, setOtPrintModalOpen] = useState(false);
   const [timeSheetModalOpen, setTimeSheetModalOpen] = useState(false);
+  const [splMatrixModalOpen, setSplMatrixModalOpen] = useState(false);
 
   // ── Payroll Tab State ───────────────────────────────────────────────────────
   const [payrollSearchQuery, setPayrollSearchQuery] = useState('');
@@ -1160,6 +1162,12 @@ export const HrmReportsPage: React.FC = () => {
                 <Plus size={14} /> + Input Lembur Manual
               </Button>
               <Button
+                onClick={() => setSplMatrixModalOpen(true)}
+                className="bg-amber-600 hover:bg-amber-700 text-white text-xs gap-1.5 h-9 rounded-xl font-bold shadow-sm"
+              >
+                <Sparkles size={14} className="text-amber-200" /> Matriks Input SPL 7-Row (Sinkron Database)
+              </Button>
+              <Button
                 onClick={() => setTimeSheetModalOpen(true)}
                 className="bg-indigo-700 hover:bg-indigo-800 text-white text-xs gap-1.5 h-9 rounded-xl font-bold shadow-sm"
               >
@@ -1926,6 +1934,12 @@ export const HrmReportsPage: React.FC = () => {
                 <Plus size={14} /> + Presensi Manual
               </Button>
               <Button
+                onClick={() => setSplMatrixModalOpen(true)}
+                className="bg-amber-600 hover:bg-amber-700 text-white text-xs gap-1.5 h-9 rounded-xl font-bold shadow-sm"
+              >
+                <Sparkles size={14} className="text-amber-200" /> Matriks SPL 7-Row &amp; Input Lembur
+              </Button>
+              <Button
                 onClick={() => setAbsenSplModalOpen(true)}
                 className="bg-teal-700 hover:bg-teal-600 text-white text-xs gap-1.5 h-9 rounded-xl font-semibold border border-teal-500/40"
               >
@@ -2238,6 +2252,18 @@ export const HrmReportsPage: React.FC = () => {
         overtimes={overtimes}
         leaves={leaves}
         initialMonth={selectedMonth}
+      />
+
+      {/* 9. Interactive 7-Sub-Row SPL Multiplier Matrix Modal */}
+      <HrmSplMultiplierMatrixModal
+        open={splMatrixModalOpen}
+        onClose={() => setSplMatrixModalOpen(false)}
+        employees={employees}
+        attendances={attendances}
+        overtimes={overtimes}
+        leaves={leaves}
+        initialMonth={selectedMonth}
+        onDataChanged={loadData}
       />
 
       {/* 8. Inline Modal Input Presensi Manual */}

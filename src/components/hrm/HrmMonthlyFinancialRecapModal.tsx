@@ -55,6 +55,8 @@ import {
 } from '@/lib/frpPayrollCalculations';
 import { getTodayDateStr } from '@/services/hrmService';
 import { toast } from 'sonner';
+import { HrmTimeSheetPdfModal } from '@/components/hrm/HrmTimeSheetPdfModal';
+import { HrmSplMultiplierMatrixModal } from '@/components/hrm/HrmSplMultiplierMatrixModal';
 
 interface Props {
   isOpen: boolean;
@@ -105,6 +107,8 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
   const [search, setSearch] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<'ALL' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP'>(initialGroup || 'ALL');
   const [filterOnlyWithOvertime, setFilterOnlyWithOvertime] = useState<boolean>(false);
+  const [timeSheetOpen, setTimeSheetOpen] = useState(false);
+  const [splMatrixOpen, setSplMatrixOpen] = useState(false);
 
   // Live overtimes & synced PT FRP next-month payroll projection
   const [liveOvertimes, setLiveOvertimes] = useState<any[]>(initialOvertimes || []);
@@ -1113,6 +1117,22 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
 
               <Button
                 size="sm"
+                onClick={() => setTimeSheetOpen(true)}
+                className="h-8 text-xs font-semibold gap-1.5 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white shadow-2xs"
+                title="Buka Time Sheet Resmi Tenaga Alih Daya 41 Kolom PDF/Excel"
+              >
+                <FileSpreadsheet size={13} /> Time Sheet 41-Kolom
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setSplMatrixOpen(true)}
+                className="h-8 text-xs font-semibold gap-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white shadow-2xs"
+                title="Buka Matriks Input SPL 7-Row (Sinkron Database)"
+              >
+                <Sparkles size={13} /> Matriks Input SPL
+              </Button>
+              <Button
+                size="sm"
                 variant="outline"
                 onClick={handleExportExcel}
                 className="h-8 text-xs font-semibold gap-1.5 rounded-xl border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 shadow-2xs"
@@ -2047,6 +2067,28 @@ export const HrmMonthlyFinancialRecapModal: React.FC<Props> = ({
             Tutup
           </Button>
         </DialogFooter>
+
+        {/* Master 41-Column Time Sheet & Overtime PDF Modal */}
+        <HrmTimeSheetPdfModal
+          open={timeSheetOpen}
+          onClose={() => setTimeSheetOpen(false)}
+          employees={users}
+          attendances={attendances}
+          overtimes={initialOvertimes}
+          leaves={leaves}
+          initialMonth={selectedMonth}
+        />
+
+        {/* Interactive 7-Sub-Row SPL Multiplier Matrix Modal */}
+        <HrmSplMultiplierMatrixModal
+          open={splMatrixOpen}
+          onClose={() => setSplMatrixOpen(false)}
+          employees={users}
+          attendances={attendances}
+          overtimes={initialOvertimes}
+          leaves={leaves}
+          initialMonth={selectedMonth}
+        />
       </DialogContent>
     </Dialog>
   );
