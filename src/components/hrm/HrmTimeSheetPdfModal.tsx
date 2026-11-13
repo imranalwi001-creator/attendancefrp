@@ -31,6 +31,77 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
   const [selectedGroup, setSelectedGroup] = useState<'SHIPMENT' | 'RUMAH TANGGA' | 'ALL'>('SHIPMENT');
   const printAreaRef = useRef<HTMLDivElement>(null);
 
+  // Local Reactive States for Live Synchronization
+  const [activeAttendances, setActiveAttendances] = useState<AttendanceRecord[]>(attendances || []);
+  const [activeOvertimes, setActiveOvertimes] = useState<OvertimeRecord[]>(overtimes || []);
+  const [activeLeaves, setActiveLeaves] = useState<LeaveRequest[]>(leaves || []);
+  const [isFetchingData, setIsFetchingData] = useState<boolean>(false);
+
+  React.useEffect(() => {
+    if (attendances && attendances.length > 0) setActiveAttendances(attendances);
+  }, [attendances]);
+  React.useEffect(() => {
+    if (overtimes && overtimes.length > 0) setActiveOvertimes(overtimes);
+  }, [overtimes]);
+  React.useEffect(() => {
+    if (leaves && leaves.length > 0) setActiveLeaves(leaves);
+  }, [leaves]);
+
+  const fetchLatestTimeSheetData = React.useCallback(async (targetMonth: string) => {
+    setIsFetchingData(true);
+    try {
+      const [aRes, oRes, lRes] = await Promise.all([
+        fetch(`/api/attendances?month=${targetMonth}`),
+        fetch(`/api/overtime?month=${targetMonth}`),
+        fetch('/api/leaves'),
+      ]);
+      if (aRes.ok) {
+        const aJson = await aRes.json();
+        if (aJson.success && Array.isArray(aJson.data)) {
+          setActiveAttendances(aJson.data);
+        }
+      }
+      if (oRes.ok) {
+        const oJson = await oRes.json();
+        if (oJson.success && Array.isArray(oJson.data)) {
+          setActiveOvertimes(oJson.data);
+        }
+      }
+      if (lRes.ok) {
+        const lJson = await lRes.json();
+        if (lJson.success && Array.isArray(lJson.data)) {
+          setActiveLeaves(lJson.data);
+        }
+      }
+    } catch (err) {
+      console.warn('[TimeSheet Sync Warn]:', err);
+    } finally {
+      setIsFetchingData(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (open) {
+      fetchLatestTimeSheetData(selectedMonth);
+    }
+  }, [open, selectedMonth, fetchLatestTimeSheetData]);
+
+  React.useEffect(() => {
+    const handleSyncEvent = () => {
+      if (open) {
+        fetchLatestTimeSheetData(selectedMonth);
+      }
+    };
+    window.addEventListener('hrm_overtime_updated', handleSyncEvent);
+    window.addEventListener('hrm_attendance_updated', handleSyncEvent);
+    window.addEventListener('hrm_data_updated', handleSyncEvent);
+    return () => {
+      window.removeEventListener('hrm_overtime_updated', handleSyncEvent);
+      window.removeEventListener('hrm_attendance_updated', handleSyncEvent);
+      window.removeEventListener('hrm_data_updated', handleSyncEvent);
+    };
+  }, [open, selectedMonth, fetchLatestTimeSheetData]);
+
   // Month Math
   const [yearNum, monthNum] = useMemo(() => {
     const parts = selectedMonth.split('-').map(Number);
@@ -104,26 +175,34 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
   const timeSheetRows = useMemo(() => {
     return targetEmployees.map((emp, idx) => {
       const empNipNorm = (emp.nip || '').replace(/[\s.]/g, '').toUpperCase();
+      const empIdStr = (emp.id || '').toString();
       const nipDisplay = emp.nip ? (emp.nip.includes('.') ? emp.nip : emp.nip.replace(/(FR)(07)(\d+)/, '$1.$2.$3')) : `FR.07.${String(idx + 34).padStart(3, '0')}`;
 
-      // Attendances in selectedMonth
-      const empAtts = attendances.filter((a) => {
-        const aNipNorm = (a.userNip || '').replace(/[\s.]/g, '').toUpperCase();
-        const inMonth = (a.attendanceDate || (a as any).date || '').startsWith(selectedMonth);
-        return inMonth && ((empNipNorm && aNipNorm && empNipNorm === aNipNorm) || a.userId === emp.id || a.userNip === emp.nip);
+      // Attendances in selectedMonth (Normalisasi Defensif Snake & Camel Case)
+      const empAtts = activeAttendances.filter((a) => {
+        const aNipNorm = ((a as any).user_nip || (a as any).userNip || (a as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
+        const aUserId = ((a as any).user_id || (a as any).userId || '').toString();
+        const aDateStr = ((a as any).attendance_date_str || (a as any).attendance_date || (a as any).attendanceDate || (a as any).date || '').toString().slice(0, 10);
+        const inMonth = aDateStr.startsWith(selectedMonth);
+        return inMonth && (aUserId === empIdStr || (empNipNorm && aNipNorm && empNipNorm === aNipNorm));
       });
 
       // Approved leaves
-      const empLeaves = leaves.filter((l) => {
-        const lNipNorm = ((l as any).userNip || '').replace(/[\s.]/g, '').toUpperCase();
-        return l.status === 'approved' && ((empNipNorm && lNipNorm && empNipNorm === lNipNorm) || l.userId === emp.id || (l as any).userNip === emp.nip);
+      const empLeaves = activeLeaves.filter((l) => {
+        const lNipNorm = ((l as any).user_nip || (l as any).userNip || (l as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
+        const lUserId = ((l as any).user_id || (l as any).userId || '').toString();
+        const isApp = (l.status || '').toLowerCase() === 'approved';
+        return isApp && (lUserId === empIdStr || (empNipNorm && lNipNorm && empNipNorm === lNipNorm));
       });
 
       // Approved overtimes
-      const empOts = overtimes.filter((o) => {
-        const oNipNorm = (o.userNip || '').replace(/[\s.]/g, '').toUpperCase();
-        const inMonth = (o.date || '').startsWith(selectedMonth);
-        return inMonth && o.status === 'approved' && ((empNipNorm && oNipNorm && empNipNorm === oNipNorm) || o.userId === emp.id || o.userNip === emp.nip);
+      const empOts = activeOvertimes.filter((o) => {
+        const oNipNorm = ((o as any).user_nip || (o as any).userNip || (o as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
+        const oUserId = ((o as any).user_id || (o as any).userId || '').toString();
+        const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
+        const inMonth = oDateStr.startsWith(selectedMonth);
+        const isApp = (o.status || '').toLowerCase() === 'approved' || Boolean((o as any).assignedByAdmin || (o as any).isManualAdmin);
+        return inMonth && isApp && (oUserId === empIdStr || (empNipNorm && oNipNorm && empNipNorm === oNipNorm));
       });
 
       // Daily cells: 1..daysInMonth
@@ -133,17 +212,22 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
       let countS = 0;
       let countI = 0;
       let countCT = 0;
+      const todayYmd = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
 
       daysMeta.forEach((d) => {
         // 1. Check leave
-        const leaveOnDay = empLeaves.find((l) => l.startDate <= d.dateStr && l.endDate >= d.dateStr);
+        const leaveOnDay = empLeaves.find((l) => {
+          const s = ((l as any).start_date || (l as any).startDate || '').toString().slice(0, 10);
+          const e = ((l as any).end_date || (l as any).endDate || '').toString().slice(0, 10);
+          return s <= d.dateStr && e >= d.dateStr;
+        });
         if (leaveOnDay) {
-          const type = (leaveOnDay.leaveType || '').toLowerCase();
-          if (type === 'sakit') {
-            dailyCells.push('SK');
+          const type = ((leaveOnDay as any).leave_type || (leaveOnDay as any).leaveType || '').toLowerCase();
+          if (type.includes('sakit') || type.includes('sick')) {
+            dailyCells.push('S');
             countS++;
             return;
-          } else if (type === 'izin') {
+          } else if (type.includes('izin') || type.includes('permission')) {
             dailyCells.push('I');
             countI++;
             return;
@@ -155,29 +239,33 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         }
 
         // 2. Check attendance
-        const attOnDay = empAtts.find((a) => (a.attendanceDate || (a as any).date) === d.dateStr);
+        const attOnDay = empAtts.find((a) => {
+          const dt = ((a as any).attendance_date_str || (a as any).attendance_date || (a as any).attendanceDate || (a as any).date || '').toString().slice(0, 10);
+          return dt === d.dateStr;
+        });
         if (attOnDay) {
-          if (attOnDay.status === 'hadir') {
+          const st = (attOnDay.status || '').toLowerCase().trim();
+          if (st === 'hadir' || st === 'terlambat' || (attOnDay as any).clock_in || (attOnDay as any).clockIn) {
             dailyCells.push('1');
             totalHadir++;
             return;
-          } else if (attOnDay.status === 'mangkir') {
+          } else if (st === 'mangkir' || st === 'alpa') {
             dailyCells.push('A');
             countA++;
             return;
-          } else if (attOnDay.status === 'cuti') {
+          } else if (st === 'cuti') {
             dailyCells.push('CT');
             countCT++;
             return;
-          } else if (attOnDay.status === 'sakit') {
-            dailyCells.push('SK');
+          } else if (st === 'sakit') {
+            dailyCells.push('S');
             countS++;
             return;
-          } else if (attOnDay.status === 'izin') {
+          } else if (st === 'izin') {
             dailyCells.push('I');
             countI++;
             return;
-          } else if (attOnDay.status === 'off' || attOnDay.status === 'libur') {
+          } else if (st === 'off' || st === 'libur') {
             dailyCells.push('0');
             return;
           }
@@ -186,17 +274,14 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         // 3. Fallback: Weekend / Off pattern
         if (d.isWeekend) {
           dailyCells.push('0');
+        } else if (d.dateStr < todayYmd) {
+          // Already passed without attendance -> Alpa / Mangkir (A)
+          dailyCells.push('A');
+          countA++;
         } else {
-          // Normal workday
-          const todayYmd = new Date().toISOString().slice(0, 10);
-          if (d.dateStr < todayYmd) {
-            // Already passed without attendance -> default to present or off based on shift
-            dailyCells.push('1');
-            totalHadir++;
-          } else {
-            dailyCells.push('1');
-            totalHadir++;
-          }
+          // Normal scheduled workday
+          dailyCells.push('1');
+          totalHadir++;
         }
       });
 
@@ -206,19 +291,31 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
       let totalPay = 0;
 
       empOts.forEach((o) => {
-        const rawDur = Number(o.durationHours || o.approvedHours || 0);
+        const rawDur = parseFloat((o as any).duration_hours || (o as any).durationHours || (o as any).approved_hours || (o as any).approvedHours || 0);
         realHours += rawDur;
 
-        const mult = Number(o.rateMultiplier) || (o.isWeekendHoliday ? 2.0 : 1.5);
+        const desc = ((o as any).task_description || (o as any).taskDescription || '').toLowerCase();
+        const isReliefOrHoliday =
+          Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday) ||
+          desc.includes('pengganti') ||
+          desc.includes('relief') ||
+          desc.includes('sambung') ||
+          desc.includes('libur') ||
+          desc.includes('off') ||
+          desc.includes('cuti');
+
+        const explicitMult = Number((o as any).rate_multiplier || (o as any).rateMultiplier);
+        const mult = explicitMult > 0 ? explicitMult : (isReliefOrHoliday ? 2.0 : 1.5);
+
         // Paid hours
-        let empPaid = rawDur * mult;
-        if (Number(o.totalPay || o.compensationAmount) > 0) {
-          totalPay += Number(o.totalPay || o.compensationAmount);
+        const empPaid = rawDur * mult;
+        const comp = parseFloat((o as any).compensation_amount || (o as any).compensationAmount || (o as any).totalPay || 0);
+        if (comp > 0) {
+          totalPay += comp;
           paidHours += empPaid;
         } else {
-          empPaid = rawDur * mult;
-          paidHours += empPaid;
           totalPay += Math.round(empPaid * HOURLY_RATE);
+          paidHours += empPaid;
         }
       });
 
@@ -246,7 +343,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         totalUpahLembur: totalPay,
       };
     });
-  }, [targetEmployees, attendances, leaves, overtimes, selectedMonth, daysMeta, HOURLY_RATE]);
+  }, [targetEmployees, activeAttendances, activeLeaves, activeOvertimes, selectedMonth, daysMeta, HOURLY_RATE]);
 
   // Grand Totals
   const grandTotals = useMemo(() => {
@@ -554,6 +651,19 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
               onChange={(e) => e.target.value && setSelectedMonth(e.target.value)}
               className="h-9 px-2 text-xs rounded-xl border border-border bg-card font-mono font-bold"
             />
+
+            {/* Live Refresh Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fetchLatestTimeSheetData(selectedMonth)}
+              disabled={isFetchingData}
+              className="h-9 text-xs gap-1.5 rounded-xl font-bold border-primary/30 text-primary hover:bg-primary/10"
+              title="Sinkronisasi Ulang Data Realtime dari Database"
+            >
+              <RotateCw size={13} className={isFetchingData ? 'animate-spin text-primary' : ''} />
+              {isFetchingData ? 'Menyinkronkan...' : 'Sinkron Realtime'}
+            </Button>
 
             {/* Print & Excel Buttons */}
             <Button onClick={handlePrint} className="h-9 text-xs gap-1.5 rounded-xl font-bold bg-primary text-primary-foreground shadow-sm">

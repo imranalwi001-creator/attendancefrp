@@ -424,6 +424,10 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
 
       if (res.success) {
         toast.success(`SPKL Lembur manual untuk ${selectedUser?.fullName} (${durationHours} Jam) berhasil diterbitkan & disahkan!`);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('hrm_overtime_updated'));
+          window.dispatchEvent(new CustomEvent('hrm_data_updated'));
+        }
         if (onSuccess) onSuccess();
         onClose();
       } else {

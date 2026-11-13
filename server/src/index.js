@@ -6685,12 +6685,19 @@ app.get('/api/attendances', async (req, res) => {
   try {
     const isFullPhoto = includePhoto === 'true';
     let query = isFullPhoto
-      ? `SELECT a.*, p.full_name as user_name, p.nip as user_nip, p.avatar_url as user_avatar,
+      ? `SELECT a.*, a.user_id as "userId", a.attendance_date as "attendanceDate",
+                TO_CHAR(a.attendance_date, 'YYYY-MM-DD') as "attendanceDateStr",
+                p.full_name as user_name, p.full_name as "userName",
+                p.nip as user_nip, p.nip as "userNip",
+                p.avatar_url as user_avatar,
                 COALESCE(d.name, p.division_name, 'Umum') as division_name
          FROM hrm_attendances a
          LEFT JOIN hrm_profiles p ON a.user_id = p.id
          LEFT JOIN hrm_divisions d ON p.division_id = d.id`
-      : `SELECT a.id, a.user_id, a.attendance_date, a.clock_in, a.clock_out,
+      : `SELECT a.id, a.user_id, a.user_id as "userId", 
+                a.attendance_date, a.attendance_date as "attendanceDate",
+                TO_CHAR(a.attendance_date, 'YYYY-MM-DD') as "attendanceDateStr",
+                a.clock_in, a.clock_out,
                 a.lat_in, a.long_in, a.lat_out, a.long_out, a.status,
                 a.late_minutes, a.early_leaving_minutes, a.work_duration_minutes,
                 a.is_locked, a.is_perimeter_breached, a.perimeter_breach_count, a.time_outside_minutes,
@@ -6701,7 +6708,8 @@ app.get('/api/attendances', async (req, res) => {
                 a.is_on_break, a.break_start_time, a.break_end_time, a.break_duration_minutes,
                 (a.photo_in IS NOT NULL) as has_photo_in,
                 (a.photo_out IS NOT NULL) as has_photo_out,
-                p.full_name as user_name, p.nip as user_nip,
+                p.full_name as user_name, p.full_name as "userName",
+                p.nip as user_nip, p.nip as "userNip",
                 CASE WHEN (p.avatar_url IS NOT NULL OR p.face_photo_url IS NOT NULL) THEN '/api/users/' || p.id || '/avatar' ELSE NULL END as user_avatar,
                 COALESCE(d.name, p.division_name, 'Umum') as division_name
          FROM hrm_attendances a
@@ -7951,7 +7959,16 @@ app.get('/api/leaves', async (req, res) => {
   const { userId, status, divisionId } = req.query;
   try {
     let query = `
-      SELECT l.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name,
+      SELECT l.*, 
+             TO_CHAR(l.start_date, 'YYYY-MM-DD') as "startDate",
+             TO_CHAR(l.end_date, 'YYYY-MM-DD') as "endDate",
+             l.leave_type as "leaveType",
+             l.user_id as "userId",
+             p.full_name as user_name, 
+             p.full_name as "userName",
+             p.nip as user_nip, 
+             p.nip as "userNip",
+             d.name as division_name,
              p.annual_leave_quota, p.used_leave_days, p.division_id as user_division_id,
              ap.full_name as approver_name,
              sp.phone as substitute_phone, sp.full_name as sub_profile_name, sp.nip as sub_profile_nip,
@@ -10569,10 +10586,21 @@ app.put('/api/leaves/:id/status', async (req, res) => {
 
 // ─── 9. OVERTIME REQUESTS (SURAT PERINTAH LEMBUR) ─────────────────────────────
 app.get('/api/overtime', async (req, res) => {
-  const { userId, status, divisionId } = req.query;
+  const { userId, status, divisionId, month, startDate, endDate } = req.query;
   try {
     let query = `
-      SELECT o.*, p.full_name as user_name, p.nip as user_nip, d.name as division_name,
+      SELECT o.*, 
+             TO_CHAR(o.date, 'YYYY-MM-DD') as date_str,
+             o.duration_hours as "durationHours",
+             o.approved_hours as "approvedHours",
+             o.user_id as "userId",
+             o.task_description as "taskDescription",
+             p.full_name as user_name, 
+             p.full_name as "userName",
+             p.nip as user_nip, 
+             p.nip as "userNip",
+             d.name as division_name,
+             d.name as "divisionName",
              p.division_id as user_division_id,
              ap.full_name as approver_name
       FROM hrm_overtime_records o
@@ -10599,10 +10627,20 @@ app.get('/api/overtime', async (req, res) => {
       params.push(divisionId);
       conditions.push(`p.division_id::text = $${params.length}`);
     }
+    if (month) {
+      params.push(month);
+      conditions.push(`TO_CHAR(o.date, 'YYYY-MM') = $${params.length}`);
+    } else if (startDate && endDate) {
+      params.push(startDate);
+      const p1 = params.length;
+      params.push(endDate);
+      const p2 = params.length;
+      conditions.push(`o.date BETWEEN $${p1}::date AND $${p2}::date`);
+    }
     if (conditions.length > 0) {
       query += ' WHERE ' + conditions.join(' AND ');
     }
-    query += ' ORDER BY o.created_at DESC LIMIT 200';
+    query += ' ORDER BY o.date DESC, o.created_at DESC LIMIT 1000';
     const result = await pool.query(query, params);
     res.json({ success: true, data: result.rows });
   } catch (err) {

@@ -59,6 +59,83 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
   const [selectedGroup, setSelectedGroup] = useState<'SHIPMENT' | 'RUMAH TANGGA' | 'ALL'>('SHIPMENT');
   const printAreaRef = useRef<HTMLDivElement>(null);
 
+  // Local Reactive States for Live Synchronization
+  const [activeAttendances, setActiveAttendances] = useState<AttendanceRecord[]>(attendances || []);
+  const [activeOvertimes, setActiveOvertimes] = useState<OvertimeRecord[]>(overtimes || []);
+  const [activeLeaves, setActiveLeaves] = useState<LeaveRequest[]>(leaves || []);
+  const [isFetchingData, setIsFetchingData] = useState<boolean>(false);
+  const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string>('');
+
+  // Sinkronisasi data awal dari props
+  React.useEffect(() => {
+    if (attendances && attendances.length > 0) setActiveAttendances(attendances);
+  }, [attendances]);
+  React.useEffect(() => {
+    if (overtimes && overtimes.length > 0) setActiveOvertimes(overtimes);
+  }, [overtimes]);
+  React.useEffect(() => {
+    if (leaves && leaves.length > 0) setActiveLeaves(leaves);
+  }, [leaves]);
+
+  // Fungsi Fetch Realtime Laporan Langsung ke Database PostgreSQL
+  const fetchLatestMatrixData = React.useCallback(async (targetMonth: string) => {
+    setIsFetchingData(true);
+    try {
+      const [aRes, oRes, lRes] = await Promise.all([
+        fetch(`/api/attendances?month=${targetMonth}`),
+        fetch(`/api/overtime?month=${targetMonth}`),
+        fetch('/api/leaves'),
+      ]);
+      if (aRes.ok) {
+        const aJson = await aRes.json();
+        if (aJson.success && Array.isArray(aJson.data)) {
+          setActiveAttendances(aJson.data);
+        }
+      }
+      if (oRes.ok) {
+        const oJson = await oRes.json();
+        if (oJson.success && Array.isArray(oJson.data)) {
+          setActiveOvertimes(oJson.data);
+        }
+      }
+      if (lRes.ok) {
+        const lJson = await lRes.json();
+        if (lJson.success && Array.isArray(lJson.data)) {
+          setActiveLeaves(lJson.data);
+        }
+      }
+      setLastSyncTimestamp(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WITA');
+    } catch (err) {
+      console.warn('[Matrix Sync Warn]:', err);
+    } finally {
+      setIsFetchingData(false);
+    }
+  }, []);
+
+  // Auto-fetch saat modal dibuka atau bulan diubah
+  React.useEffect(() => {
+    if (open) {
+      fetchLatestMatrixData(selectedMonth);
+    }
+  }, [open, selectedMonth, fetchLatestMatrixData]);
+
+  // Event Listeners: Reaktif Otomatis begitu SPKL manual diterbitkan atau presensi berubah!
+  React.useEffect(() => {
+    const handleSyncEvent = () => {
+      if (open) {
+        fetchLatestMatrixData(selectedMonth);
+      }
+    };
+    window.addEventListener('hrm_overtime_updated', handleSyncEvent);
+    window.addEventListener('hrm_attendance_updated', handleSyncEvent);
+    window.addEventListener('hrm_data_updated', handleSyncEvent);
+    return () => {
+      window.removeEventListener('hrm_overtime_updated', handleSyncEvent);
+      window.removeEventListener('hrm_attendance_updated', handleSyncEvent);
+      window.removeEventListener('hrm_data_updated', handleSyncEvent);
+    };
+  }, [open, selectedMonth, fetchLatestMatrixData]);
+
   // Cell Editor Modal State
   const [cellEditOpen, setCellEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<CellClickTarget | null>(null);
@@ -138,57 +215,83 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
 
   // Build Multi-Tier Matrix Data (7 rows per employee)
   const matrixData = useMemo(() => {
+    const todayWitaStr = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+
     return targetEmployees.map((emp, empIdx) => {
       const empNipNorm = (emp.nip || '').replace(/[\s.]/g, '').toUpperCase();
+      const empIdStr = (emp.id || '').toString();
       const nipDisplay = emp.nip ? (emp.nip.includes('.') ? emp.nip : emp.nip.replace(/(FR)(07)(\d+)/, '$1.$2.$3')) : `FR.07.${String(empIdx + 34).padStart(3, '0')}`;
 
-      // 1. Attendances
-      const empAtts = attendances.filter((a) => {
-        const aNipNorm = (a.userNip || '').replace(/[\s.]/g, '').toUpperCase();
-        const inMonth = (a.attendanceDate || (a as any).date || '').startsWith(selectedMonth);
-        return inMonth && ((empNipNorm && aNipNorm && empNipNorm === aNipNorm) || a.userId === emp.id || a.userNip === emp.nip);
+      // 1. Attendances (Normalisasi Defensif Snake & Camel Case)
+      const empAtts = activeAttendances.filter((a) => {
+        const aNip = ((a as any).user_nip || (a as any).userNip || (a as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
+        const aUserId = ((a as any).user_id || (a as any).userId || (a as any).id || '').toString();
+        const aDateStr = ((a as any).attendance_date_str || (a as any).attendance_date || (a as any).attendanceDate || (a as any).date || '').toString().slice(0, 10);
+        const inMonth = aDateStr.startsWith(selectedMonth);
+        return inMonth && (aUserId === empIdStr || (empNipNorm && aNip && empNipNorm === aNip));
       });
 
       // 2. Approved Leaves
-      const empLeaves = leaves.filter((l) => {
-        const lNipNorm = ((l as any).userNip || '').replace(/[\s.]/g, '').toUpperCase();
-        return l.status === 'approved' && ((empNipNorm && lNipNorm && empNipNorm === lNipNorm) || l.userId === emp.id || (l as any).userNip === emp.nip);
+      const empLeaves = activeLeaves.filter((l) => {
+        const lNip = ((l as any).user_nip || (l as any).userNip || (l as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
+        const lUserId = ((l as any).user_id || (l as any).userId || '').toString();
+        const isApp = (l.status || '').toLowerCase() === 'approved';
+        return isApp && (lUserId === empIdStr || (empNipNorm && lNip && empNipNorm === lNip));
       });
 
-      // 3. Overtimes in Month
-      const empOts = overtimes.filter((o) => {
-        const oNipNorm = (o.userNip || '').replace(/[\s.]/g, '').toUpperCase();
-        const inMonth = (o.date || '').startsWith(selectedMonth);
-        return inMonth && ((empNipNorm && oNipNorm && empNipNorm === oNipNorm) || o.userId === emp.id || o.userNip === emp.nip);
+      // 3. Overtimes in Month (Sinkron Otomatis dari Input Manual & PWA)
+      const empOts = activeOvertimes.filter((o) => {
+        const oNip = ((o as any).user_nip || (o as any).userNip || (o as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
+        const oUserId = ((o as any).user_id || (o as any).userId || '').toString();
+        const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
+        const inMonth = oDateStr.startsWith(selectedMonth);
+        const isApp = (o.status || '').toLowerCase() === 'approved' || Boolean((o as any).assignedByAdmin || (o as any).isManualAdmin);
+        return inMonth && isApp && (oUserId === empIdStr || (empNipNorm && oNip && empNipNorm === oNip));
       });
 
-      // Baris 1: Presensi Harian
+      // Baris 1: Presensi Harian (1 = Hadir, 0 = Off, A = Alfa/Mangkir, S = Sakit, I = Izin, CT = Cuti)
       const attendanceCells: { val: string; isHoliday: boolean }[] = [];
       let totalHariKerja = 0;
 
       daysMeta.forEach((d) => {
-        const leave = empLeaves.find((l) => l.startDate <= d.dateStr && l.endDate >= d.dateStr);
+        // A. Cek Cuti / Izin / Sakit Resmi Disahkan
+        const leave = empLeaves.find((l) => {
+          const s = ((l as any).start_date || (l as any).startDate || '').toString().slice(0, 10);
+          const e = ((l as any).end_date || (l as any).endDate || '').toString().slice(0, 10);
+          return s <= d.dateStr && e >= d.dateStr;
+        });
         if (leave) {
-          const type = (leave.leaveType || '').toLowerCase();
-          attendanceCells.push({ val: type === 'sakit' ? 'SK' : type === 'izin' ? 'I' : 'CT', isHoliday: d.isWeekend });
+          const t = ((leave as any).leave_type || (leave as any).leaveType || '').toLowerCase();
+          if (t.includes('sakit') || t.includes('sick')) {
+            attendanceCells.push({ val: 'S', isHoliday: d.isWeekend });
+          } else if (t.includes('izin') || t.includes('permission')) {
+            attendanceCells.push({ val: 'I', isHoliday: d.isWeekend });
+          } else {
+            attendanceCells.push({ val: 'CT', isHoliday: d.isWeekend });
+          }
           return;
         }
 
-        const att = empAtts.find((a) => (a.attendanceDate || (a as any).date) === d.dateStr);
+        // B. Cek Record Presensi Harian di Database
+        const att = empAtts.find((a) => {
+          const dt = ((a as any).attendance_date_str || (a as any).attendance_date || (a as any).attendanceDate || (a as any).date || '').toString().slice(0, 10);
+          return dt === d.dateStr;
+        });
         if (att) {
-          if (att.status === 'hadir') {
+          const st = (att.status || '').toLowerCase().trim();
+          if (st === 'cuti') {
+            attendanceCells.push({ val: 'CT', isHoliday: d.isWeekend });
+          } else if (st === 'sakit') {
+            attendanceCells.push({ val: 'S', isHoliday: d.isWeekend });
+          } else if (st === 'izin') {
+            attendanceCells.push({ val: 'I', isHoliday: d.isWeekend });
+          } else if (st === 'mangkir' || st === 'alpa') {
+            attendanceCells.push({ val: 'A', isHoliday: d.isWeekend });
+          } else if (st === 'off' || st === 'libur') {
+            attendanceCells.push({ val: '0', isHoliday: d.isWeekend });
+          } else if (st === 'hadir' || st === 'terlambat' || (att as any).clock_in || (att as any).clockIn) {
             attendanceCells.push({ val: '1', isHoliday: d.isWeekend });
             totalHariKerja++;
-          } else if (att.status === 'mangkir') {
-            attendanceCells.push({ val: 'A', isHoliday: d.isWeekend });
-          } else if (att.status === 'cuti') {
-            attendanceCells.push({ val: 'CT', isHoliday: d.isWeekend });
-          } else if (att.status === 'sakit') {
-            attendanceCells.push({ val: 'SK', isHoliday: d.isWeekend });
-          } else if (att.status === 'izin') {
-            attendanceCells.push({ val: 'I', isHoliday: d.isWeekend });
-          } else if (att.status === 'off' || att.status === 'libur') {
-            attendanceCells.push({ val: '0', isHoliday: d.isWeekend });
           } else {
             attendanceCells.push({ val: '1', isHoliday: d.isWeekend });
             totalHariKerja++;
@@ -196,41 +299,61 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
           return;
         }
 
+        // C. Fallback Cerdas Presensi:
         if (d.isWeekend) {
           attendanceCells.push({ val: '0', isHoliday: true });
+        } else if (d.dateStr < todayWitaStr) {
+          // Hari kerja lampau tanpa presensi dan tanpa cuti = ALPA / MANGKIR (A)
+          attendanceCells.push({ val: 'A', isHoliday: false });
         } else {
+          // Hari ini atau jadwal kerja mendatang = 1
           attendanceCells.push({ val: '1', isHoliday: false });
           totalHariKerja++;
         }
       });
 
-      // Baris Pengali: 1.5, 2 (weekday), 2 (holiday/relief), 3, 4
+      // Baris Pengali: 1.5, 2 (Hari Kerja), 2 (Libur / Relief Pengganti), 3, 4
       const buildMultiplierRow = (targetMult: number, isReliefRow: boolean) => {
         const cells: { hours: number; rawOt?: OvertimeRecord; isYellow: boolean }[] = [];
         let rowReal = 0;
         let rowPaid = 0;
 
         daysMeta.forEach((d) => {
-          // Find matching overtime on this day with this multiplier
           const matchOt = empOts.find((o) => {
-            if (o.date !== d.dateStr) return false;
-            const mult = Number(o.rateMultiplier) || (o.isWeekendHoliday ? 2.0 : 1.5);
+            const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
+            if (oDateStr !== d.dateStr) return false;
+
+            const desc = ((o as any).task_description || (o as any).taskDescription || '').toLowerCase();
+            const isReliefOrHoliday =
+              Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday) ||
+              d.isWeekend ||
+              desc.includes('pengganti') ||
+              desc.includes('relief') ||
+              desc.includes('sambung') ||
+              desc.includes('libur') ||
+              desc.includes('off') ||
+              desc.includes('cuti');
+
+            const explicitMult = Number((o as any).rate_multiplier || (o as any).rateMultiplier);
 
             if (isReliefRow) {
               // Relief / Holiday 2.0x row
-              const isReliefOrHoliday = o.isWeekendHoliday || (o.taskDescription || '').toLowerCase().includes('pengganti') || (o.taskDescription || '').toLowerCase().includes('relief');
-              return mult === 2.0 && isReliefOrHoliday;
+              if (explicitMult === 2.0) return isReliefOrHoliday;
+              return isReliefOrHoliday;
             } else if (targetMult === 2.0) {
               // Weekday 2.0x row
-              const isReliefOrHoliday = o.isWeekendHoliday || (o.taskDescription || '').toLowerCase().includes('pengganti') || (o.taskDescription || '').toLowerCase().includes('relief');
-              return mult === 2.0 && !isReliefOrHoliday;
+              if (explicitMult === 2.0) return !isReliefOrHoliday;
+              return !isReliefOrHoliday && !d.isWeekend;
+            } else if (targetMult === 1.5) {
+              if (explicitMult === 1.5) return true;
+              return !isReliefOrHoliday && !d.isWeekend;
             } else {
-              return mult === targetMult;
+              return explicitMult === targetMult;
             }
           });
 
           if (matchOt) {
-            const h = Number(matchOt.durationHours || matchOt.approvedHours || 0);
+            const h = parseFloat((matchOt as any).duration_hours || (matchOt as any).durationHours || (matchOt as any).approved_hours || (matchOt as any).approvedHours || 0);
             rowReal += h;
             rowPaid += h * targetMult;
             cells.push({ hours: h, rawOt: matchOt, isYellow: isReliefRow || d.isWeekend });
@@ -285,7 +408,7 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         totalLemburPaid,
       };
     });
-  }, [targetEmployees, attendances, leaves, overtimes, selectedMonth, daysMeta]);
+  }, [targetEmployees, activeAttendances, activeLeaves, activeOvertimes, selectedMonth, daysMeta]);
 
   // Grand Totals for Bottom Row
   const grandTotals = useMemo(() => {
@@ -644,6 +767,19 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
               onChange={(e) => e.target.value && setSelectedMonth(e.target.value)}
               className="h-9 px-2 text-xs rounded-xl border border-border bg-card font-mono font-bold"
             />
+
+            {/* Live Refresh Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fetchLatestMatrixData(selectedMonth)}
+              disabled={isFetchingData}
+              className="h-9 text-xs gap-1.5 rounded-xl font-bold border-primary/30 text-primary hover:bg-primary/10"
+              title="Sinkronisasi Ulang Data Realtime dari Database"
+            >
+              <RotateCw size={13} className={isFetchingData ? 'animate-spin text-primary' : ''} />
+              {isFetchingData ? 'Menyinkronkan...' : 'Sinkron Realtime'}
+            </Button>
 
             {/* Print & Excel */}
             <Button onClick={handlePrint} className="h-9 text-xs gap-1.5 rounded-xl font-bold bg-primary text-primary-foreground shadow-sm">
