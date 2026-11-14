@@ -10392,7 +10392,7 @@ app.put('/api/leaves/:id/status', async (req, res) => {
           const dutyDate = ds.date || ds.dutyDate;
 
           const sProfRes = await pool.query(
-            'SELECT id, full_name, nip, phone, COALESCE(hourly_overtime_rate, 23381.79) as rate FROM hrm_profiles p LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id WHERE p.id = $1',
+            'SELECT p.id, p.full_name, p.nip, p.phone, COALESCE(sp.hourly_overtime_rate, 23381.79) as rate FROM hrm_profiles p LEFT JOIN hrm_payroll_salary_profiles sp ON sp.user_id = p.id WHERE p.id = $1',
             [subUserId]
           );
           const sProf = sProfRes.rows[0] || { id: subUserId, full_name: ds.substituteName || ds.name, nip: ds.substituteNip || ds.nip, phone: '' };
