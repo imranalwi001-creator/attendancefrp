@@ -318,7 +318,8 @@ export const HrmLemburManagementTab: React.FC = () => {
         selectedOt.id,
         actionType === 'approve' ? 'approved' : 'rejected',
         'Super Administrator',
-        actionNotes
+        actionNotes,
+        Number(selectedOt.durationHours || (selectedOt as any).requestedHours || 8)
       );
 
       if (res.success) {

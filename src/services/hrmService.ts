@@ -5620,30 +5620,64 @@ export const hrmService = {
     );
   },
 
-  updateOvertimeStatus: (
+  updateOvertimeStatus: async (
     id: string,
     status: OvertimeStatus,
     approvedBy: string,
-    notes?: string
-  ): OvertimeRecord => {
+    notes?: string,
+    approvedHours?: number
+  ): Promise<{ success: boolean; record?: OvertimeRecord; error?: string }> => {
     hrmService.init();
-    const records = hrmService.getOvertimeRecords();
-    const index = records.findIndex((r) => r.id === id);
-    if (index === -1) throw new Error('Catatan lembur tidak ditemukan.');
+    try {
+      // 1. Sync ke PostgreSQL database backend
+      const apiRes: any = await api.put(`/overtime/${id}/status`, {
+        status,
+        approvedHours,
+        approverId: approvedBy,
+        approverName: approvedBy || 'Super Administrator',
+        notes: notes || (status === 'approved' ? 'Disetujui oleh Super Administrator' : 'Ditolak'),
+      });
 
-    const approver = hrmService.getUsers().find((u) => u.id === approvedBy);
+      if (apiRes && apiRes.success === false) {
+        return { success: false, error: apiRes.error || 'Gagal memperbarui status di server' };
+      }
 
-    records[index] = {
-      ...records[index],
-      status,
-      approvedBy,
-      approvedByName: approver?.fullName || 'HRD / Pimpinan',
-      approvalNotes: notes || (status === 'approved' ? 'Disetujui' : 'Ditolak'),
-    };
+      // 2. Update local storage records & cache
+      const records = hrmService.getOvertimeRecords();
+      const index = records.findIndex((r) => r.id === id);
+      const approver = hrmService.getUsers().find((u) => u.id === approvedBy || u.fullName === approvedBy);
 
-    localStorage.setItem(STORAGE_KEYS.OVERTIME_RECORDS, JSON.stringify(records));
-    window.dispatchEvent(new Event('hrm_overtime_updated'));
-    return records[index];
+      let record: OvertimeRecord;
+      if (index !== -1) {
+        records[index] = {
+          ...records[index],
+          status,
+          approvedBy,
+          approvedByName: approver?.fullName || approvedBy || 'Super Administrator',
+          approvalNotes: notes || (status === 'approved' ? 'Disetujui' : 'Ditolak'),
+          overtimePhase: status === 'approved' ? 'in_progress' : records[index].overtimePhase,
+        };
+        record = records[index];
+      } else {
+        record = {
+          id,
+          status,
+          approvedBy,
+          approvedByName: approver?.fullName || approvedBy || 'Super Administrator',
+          approvalNotes: notes || (status === 'approved' ? 'Disetujui' : 'Ditolak'),
+        } as any;
+        records.unshift(record);
+      }
+
+      safeSetJson(STORAGE_KEYS.OVERTIME_RECORDS, records);
+      window.dispatchEvent(new Event('hrm_overtime_updated'));
+      window.dispatchEvent(new Event('hrm_data_updated'));
+
+      return { success: true, record };
+    } catch (err: any) {
+      console.error('[HRM] Error updating overtime status:', err);
+      return { success: false, error: err.message || 'Gagal memperbarui status lembur di database' };
+    }
   },
 
   updateOvertimePaymentStatus: (

@@ -10306,9 +10306,14 @@ app.put('/api/leaves/:id/status', async (req, res) => {
       }
     }
 
-    let validApproverId = approverId;
-    if (approverId && !UUID_REGEX.test(approverId)) {
-      const aRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [approverId]);
+    let validApproverId = null;
+    if (approverId && UUID_REGEX.test(approverId)) {
+      validApproverId = approverId;
+    } else if (approverId) {
+      const aRes = await pool.query(
+        'SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) OR LOWER(full_name) = LOWER($1) LIMIT 1',
+        [approverId]
+      );
       if (aRes.rows.length > 0) validApproverId = aRes.rows[0].id;
     }
 
@@ -11101,9 +11106,14 @@ app.put('/api/overtime/:id/status', async (req, res) => {
     }
     const ot = oRes.rows[0];
 
-    let validApproverId = approverId;
-    if (approverId && !UUID_REGEX.test(approverId)) {
-      const aRes = await pool.query('SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) LIMIT 1', [approverId]);
+    let validApproverId = null;
+    if (approverId && UUID_REGEX.test(approverId)) {
+      validApproverId = approverId;
+    } else if (approverId) {
+      const aRes = await pool.query(
+        'SELECT id FROM hrm_profiles WHERE LOWER(email) = LOWER($1) OR LOWER(nip) = LOWER($1) OR LOWER(full_name) = LOWER($1) LIMIT 1',
+        [approverId]
+      );
       if (aRes.rows.length > 0) validApproverId = aRes.rows[0].id;
     }
 
@@ -11176,18 +11186,29 @@ app.put('/api/overtime/:id/status', async (req, res) => {
 
     const updateRes = await pool.query(`
       UPDATE hrm_overtime_records SET
-        status = $1,
+        status = $1::varchar,
         overtime_phase = $2,
         duration_hours = $3,
         compensation_amount = $4,
         approved_by = $5,
+        approved_by_name = $6,
+        approval_notes = $7,
         forwarded_to_pimpinan = true,
         approved_at = NOW(),
-        started_at = CASE WHEN $1 = 'approved' AND started_at IS NULL THEN NOW() ELSE started_at END,
+        started_at = CASE WHEN $1::varchar = 'approved' AND started_at IS NULL THEN NOW() ELSE started_at END,
         updated_at = NOW()
-      WHERE id = $6
+      WHERE id = $8
       RETURNING *;
-    `, [status, nextPhase, finalHours, compensation, validApproverId || null, id]);
+    `, [
+      status,
+      nextPhase,
+      finalHours,
+      compensation,
+      validApproverId || null,
+      approverName || 'Super Administrator',
+      notes || (status === 'approved' ? 'Disetujui oleh Super Administrator' : 'Ditolak'),
+      id
+    ]);
 
     // 📢 NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
     // Kebijakan PT FRP: Informasi nominal dirahasiakan dari teks pengumuman/karyawan
