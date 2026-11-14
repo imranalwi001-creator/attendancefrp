@@ -399,6 +399,11 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           att = dayAtts[dayAtts.length - 1];
           subAtt = dayAtts[0];
         }
+      } else if (dayAtts.length === 1 && (isRosterOff || isSubstituteAtt(dayAtts[0]) || (ot && (ot.source === 'shift_relief' || ot.source === 'emergency_override_clockin' || (ot as any).isEmergency)))) {
+        // Karyawan bertugas lembur sebagai pengganti atau lembur di hari libur (OFF)
+        // Shift lembur dialokasikan ke subAtt (kolom LEMBUR), sedangkan kolom ABSEN tetap mencerminkan jadwal resmi (OFF)
+        subAtt = dayAtts[0];
+        att = undefined;
       } else if (dayAtts.length === 1 && ot && sched && !sched.isOff && sched.startTime) {
         // DETEKSI CERDAS: LEMBUR SAMBUNG MUNDUR ATAU SAMBUNG MAJU
         // (Karyawan datang lebih awal di shift pengganti sebelum shift resminya dimulai, atau lanjut lembur pasca shift resmi)
@@ -577,7 +582,18 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         const rawEnd = ot.endTime || ot.end_time || '';
         lemburMulai = subAtt?.clockIn ? String(subAtt.clockIn).substring(0, 5) : (rawStart ? String(rawStart).substring(0, 5) : '-');
         lemburSelesai = subAtt?.clockOut ? String(subAtt.clockOut).substring(0, 5) : (isToday && !subAtt?.clockOut ? 'Bertugas' : (rawEnd ? String(rawEnd).substring(0, 5) : '-'));
-        const hours = Number(ot.approvedHours ?? ot.approved_hours ?? ot.durationHours ?? ot.duration_hours ?? 0);
+        const approvedVal = Number(ot.approvedHours || ot.approved_hours || 0);
+        const durationVal = Number(ot.durationHours || ot.duration_hours || 0);
+        let hours = approvedVal > 0 ? approvedVal : durationVal;
+        if (hours <= 0 && subAtt?.clockIn && subAtt?.clockOut) {
+          const [inH, inM] = String(subAtt.clockIn).split(':').map(Number);
+          const [outH, outM] = String(subAtt.clockOut).split(':').map(Number);
+          if (Number.isFinite(inH) && Number.isFinite(outH)) {
+            let diffMins = (outH * 60 + outM) - (inH * 60 + inM);
+            if (diffMins < 0) diffMins += 1440;
+            hours = Math.round((diffMins / 60) * 10) / 10;
+          }
+        }
         realisasiJamLembur = hours > 0 ? String(hours) : '-';
         const taskDesc = ot.taskDescription || ot.task_description || '';
         if (taskDesc) {
@@ -592,7 +608,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           memerintahkanKaur = employeeKaur;
         }
         if (ket === '-' || ket === 'OFF') {
-          ket = 'LEMBUR';
+          ket = subAtt || ot.source === 'shift_relief' ? 'LEMBUR PENGGANTI' : 'LEMBUR';
         } else if (ket === 'HADIR' || (att && (hasClockIn || att.clockIn))) {
           ket = 'HADIR + LEMBUR';
         } else if (subAtt && !att) {
@@ -614,6 +630,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         const subLabel = subAtt.shiftName || 'Shift Pengganti';
         const subTimeInfo = `${lemburMulai}${lemburSelesai !== '-' ? ` - ${lemburSelesai}` : ''}`;
         if (ket === 'HADIR') ket = 'HADIR + LEMBUR';
+        else if (ket === '-' || ket === 'OFF') ket = 'LEMBUR PENGGANTI';
         uraianPekerjaan = uraianPekerjaan && uraianPekerjaan !== '-'
           ? `${uraianPekerjaan} • Lembur Pengganti: ${subLabel} (${subTimeInfo})`
           : `Lembur Pengganti: ${subLabel} (${subTimeInfo})`;

@@ -6032,6 +6032,39 @@ app.post('/api/attendances/clock-out', async (req, res) => {
     ]);
     const updatedAttendance = result.rows[0];
 
+    // Sinkronisasi otomatis ke hrm_overtime_records jika presensi ini berasal dari emergency_override_clockin
+    try {
+      const emOtRes = await pool.query(
+        `SELECT id, start_time FROM hrm_overtime_records 
+         WHERE user_id = $1 AND date = $2::date AND source = 'emergency_override_clockin' 
+           AND status = 'pending'
+         ORDER BY created_at DESC LIMIT 1`,
+        [validUserId, date]
+      );
+      if (emOtRes.rows.length > 0) {
+        const emOt = emOtRes.rows[0];
+        const sTime = emOt.start_time ? String(emOt.start_time).substring(0, 5) : '18:43';
+        const eTime = time ? String(time).substring(0, 5) : '23:21';
+        const [inH, inM] = sTime.split(':').map(Number);
+        const [outH, outM] = eTime.split(':').map(Number);
+        let diffMins = (outH * 60 + outM) - (inH * 60 + inM);
+        if (diffMins < 0) diffMins += 1440;
+        const durHours = Math.round((diffMins / 60) * 10) / 10;
+        await pool.query(
+          `UPDATE hrm_overtime_records SET
+             end_time = $1::time,
+             actual_end_time = $1,
+             duration_hours = $2,
+             requested_hours = $2,
+             updated_at = NOW()
+           WHERE id = $3`,
+          [time || '23:21', durHours, emOt.id]
+        );
+      }
+    } catch (emErr) {
+      console.warn('[Clock-out Emergency Overtime Sync Error]:', emErr.message);
+    }
+
     // ─── 3. EMERGENCY POST-SHIFT OVERTIME (LAPORAN LEMBUR DARURAT PASCA-SHIFT) ───
     let emergencyOtRecord = null;
     const isEmergencyOvertime = req.body.isEmergencyOvertime === true || req.body.isEmergencyOvertime === 'true';
@@ -8614,12 +8647,12 @@ async function assignReliefSubstituteHelper({
   }
 
   // 3. Hitung Jam Tugas & Kompensasi Pengganti Sesuai Kebijakan Divisi PT FRP
-  let appliedStartTime = '15:30';
-  let appliedEndTime = '22:30';
-  let appliedDuration = 7.0;
+  let appliedStartTime = '07:30';
+  let appliedEndTime = '15:30';
+  let appliedDuration = 8.0;
   let shiftId = originalUser.shift_id || null;
-  let shiftCode = 'S';
-  let shiftName = 'Shift II (15:30 - 22:30 WITA)';
+  let shiftCode = 'P';
+  let shiftName = 'Shift I (07:30 - 15:30 WITA)';
 
   try {
     const origSchedRes = await pool.query(
@@ -8631,15 +8664,44 @@ async function assignReliefSubstituteHelper({
       shiftId = os.shift_id || shiftId;
       shiftCode = os.shift_code || shiftCode;
       shiftName = os.shift_name || shiftName;
-      startTime = os.start_time ? os.start_time.substring(0, 5) : startTime;
-      endTime = os.end_time ? os.end_time.substring(0, 5) : endTime;
-      durationHours = os.duration_hours || durationHours;
-      appliedStartTime = startTime;
-      appliedEndTime = endTime;
-      appliedDuration = durationHours;
+      appliedStartTime = os.start_time ? os.start_time.substring(0, 5) : appliedStartTime;
+      appliedEndTime = os.end_time ? os.end_time.substring(0, 5) : appliedEndTime;
+      appliedDuration = Number(os.duration_hours) || appliedDuration;
     }
   } catch (durErr) {
     console.error('[assignReliefSubstituteHelper Duration Check Error]:', durErr.message);
+  }
+
+  // Ambil Jadwal Resmi Personil Pengganti di Tanggal Tugas
+  let reliefShiftName = 'Libur / OFF';
+  let reliefIsOff = true;
+  let reliefStart = '-';
+  let reliefEnd = '-';
+  try {
+    const rSchedRes = await pool.query(
+      `SELECT * FROM hrm_employee_schedules WHERE user_id = $1 AND schedule_date = $2 LIMIT 1`,
+      [reliefUserId, targetStart]
+    );
+    if (rSchedRes.rows.length > 0) {
+      const rs = rSchedRes.rows[0];
+      reliefIsOff = Boolean(rs.is_off || rs.shift_code === 'OFF');
+      reliefShiftName = reliefIsOff ? 'Libur / OFF' : (rs.shift_name || rs.shift_code || 'Shift Resmi');
+      reliefStart = rs.start_time ? rs.start_time.substring(0, 5) : '-';
+      reliefEnd = rs.end_time ? rs.end_time.substring(0, 5) : '-';
+    }
+  } catch (rSchedErr) {
+    console.warn('[assignReliefSubstituteHelper Relief Sched Query Warning]:', rSchedErr.message);
+  }
+
+  let reliefCategory = 'Lembur Hari Libur / OFF (Relief Duty 8 Jam)';
+  if (!reliefIsOff) {
+    if (reliefEnd && appliedStartTime && reliefEnd <= appliedStartTime) {
+      reliefCategory = `Lembur Sambung Maju Shift (${reliefShiftName} Asli dilanjutkan ${shiftName} Pengganti)`;
+    } else if (appliedEndTime && reliefStart && appliedEndTime <= reliefStart) {
+      reliefCategory = `Lembur Sambung Mundur Shift (${shiftName} Pengganti dilanjutkan ${reliefShiftName} Asli)`;
+    } else {
+      reliefCategory = `Lembur Sambung Shift (${reliefShiftName} Asli + ${shiftName} Pengganti)`;
+    }
   }
 
   const hourlyRate = parseFloat(reliefUser.hourly_overtime_rate || 23381.79);
@@ -8718,7 +8780,7 @@ async function assignReliefSubstituteHelper({
         // Personil pengganti sudah memiliki jadwal resmi (baik Libur/OFF maupun Shift Kerjanya sendiri)
         // PERTAHANKAN jadwal asli karyawan agar tidak tertimpa/tidak memicu Alpa palsu saat hari libur!
         const existingNotes = reliefSchedRes.rows[0].notes || '';
-        const subNote = `Tugas Pengganti Pos ${originalUser.full_name} (Cuti Resmi)`;
+        const subNote = `Tugas Pengganti Pos ${originalUser.full_name} (${curShiftName})`;
         const updatedNotes = existingNotes && !existingNotes.includes('Tugas Pengganti')
           ? `${existingNotes} • ${subNote}`
           : (existingNotes || subNote);
@@ -8742,7 +8804,7 @@ async function assignReliefSubstituteHelper({
           curStart,
           curEnd,
           curDuration,
-          `Tugas Pengganti Pos ${originalUser.full_name} (Cuti Resmi)`
+          `Tugas Pengganti Pos ${originalUser.full_name} (${curShiftName})`
         ]);
       }
 
@@ -8762,8 +8824,9 @@ async function assignReliefSubstituteHelper({
 
   // 4. Catat di hrm_overtime_records (SPKL Pengganti Pos Resmi)
   const postNamesStr = originalPosts.map(p => p.post_name).join(', ') || 'Pos Dinas';
+  let otInsertRes = null;
   try {
-    await pool.query(
+    otInsertRes = await pool.query(
       `INSERT INTO hrm_overtime_records (
         user_id, date, start_time, end_time, duration_hours, approved_hours, rate_applied, compensation_amount,
         task_description, status, source, leave_request_id, approved_by, overtime_phase
@@ -8779,7 +8842,7 @@ async function assignReliefSubstituteHelper({
         appliedDuration,
         hourlyRate,
         overtimeAmount,
-        `Tugas Pengganti Pos Resmi untuk ${originalUser.full_name} di ${postNamesStr}`,
+        `Tugas Pengganti Pos Resmi untuk ${originalUser.full_name} (${shiftName}) di ${postNamesStr}`,
         leaveId || null,
         adminId || null
       ]
@@ -8792,11 +8855,14 @@ async function assignReliefSubstituteHelper({
   const reliefWaMsg = `🛡️ *SURAT TUGAS PENGGANTI POS (ZERO VACANCY) TERBIT*\n\n` +
     `Halo Rekan *${reliefUser.full_name}* (NIP: ${reliefUser.nip}),\n` +
     `Anda telah resmi ditugaskan menggantikan rekan kerja Anda:\n` +
-    `👤 *Karyawan:* ${originalUser.full_name} (${originalUser.nip})\n` +
+    `👤 *Karyawan yang Diganti:* ${originalUser.full_name} (${originalUser.nip})\n` +
     `🏢 *Divisi Asal:* ${originalUser.division_name}\n` +
     `📍 *Pos Tugas:* ${postNamesStr}\n` +
-    `📅 *Periode Tugas:* ${targetStart} s/d ${targetEnd}\n` +
-    `💰 *Kompensasi:* Lembur Resmi Pengganti Pos (SPKL 1 Shift Penuh)\n\n` +
+    `📅 *Tanggal / Periode Tugas:* ${targetStart} s/d ${targetEnd}\n` +
+    `⚡ *Shift yang Harus Diganti:* *${shiftName} (${appliedStartTime} - ${appliedEndTime} WITA)*\n` +
+    `🗓️ *Jadwal Resmi Anda:* *${reliefShiftName}${!reliefIsOff ? ` (${reliefStart} - ${reliefEnd} WITA)` : ''}*\n` +
+    `📋 *Kategori Penugasan:* ${reliefCategory}\n` +
+    `💰 *Kompensasi:* Lembur Resmi Pengganti Pos (SPKL 1 Shift Penuh - ${appliedDuration} Jam)\n\n` +
     `✅ *Koordinat titik pos dinas telah diaktifkan otomatis di aplikasi PWA Anda.* Anda dapat langsung melakukan presensi masuk & pulang di pos tersebut tanpa alarm breach.\n\n` +
     `_Sistem Sentinel HRM PT Fawwaz Reski Perwira_`;
 
@@ -8806,10 +8872,13 @@ async function assignReliefSubstituteHelper({
 
   // Broadcast ke Pimpinan & Superadmin
   const leaderWaMsg = `🛡️ *PENUGASAN PENGGANTI POS LAPANGAN RESMI*\n\n` +
-    `Pengganti: *${reliefUser.full_name}* (${reliefUser.nip})\n` +
-    `Menggantikan: *${originalUser.full_name}* (${originalUser.nip})\n` +
-    `Pos Tugas: ${postNamesStr}\n` +
-    `Periode: ${targetStart} s/d ${targetEnd}\n` +
+    `👤 *Pengganti:* *${reliefUser.full_name}* (${reliefUser.nip})\n` +
+    `👤 *Menggantikan:* *${originalUser.full_name}* (${originalUser.nip})\n` +
+    `📍 *Pos Tugas:* ${postNamesStr}\n` +
+    `📅 *Periode:* ${targetStart} s/d ${targetEnd}\n` +
+    `⚡ *Shift yang Diganti:* *${shiftName} (${appliedStartTime} - ${appliedEndTime} WITA)*\n` +
+    `🗓️ *Jadwal Resmi Pengganti:* *${reliefShiftName}${!reliefIsOff ? ` (${reliefStart} - ${reliefEnd} WITA)` : ''}*\n` +
+    `📋 *Kategori Penugasan:* ${reliefCategory}\n` +
     `Status Area: Terisi & Aman (Zero Vacancy Terpenuhi)`;
 
   alertLeadershipViaWhatsAppAndSystem({
@@ -8822,7 +8891,7 @@ async function assignReliefSubstituteHelper({
     success: true,
     injectedPosts,
     substitution: subRes.rows[0],
-    overtimeRecord: otRes.rows[0]
+    overtimeRecord: otInsertRes?.rows?.[0] || null
   };
 }
 
@@ -10469,21 +10538,52 @@ app.put('/api/leaves/:id/status', async (req, res) => {
             data: { userId: sProf.id, dutyDate, leaveId: leave.id }
           });
 
+          // Ambil rincian shift yang diganti dan jadwal resmi pengganti
+          let dutyShiftName = 'Shift I (07:30 - 15:30 WITA)';
+          let dutyShiftStart = '07:30';
+          let dutyShiftEnd = '15:30';
+          try {
+            const lSched = await pool.query(
+              `SELECT * FROM hrm_employee_schedules WHERE user_id = $1 AND schedule_date = $2::date LIMIT 1`,
+              [leave.user_id, dutyDate]
+            );
+            if (lSched.rows.length > 0 && !lSched.rows[0].is_off) {
+              dutyShiftName = lSched.rows[0].shift_name || dutyShiftName;
+              dutyShiftStart = lSched.rows[0].start_time ? lSched.rows[0].start_time.substring(0, 5) : dutyShiftStart;
+              dutyShiftEnd = lSched.rows[0].end_time ? lSched.rows[0].end_time.substring(0, 5) : dutyShiftEnd;
+            }
+          } catch (_) {}
+
+          let subOfficialShift = 'Libur / OFF';
+          let subIsOff = true;
+          try {
+            const sSched = await pool.query(
+              `SELECT * FROM hrm_employee_schedules WHERE user_id = $1 AND schedule_date = $2::date LIMIT 1`,
+              [sProf.id, dutyDate]
+            );
+            if (sSched.rows.length > 0) {
+              subIsOff = Boolean(sSched.rows[0].is_off || sSched.rows[0].shift_code === 'OFF');
+              subOfficialShift = subIsOff ? 'Libur / OFF' : (sSched.rows[0].shift_name || 'Shift Resmi');
+            }
+          } catch (_) {}
+
           // Kirim notifikasi WhatsApp ke masing-masing personil pengganti harian
           if (sProf.phone) {
             const dailyWaMsg = `🛡️ *SURAT TUGAS PENGGANTI POS (HARI KE-${idx + 1})*\n` +
               `*PT. FAWWAZ RESKI PERWIRA*\n\n` +
               `Halo Rekan *${sProf.full_name}* (NIP: ${sProf.nip || '-'}),\n` +
               `Anda telah resmi ditugaskan menggantikan rekan kerja Anda:\n` +
-              `👤 *Karyawan:* ${leave.user_name} (${leave.user_nip})\n` +
+              `👤 *Karyawan yang Diganti:* ${leave.user_name} (${leave.user_nip})\n` +
               `📅 *Tanggal Tugas:* *${dutyDate}* (Khusus 1 Hari)\n` +
+              `⚡ *Shift yang Harus Diganti:* *${dutyShiftName} (${dutyShiftStart} - ${dutyShiftEnd} WITA)*\n` +
+              `🗓️ *Jadwal Resmi Anda:* *${subOfficialShift}*\n` +
               `💰 *Kompensasi:* Lembur Resmi SPKL 1 Shift Penuh (8 Jam)\n\n` +
               `✅ Koordinat titik pos dinas telah diaktifkan otomatis di aplikasi PWA Anda untuk tanggal tersebut. Mohon bertugas sesuai jadwal.\n\n` +
               `_Sistem Sentinel HRM PT FRP_`;
             await sendWhatsAppAlert({ phone: sProf.phone, message: dailyWaMsg }).catch(() => {});
           }
 
-          summaryLines.push(`• Hari ke-${idx + 1} (${dutyDate}): *${sProf.full_name}* (${sProf.nip || '-'})`);
+          summaryLines.push(`• Hari ke-${idx + 1} (${dutyDate}): *${sProf.full_name}* (${sProf.nip || '-'}) gantikan *${dutyShiftName}* [Jadwal Asli: ${subOfficialShift}]`);
         }
         dailySummaryFormatted = summaryLines.join('\n');
 
@@ -11189,6 +11289,7 @@ app.put('/api/overtime/:id/status', async (req, res) => {
         status = $1::varchar,
         overtime_phase = $2,
         duration_hours = $3,
+        approved_hours = CASE WHEN $1::varchar = 'approved' THEN $3 ELSE 0 END,
         compensation_amount = $4,
         approved_by = $5,
         approved_by_name = $6,

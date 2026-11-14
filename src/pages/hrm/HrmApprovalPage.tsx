@@ -645,8 +645,19 @@ export const HrmApprovalPage: React.FC = () => {
   const handleOpenOtProcess = (ot: OvertimeRecord, type: 'approved' | 'rejected') => {
     setSelectedOvertime(ot);
     setOtDecision(type);
-    setOtApprovedHours(ot.requestedHours || ot.durationHours || 2);
-    setOtNotes(type === 'approved' ? `Lembur disetujui ${ot.requestedHours || ot.durationHours || 2} Jam untuk diproses ke slip gaji.` : 'Permohonan lembur belum disetujui.');
+    let calcHours = Number(ot.requestedHours || ot.durationHours || 0);
+    if (calcHours <= 0 && ot.startTime && ot.endTime) {
+      const [sH, sM] = String(ot.startTime).split(':').map(Number);
+      const [eH, eM] = String(ot.endTime).split(':').map(Number);
+      if (Number.isFinite(sH) && Number.isFinite(eH)) {
+        let diffMins = (eH * 60 + eM) - (sH * 60 + sM);
+        if (diffMins < 0) diffMins += 1440;
+        calcHours = Math.round((diffMins / 60) * 10) / 10;
+      }
+    }
+    const finalDefaultHours = calcHours > 0 ? calcHours : 2;
+    setOtApprovedHours(finalDefaultHours);
+    setOtNotes(type === 'approved' ? `Lembur disetujui ${finalDefaultHours} Jam untuk diproses ke slip gaji.` : 'Permohonan lembur belum disetujui.');
     setOtModalOpen(true);
   };
 
