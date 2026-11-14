@@ -29,6 +29,7 @@ import {
   ArrowRight,
   Info,
   RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -218,6 +219,27 @@ export const HrmLeavePage: React.FC = () => {
     setSubstituteNip('');
     setFormError(null);
     setModalOpen(true);
+  };
+
+  const handleDeleteLeave = async (leave: LeaveRequest) => {
+    const isApproved = leave.status === 'approved';
+    const confirmMsg = isApproved
+      ? `PERINGATAN: Pengajuan cuti untuk ${leave.userName} (${leave.startDate} s/d ${leave.endDate}, ${leave.totalDays} hari) sudah disetujui.\n\nApakah Anda yakin ingin MEMBATALKAN & MENGHAPUS pengajuan cuti ini?\n- Saldo kuota cuti akan otomatis dikembalikan ke karyawan (${leave.totalDays} hari).\n- Status presensi pada rentang tanggal tersebut akan dipulihkan.`
+      : `Batalkan dan hapus pengajuan ${leave.leaveType.toUpperCase()} untuk ${leave.userName} (${leave.startDate} s/d ${leave.endDate})?`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      const res = await api.delete(`/api/leaves/${leave.id}`);
+      if (res.data?.success) {
+        toast.success(res.data.message || 'Pengajuan cuti berhasil dibatalkan');
+        loadLeaves();
+      } else {
+        toast.error(res.data?.error || 'Gagal membatalkan pengajuan cuti');
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Gagal membatalkan pengajuan cuti');
+    }
   };
 
   const compressImage = (dataUrl: string, maxDimension = 1200, quality = 0.75): Promise<string> => {
@@ -754,6 +776,18 @@ export const HrmLeavePage: React.FC = () => {
                               Tindak Lanjut
                             </Button>
                           )}
+                          {isSupervisorRole && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDeleteLeave(l)}
+                              className="h-7 text-[11px] gap-1 px-2 rounded-lg border-rose-200 dark:border-rose-900/40 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                              title="Batalkan pengajuan cuti dan kembalikan saldo kuota"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              Hapus
+                            </Button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1002,7 +1036,13 @@ export const HrmLeavePage: React.FC = () => {
                 <Label className="text-xs font-semibold">Tanggal Mulai</Label>
                 <DatePicker
                   value={startDate}
-                  onChange={(val) => setStartDate(val)}
+                  onChange={(val) => {
+                    const newVal = val || '';
+                    setStartDate(newVal);
+                    if (!endDate || endDate === startDate || (newVal && new Date(endDate) < new Date(newVal))) {
+                      setEndDate(newVal);
+                    }
+                  }}
                   placeholder="Pilih Tanggal Mulai"
                 />
               </div>
@@ -1011,11 +1051,20 @@ export const HrmLeavePage: React.FC = () => {
                 <Label className="text-xs font-semibold">Tanggal Selesai</Label>
                 <DatePicker
                   value={endDate}
-                  onChange={(val) => setEndDate(val)}
+                  onChange={(val) => setEndDate(val || '')}
                   placeholder="Pilih Tanggal Selesai"
                 />
               </div>
             </div>
+
+            {startDate && endDate && (
+              <div className="flex items-center justify-between px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs font-medium text-blue-900 dark:text-blue-200">
+                <span>Perhitungan Durasi Pengajuan:</span>
+                <span className="font-bold font-mono text-primary">
+                  {Math.max(1, Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000) + 1)} Hari Kerja
+                </span>
+              </div>
+            )}
 
             {/* ─── KARYAWAN PENGGANTI (ZERO VACANCY RULE) ─── */}
             <div className="space-y-1.5 p-3 rounded-xl bg-blue-500/10 border border-blue-500/25 text-xs">

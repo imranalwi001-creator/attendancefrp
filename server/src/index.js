@@ -10228,6 +10228,105 @@ app.post('/api/leaves', async (req, res) => {
   }
 });
 
+// DELETE /api/leaves/:id - Batalkan / Hapus Pengajuan Cuti dengan Rollback Kuota & Presensi Otomatis
+app.delete('/api/leaves/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const lRes = await pool.query(
+      `SELECT l.*, p.full_name, p.nip 
+       FROM hrm_leave_requests l 
+       JOIN hrm_profiles p ON l.user_id = p.id 
+       WHERE l.id::text = $1 LIMIT 1`,
+      [id]
+    );
+    if (lRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Pengajuan cuti tidak ditemukan' });
+    }
+    const leave = lRes.rows[0];
+
+    // 1. Ambil seluruh hari cuti yang tercatat di ledger untuk pengajuan ini
+    const ledgerEntries = await pool.query(
+      `SELECT COALESCE(SUM(days_delta), 0) as total_delta 
+       FROM hrm_leave_ledger 
+       WHERE leave_request_id = $1`,
+      [leave.id]
+    );
+    const deductedDays = parseInt(ledgerEntries.rows[0]?.total_delta || 0, 10);
+
+    // 2. Hapus entri ledger terkait pengajuan ini
+    await pool.query('DELETE FROM hrm_leave_ledger WHERE leave_request_id = $1', [leave.id]);
+
+    // 3. Rollback kuota di hrm_profiles jika ada hari yang terpotong
+    if (deductedDays > 0) {
+      await pool.query(
+        `UPDATE hrm_profiles 
+         SET used_leave_days = GREATEST(0, used_leave_days - $1),
+             updated_at = NOW() 
+         WHERE id = $2`,
+        [deductedDays, leave.user_id]
+      );
+    }
+
+    // 4. Hapus relief substitutes & overtime records terkait
+    const subRecords = await pool.query(
+      'SELECT overtime_record_id FROM hrm_leave_daily_substitutes WHERE leave_request_id = $1 AND overtime_record_id IS NOT NULL',
+      [leave.id]
+    );
+    for (const row of subRecords.rows) {
+      if (row.overtime_record_id) {
+        await pool.query('DELETE FROM hrm_overtime_records WHERE id = $1', [row.overtime_record_id]).catch(() => {});
+      }
+    }
+    await pool.query('DELETE FROM hrm_leave_daily_substitutes WHERE leave_request_id = $1', [leave.id]);
+    await pool.query('DELETE FROM hrm_shift_substitutions WHERE reference_id = $1::text', [leave.id]).catch(() => {});
+
+    // 5. Rollback hrm_attendances untuk rentang tanggal cuti
+    const sDate = new Date(leave.start_date);
+    const eDate = new Date(leave.end_date || leave.start_date);
+    for (let dt = new Date(sDate); dt <= eDate; dt.setDate(dt.getDate() + 1)) {
+      const curDateStr = dt.toISOString().split('T')[0];
+      const schedRes = await pool.query(
+        'SELECT is_off FROM hrm_employee_schedules WHERE user_id = $1 AND schedule_date = $2::date LIMIT 1',
+        [leave.user_id, curDateStr]
+      );
+      const isSchedOff = schedRes.rows.length > 0 && schedRes.rows[0].is_off;
+
+      const attRes = await pool.query(
+        'SELECT id, clock_in, status FROM hrm_attendances WHERE user_id = $1 AND attendance_date = $2::date',
+        [leave.user_id, curDateStr]
+      );
+
+      for (const att of attRes.rows) {
+        if (att.clock_in) {
+          await pool.query(
+            "UPDATE hrm_attendances SET status = 'hadir', updated_at = NOW() WHERE id = $1",
+            [att.id]
+          );
+        } else if (isSchedOff) {
+          await pool.query(
+            "UPDATE hrm_attendances SET status = 'off', notes = 'Libur Sesuai Matriks Roster', updated_at = NOW() WHERE id = $1",
+            [att.id]
+          );
+        } else if (att.status === 'cuti') {
+          await pool.query('DELETE FROM hrm_attendances WHERE id = $1', [att.id]);
+        }
+      }
+    }
+
+    // 6. Hapus pengajuan cuti
+    await pool.query('DELETE FROM hrm_leave_requests WHERE id = $1', [leave.id]);
+
+    res.json({
+      success: true,
+      message: `Pengajuan cuti ${leave.full_name} (${String(leave.start_date).slice(0, 10)} s/d ${String(leave.end_date).slice(0, 10)}) berhasil dibatalkan/dihapus. Kuota cuti (${deductedDays} hari) dan status presensi otomatis dikembalikan.`,
+    });
+  } catch (err) {
+    console.error('[DeleteLeave] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Update Status Cuti / Izin / Izin Darurat (Approval oleh Korlap, Admin, K3, atau Pimpinan)
 app.put('/api/leaves/:id/status', async (req, res) => {
   const { id } = req.params;

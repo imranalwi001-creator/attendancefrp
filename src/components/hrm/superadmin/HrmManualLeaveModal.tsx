@@ -289,7 +289,14 @@ export const HrmManualLeaveModal: React.FC<HrmManualLeaveModalProps> = ({
               <Label className="text-xs font-semibold">Tanggal Mulai <span className="text-destructive">*</span></Label>
               <DatePicker
                 value={startDate}
-                onChange={(val) => setStartDate(val || '')}
+                onChange={(val) => {
+                  const newVal = val || '';
+                  setStartDate(newVal);
+                  // Cerdas: Jika tanggal selesai kosong, sama dengan tanggal mulai lama, atau lebih awal dari tanggal mulai baru -> sinkronkan otomatis
+                  if (!endDate || endDate === startDate || (newVal && new Date(endDate) < new Date(newVal))) {
+                    setEndDate(newVal);
+                  }
+                }}
                 className="h-9"
               />
             </div>
