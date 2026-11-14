@@ -8696,11 +8696,11 @@ async function assignReliefSubstituteHelper({
   let reliefCategory = 'Lembur Hari Libur / OFF (Relief Duty 8 Jam)';
   if (!reliefIsOff) {
     if (reliefEnd && appliedStartTime && reliefEnd <= appliedStartTime) {
-      reliefCategory = `Lembur Sambung Maju Shift (${reliefShiftName} Asli dilanjutkan ${shiftName} Pengganti)`;
+      reliefCategory = `Lembur Setelah Shift (${reliefShiftName} Asli dilanjutkan ${shiftName} Pengganti)`;
     } else if (appliedEndTime && reliefStart && appliedEndTime <= reliefStart) {
-      reliefCategory = `Lembur Sambung Mundur Shift (${shiftName} Pengganti dilanjutkan ${reliefShiftName} Asli)`;
+      reliefCategory = `Lembur Sebelum Shift (${shiftName} Pengganti dilanjutkan ${reliefShiftName} Asli)`;
     } else {
-      reliefCategory = `Lembur Sambung Shift (${reliefShiftName} Asli + ${shiftName} Pengganti)`;
+      reliefCategory = `Lembur Pergantian Shift (${reliefShiftName} Asli + ${shiftName} Pengganti)`;
     }
   }
 

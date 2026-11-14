@@ -244,37 +244,37 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
         setEndTime('22:30');
         setDurationHours(7.0);
         setShiftPreset('shift2');
-        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
-          setTaskDescription('Sambung Shift Maju ke Shift 2 (Tugas Pengganti Pos)');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan') || taskDescription.includes('Lembur')) {
+          setTaskDescription('Lembur Setelah Shift ke Shift 2 (Tugas Pengganti Pos)');
         }
-        toast.success(`Preset Sambung Maju Aktif: Shift 2 (15:30 - 22:30 WITA, 7 Jam) untuk ${selectedUser.fullName}`);
+        toast.success(`Preset Lembur Setelah Shift Aktif: Shift 2 (15:30 - 22:30 WITA, 7 Jam) untuk ${selectedUser.fullName}`);
       } else if (isShift2) {
         setStartTime('22:30');
         setEndTime('07:30');
         setDurationHours(9.0);
         setShiftPreset('shift3');
-        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
-          setTaskDescription('Sambung Shift Maju ke Shift 3 (Tugas Pengganti Pos)');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan') || taskDescription.includes('Lembur')) {
+          setTaskDescription('Lembur Setelah Shift ke Shift 3 (Tugas Pengganti Pos)');
         }
-        toast.success(`Preset Sambung Maju Aktif: Shift 3 (22:30 - 07:30 WITA, 9 Jam) untuk ${selectedUser.fullName}`);
+        toast.success(`Preset Lembur Setelah Shift Aktif: Shift 3 (22:30 - 07:30 WITA, 9 Jam) untuk ${selectedUser.fullName}`);
       } else if (isShift3) {
         setStartTime('07:30');
         setEndTime('15:30');
         setDurationHours(8.0);
         setShiftPreset('shift1');
-        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
-          setTaskDescription('Sambung Shift Maju ke Shift 1 (Tugas Pengganti Pos)');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan') || taskDescription.includes('Lembur')) {
+          setTaskDescription('Lembur Setelah Shift ke Shift 1 (Tugas Pengganti Pos)');
         }
-        toast.success(`Preset Sambung Maju Aktif: Shift 1 (07:30 - 15:30 WITA, 8 Jam) untuk ${selectedUser.fullName}`);
+        toast.success(`Preset Lembur Setelah Shift Aktif: Shift 1 (07:30 - 15:30 WITA, 8 Jam) untuk ${selectedUser.fullName}`);
       } else {
         setStartTime('16:30');
         setEndTime('22:30');
         setDurationHours(6.0);
         setShiftPreset('custom');
-        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
-          setTaskDescription('Lembur Sambung Pasca Day Shift (Tugas Pengganti Pos)');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan') || taskDescription.includes('Lembur')) {
+          setTaskDescription('Lembur Setelah Shift Pasca Day Shift (Tugas Pengganti Pos)');
         }
-        toast.success(`Preset Sambung Maju Aktif: 16:30 - 22:30 WITA (6 Jam) untuk ${selectedUser.fullName}`);
+        toast.success(`Preset Lembur Setelah Shift Aktif: 16:30 - 22:30 WITA (6 Jam) untuk ${selectedUser.fullName}`);
       }
     } else {
       if (isShift3) {
@@ -282,37 +282,37 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
         setEndTime('22:30');
         setDurationHours(7.0);
         setShiftPreset('shift2');
-        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
-          setTaskDescription('Sambung Shift Mundur mengisi Shift 2 sebelum Shift 3 (Tugas Pengganti Pos)');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan') || taskDescription.includes('Lembur')) {
+          setTaskDescription('Lembur Sebelum Shift mengisi Shift 2 sebelum Shift 3 (Tugas Pengganti Pos)');
         }
-        toast.success(`Preset Sambung Mundur Aktif: Mengisi Shift 2 (15:30 - 22:30 WITA, 7 Jam) untuk ${selectedUser.fullName}`);
+        toast.success(`Preset Lembur Sebelum Shift Aktif: Mengisi Shift 2 (15:30 - 22:30 WITA, 7 Jam) untuk ${selectedUser.fullName}`);
       } else if (isShift2) {
         setStartTime('07:30');
         setEndTime('15:30');
         setDurationHours(8.0);
         setShiftPreset('shift1');
-        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
-          setTaskDescription('Sambung Shift Mundur mengisi Shift 1 sebelum Shift 2 (Tugas Pengganti Pos)');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan') || taskDescription.includes('Lembur')) {
+          setTaskDescription('Lembur Sebelum Shift mengisi Shift 1 sebelum Shift 2 (Tugas Pengganti Pos)');
         }
-        toast.success(`Preset Sambung Mundur Aktif: Mengisi Shift 1 (07:30 - 15:30 WITA, 8 Jam) untuk ${selectedUser.fullName}`);
+        toast.success(`Preset Lembur Sebelum Shift Aktif: Mengisi Shift 1 (07:30 - 15:30 WITA, 8 Jam) untuk ${selectedUser.fullName}`);
       } else if (isShift1) {
         setStartTime('22:30');
         setEndTime('07:30');
         setDurationHours(9.0);
         setShiftPreset('shift3');
-        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
-          setTaskDescription('Sambung Shift Mundur mengisi Shift 3 Malam (Tugas Pengganti Pos)');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan') || taskDescription.includes('Lembur')) {
+          setTaskDescription('Lembur Sebelum Shift mengisi Shift 3 Malam (Tugas Pengganti Pos)');
         }
-        toast.success(`Preset Sambung Mundur Aktif: Mengisi Shift 3 (22:30 - 07:30 WITA, 9 Jam) untuk ${selectedUser.fullName}`);
+        toast.success(`Preset Lembur Sebelum Shift Aktif: Mengisi Shift 3 (22:30 - 07:30 WITA, 9 Jam) untuk ${selectedUser.fullName}`);
       } else {
         setStartTime('05:30');
         setEndTime('07:30');
         setDurationHours(2.0);
         setShiftPreset('custom');
-        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan')) {
-          setTaskDescription('Lembur Sambung Datang Lebih Awal Pre-Day Shift');
+        if (!taskDescription || taskDescription.includes('Sambung') || taskDescription.includes('kekosongan') || taskDescription.includes('Lembur')) {
+          setTaskDescription('Lembur Sebelum Shift Datang Lebih Awal Pre-Day Shift');
         }
-        toast.success(`Preset Sambung Mundur Aktif: 05:30 - 07:30 WITA (2 Jam) untuk ${selectedUser.fullName}`);
+        toast.success(`Preset Lembur Sebelum Shift Aktif: 05:30 - 07:30 WITA (2 Jam) untuk ${selectedUser.fullName}`);
       }
     }
   };
@@ -598,12 +598,12 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
 
           {/* 3. Preset Pilihan Durasi Lembur Sesuai Aturan Pimpinan */}
           <div className="space-y-2">
-            {/* Quick Actions: Sambung Shift Maju & Mundur */}
+            {/* Quick Actions: Lembur Setelah Shift & Sebelum Shift */}
             <div className="p-2.5 rounded-xl border border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-950/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5">
                   <Zap className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600" />
-                  <span>Fitur Pintar: Sambung Shift Pengganti Pos (Anti-Kekosongan)</span>
+                  <span>Fitur Pintar: Lembur Pengganti Pos (Anti-Kekosongan)</span>
                 </span>
                 {selectedUser && (
                   <Badge variant="outline" className="text-[10px] font-mono border-indigo-400 text-indigo-700 dark:text-indigo-300">
@@ -619,7 +619,7 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
                   onClick={() => applySambungShift('maju')}
                   className="h-9 text-xs font-bold border-indigo-400 dark:border-indigo-600 hover:bg-indigo-600 hover:text-white text-indigo-800 dark:text-indigo-200 flex items-center justify-center gap-1.5 rounded-lg shadow-2xs"
                 >
-                  <span>⏩ Sambung Shift Maju</span>
+                  <span>⏩ Lembur Setelah Shift</span>
                   <span className="text-[10px] font-normal opacity-80">(Lanjut Pasca Shift)</span>
                 </Button>
                 <Button
@@ -629,7 +629,7 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
                   onClick={() => applySambungShift('mundur')}
                   className="h-9 text-xs font-bold border-indigo-400 dark:border-indigo-600 hover:bg-indigo-600 hover:text-white text-indigo-800 dark:text-indigo-200 flex items-center justify-center gap-1.5 rounded-lg shadow-2xs"
                 >
-                  <span>⏪ Sambung Shift Mundur</span>
+                  <span>⏪ Lembur Sebelum Shift</span>
                   <span className="text-[10px] font-normal opacity-80">(Datang Lebih Awal)</span>
                 </Button>
               </div>

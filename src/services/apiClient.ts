@@ -31,10 +31,12 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   const base = getApiBaseUrl();
   const url = `${base}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
 
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string> || {}),
   };
+  if (options.body && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   const controller = new AbortController();
   let timeoutMs = 30000;

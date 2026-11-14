@@ -56,6 +56,8 @@ interface Props {
   attendance: AttendanceRecord | null;
   allAttendances?: AttendanceRecord[];
   shift?: any;
+  initialMonth?: string;
+  schedules?: any[];
 }
 
 export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
@@ -65,6 +67,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   attendance,
   allAttendances = [],
   shift,
+  initialMonth,
+  schedules,
 }) => {
   // 3 Petugas Lapangan Khusus Pimpinan (Muh Aslam Faisal, La Unga Samsi, Takdir)
   const isSpecialTarget = useMemo(() => {
@@ -84,8 +88,14 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     return `${prevY}-${prevM}`;
   }, [currentMonthStr]);
 
-  // State bulan yang dipilih
-  const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
+  // State bulan yang dipilih (sinkron dengan bulan aktif dari filter monitoring / kalender)
+  const [selectedMonth, setSelectedMonth] = useState<string>(initialMonth || currentMonthStr);
+
+  useEffect(() => {
+    if (initialMonth && isOpen) {
+      setSelectedMonth(initialMonth);
+    }
+  }, [initialMonth, isOpen]);
   const [serverAttendances, setServerAttendances] = useState<AttendanceRecord[]>([]);
   const [serverOvertimes, setServerOvertimes] = useState<OvertimeRecord[]>([]);
   const [serverLeaves, setServerLeaves] = useState<any[]>([]);
@@ -201,18 +211,19 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     let isMounted = true;
     setIsLoadingData(true);
 
-    const validIds = [user.id, user.nip, user.email].filter(Boolean);
+    const validIds = [user.id, user.nip, user.email].filter(Boolean).map((s) => String(s).toLowerCase().trim());
+    const targetUserId = user.id || user.nip;
 
-    // Fetch attendances dari API
-    const attPromise = api
-      .get<{ success: boolean; data?: any[] }>(`/attendances?userId=${encodeURIComponent(user.id)}&_t=${Date.now()}`)
-      .then((res) => {
+    // 1. Fetch attendances dari API (filter berdasarkan bulan & userId untuk akurasi data)
+    const attPromise = fetch(`/api/attendances?month=${selectedMonth}&userId=${encodeURIComponent(targetUserId)}&_t=${Date.now()}`)
+      .then((res) => res.json())
+      .then((json) => {
         if (!isMounted) return;
-        if (res && res.success && Array.isArray(res.data)) {
-          setServerAttendances(res.data);
+        if (json && json.success && Array.isArray(json.data)) {
+          setServerAttendances(json.data);
         } else {
           const localAtts = allAttendances.filter((a) => {
-            const aUser = a.userId || (a as any).user_id || a.userNip || (a as any).user_nip;
+            const aUser = String(a.userId || (a as any).user_id || a.userNip || (a as any).user_nip || '').toLowerCase().trim();
             return validIds.includes(aUser);
           });
           setServerAttendances(localAtts);
@@ -221,62 +232,80 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       .catch(() => {
         if (!isMounted) return;
         const localAtts = allAttendances.filter((a) => {
-          const aUser = a.userId || (a as any).user_id || a.userNip || (a as any).user_nip;
+          const aUser = String(a.userId || (a as any).user_id || a.userNip || (a as any).user_nip || '').toLowerCase().trim();
           return validIds.includes(aUser);
         });
         setServerAttendances(localAtts);
       });
 
-    // Fetch overtimes dari API & LocalStorage
-    const otPromise = api
-      .get<{ success: boolean; data?: any[] }>(`/overtime?userId=${encodeURIComponent(user.id)}&_t=${Date.now()}`)
-      .then((res) => {
+    // 2. Fetch overtimes dari API & LocalStorage
+    const otPromise = fetch(`/api/overtime?userId=${encodeURIComponent(targetUserId)}&_t=${Date.now()}`)
+      .then((res) => res.json())
+      .then((json) => {
         if (!isMounted) return;
-        if (res && res.success && Array.isArray(res.data)) {
-          setServerOvertimes(res.data);
+        if (json && json.success && Array.isArray(json.data)) {
+          setServerOvertimes(json.data);
         } else {
-          const localOt = hrmService.getOvertimeRecords().filter((o) => validIds.includes(o.userId) || validIds.includes(o.userNip));
+          const localOt = hrmService.getOvertimeRecords().filter((o) => {
+            const oUser = String(o.userId || o.userNip || (o as any).user_id || '').toLowerCase().trim();
+            return validIds.includes(oUser);
+          });
           setServerOvertimes(localOt);
         }
       })
       .catch(() => {
         if (!isMounted) return;
-        const localOt = hrmService.getOvertimeRecords().filter((o) => validIds.includes(o.userId) || validIds.includes(o.userNip));
+        const localOt = hrmService.getOvertimeRecords().filter((o) => {
+          const oUser = String(o.userId || o.userNip || (o as any).user_id || '').toLowerCase().trim();
+          return validIds.includes(oUser);
+        });
         setServerOvertimes(localOt);
       });
 
-    // Fetch leaves dari API & LocalStorage
-    const leavePromise = api
-      .get<{ success: boolean; data?: any[] }>(`/leaves?userId=${encodeURIComponent(user.id)}&_t=${Date.now()}`)
-      .then((res) => {
+    // 3. Fetch leaves dari API & LocalStorage
+    const leavePromise = fetch(`/api/leaves?userId=${encodeURIComponent(targetUserId)}&_t=${Date.now()}`)
+      .then((res) => res.json())
+      .then((json) => {
         if (!isMounted) return;
-        if (res && res.success && Array.isArray(res.data)) {
-          setServerLeaves(res.data);
+        if (json && json.success && Array.isArray(json.data)) {
+          setServerLeaves(json.data);
         } else {
-          const localLeaves = hrmService.getLeaveRequests().filter((l) => validIds.includes(l.userId) || validIds.includes(l.userNip));
+          const localLeaves = hrmService.getLeaveRequests().filter((l) => {
+            const lUser = String(l.userId || l.userNip || (l as any).user_id || (l as any).user_nip || '').toLowerCase().trim();
+            return validIds.includes(lUser);
+          });
           setServerLeaves(localLeaves);
         }
       })
       .catch(() => {
         if (!isMounted) return;
-        const localLeaves = hrmService.getLeaveRequests().filter((l) => validIds.includes(l.userId) || validIds.includes(l.userNip));
+        const localLeaves = hrmService.getLeaveRequests().filter((l) => {
+          const lUser = String(l.userId || l.userNip || (l as any).user_id || (l as any).user_nip || '').toLowerCase().trim();
+          return validIds.includes(lUser);
+        });
         setServerLeaves(localLeaves);
       });
 
-    // Fetch schedules (Matriks Roster Karyawan) dari API
-    const schedPromise = api
-      .get<{ success: boolean; data?: any[] }>(`/employee-schedules?userId=${encodeURIComponent(user.id)}&month=${selectedMonth}&_t=${Date.now()}`)
-      .then((res) => {
+    // 4. Fetch schedules (Matriks Roster Karyawan) dari API
+    const schedPromise = fetch(`/api/employee-schedules?userId=${encodeURIComponent(targetUserId)}&month=${selectedMonth}&_t=${Date.now()}`)
+      .then((res) => res.json())
+      .then((json) => {
         if (!isMounted) return;
-        if (res && res.success && Array.isArray(res.data)) {
-          setServerSchedules(res.data);
+        if (json && json.success && Array.isArray(json.data) && json.data.length > 0) {
+          setServerSchedules(json.data);
+        } else if (Array.isArray(schedules) && schedules.length > 0) {
+          setServerSchedules(schedules);
         } else {
           setServerSchedules([]);
         }
       })
       .catch(() => {
         if (!isMounted) return;
-        setServerSchedules([]);
+        if (Array.isArray(schedules) && schedules.length > 0) {
+          setServerSchedules(schedules);
+        } else {
+          setServerSchedules([]);
+        }
       });
 
     Promise.allSettled([attPromise, otPromise, leavePromise, schedPromise]).finally(() => {
@@ -286,7 +315,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, user, allAttendances, refreshTrigger, selectedMonth]);
+  }, [isOpen, user, allAttendances, refreshTrigger, selectedMonth, schedules]);
 
   // Gabungkan attendance hari ini agar realtime
   const combinedAttendances = useMemo(() => {
@@ -346,7 +375,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       // 1. Cari jadwal roster resmi dari serverSchedules
       const sched = serverSchedules.find(
         (s) => (s.scheduleDate || s.schedule_date || s.date || '').slice(0, 10) === dateStr
-      );
+      ) || (Array.isArray(schedules) ? schedules.find((s) => (s.scheduleDate || s.schedule_date || s.date || '').slice(0, 10) === dateStr) : undefined)
+        || hrmService.getEmployeeTodaySchedule(user.id, dateStr);
       const hasSched = Boolean(sched);
       const isRosterOff = Boolean(
         sched && (sched.isOff || sched.is_off || sched.shiftCode === 'OFF' || sched.shift_code === 'OFF')
@@ -396,8 +426,18 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           subAtt = otMatch;
           att = dayAtts.find((a) => a !== otMatch) || dayAtts[0];
         } else {
-          att = dayAtts[dayAtts.length - 1];
-          subAtt = dayAtts[0];
+          // Default sorting: jika sesi pertama jam masuknya sebelum jam shift resmi dan ada SPKL lembur -> Lembur Sebelum Shift
+          const s1 = dayAtts[0];
+          const s2 = dayAtts[1] || dayAtts[dayAtts.length - 1];
+          const s1In = String(s1.clockIn || '').substring(0, 5);
+          const schedStart = sched?.startTime ? String(sched.startTime).substring(0, 5) : '07:30';
+          if (ot && schedStart && s1In < schedStart) {
+            subAtt = s1;
+            att = s2;
+          } else {
+            att = s1;
+            subAtt = s2;
+          }
         }
       } else if (dayAtts.length === 1 && (isRosterOff || isSubstituteAtt(dayAtts[0]) || (ot && (ot.source === 'shift_relief' || ot.source === 'emergency_override_clockin' || (ot as any).isEmergency)))) {
         // Karyawan bertugas lembur sebagai pengganti atau lembur di hari libur (OFF)
@@ -405,7 +445,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         subAtt = dayAtts[0];
         att = undefined;
       } else if (dayAtts.length === 1 && ot && sched && !sched.isOff && sched.startTime) {
-        // DETEKSI CERDAS: LEMBUR SAMBUNG MUNDUR ATAU SAMBUNG MAJU
+        // DETEKSI CERDAS: LEMBUR SEBELUM SHIFT ATAU LEMBUR SETELAH SHIFT
         // (Karyawan datang lebih awal di shift pengganti sebelum shift resminya dimulai, atau lanjut lembur pasca shift resmi)
         const singleAtt = dayAtts[0];
         const singleClockIn = String(singleAtt.clockIn || '').substring(0, 5);
@@ -413,8 +453,9 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         const otStart = String(ot.startTime || ot.start_time || '').substring(0, 5);
         const otEnd = String(ot.endTime || ot.end_time || '').substring(0, 5);
         const schedStart = String(sched.startTime || '').substring(0, 5);
+        const schedEnd = String(sched.endTime || '').substring(0, 5);
 
-        // Kasus Lembur Sambung Mundur (misal: lembur 15:30 - 22:30, shift resmi 22:30 - 07:30)
+        // Kasus 1: Lembur Sebelum Shift (misal: lembur 15:30 - 22:30, shift resmi 22:30 - 07:30)
         if (otStart && schedStart && singleClockIn < schedStart && otStart < schedStart) {
           subAtt = {
             ...singleAtt,
@@ -431,8 +472,20 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               shiftName: sched.shiftName || 'Shift Resmi',
             };
           } else if (isToday) {
-            // Sedang aktif di shift lembur, shift resmi menunggu jam masuk
-            att = undefined;
+            // Jam WITA real-time saat ini
+            const nowWita = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Makassar', hour12: false }).substring(0, 5);
+            if (schedStart && nowWita >= schedStart) {
+              // Jam lembur pengganti usai -> Kolom Absensi otomatis terisi aktif bertugas di shift resminya!
+              att = {
+                ...singleAtt,
+                clockIn: schedStart,
+                clockOut: singleClockOut || undefined,
+                shiftName: sched.shiftName || 'Shift Resmi',
+              };
+            } else {
+              // Sedang aktif di shift lembur, shift resmi menunggu jam masuk
+              att = undefined;
+            }
           } else {
             att = {
               ...singleAtt,
@@ -441,6 +494,23 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               shiftName: sched.shiftName || 'Shift Resmi',
             };
           }
+        }
+        // Kasus 2: Lembur Setelah Shift (misal: shift resmi 07:30 - 15:30, lanjut lembur pengganti 15:30 - 22:30)
+        else if (otStart && schedEnd && (otStart >= schedEnd || otStart >= schedStart)) {
+          const nowWita = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Makassar', hour12: false }).substring(0, 5);
+          const isShiftDone = singleClockOut || (isToday && nowWita >= schedEnd) || !isToday;
+          att = {
+            ...singleAtt,
+            clockIn: singleClockIn || schedStart,
+            clockOut: singleClockOut || (isShiftDone ? schedEnd : undefined),
+            shiftName: sched.shiftName || 'Shift Resmi',
+          };
+          subAtt = {
+            ...singleAtt,
+            clockIn: otStart || schedEnd,
+            clockOut: singleClockOut && singleClockOut > schedEnd ? singleClockOut : (isToday && nowWita < (otEnd || '23:59') ? undefined : (otEnd || '-')),
+            shiftName: 'Shift Pengganti (Lembur)',
+          };
         }
       }
 
@@ -526,13 +596,13 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         absenMasuk = 'OFF';
         absenPulang = 'OFF';
         ket = 'OFF';
-        uraianPekerjaan = '-';
+        uraianPekerjaan = isRosterOff ? 'Libur Sesuai Matriks Roster' : '-';
         memerintahkanKaur = '-';
       }
-      // PRIORITAS 4: Hari Ini (Belum Masuk Shift)
+      // PRIORITAS 4B: Hari Ini (Belum Masuk Shift)
       else if (isToday) {
         if (subAtt) {
-          // Kasus Lembur Sambung Mundur: Karyawan sedang aktif di shift lembur pengganti, shift resmi dimulai nanti malam
+          // Kasus Lembur Sebelum Shift: Karyawan sedang aktif di shift lembur pengganti, shift resmi dimulai nanti malam
           const startT = sched?.startTime ? sched.startTime.substring(0, 5) : '07:30';
           absenMasuk = sched?.shiftCode ? `${sched.shiftCode} (${startT})` : (sched?.startTime ? startT : '-');
           absenPulang = 'Menunggu Jam Masuk';
@@ -551,14 +621,21 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         }
         memerintahkanKaur = isSpecialTarget ? 'Pimpinan PT. FRP' : (employeeKaur || 'Korlap');
       }
-      // PRIORITAS 5: Hari Lampau Tanpa Kehadiran (ALPA / MANGKIR)
+      // PRIORITAS 5: Hari Lampau Tanpa Kehadiran (Deteksi Lembur & Hari Libur Terjaga)
       else if (isPast) {
-        if (subAtt) {
-          absenMasuk = '-';
-          absenPulang = '-';
-          ket = 'LEMBUR PENGGANTI';
-          uraianPekerjaan = subAtt.notes || 'Lembur Pengganti Pos';
-          memerintahkanKaur = employeeKaur || 'Korlap';
+        if (subAtt || ot) {
+          absenMasuk = isRosterOff ? 'OFF' : '-';
+          absenPulang = isRosterOff ? 'OFF' : '-';
+          const isRelief = (ot && (ot.source === 'shift_relief' || String(ot.taskDescription || ot.task_description || '').toLowerCase().includes('pengganti'))) || isRosterOff;
+          ket = isRelief ? 'LEMBUR PENGGANTI' : 'LEMBUR';
+          uraianPekerjaan = ot?.notes || ot?.taskDescription || ot?.task_description || subAtt?.notes || 'Lembur Penugasan Lapangan';
+          memerintahkanKaur = ot?.supervisorName || ot?.supervisor_name || ot?.approvedByName || ot?.approved_by_name || employeeKaur || 'Korlap';
+        } else if (isRosterOff) {
+          absenMasuk = 'OFF';
+          absenPulang = 'OFF';
+          ket = 'OFF';
+          uraianPekerjaan = 'Libur Sesuai Matriks Roster';
+          memerintahkanKaur = '-';
         } else {
           absenMasuk = '-';
           absenPulang = '-';
@@ -569,9 +646,9 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       }
       // PRIORITAS 6: Hari Mendatang (Jadwal Normal)
       else {
-        absenMasuk = '-';
-        absenPulang = '-';
-        ket = '-';
+        absenMasuk = isRosterOff ? 'OFF' : '-';
+        absenPulang = isRosterOff ? 'OFF' : '-';
+        ket = isRosterOff ? 'OFF' : '-';
         uraianPekerjaan = sched?.shiftName || '-';
         memerintahkanKaur = '-';
       }
@@ -597,9 +674,11 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         realisasiJamLembur = hours > 0 ? String(hours) : '-';
         const taskDesc = ot.taskDescription || ot.task_description || '';
         if (taskDesc) {
-          uraianPekerjaan = uraianPekerjaan && uraianPekerjaan !== '-' && !uraianPekerjaan.includes(taskDesc)
-            ? `${uraianPekerjaan} • Lembur: ${taskDesc}`
-            : taskDesc;
+          if (uraianPekerjaan && uraianPekerjaan !== '-' && !uraianPekerjaan.includes('Mangkir') && !uraianPekerjaan.includes('Libur Sesuai Matriks Roster')) {
+            uraianPekerjaan = `${uraianPekerjaan} • Lembur: ${taskDesc}`;
+          } else {
+            uraianPekerjaan = taskDesc;
+          }
         }
         const otSupervisor = ot.supervisorName || ot.supervisor_name || ot.approvedByName || ot.approved_by_name || ot.approver_name;
         if (otSupervisor) {
@@ -607,8 +686,9 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         } else if (employeeKaur) {
           memerintahkanKaur = employeeKaur;
         }
-        if (ket === '-' || ket === 'OFF') {
-          ket = subAtt || ot.source === 'shift_relief' ? 'LEMBUR PENGGANTI' : 'LEMBUR';
+        if (ket === '-' || ket === 'OFF' || ket === 'ALPA') {
+          const isRelief = ot.source === 'shift_relief' || isRosterOff || String(ot.taskDescription || ot.task_description || '').toLowerCase().includes('pengganti');
+          ket = isRelief ? 'LEMBUR PENGGANTI' : 'LEMBUR';
         } else if (ket === 'HADIR' || (att && (hasClockIn || att.clockIn))) {
           ket = 'HADIR + LEMBUR';
         } else if (subAtt && !att) {

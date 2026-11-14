@@ -96,5 +96,5 @@ Setiap personil memiliki 5 baris pengali lembur di bawah baris presensi:
    - Modal Lampiran II wajib mendengarkan event window `hrm_overtime_updated` dan `hrm_data_updated`.
    - Begitu SPKL disimpan dari modal manapun, matriks langsung memuat ulang data tanpa menunggu reload halaman browser.
 3. **Penyelarasan Presensi & Lembur (1 Tanggal = 1 Baris Rekap)**:
-   - Jika karyawan masuk lebih awal (sambung mundur) atau lanjut setelah shift (sambung maju), jam lembur masuk ke baris pengali lembur, sementara kehadiran resmi tetap tercatat di baris `[Absen]` sesuai jadwal shiftnya.
+   - Jika karyawan masuk lebih awal (lembur sebelum shift) atau lanjut setelah shift (lembur setelah shift), jam lembur masuk ke baris pengali lembur, sementara kehadiran resmi tetap tercatat di baris `[Absen]` sesuai jadwal shiftnya.
 

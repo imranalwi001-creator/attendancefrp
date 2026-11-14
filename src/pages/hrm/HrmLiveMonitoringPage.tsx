@@ -3312,7 +3312,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   filtered.map(({ user: u, attendance: att, status, absentSubtype, shift, totalLateMinutes, lateCount, totalAttCount, todayOvertime, todayOvertimeHours, todayOvertimePay, monthlyOvertimeHours, monthlyOvertimePay, monthlyOvertimeCount }, idx) => {
                     const userAnomaly = radarSummary.items.find((i) => i.userId === u.id);
 
-                    // Deteksi Cerdas Kasus Lembur Sambung Mundur (Shift Pengganti Masuk Lebih Awal)
+                    // Deteksi Cerdas Kasus Lembur Sebelum Shift (Shift Pengganti Masuk Lebih Awal)
                     const otStart = todayOvertime?.startTime ? String(todayOvertime.startTime).substring(0, 5) : '';
                     const otEnd = todayOvertime?.endTime ? String(todayOvertime.endTime).substring(0, 5) : '';
                     const schedStart = shift?.startTime ? String(shift.startTime).substring(0, 5) : '';
@@ -4476,6 +4476,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         attendance={selectedReportAttendance}
         allAttendances={allAttendances}
         shift={selectedReportShift}
+        initialMonth={selectedMonth}
       />
 
       {/* Modal Rekapitulasi Gaji & Lembur Realtime Seluruh Karyawan */}
