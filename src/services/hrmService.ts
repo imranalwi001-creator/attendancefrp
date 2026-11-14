@@ -4180,6 +4180,9 @@ export const hrmService = {
 
   createLeaveRequest: async (req: {
     userId: string;
+    userName?: string;
+    userNip?: string;
+    divisionName?: string;
     leaveType: LeaveRequest['leaveType'];
     startDate: string;
     endDate: string;
@@ -4189,8 +4192,15 @@ export const hrmService = {
     substituteName?: string;
     substituteNip?: string;
   }): Promise<LeaveRequest> => {
-    const user = hrmService.getUsers().find((u) => u.id === req.userId);
-    if (!user) throw new Error('Pengguna tidak ditemukan');
+    let user = hrmService.getUsers().find((u) => u.id === req.userId || u.nip === req.userId);
+    if (!user) {
+      user = {
+        id: req.userId,
+        fullName: req.userName || 'Karyawan',
+        nip: req.userNip || '',
+        divisionName: req.divisionName || '-',
+      } as any;
+    }
 
     if (!req.reason || !req.reason.trim()) {
       throw new Error('Alasan pengajuan wajib diisi');
@@ -4309,6 +4319,9 @@ export const hrmService = {
 
   createManualLeaveRequest: async (req: {
     userId: string;
+    userName?: string;
+    userNip?: string;
+    divisionName?: string;
     leaveType: LeaveRequest['leaveType'];
     startDate: string;
     endDate: string;
@@ -4324,8 +4337,15 @@ export const hrmService = {
   }): Promise<{ success: boolean; leave: LeaveRequest }> => {
     hrmService.init();
     const users = hrmService.getUsers();
-    const user = users.find((u) => u.id === req.userId);
-    if (!user) throw new Error('Karyawan tidak ditemukan');
+    let user = users.find((u) => u.id === req.userId || u.nip === req.userId);
+    if (!user) {
+      user = {
+        id: req.userId,
+        fullName: req.userName || 'Karyawan',
+        nip: req.userNip || '',
+        divisionName: req.divisionName || '-',
+      } as any;
+    }
 
     if (!req.reason || !req.reason.trim()) {
       throw new Error('Alasan pengajuan cuti/izin wajib diisi');
@@ -4988,7 +5008,19 @@ export const hrmService = {
     window.dispatchEvent(new Event('hrm_overtime_updated'));
 
     // Push to backend database asynchronously
-    api.post('/overtimes', newRecord).catch((err) => {
+    api.post('/overtime', {
+      userId: data.userId,
+      date: data.date,
+      startTime: data.startTime,
+      endTime: data.endTime,
+      scheduledEndTime: data.scheduledEndTime || data.endTime,
+      durationHours: data.durationHours,
+      taskDescription: data.taskDescription,
+      supervisorName: data.supervisorName,
+      supervisorSignature: data.supervisorSignature,
+      taskPhotoUrl: data.taskPhotoUrl || data.attachmentUrl,
+      attachmentUrl: data.attachmentUrl || data.taskPhotoUrl,
+    }).catch((err) => {
       console.warn('[HRM] Warning syncing overtime to backend:', err);
     });
 
@@ -5080,6 +5112,9 @@ export const hrmService = {
 
   createManualOvertimeRequest: async (req: {
     userId: string;
+    userName?: string;
+    userNip?: string;
+    divisionName?: string;
     date: string;
     startTime: string;
     endTime: string;
@@ -5095,8 +5130,24 @@ export const hrmService = {
   }): Promise<{ success: boolean; record: OvertimeRecord }> => {
     hrmService.init();
     const users = hrmService.getUsers();
-    const user = users.find((u) => u.id === req.userId);
-    if (!user) throw new Error('Karyawan tidak ditemukan');
+    let user = users.find((u) => u.id === req.userId || u.nip === req.userId);
+    if (!user) {
+      user = {
+        id: req.userId,
+        fullName: req.userName || 'Karyawan',
+        nip: req.userNip || '',
+        divisionName: req.divisionName || 'Operasional Lapangan',
+        role: 'staff',
+        roleName: 'Staff Operasional',
+        email: '',
+        phone: '',
+        annualLeaveQuota: 12,
+        usedLeaveDays: 0,
+        remainingLeaveDays: 12,
+        overtimeEligible: true,
+        hourlyOvertimeRate: 23381.79,
+      } as any;
+    }
 
     const finalStatus: OvertimeStatus = req.status || 'approved';
     const hours = req.durationHours || 2.0;
@@ -5277,21 +5328,46 @@ export const hrmService = {
   },
 
   // Employee Overtime Request (dengan Paraf & Nama Kepala Regu)
-  requestOvertime: (data: {
+  requestOvertime: async (data: {
     userId: string;
+    userName?: string;
+    userNip?: string;
+    divisionId?: string;
+    divisionName?: string;
     date: string;
     startTime: string;
     endTime: string;
-    hours: number;
+    hours?: number;
+    durationHours?: number;
     taskDescription: string;
     supervisorName?: string;
     supervisorSignature?: string;
-  }): OvertimeRecord => {
+    taskPhotoUrl?: string;
+    attachmentUrl?: string;
+  }): Promise<OvertimeRecord> => {
     hrmService.init();
     const users = hrmService.getUsers();
-    const user = users.find((u) => u.id === data.userId);
-    if (!user) throw new Error('Karyawan tidak ditemukan');
+    let user = users.find((u) => u.id === data.userId || u.nip === data.userId);
+    if (!user) {
+      user = {
+        id: data.userId,
+        fullName: data.userName || 'Karyawan',
+        nip: data.userNip || '',
+        divisionId: data.divisionId || '',
+        divisionName: data.divisionName || 'Operasional Lapangan',
+        role: 'staff',
+        roleName: 'Staff Operasional',
+        email: '',
+        phone: '',
+        annualLeaveQuota: 12,
+        usedLeaveDays: 0,
+        remainingLeaveDays: 12,
+        overtimeEligible: true,
+        hourlyOvertimeRate: 23381.79,
+      } as any;
+    }
 
+    const effectiveHours = Number(data.hours ?? data.durationHours ?? 0);
     const dateObj = new Date(data.date);
     const day = dateObj.getDay();
     const isWeekend = (day === 0 || day === 6) || hrmHolidayService.isWeekendOrHoliday(data.date).isWeekendOrHoliday;
@@ -5299,7 +5375,32 @@ export const hrmService = {
     const calc = hrmService.calculateOvertime(data.startTime, data.endTime, isWeekend);
     const hourlyRate = calc.hourlyRate;
     const rateMultiplier = calc.rateMultiplier;
-    const totalPay = Math.round(data.hours * hourlyRate * rateMultiplier);
+    const totalPay = Math.round(effectiveHours * hourlyRate * rateMultiplier);
+    const photoUrl = data.taskPhotoUrl || data.attachmentUrl || '';
+
+    // Push to backend PostgreSQL
+    let backendRecord: any = null;
+    try {
+      const apiRes = await api.post<any>('/overtime', {
+        userId: user.id,
+        date: data.date,
+        startTime: data.startTime,
+        endTime: data.endTime,
+        scheduledEndTime: data.endTime,
+        durationHours: effectiveHours,
+        taskDescription: data.taskDescription,
+        supervisorName: data.supervisorName,
+        supervisorSignature: data.supervisorSignature,
+        taskPhotoUrl: photoUrl,
+        attachmentUrl: photoUrl,
+      });
+      if (apiRes && (apiRes.data || (apiRes as any).success)) {
+        backendRecord = apiRes.data || apiRes;
+      }
+    } catch (err: any) {
+      console.warn('[Overtime] Backend request warning:', err);
+      throw new Error(err.message || 'Gagal mengirim formulir SPL ke server');
+    }
 
     const record = hrmService.createOvertimeRequest({
       userId: user.id,
@@ -5311,9 +5412,9 @@ export const hrmService = {
       startTime: data.startTime,
       endTime: data.endTime,
       scheduledEndTime: data.endTime,
-      durationMinutes: data.hours * 60,
-      durationHours: data.hours,
-      requestedHours: data.hours,
+      durationMinutes: effectiveHours * 60,
+      durationHours: effectiveHours,
+      requestedHours: effectiveHours,
       assignedByAdmin: false,
       isWeekendHoliday: isWeekend,
       hourlyRate,
@@ -5322,23 +5423,16 @@ export const hrmService = {
       taskDescription: data.taskDescription,
       supervisorName: data.supervisorName,
       supervisorSignature: data.supervisorSignature,
+      taskPhotoUrl: photoUrl,
+      attachmentUrl: photoUrl,
       overtimePhase: 'requested',
       status: 'pending',
       paymentStatus: 'unpaid',
     });
 
-    // Push to backend PostgreSQL
-    api.post('/overtime', {
-      userId: user.id,
-      date: data.date,
-      startTime: data.startTime,
-      endTime: data.endTime,
-      scheduledEndTime: data.endTime,
-      durationHours: data.hours,
-      taskDescription: data.taskDescription,
-      supervisorName: data.supervisorName,
-      supervisorSignature: data.supervisorSignature,
-    }).catch((err) => console.warn('[Overtime] Backend request warning:', err));
+    if (backendRecord && backendRecord.id) {
+      record.id = backendRecord.id;
+    }
 
     // Notify Admin
     hrmService.addNotification({

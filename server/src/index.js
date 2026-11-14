@@ -3055,7 +3055,8 @@ async function alertLeadershipViaWhatsAppAndSystem({ title, message, waMessage, 
 // Mengirim serentak ke: Pemohon, Karyawan Pengganti, Korlap, K3, Admin, Superadmin, dan Pimpinan (Dirut/Pimpinan)
 async function notifyAllPartiesViaWhatsApp({
   submissionType,     // e.g. 'CUTI', 'IZIN', 'SAKIT', 'LEMBUR (SPL)', 'TUKAR SHIFT'
-  details,            // detail teks jadwal/waktu
+  details,            // detail teks jadwal/waktu (untuk manajemen / Korlap / Admin)
+  applicantDetails,   // detail teks jadwal/waktu khusus karyawan (tanpa nominal upah)
   applicant,          // { id, fullName, nip, phone, divisionName }
   substitute,         // { id, fullName, nip, phone } (opsional jika ada pengganti)
   reasonOrTask,       // alasan / tugas
@@ -3071,6 +3072,15 @@ async function notifyAllPartiesViaWhatsApp({
   try {
     const isApproved = decisionStatus === 'approved';
 
+    // 🛡️ KEBIJAKAN KERAHASIAAN NOMINAL PAYROLL PT FRP:
+    // Bersihkan nominal rupiah (Rp) dari teks yang diterima oleh karyawan pemohon & petugas pengganti pos.
+    // Nominal upah HANYA boleh tampil pada notifikasi manajemen / Korlap / K3 / Admin / Superadmin.
+    const safeEmployeeDetails = applicantDetails || (
+      typeof details === 'string'
+        ? details.replace(/\s*[-•]\s*Est\.?\s*Rp\.?\s*[\d.,]+/gi, '').replace(/\s*\(Est\.?\s*Rp\.?\s*[\d.,]+\)/gi, '').trim()
+        : details
+    );
+
     // 0. KHUSUS 3 PETUGAS LAPANGAN KHUSUS PIMPINAN (ASLAM, SAMSI, TAKDIR):
     // TIDAK MEMBUTUHKAN PENGGANTI POS & OTORITAS PENUH BERADA PADA DIRUT ATAU PIMPINAN (FIRST-RESPONDER)
     if (isSpecialOfficer) {
@@ -3083,7 +3093,7 @@ async function notifyAllPartiesViaWhatsApp({
 Halo *${applicant.fullName}* (${applicant.nip || '-'}),
 Pengajuan *${submissionType}* Anda telah resmi diteruskan langsung ke *Direktur Utama (Bpk Alam AS)* dan *Pimpinan (Bpk Reski Faisal)* untuk persetujuan eksekutif.
 
-📅 Jadwal: *${details}*
+📅 Jadwal: *${safeEmployeeDetails}*
 🏢 Jabatan: *Petugas Lapangan Khusus Pimpinan (Bebas Pengganti)*
 💬 Alasan: "${reasonOrTask || '-'}"
 
@@ -3191,7 +3201,7 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
           `✅ *TANDA TERIMA PENGAJUAN ${submissionType} (PT FRP)*\n\n` +
           `Halo *${applicant.fullName}* (${applicant.nip || '-'}),\n` +
           `Pengajuan *${submissionType}* Anda telah berhasil tercatat resmi di sistem HRM:\n\n` +
-          `📅 Jadwal/Detail: *${details}*\n` +
+          `📅 Jadwal/Detail: *${safeEmployeeDetails}*\n` +
           `🏢 Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
           `💬 Alasan/Tugas: "${reasonOrTask || '-'}"\n` +
           (substitute?.fullName ? `🛡️ Usulan Pengganti Pos: *${substitute.fullName}* (${substitute.nip || '-'})\n` : '') +
@@ -3202,14 +3212,14 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
         applicantMsg = isApproved
           ? `🎉 *PENGAJUAN ${submissionType} TELAH DISETUJUI*\n\n` +
             `Halo *${applicant.fullName}*,\n` +
-            `Pengajuan *${submissionType}* Anda (${details}) telah *DISETUJUI RESMI* oleh *${approverName || 'Atasan'}*.\n` +
+            `Pengajuan *${submissionType}* Anda (${safeEmployeeDetails}) telah *DISETUJUI RESMI* oleh *${approverName || 'Atasan'}*.\n` +
             (approvalNotes ? `💬 Catatan: "${approvalNotes}"\n` : '') +
             (substitute?.fullName ? `🛡️ Petugas Pengganti Pos Resmi: *${substitute.fullName}*\n` : '') +
             (quota ? `\n📊 *Sisa Kuota Cuti Anda Saat Ini: ${quota.estRemaining ?? quota.currentRemaining} Hari* (dari Kuota ${quota.annualQuota} Hari, Terpakai: ${quota.usedDays} Hari)\n` : '') +
             `\nStatus presensi & jadwal roster kerja Anda telah otomatis disinkronkan di sistem HRM PT FRP.`
           : `⚠️ *PEMBERITAHUAN PENGAJUAN ${submissionType} DITOLAK*\n\n` +
             `Halo *${applicant.fullName}*,\n` +
-            `Mohon maaf, pengajuan *${submissionType}* Anda (${details}) *DITOLAK* oleh *${approverName || 'Atasan'}*.\n` +
+            `Mohon maaf, pengajuan *${submissionType}* Anda (${safeEmployeeDetails}) *DITOLAK* oleh *${approverName || 'Atasan'}*.\n` +
             (approvalNotes ? `💬 Alasan: "${approvalNotes}"\n` : '') +
             `\nSilakan berkoordinasi langsung dengan Korlap atau Admin terkait kendala dinas Anda.`;
       }
@@ -3226,7 +3236,7 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
           `Anda telah diusulkan sebagai *Petugas Pengganti Pos Dinas* untuk mengisi kekosongan:\n\n` +
           `👤 Karyawan yang Digantikan: *${applicant.fullName}*\n` +
           `🏢 Pos/Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
-          `📅 Jadwal: *${details}*\n` +
+          `📅 Jadwal: *${safeEmployeeDetails}*\n` +
           `📌 Status: *Menunggu Persetujuan Resmi Korlap / Pimpinan*\n\n` +
           `Tugas penggantian pos ini dihitung sebagai lembur resmi (Relief Duty Pay) sesuai ketentuan perusahaan. Harap bersiap untuk bertugas pada jadwal tersebut.`;
       } else if (isApproved) {
@@ -3236,7 +3246,7 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
           `Penugasan Anda sebagai *Petugas Pengganti Pos Dinas* resmi *DISETUJUI & DISAHKAN* oleh *${approverName || 'Korlap'}*:\n\n` +
           `👤 Menggantikan: *${applicant.fullName}*\n` +
           `🏢 Pos/Divisi: *${applicant.divisionName || 'Operasional'}*\n` +
-          `📅 Jadwal Dinas: *${details}*\n` +
+          `📅 Jadwal Dinas: *${safeEmployeeDetails}*\n` +
           `💰 Kompensasi: *Otomatis Dihitung Lembur (Relief Duty Pay)*\n\n` +
           `🚨 *BEBAS KENDALA RADIUS (RADIUS EXEMPTION AKTIF):*\n` +
           `Radius dan seluruh titik pos penugasan dari rekan yang Anda gantikan telah otomatis ditambahkan ke akun Anda di sistem HRM. Anda dapat langsung melakukan absensi masuk (Clock-In) di lokasi pos tersebut tanpa kendala radius.\n\n` +
@@ -6050,7 +6060,7 @@ app.post('/api/attendances/clock-out', async (req, res) => {
           task_description, task_photo_url, is_emergency, source, status, overtime_phase,
           emergency_reported_at, approval_notes
         ) VALUES (
-          $1, $2::date, COALESCE($3, '16:30'), COALESCE($4, '19:30'), $5, $5, $5,
+          $1, $2::date, COALESCE($3::time, '16:30'::time), COALESCE($4::time, '19:30'::time), $5, $5, $5,
           $6, $7, true, 'emergency_post_shift', 'pending', 'completed',
           NOW(), 'Lembur Darurat Pasca-Shift dilaporkan otomatis saat Clock-Out (Maks 3 Jam)'
         ) RETURNING *;
@@ -11034,6 +11044,7 @@ app.post('/api/overtime', async (req, res) => {
     await notifyAllPartiesViaWhatsApp({
       submissionType: 'LEMBUR (SPL)',
       details: `${date} (${startTime} - ${endTime}, ${hours} Jam) - Est. Rp ${comp.toLocaleString('id-ID')}`,
+      applicantDetails: `${date} (${startTime} - ${endTime}, ${hours} Jam)`,
       applicant: {
         id: userProfile.id,
         fullName: userProfile.full_name,
@@ -11150,7 +11161,7 @@ app.put('/api/overtime/:id/status', async (req, res) => {
     if (status === 'approved') {
       const budgetGuard = await verifyOvertimeBudgetGuardrail(pool, ot.user_id, ot.date, compensation, ot.id, {
         forceBudgetOverride: Boolean(req.body?.forceBudgetOverride),
-        approverRole: String(req.body?.approverRole || approvedByName || ''),
+        approverRole: String(req.body?.approverRole || approverName || ''),
       });
       if (!budgetGuard.allowed) {
         return res.status(403).json({

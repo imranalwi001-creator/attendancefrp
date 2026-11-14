@@ -876,6 +876,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       const yesterdayStr = getYesterdayDateStr();
       let todayAtt: AttendanceRecord | undefined = undefined;
 
+      // Pastikan profil user aktif terdaftar di inMemoryUsers hrmService
+      const currentUsers = hrmService.getUsers();
+      if (!currentUsers.some((u) => u.id === user.id)) {
+        hrmService.setInMemoryUsers([...currentUsers, user]);
+      }
+
       // ─── TAHAP 1.5: SINKRONISASI PROFIL REALTIME DARI POSTGRESQL ───
       // Memastikan perubahan penugasan shift, divisi, atau status akun dari Superadmin langsung aktif
       if (typeof refreshUser === 'function' && Date.now() - lastUserRefreshRef.current > 10000) {
@@ -3202,6 +3208,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     try {
       await hrmService.createLeaveRequest({
         userId: user.id,
+        userName: user.fullName,
+        userNip: user.nip,
+        divisionName: user.divisionName,
         leaveType,
         startDate: leaveStartDate,
         endDate: leaveEndDate,
@@ -3251,6 +3260,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     try {
       await hrmService.requestOvertime({
         userId: user.id,
+        userName: user.fullName,
+        userNip: user.nip,
+        divisionId: user.divisionId,
+        divisionName: user.divisionName,
         date: otDate,
         startTime: otStartTime,
         endTime: otEndTime,
@@ -6621,7 +6634,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             </Button>
             <Button
               size="sm"
-              disabled={isSubmittingOvertime || !otTaskDescription.trim() || !otProofPhoto}
+              disabled={isSubmittingOvertime}
               onClick={handleCreateOvertime}
               className="rounded-xl flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
             >
