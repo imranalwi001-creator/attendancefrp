@@ -228,23 +228,32 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
     return targetEmployees.map((emp, empIdx) => {
       const empNipNorm = (emp.nip || '').replace(/[\s.]/g, '').toUpperCase();
       const empIdStr = (emp.id || '').toString();
+      const empNameNorm = (emp.fullName || (emp as any).name || '').toLowerCase().trim();
       const nipDisplay = emp.nip ? (emp.nip.includes('.') ? emp.nip : emp.nip.replace(/(FR)(07)(\d+)/, '$1.$2.$3')) : `FR.07.${String(empIdx + 34).padStart(3, '0')}`;
 
-      // 1. Attendances (Normalisasi Defensif Snake & Camel Case)
+      // 1. Attendances (Normalisasi Defensif Snake & Camel Case & Name Fallback)
       const empAtts = activeAttendances.filter((a) => {
         const aNip = ((a as any).user_nip || (a as any).userNip || (a as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
-        const aUserId = ((a as any).user_id || (a as any).userId || (a as any).id || '').toString();
+        const aUserId = ((a as any).user_id || (a as any).userId || '').toString();
+        const aName = ((a as any).userName || (a as any).user_name || '').toLowerCase().trim();
         const aDateStr = ((a as any).attendance_date_str || (a as any).attendance_date || (a as any).attendanceDate || (a as any).date || '').toString().slice(0, 10);
         const inMonth = aDateStr.startsWith(selectedMonth);
-        return inMonth && (aUserId === empIdStr || (empNipNorm && aNip && empNipNorm === aNip));
+        const matchesUser = (aUserId && empIdStr && aUserId === empIdStr) ||
+          (empNipNorm && aNip && empNipNorm === aNip) ||
+          (empNameNorm && aName && (empNameNorm === aName || (empNameNorm.includes('honnes') && aName.includes('honnes'))));
+        return inMonth && matchesUser;
       });
 
       // 2. Approved Leaves
       const empLeaves = activeLeaves.filter((l) => {
         const lNip = ((l as any).user_nip || (l as any).userNip || (l as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
         const lUserId = ((l as any).user_id || (l as any).userId || '').toString();
+        const lName = ((l as any).userName || (l as any).user_name || (l as any).full_name || '').toLowerCase().trim();
         const isApp = (l.status || '').toLowerCase() === 'approved';
-        return isApp && (lUserId === empIdStr || (empNipNorm && lNip && empNipNorm === lNip));
+        const matchesUser = (lUserId && empIdStr && lUserId === empIdStr) ||
+          (empNipNorm && lNip && empNipNorm === lNip) ||
+          (empNameNorm && lName && (empNameNorm === lName || (empNameNorm.includes('honnes') && lName.includes('honnes'))));
+        return isApp && matchesUser;
       });
 
       // 3. Employee Shift Schedules (Roster Database)
@@ -310,17 +319,17 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
 
         if (att) {
           const st = (att.status || '').toLowerCase().trim();
-          if (st === 'cuti') {
+          if (st === 'cuti' || st.includes('cuti')) {
             attendanceCells.push({ val: 'CT', isHoliday: d.isWeekend });
-          } else if (st === 'sakit') {
+          } else if (st === 'sakit' || st.includes('sakit')) {
             attendanceCells.push({ val: 'S', isHoliday: d.isWeekend });
-          } else if (st === 'izin') {
+          } else if (st === 'izin' || st.includes('izin')) {
             attendanceCells.push({ val: 'I', isHoliday: d.isWeekend });
           } else if (st === 'mangkir' || st === 'alpa') {
             attendanceCells.push({ val: 'A', isHoliday: d.isWeekend });
           } else if (isSchedOff || st === 'off' || st === 'libur') {
             attendanceCells.push({ val: '0', isHoliday: d.isWeekend });
-          } else if (st === 'hadir' || st === 'terlambat' || (att as any).clock_in || (att as any).clockIn) {
+          } else if (st === 'hadir' || st === 'terlambat' || st === 'present' || (att as any).clock_in || (att as any).clockIn) {
             if (isSchedOff) {
               attendanceCells.push({ val: '0', isHoliday: d.isWeekend });
             } else {

@@ -427,27 +427,29 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
       const hasClockIn = Boolean(att?.clockIn);
       const hasClockOut = Boolean(att?.clockOut);
+      const attStatus = (att?.status || '').toLowerCase().trim();
 
-      // PRIORITAS 1: Presensi Fisik Aktual
-      if (hasClockIn && att) {
-        absenMasuk = (att.clockIn || '').substring(0, 5);
-        if (hasClockOut) {
-          absenPulang = (att.clockOut || '').substring(0, 5);
-        } else if (isToday) {
-          absenPulang = 'Bertugas';
-        }
-        if (att.lateMinutes && Number(att.lateMinutes) > 0) {
-          telatMnt = String(att.lateMinutes);
-        }
-        ket = att.status === 'terlambat' ? 'TELAT' : 'HADIR';
-        if (att.notes) {
-          uraianPekerjaan = att.notes;
+      // PRIORITAS 1: Cuti / Izin / Sakit dari Record Presensi Database atau Pengesahan Superadmin
+      if (att && (attStatus === 'cuti' || attStatus.includes('cuti') || attStatus === 'sakit' || attStatus.includes('sakit') || attStatus === 'izin' || attStatus.includes('izin'))) {
+        if (attStatus === 'cuti' || attStatus.includes('cuti')) {
+          absenMasuk = 'CUTI';
+          absenPulang = 'CUTI';
+          ket = 'CUTI';
+          uraianPekerjaan = att.notes || 'Cuti Tahunan (Disahkan)';
+        } else if (attStatus === 'sakit' || attStatus.includes('sakit')) {
+          absenMasuk = 'SAKIT';
+          absenPulang = 'SAKIT';
+          ket = 'SAKIT';
+          uraianPekerjaan = att.notes || 'Izin Sakit (Disahkan)';
         } else {
-          uraianPekerjaan = isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : (att.shiftName || sched?.shiftName || 'Tugas Lapangan Operasional');
+          absenMasuk = 'IZIN';
+          absenPulang = 'IZIN';
+          ket = 'IZIN';
+          uraianPekerjaan = att.notes || 'Izin Resmi (Disahkan)';
         }
-        memerintahkanKaur = isSpecialTarget ? 'Pimpinan PT. FRP' : (employeeKaur || 'Korlap');
+        memerintahkanKaur = isSpecialTarget ? 'Direksi PT. FRP' : (employeeKaur || 'Korlap');
       }
-      // PRIORITAS 2: Cuti / Izin / Sakit Resmi yang Disetujui
+      // PRIORITAS 2: Cuti / Izin / Sakit Resmi yang Disetujui dari hrm_leave_requests
       else if (activeLeave) {
         const lType = String(activeLeave.leaveType || activeLeave.leave_type || 'cuti').toLowerCase();
         if (lType.includes('sakit')) {
@@ -471,8 +473,27 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         }
         memerintahkanKaur = activeLeave.approved_by_name || activeLeave.approvedByName || (isSpecialTarget ? 'Direksi PT. FRP' : (employeeKaur || 'Korlap'));
       }
-      // PRIORITAS 3: Hari Libur Roster (OFF) atau Akhir Pekan tanpa jadwal shift kerja
-      else if (isRosterOff || (!hasSched && isWeekend)) {
+      // PRIORITAS 3: Presensi Fisik Aktual (Hadir / Telat)
+      else if (att && (hasClockIn || attStatus === 'hadir' || attStatus === 'terlambat' || attStatus === 'present')) {
+        absenMasuk = (att.clockIn || '').substring(0, 5) || (isToday ? 'Bertugas' : '-');
+        if (hasClockOut) {
+          absenPulang = (att.clockOut || '').substring(0, 5);
+        } else if (isToday) {
+          absenPulang = 'Bertugas';
+        }
+        if (att.lateMinutes && Number(att.lateMinutes) > 0) {
+          telatMnt = String(att.lateMinutes);
+        }
+        ket = att.status === 'terlambat' ? 'TELAT' : 'HADIR';
+        if (att.notes) {
+          uraianPekerjaan = att.notes;
+        } else {
+          uraianPekerjaan = isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : (att.shiftName || sched?.shiftName || 'Tugas Lapangan Operasional');
+        }
+        memerintahkanKaur = isSpecialTarget ? 'Pimpinan PT. FRP' : (employeeKaur || 'Korlap');
+      }
+      // PRIORITAS 4: Hari Libur Roster (OFF) atau Akhir Pekan tanpa jadwal shift kerja atau status OFF di attendance
+      else if (isRosterOff || (!hasSched && isWeekend) || attStatus === 'off' || attStatus === 'libur') {
         absenMasuk = 'OFF';
         absenPulang = 'OFF';
         ket = 'OFF';

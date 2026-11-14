@@ -184,23 +184,32 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
     return targetEmployees.map((emp, idx) => {
       const empNipNorm = (emp.nip || '').replace(/[\s.]/g, '').toUpperCase();
       const empIdStr = (emp.id || '').toString();
+      const empNameNorm = (emp.fullName || (emp as any).name || '').toLowerCase().trim();
       const nipDisplay = emp.nip ? (emp.nip.includes('.') ? emp.nip : emp.nip.replace(/(FR)(07)(\d+)/, '$1.$2.$3')) : `FR.07.${String(idx + 34).padStart(3, '0')}`;
 
-      // 1. Attendances in selectedMonth (Normalisasi Defensif Snake & Camel Case)
+      // 1. Attendances in selectedMonth (Normalisasi Defensif Snake & Camel Case & Name Fallback)
       const empAtts = activeAttendances.filter((a) => {
         const aNipNorm = ((a as any).user_nip || (a as any).userNip || (a as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
         const aUserId = ((a as any).user_id || (a as any).userId || '').toString();
+        const aName = ((a as any).userName || (a as any).user_name || '').toLowerCase().trim();
         const aDateStr = ((a as any).attendance_date_str || (a as any).attendance_date || (a as any).attendanceDate || (a as any).date || '').toString().slice(0, 10);
         const inMonth = aDateStr.startsWith(selectedMonth);
-        return inMonth && (aUserId === empIdStr || (empNipNorm && aNipNorm && empNipNorm === aNipNorm));
+        const matchesUser = (aUserId && empIdStr && aUserId === empIdStr) ||
+          (empNipNorm && aNipNorm && empNipNorm === aNipNorm) ||
+          (empNameNorm && aName && (empNameNorm === aName || (empNameNorm.includes('honnes') && aName.includes('honnes'))));
+        return inMonth && matchesUser;
       });
 
       // 2. Approved leaves
       const empLeaves = activeLeaves.filter((l) => {
         const lNipNorm = ((l as any).user_nip || (l as any).userNip || (l as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
         const lUserId = ((l as any).user_id || (l as any).userId || '').toString();
+        const lName = ((l as any).userName || (l as any).user_name || (l as any).full_name || '').toLowerCase().trim();
         const isApp = (l.status || '').toLowerCase() === 'approved';
-        return isApp && (lUserId === empIdStr || (empNipNorm && lNipNorm && empNipNorm === lNipNorm));
+        const matchesUser = (lUserId && empIdStr && lUserId === empIdStr) ||
+          (empNipNorm && lNipNorm && empNipNorm === lNipNorm) ||
+          (empNameNorm && lName && (empNameNorm === lName || (empNameNorm.includes('honnes') && lName.includes('honnes'))));
+        return isApp && matchesUser;
       });
 
       // 3. Employee shift schedules (Roster Database)
@@ -276,15 +285,15 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
 
         if (attOnDay) {
           const st = (attOnDay.status || '').toLowerCase().trim();
-          if (st === 'cuti') {
+          if (st === 'cuti' || st.includes('cuti')) {
             dailyCells.push('CT');
             countCT++;
             return;
-          } else if (st === 'sakit') {
+          } else if (st === 'sakit' || st.includes('sakit')) {
             dailyCells.push('S');
             countS++;
             return;
-          } else if (st === 'izin') {
+          } else if (st === 'izin' || st.includes('izin')) {
             dailyCells.push('I');
             countI++;
             return;
@@ -295,7 +304,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
           } else if (isSchedOff || st === 'off' || st === 'libur') {
             dailyCells.push('0');
             return;
-          } else if (st === 'hadir' || st === 'terlambat' || (attOnDay as any).clock_in || (attOnDay as any).clockIn) {
+          } else if (st === 'hadir' || st === 'terlambat' || st === 'present' || (attOnDay as any).clock_in || (attOnDay as any).clockIn) {
             if (isSchedOff) {
               dailyCells.push('0');
             } else {
