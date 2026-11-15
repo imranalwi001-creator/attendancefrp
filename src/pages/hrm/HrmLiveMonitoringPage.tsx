@@ -19,6 +19,7 @@ import {
   Clock,
   Search,
   RotateCw,
+  RotateCcw,
   QrCode,
   ShieldCheck,
   AlertTriangle,
@@ -31,6 +32,10 @@ import {
   ShieldAlert,
   Flame,
   Activity,
+  HeartPulse,
+  CalendarCheck,
+  FileCheck2,
+  TrendingUp,
   UserX,
   LayoutGrid,
   TableProperties,
@@ -226,6 +231,20 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const pastMonthStr = React.useMemo(() => getPreviousYearMonth(currentMonthStr), [currentMonthStr]);
   const futureMonthStr = React.useMemo(() => getNextYearMonth(currentMonthStr), [currentMonthStr]);
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
+  const [lampiran2ViewMode, setLampiran2ViewMode] = useState<'monthly' | 'daily'>('monthly');
+
+  const currentMonthLabel = React.useMemo(() => {
+    const [y, m] = currentMonthStr.split('-').map(Number);
+    const d = new Date(y, m - 1, 1);
+    return d.toLocaleDateString('id-ID', { month: 'short', year: 'numeric' });
+  }, [currentMonthStr]);
+
+  const pastMonthLabel = React.useMemo(() => {
+    const [y, m] = pastMonthStr.split('-').map(Number);
+    const d = new Date(y, m - 1, 1);
+    return d.toLocaleDateString('id-ID', { month: 'short', year: 'numeric' });
+  }, [pastMonthStr]);
+
   const [selectedDayDate, setSelectedDayDate] = useState<string>(''); // YYYY-MM-DD atau '' (semua tanggal di bulan)
   const targetDayDate = selectedDayDate || getTodayDateStr();
   const [calendarModalOpen, setCalendarModalOpen] = useState<boolean>(false);
@@ -725,10 +744,11 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const fetchMonthAttendances = React.useCallback(async (monthStr: string) => {
     try {
       setIsFetchingMonth(true);
-      const [resAtt, resSched, resLeaves] = await Promise.all([
+      const [resAtt, resSched, resLeaves, resOt] = await Promise.all([
         fetch(`/api/attendances?month=${monthStr}`),
         fetch(`/api/employee-schedules?month=${monthStr}`),
         fetch(`/api/leaves?status=approved`),
+        fetch(`/api/overtime?month=${monthStr}`),
       ]);
 
       if (resAtt.ok) {
@@ -761,6 +781,34 @@ export const HrmLiveMonitoringPage: React.FC = () => {
           setApprovedLeaves(jsonLeaves.data);
         }
       }
+
+      if (resOt && resOt.ok) {
+        const jsonOt = await resOt.json();
+        if (jsonOt.success && Array.isArray(jsonOt.data)) {
+          const mapped = jsonOt.data.map((o: any) => ({
+            ...o,
+            userId: o.userId || o.user_id,
+            userNip: o.userNip || o.user_nip,
+            userName: o.userName || o.user_name,
+            divisionName: o.divisionName || o.division_name,
+            date: String(o.date || o.overtimeDate || o.overtime_date || '').slice(0, 10),
+            startTime: o.startTime || o.start_time,
+            endTime: o.endTime || o.end_time,
+            durationHours: Number(o.durationHours || o.duration_hours || 0),
+            approvedHours: Number(o.approvedHours || o.approved_hours || o.durationHours || o.duration_hours || 0),
+            compensationAmount: Number(o.compensationAmount || o.compensation_amount || o.totalPay || o.total_pay || 0),
+            totalPay: Number(o.compensationAmount || o.compensation_amount || o.totalPay || o.total_pay || 0),
+            taskDescription: o.taskDescription || o.task_description || '',
+            status: o.status || 'pending',
+            supervisorName: o.supervisorName || o.supervisor_name || o.approvedByName || o.approved_by_name || o.approver_name || '',
+          }));
+          setOvertimes((prev) => {
+            const map = new Map(prev.map((o) => [o.id, o]));
+            mapped.forEach((o: any) => map.set(o.id, o));
+            return Array.from(map.values());
+          });
+        }
+      }
     } catch (e) {
       console.warn('[LiveMonitoring] Fetch month note:', e);
     } finally {
@@ -768,12 +816,99 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     }
   }, []);
 
-  // Fetch data bulan saat selectedMonth berubah atau saat periodScope beralih ke 'month'
+  // Fetch data bulan setiap kali selectedMonth berubah, agar akumulasi Lampiran II selalu sinkron
   useEffect(() => {
-    if (periodScope === 'month') {
-      fetchMonthAttendances(selectedMonth);
-    }
-  }, [selectedMonth, periodScope, fetchMonthAttendances]);
+    fetchMonthAttendances(selectedMonth);
+  }, [selectedMonth, fetchMonthAttendances]);
+
+  // ─── AKUMULASI STATISTIK BULANAN UNTUK LAMPIRAN II (BULAN BERJALAN & BULAN SEBELUMNYA) ───
+  const monthStats = React.useMemo(() => {
+    const targetMonth = selectedMonth || currentMonthStr; // 'YYYY-MM'
+
+    // 1. Presensi Hadir pada targetMonth
+    const monthAtts = (allAttendances || []).filter((a) => {
+      const d = String(a.attendanceDate || (a as any).date || '').slice(0, 7);
+      return d === targetMonth && isOfficialFrEmployee(a);
+    });
+
+    const hadirAtts = monthAtts.filter((a) => ['present', 'hadir', 'late', 'terlambat'].includes(a.status));
+    const lateAtts = monthAtts.filter((a) => ['late', 'terlambat'].includes(a.status) || (a.lateMinutes && a.lateMinutes > 0));
+    const tepatAtts = hadirAtts.filter((a) => !['late', 'terlambat'].includes(a.status) && (!a.lateMinutes || a.lateMinutes <= 0));
+
+    // 2. Mangkir / Alpa pada targetMonth
+    const mangkirAtts = monthAtts.filter((a) => ['alfa', 'mangkir'].includes(a.status) || (a as any).absentSubtype === 'mangkir');
+
+    // 3. Sakit, Izin, Cuti dari Cuti Requests & Presensi
+    const countLeaveDays = (typeKeyword: string): number => {
+      let days = 0;
+      (approvedLeaves || []).forEach((l) => {
+        if (!isOfficialFrEmployee(l)) return;
+        const lType = String(l.leaveType || (l as any).leave_type || '').toLowerCase();
+        if (!lType.includes(typeKeyword)) return;
+
+        const sStr = String(l.startDate || (l as any).start_date || '');
+        const eStr = String(l.endDate || (l as any).end_date || sStr);
+        if (!sStr) return;
+
+        const s = new Date(sStr);
+        const e = new Date(eStr);
+        if (isNaN(s.getTime()) || isNaN(e.getTime())) return;
+
+        const cur = new Date(s);
+        let guard = 0;
+        while (cur <= e && guard < 60) {
+          const y = cur.getFullYear();
+          const m = String(cur.getMonth() + 1).padStart(2, '0');
+          if (`${y}-${m}` === targetMonth) {
+            days++;
+          }
+          cur.setDate(cur.getDate() + 1);
+          guard++;
+        }
+      });
+      return days;
+    };
+
+    const attSakitCount = monthAtts.filter((a) => ['sick', 'sakit'].includes(a.status)).length;
+    const leaveSakitDays = countLeaveDays('sakit') + countLeaveDays('sick');
+    const totalSakit = Math.max(attSakitCount, leaveSakitDays);
+
+    const leaveIzinDays = countLeaveDays('izin') + countLeaveDays('permission');
+    const attIzinCount = monthAtts.filter((a) => ['izin', 'permission'].includes(a.status)).length;
+    const totalIzin = Math.max(attIzinCount, leaveIzinDays);
+
+    const attCutiCount = monthAtts.filter((a) => ['cuti', 'leave'].includes(a.status)).length;
+    const leaveCutiDays = countLeaveDays('cuti') + countLeaveDays('annual');
+    const totalCuti = Math.max(attCutiCount, leaveCutiDays);
+
+    // 4. Lembur (SPKL) pada targetMonth
+    const normNip = (n?: string) => (n || '').replace(/[\s.]/g, '').toUpperCase();
+    const monthOts = (overtimes || []).filter((o) => {
+      const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || '').slice(0, 7);
+      const isApp = o.status === 'approved' || (o as any).status === 'completed';
+      return oDate === targetMonth && isApp && isOfficialFrEmployee(o);
+    });
+
+    const totalOtHours = monthOts.reduce((sum, o) => sum + Number(o.approvedHours || (o as any).approved_hours || o.durationHours || 0), 0);
+    const totalOtPay = monthOts.reduce((sum, o) => sum + Number(o.compensationAmount || (o as any).compensation_amount || o.totalPay || 0), 0);
+    const totalOtCount = monthOts.length;
+    const uniqueOtUsers = new Set(monthOts.map((o) => o.userId || (o as any).user_id || normNip(o.userNip))).size;
+
+    return {
+      targetMonth,
+      totalHadir: hadirAtts.length,
+      totalTepat: tepatAtts.length,
+      totalLate: lateAtts.length,
+      totalSakit,
+      totalIzin,
+      totalCuti,
+      totalMangkir: mangkirAtts.length,
+      totalOtHours,
+      totalOtPay,
+      totalOtCount,
+      uniqueOtUsers,
+    };
+  }, [selectedMonth, currentMonthStr, allAttendances, approvedLeaves, overtimes]);
 
   // Navigasi Bulan (Sebelumnya, Berikutnya, Berjalan)
   const handlePrevMonth = () => {
@@ -1262,10 +1397,27 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || (o as any).createdAt || (o as any).created_at || '').slice(0, 10);
         const matchUser = oUserId === u.id || (Boolean(oUserNip) && normNip(oUserNip) === normNip(u.nip)) || (u.email && (o as any).email?.toLowerCase() === u.email?.toLowerCase());
         const isApproved = o.status === 'approved' || (o as any).status === 'completed';
-        return matchUser && oDate.startsWith(currentMonthStr) && isApproved;
+        const targetPeriod = selectedMonth || currentMonthStr;
+        return matchUser && oDate.startsWith(targetPeriod) && isApproved;
       });
       const userMonthOtHours = userMonthOts.reduce((sum, o) => sum + Number(o.approvedHours || (o as any).approved_hours || o.durationHours || (o as any).duration_hours || 0), 0);
       const userMonthOtPay = userMonthOts.reduce((sum, o) => sum + Number(o.compensationAmount || (o as any).compensation_amount || o.totalPay || (o as any).total_pay || 0), 0);
+
+      const monthlyOvertimeDates = userMonthOts.map((o) => {
+        const dStr = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || '').slice(0, 10);
+        const dayNum = parseInt(dStr.slice(8, 10), 10);
+        const hrs = Number(o.approvedHours || (o as any).approved_hours || o.durationHours || (o as any).duration_hours || 0);
+        const pay = Number(o.compensationAmount || (o as any).compensation_amount || o.totalPay || (o as any).total_pay || 0);
+        return {
+          date: dStr,
+          day: isNaN(dayNum) ? dStr : dayNum,
+          hours: hrs,
+          pay,
+          task: o.taskDescription || (o as any).task_description || '',
+          startTime: o.startTime || (o as any).start_time,
+          endTime: o.endTime || (o as any).end_time,
+        };
+      }).sort((a, b) => a.date.localeCompare(b.date));
 
       return {
         user: u,
@@ -1282,6 +1434,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         monthlyOvertimeHours: userMonthOtHours,
         monthlyOvertimePay: userMonthOtPay,
         monthlyOvertimeCount: userMonthOts.length,
+        monthlyOvertimeDates,
       };
     } else {
       const userAtts = activePeriodAttendances.filter(
@@ -1361,6 +1514,19 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         monthlyOvertimeHours: periodOtHours,
         monthlyOvertimePay: periodOtPay,
         monthlyOvertimeCount: userPeriodOts.length,
+        monthlyOvertimeDates: userPeriodOts.map((o) => {
+          const dStr = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || '').slice(0, 10);
+          const dayNum = parseInt(dStr.slice(8, 10), 10);
+          return {
+            date: dStr,
+            day: isNaN(dayNum) ? dStr : dayNum,
+            hours: Number(o.approvedHours || (o as any).approved_hours || o.durationHours || 0),
+            pay: Number(o.compensationAmount || (o as any).compensation_amount || o.totalPay || 0),
+            task: o.taskDescription || '',
+            startTime: o.startTime,
+            endTime: o.endTime,
+          };
+        }).sort((a, b) => a.date.localeCompare(b.date)),
       };
     }
   });
@@ -2300,168 +2466,404 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Status Counters (8 Cards: Responsive Balanced 8 / 4 / 2 Grid) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
-        {/* Card 1: Semua Karyawan */}
-        <div
-          onClick={() => setActiveTab('all')}
-          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-            activeTab === 'all'
-              ? 'border-primary bg-primary/10 ring-2 ring-primary/30 shadow-xs'
-              : 'border-border bg-card hover:bg-muted/40'
-          }`}
-        >
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-[11px] font-semibold truncate">
-              {filterCategory === 'all' ? 'Semua Karyawan' : getEmployeeCategoryLabel(filterCategory)}
-            </span>
-            <Users size={13} className="text-primary shrink-0" />
-          </div>
-          <p className="text-xl sm:text-2xl font-extrabold text-foreground mt-1.5 font-mono">
-            {scopedMonitoredList.length} <span className="text-xs font-sans font-medium text-muted-foreground">Orang</span>
-          </p>
-        </div>
-
-        {/* Card 2: Hadir Tepat Waktu */}
-        <div
-          onClick={() => setActiveTab('present')}
-          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-            activeTab === 'present'
-              ? 'border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/30 shadow-xs'
-              : 'border-border bg-card hover:bg-muted/40'
-          }`}
-        >
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 truncate">Hadir Tepat</span>
-            <UserCheck size={13} className="text-emerald-600 shrink-0" />
-          </div>
-          <p className="text-xl sm:text-2xl font-extrabold text-emerald-700 dark:text-emerald-400 mt-1.5 font-mono">
-            {presentCount} <span className="text-xs font-sans font-medium text-emerald-600/80">Orang</span>
-          </p>
-        </div>
-
-        {/* Card 3: Terlambat */}
-        <div
-          onClick={() => setActiveTab('late')}
-          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-            activeTab === 'late'
-              ? 'border-amber-500 bg-amber-500/10 ring-2 ring-amber-500/30 shadow-xs'
-              : 'border-border bg-card hover:bg-muted/40'
-          }`}
-        >
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300 truncate">Terlambat</span>
-            <Clock size={13} className="text-amber-600 shrink-0" />
-          </div>
-          <p className="text-xl sm:text-2xl font-extrabold text-amber-700 dark:text-amber-400 mt-1.5 font-mono">
-            {lateCount} <span className="text-xs font-sans font-medium text-amber-600/80">Orang</span>
-          </p>
-        </div>
-
-        {/* Card 4: Mangkir / Alpa */}
-        <div
-          onClick={() => setActiveTab('mangkir')}
-          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-            activeTab === 'mangkir'
-              ? 'border-rose-600 bg-rose-500/15 ring-2 ring-rose-500/40 shadow-xs dark:bg-rose-950/40'
-              : 'border-border bg-card hover:bg-muted/40'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 truncate">Mangkir / Alpa</span>
-            {mangkirCount > 0 ? (
-              <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
-            ) : (
-              <UserX size={13} className="text-rose-600 shrink-0" />
-            )}
-          </div>
-          <p className="text-xl sm:text-2xl font-extrabold text-rose-700 dark:text-rose-400 mt-1.5 font-mono">
-            {mangkirCount} <span className="text-xs font-sans font-medium text-rose-600/80">Orang</span>
-          </p>
-        </div>
-
-        {/* Card 5: Belum Hadir / OFF */}
-        <div
-          onClick={() => setActiveTab('absent')}
-          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-            activeTab === 'absent'
-              ? 'border-muted-foreground bg-muted ring-2 ring-border shadow-xs'
-              : 'border-border bg-card hover:bg-muted/40'
-          }`}
-        >
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-[11px] font-semibold truncate">Belum Hadir</span>
-            <Clock size={13} className="text-muted-foreground shrink-0" />
-          </div>
-          <p className="text-xl sm:text-2xl font-extrabold text-muted-foreground mt-1.5 font-mono">
-            {absentCount} <span className="text-xs font-sans font-medium text-muted-foreground/80">Orang</span>
-          </p>
-        </div>
-
-        {/* Card 6: Audit Anomali */}
-        <div
-          onClick={() => setActiveTab('anomalies')}
-          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-            activeTab === 'anomalies'
-              ? 'border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 ring-2 ring-rose-500/30 shadow-xs'
-              : 'border-border bg-card hover:bg-muted/40'
-          }`}
-        >
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 truncate">Audit Anomali</span>
-            {radarSummary.items.length > 0 ? (
-              <span className="w-2 h-2 rounded-full bg-rose-500" />
-            ) : (
-              <AlertTriangle size={13} className="text-rose-500 shrink-0" />
-            )}
-          </div>
-          <p className="text-xl sm:text-2xl font-extrabold text-rose-600 dark:text-rose-400 mt-1.5 font-mono">
-            {radarSummary.items.length} <span className="text-xs font-sans font-medium text-rose-500/80">Isu</span>
-          </p>
-        </div>
-
-        {/* Card 7: Pelanggaran Perimeter */}
-        <div
-          onClick={() => setActiveTab('breaches')}
-          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-            activeTab === 'breaches'
-              ? 'border-rose-500 bg-rose-500/10 ring-2 ring-rose-500/30 shadow-xs'
-              : 'border-border bg-card hover:bg-muted/40'
-          }`}
-        >
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 truncate">Perimeter</span>
-            {activeBreaches.length > 0 ? (
-              <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-            ) : (
-              <Lock size={13} className="text-rose-500 shrink-0" />
-            )}
-          </div>
-          <p className="text-xl sm:text-2xl font-extrabold text-rose-600 dark:text-rose-400 mt-1.5 font-mono">
-            {activeBreaches.length} <span className="text-xs font-sans font-medium text-rose-500/80">Terkunci</span>
-          </p>
-        </div>
-
-        {/* Card 8: Radar Petugas Lapangan */}
-        <div
-          onClick={() => setActiveTab('field_radar')}
-          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-            activeTab === 'field_radar'
-              ? 'border-indigo-500 bg-indigo-500/15 ring-2 ring-indigo-500/40 shadow-xs'
-              : 'border-border bg-card hover:bg-muted/40'
-          }`}
-        >
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-[11px] font-semibold text-indigo-800 dark:text-indigo-300 truncate">Radar Lapangan</span>
-            <span className="flex h-2 w-2 relative shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+      {/* ── LAMPIRAN II: REKAPITULASI STATUS & AKUMULASI OPERASIONAL ── */}
+      <div className="space-y-2.5">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2.5 p-3 rounded-2xl border border-border/80 bg-gradient-to-r from-card via-card to-primary/5 shadow-2xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className="bg-primary hover:bg-primary text-primary-foreground font-mono text-[10px] uppercase font-extrabold px-2.5 py-0.5 shadow-2xs">
+              Lampiran II
+            </Badge>
+            <h2 className="text-xs sm:text-sm font-bold text-foreground flex items-center gap-1.5">
+              <span>Rekapitulasi Kehadiran &amp; Lembur</span>
+            </h2>
+            <span className="text-xs text-muted-foreground font-medium hidden sm:inline">
+              • Periode: <strong className="text-foreground font-semibold">{selectedMonthLabel}</strong>
             </span>
           </div>
-          <p className="text-xl sm:text-2xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1.5 font-mono">
-            {fieldAgents.length > 0 ? `${fieldAgents.length}` : '3'} <span className="text-xs font-sans font-medium text-indigo-500/80">Petugas</span>
-          </p>
+
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-between md:justify-end">
+            {/* Quick Switch Bulan Berjalan vs Bulan Lalu */}
+            <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border">
+              <Button
+                size="sm"
+                variant={selectedMonth === currentMonthStr ? 'default' : 'ghost'}
+                onClick={() => {
+                  setSelectedMonth(currentMonthStr);
+                  setSelectedDayDate('');
+                }}
+                className="text-xs h-7 px-2.5 rounded-lg font-semibold gap-1.5"
+                title={`Lihat data Bulan Berjalan (${currentMonthLabel})`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span>Bulan Berjalan ({currentMonthLabel})</span>
+              </Button>
+              <Button
+                size="sm"
+                variant={selectedMonth === pastMonthStr ? 'default' : 'ghost'}
+                onClick={() => {
+                  setSelectedMonth(pastMonthStr);
+                  setSelectedDayDate('');
+                }}
+                className="text-xs h-7 px-2.5 rounded-lg font-semibold gap-1.5"
+                title={`Lihat data Bulan Sebelumnya (${pastMonthLabel})`}
+              >
+                <RotateCcw size={12} />
+                <span>Bulan Lalu ({pastMonthLabel})</span>
+              </Button>
+            </div>
+
+            {/* Mode Switch: Rekap Bulanan vs Presensi Live Hari Terpilih */}
+            <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border">
+              <Button
+                size="sm"
+                variant={lampiran2ViewMode === 'monthly' ? 'default' : 'ghost'}
+                onClick={() => setLampiran2ViewMode('monthly')}
+                className="text-xs h-7 px-2.5 rounded-lg font-semibold gap-1.5"
+                title={`Tampilkan total akumulasi ${selectedMonthLabel}`}
+              >
+                <CalendarDays size={12} />
+                <span>Rekap Bulanan</span>
+              </Button>
+              <Button
+                size="sm"
+                variant={lampiran2ViewMode === 'daily' ? 'default' : 'ghost'}
+                onClick={() => setLampiran2ViewMode('daily')}
+                className="text-xs h-7 px-2.5 rounded-lg font-semibold gap-1.5"
+                title="Tampilkan status presensi harian langsung"
+              >
+                <Clock size={12} />
+                <span>Live Hari Terpilih</span>
+              </Button>
+            </div>
+          </div>
         </div>
+
+        {/* Status Counters (8 Cards: Responsive Balanced 8 / 4 / 2 Grid) */}
+        {lampiran2ViewMode === 'monthly' ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
+            {/* Card 1: Semua Personil FRP */}
+            <div
+              onClick={() => {
+                setFilterCategory('all');
+                setActiveTab('all');
+              }}
+              className="p-3.5 rounded-2xl border border-primary/40 bg-primary/10 cursor-pointer transition-all flex flex-col justify-between hover:bg-primary/15 shadow-2xs"
+            >
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span className="text-[11px] font-semibold truncate text-primary">Personil FRP</span>
+                <Users size={13} className="text-primary shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-foreground mt-1.5 font-mono">
+                {scopedMonitoredList.length} <span className="text-xs font-sans font-medium text-muted-foreground">Orang</span>
+              </p>
+              <span className="text-[10px] text-muted-foreground truncate mt-1">
+                47 S • 33 RT • 3 Tetap
+              </span>
+            </div>
+
+            {/* Card 2: Total Hadir (H) */}
+            <div
+              onClick={() => {
+                setActiveTab('present');
+              }}
+              className="p-3.5 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 cursor-pointer transition-all flex flex-col justify-between hover:bg-emerald-500/15 shadow-2xs"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 truncate">Total Hadir (H)</span>
+                <UserCheck size={13} className="text-emerald-600 shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-emerald-700 dark:text-emerald-400 mt-1.5 font-mono">
+                {monthStats.totalHadir} <span className="text-xs font-sans font-medium text-emerald-600/80">Sesi</span>
+              </p>
+              <span className="text-[10px] text-emerald-700/80 dark:text-emerald-300/80 font-mono truncate mt-1">
+                {monthStats.totalTepat} Tepat • {monthStats.totalLate} Telat
+              </span>
+            </div>
+
+            {/* Card 3: Total Terlambat */}
+            <div
+              onClick={() => {
+                setActiveTab('late');
+              }}
+              className="p-3.5 rounded-2xl border border-amber-500/40 bg-amber-500/10 cursor-pointer transition-all flex flex-col justify-between hover:bg-amber-500/15 shadow-2xs"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300 truncate">Total Terlambat</span>
+                <Clock size={13} className="text-amber-600 shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-amber-700 dark:text-amber-400 mt-1.5 font-mono">
+                {monthStats.totalLate} <span className="text-xs font-sans font-medium text-amber-600/80">Sesi</span>
+              </p>
+              <span className="text-[10px] text-amber-700/80 dark:text-amber-300/80 font-mono truncate mt-1">
+                {monthStats.totalHadir > 0 ? `${Math.round((monthStats.totalLate / monthStats.totalHadir) * 100)}% dari hadir` : '0%'}
+              </span>
+            </div>
+
+            {/* Card 4: Total Sakit (SK) */}
+            <div
+              className="p-3.5 rounded-2xl border border-sky-500/40 bg-sky-500/10 transition-all flex flex-col justify-between shadow-2xs"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-sky-800 dark:text-sky-300 truncate">Total Sakit (SK)</span>
+                <HeartPulse size={13} className="text-sky-600 shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-sky-700 dark:text-sky-400 mt-1.5 font-mono">
+                {monthStats.totalSakit} <span className="text-xs font-sans font-medium text-sky-600/80">Hari</span>
+              </p>
+              <span className="text-[10px] text-sky-700/80 dark:text-sky-300/80 truncate mt-1">
+                Surat Sakit Resmi
+              </span>
+            </div>
+
+            {/* Card 5: Total Izin (I) */}
+            <div
+              className="p-3.5 rounded-2xl border border-indigo-500/40 bg-indigo-500/10 transition-all flex flex-col justify-between shadow-2xs"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-indigo-800 dark:text-indigo-300 truncate">Total Izin (I)</span>
+                <FileCheck2 size={13} className="text-indigo-600 shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-indigo-700 dark:text-indigo-400 mt-1.5 font-mono">
+                {monthStats.totalIzin} <span className="text-xs font-sans font-medium text-indigo-600/80">Hari</span>
+              </p>
+              <span className="text-[10px] text-indigo-700/80 dark:text-indigo-300/80 truncate mt-1">
+                Disetujui Otoritas
+              </span>
+            </div>
+
+            {/* Card 6: Total Cuti (CT) */}
+            <div
+              className="p-3.5 rounded-2xl border border-teal-500/40 bg-teal-500/10 transition-all flex flex-col justify-between shadow-2xs"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-teal-800 dark:text-teal-300 truncate">Total Cuti (CT)</span>
+                <CalendarCheck size={13} className="text-teal-600 shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-teal-700 dark:text-teal-400 mt-1.5 font-mono">
+                {monthStats.totalCuti} <span className="text-xs font-sans font-medium text-teal-600/80">Hari</span>
+              </p>
+              <span className="text-[10px] text-teal-700/80 dark:text-teal-300/80 truncate mt-1">
+                Use-It-Or-Lose-It
+              </span>
+            </div>
+
+            {/* Card 7: Total Mangkir / Alpa (A) */}
+            <div
+              onClick={() => {
+                setActiveTab('mangkir');
+              }}
+              className="p-3.5 rounded-2xl border border-rose-500/40 bg-rose-500/10 cursor-pointer transition-all flex flex-col justify-between hover:bg-rose-500/15 shadow-2xs"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 truncate">Mangkir / Alpa</span>
+                {monthStats.totalMangkir > 0 ? (
+                  <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
+                ) : (
+                  <UserX size={13} className="text-rose-600 shrink-0" />
+                )}
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-rose-700 dark:text-rose-400 mt-1.5 font-mono">
+                {monthStats.totalMangkir} <span className="text-xs font-sans font-medium text-rose-600/80">Hari</span>
+              </p>
+              <span className="text-[10px] text-rose-700/80 dark:text-rose-300/80 truncate mt-1">
+                {monthStats.totalMangkir > 0 ? 'Potongan Gaji / SPKL' : 'Nihil Pelanggaran'}
+              </span>
+            </div>
+
+            {/* Card 8: Total Lembur (SPKL) */}
+            <div
+              onClick={() => {
+                if (filterOvertimeCol === 'has_ot') {
+                  setFilterOvertimeCol('all');
+                } else {
+                  setFilterOvertimeCol('has_ot');
+                  setFilterShift('all');
+                }
+              }}
+              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between shadow-2xs ${
+                filterOvertimeCol === 'has_ot'
+                  ? 'border-purple-600 bg-purple-500/20 ring-2 ring-purple-500/40'
+                  : 'border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/15'
+              }`}
+              title="Klik untuk menyaring karyawan dengan lembur"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-purple-800 dark:text-purple-300 truncate">Total Lembur (SPKL)</span>
+                <Flame size={13} className="text-purple-600 dark:text-purple-400 shrink-0 fill-purple-600/30" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-purple-700 dark:text-purple-400 mt-1.5 font-mono">
+                {monthStats.totalOtHours} <span className="text-xs font-sans font-medium text-purple-600/80">Jam</span>
+              </p>
+              <div className="flex items-center justify-between text-[10px] text-purple-800 dark:text-purple-300 font-mono mt-1">
+                <span className="font-semibold truncate">Rp {monthStats.totalOtPay.toLocaleString('id-ID')}</span>
+                <span className="text-[9px] text-muted-foreground shrink-0">{monthStats.totalOtCount}x</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
+            {/* Card 1: Semua Karyawan */}
+            <div
+              onClick={() => setActiveTab('all')}
+              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
+                activeTab === 'all'
+                  ? 'border-primary bg-primary/10 ring-2 ring-primary/30 shadow-xs'
+                  : 'border-border bg-card hover:bg-muted/40'
+              }`}
+            >
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span className="text-[11px] font-semibold truncate">
+                  {filterCategory === 'all' ? 'Semua Karyawan' : getEmployeeCategoryLabel(filterCategory)}
+                </span>
+                <Users size={13} className="text-primary shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-foreground mt-1.5 font-mono">
+                {scopedMonitoredList.length} <span className="text-xs font-sans font-medium text-muted-foreground">Orang</span>
+              </p>
+            </div>
+
+            {/* Card 2: Hadir Tepat Waktu */}
+            <div
+              onClick={() => setActiveTab('present')}
+              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
+                activeTab === 'present'
+                  ? 'border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/30 shadow-xs'
+                  : 'border-border bg-card hover:bg-muted/40'
+              }`}
+            >
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 truncate">Hadir Tepat</span>
+                <UserCheck size={13} className="text-emerald-600 shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-emerald-700 dark:text-emerald-400 mt-1.5 font-mono">
+                {presentCount} <span className="text-xs font-sans font-medium text-emerald-600/80">Orang</span>
+              </p>
+            </div>
+
+            {/* Card 3: Terlambat */}
+            <div
+              onClick={() => setActiveTab('late')}
+              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
+                activeTab === 'late'
+                  ? 'border-amber-500 bg-amber-500/10 ring-2 ring-amber-500/30 shadow-xs'
+                  : 'border-border bg-card hover:bg-muted/40'
+              }`}
+            >
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300 truncate">Terlambat</span>
+                <Clock size={13} className="text-amber-600 shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-amber-700 dark:text-amber-400 mt-1.5 font-mono">
+                {lateCount} <span className="text-xs font-sans font-medium text-amber-600/80">Orang</span>
+              </p>
+            </div>
+
+            {/* Card 4: Mangkir / Alpa */}
+            <div
+              onClick={() => setActiveTab('mangkir')}
+              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
+                activeTab === 'mangkir'
+                  ? 'border-rose-600 bg-rose-500/15 ring-2 ring-rose-500/40 shadow-xs dark:bg-rose-950/40'
+                  : 'border-border bg-card hover:bg-muted/40'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 truncate">Mangkir / Alpa</span>
+                {mangkirCount > 0 ? (
+                  <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
+                ) : (
+                  <UserX size={13} className="text-rose-600 shrink-0" />
+                )}
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-rose-700 dark:text-rose-400 mt-1.5 font-mono">
+                {mangkirCount} <span className="text-xs font-sans font-medium text-rose-600/80">Orang</span>
+              </p>
+            </div>
+
+            {/* Card 5: Belum Hadir / OFF */}
+            <div
+              onClick={() => setActiveTab('absent')}
+              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
+                activeTab === 'absent'
+                  ? 'border-muted-foreground bg-muted ring-2 ring-border shadow-xs'
+                  : 'border-border bg-card hover:bg-muted/40'
+              }`}
+            >
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span className="text-[11px] font-semibold truncate">Belum Hadir</span>
+                <Clock size={13} className="text-muted-foreground shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-muted-foreground mt-1.5 font-mono">
+                {absentCount} <span className="text-xs font-sans font-medium text-muted-foreground/80">Orang</span>
+              </p>
+            </div>
+
+            {/* Card 6: Audit Anomali */}
+            <div
+              onClick={() => setActiveTab('anomalies')}
+              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
+                activeTab === 'anomalies'
+                  ? 'border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 ring-2 ring-rose-500/30 shadow-xs'
+                  : 'border-border bg-card hover:bg-muted/40'
+              }`}
+            >
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 truncate">Audit Anomali</span>
+                {radarSummary.items.length > 0 ? (
+                  <span className="w-2 h-2 rounded-full bg-rose-500" />
+                ) : (
+                  <AlertTriangle size={13} className="text-rose-500 shrink-0" />
+                )}
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-rose-600 dark:text-rose-400 mt-1.5 font-mono">
+                {radarSummary.items.length} <span className="text-xs font-sans font-medium text-rose-500/80">Isu</span>
+              </p>
+            </div>
+
+            {/* Card 7: Pelanggaran Perimeter */}
+            <div
+              onClick={() => setActiveTab('breaches')}
+              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
+                activeTab === 'breaches'
+                  ? 'border-rose-500 bg-rose-500/10 ring-2 ring-rose-500/30 shadow-xs'
+                  : 'border-border bg-card hover:bg-muted/40'
+              }`}
+            >
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 truncate">Perimeter</span>
+                {activeBreaches.length > 0 ? (
+                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                ) : (
+                  <Lock size={13} className="text-rose-500 shrink-0" />
+                )}
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-rose-600 dark:text-rose-400 mt-1.5 font-mono">
+                {activeBreaches.length} <span className="text-xs font-sans font-medium text-rose-500/80">Terkunci</span>
+              </p>
+            </div>
+
+            {/* Card 8: Radar Petugas Lapangan */}
+            <div
+              onClick={() => setActiveTab('field_radar')}
+              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
+                activeTab === 'field_radar'
+                  ? 'border-indigo-500 bg-indigo-500/15 ring-2 ring-indigo-500/40 shadow-xs'
+                  : 'border-border bg-card hover:bg-muted/40'
+              }`}
+            >
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span className="text-[11px] font-semibold text-indigo-800 dark:text-indigo-300 truncate">Radar Lapangan</span>
+                <span className="flex h-2 w-2 relative shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                </span>
+              </div>
+              <p className="text-xl sm:text-2xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1.5 font-mono">
+                {fieldAgents.length > 0 ? `${fieldAgents.length}` : '3'} <span className="text-xs font-sans font-medium text-indigo-500/80">Petugas</span>
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── FITUR PITA TANGGAL BERURUTAN (SEQUENTIAL DATE NAVIGATOR) UNTUK LAMPIRAN III ── */}
@@ -2576,6 +2978,11 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 const dayAttCount = allAttendances.filter(
                   (a) => (a.attendanceDate || (a as any).date) === d.dateStr && (Boolean(a.clockIn) || a.status === 'hadir' || a.status === 'terlambat')
                 ).length;
+                const dayOtCount = overtimes.filter((o) => {
+                  const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || '').slice(0, 10);
+                  const isApproved = o.status === 'approved' || (o as any).status === 'completed';
+                  return oDate === d.dateStr && isApproved && isOfficialFrEmployee(o);
+                }).length;
                 const dObj = new Date(d.dateStr);
                 const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
 
@@ -2593,19 +3000,32 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                         ? 'border-border/60 bg-muted/30 text-muted-foreground/80 hover:bg-muted/60'
                         : 'border-border bg-card hover:bg-muted/50 text-foreground'
                     }`}
-                    title={`${d.dayName}, ${d.dateStr} • ${dayAttCount} presensi hadir`}
+                    title={`${d.dayName}, ${d.dateStr} • ${dayAttCount} presensi hadir${dayOtCount > 0 ? ` • ${dayOtCount} personil lembur (SPKL)` : ''}`}
                   >
                     <span className="text-[10px] uppercase font-semibold leading-none opacity-90">{d.dayName}</span>
                     <span className="text-xs font-bold font-mono mt-0.5">{String(d.dayNum).padStart(2, '0')}</span>
-                    {dayAttCount > 0 ? (
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full mt-0.5 ${
-                          isSelected ? 'bg-primary-foreground' : 'bg-emerald-500'
-                        }`}
-                      />
-                    ) : (
-                      <span className="w-1.5 h-1.5 rounded-full mt-0.5 opacity-0" />
-                    )}
+                    <div className="flex items-center gap-1 mt-0.5">
+                      {dayAttCount > 0 && (
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            isSelected ? 'bg-primary-foreground' : 'bg-emerald-500'
+                          }`}
+                          title={`${dayAttCount} hadir`}
+                        />
+                      )}
+                      {dayOtCount > 0 && (
+                        <span
+                          className={`px-1 rounded-full text-[8px] font-extrabold font-mono leading-tight ${
+                            isSelected
+                              ? 'bg-amber-300 text-amber-950'
+                              : 'bg-amber-500/25 text-amber-800 dark:text-amber-300 border border-amber-500/40'
+                          }`}
+                          title={`${dayOtCount} lembur SPKL pada tanggal ini`}
+                        >
+                          ⚡{dayOtCount}
+                        </span>
+                      )}
+                    </div>
                   </button>
                 );
               })}
@@ -3945,7 +4365,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filtered.map(({ user: u, attendance: att, status, absentSubtype, shift, totalLateMinutes, lateCount, totalAttCount, todayOvertime, todayOvertimeHours, todayOvertimePay, monthlyOvertimeHours, monthlyOvertimePay, monthlyOvertimeCount }, idx) => {
+                  filtered.map(({ user: u, attendance: att, status, absentSubtype, shift, totalLateMinutes, lateCount, totalAttCount, todayOvertime, todayOvertimeHours, todayOvertimePay, monthlyOvertimeHours, monthlyOvertimePay, monthlyOvertimeCount, monthlyOvertimeDates }, idx) => {
                     const userAnomaly = radarSummary.items.find((i) => i.userId === u.id);
 
                     // Deteksi Cerdas Kasus Lembur Sebelum Shift (Shift Pengganti Masuk Lebih Awal)
@@ -4215,19 +4635,17 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                   )}
                                   {monthlyOvertimeHours > todayOvertimeHours && (
                                     <span className="text-[9px] text-muted-foreground font-mono mt-0.5" title="Total akumulasi lembur bulan berjalan">
-                                      Bln: {monthlyOvertimeHours}J (Rp {monthlyOvertimePay?.toLocaleString('id-ID')})
+                                      Total Bln: {monthlyOvertimeHours}J (Rp {monthlyOvertimePay?.toLocaleString('id-ID')})
                                     </span>
                                   )}
                                 </div>
-                              ) : monthlyOvertimeHours && monthlyOvertimeHours > 0 ? (
-                                <div className="inline-flex flex-col items-center">
-                                  <span className="text-xs text-muted-foreground/60 font-mono">0 Jam (-)</span>
-                                  <span className="text-[9.5px] font-bold text-amber-600 dark:text-amber-400 font-mono mt-0.5" title={`Akumulasi lembur bulan ini: ${monthlyOvertimeHours} jam (${monthlyOvertimeCount}x SPKL)`}>
-                                    Bln: {monthlyOvertimeHours}J (Rp {monthlyOvertimePay?.toLocaleString('id-ID')})
-                                  </span>
-                                </div>
                               ) : (
-                                <span className="text-xs text-muted-foreground/50 font-mono">0 Jam (-)</span>
+                                <span
+                                  className="text-xs text-muted-foreground/30 font-mono"
+                                  title={monthlyOvertimeHours > 0 ? `Tidak ada lembur pada tanggal ${targetDayDate} (Total lembur ${selectedMonthLabel}: ${monthlyOvertimeHours} Jam)` : 'Tidak ada lembur'}
+                                >
+                                  -
+                                </span>
                               )
                             ) : (
                               monthlyOvertimeHours && monthlyOvertimeHours > 0 ? (
@@ -4240,7 +4658,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                                   </span>
                                 </div>
                               ) : (
-                                <span className="text-xs text-muted-foreground/40 font-mono">0 Jam</span>
+                                <span className="text-xs text-muted-foreground/30 font-mono">-</span>
                               )
                             )}
                           </TableCell>
