@@ -349,37 +349,34 @@ export const isLeadershipSpecialFieldOfficer = (userOrNipOrEmail: any): boolean 
   let nip = '';
   let id = '';
   let name = '';
+  let opGroup = '';
   if (typeof userOrNipOrEmail === 'string') {
     const s = userOrNipOrEmail.trim().toLowerCase();
     email = s;
     id = s;
     nip = userOrNipOrEmail.toUpperCase().replace(/[\s.]/g, '');
+    name = s;
   } else {
     email = (userOrNipOrEmail.email || '').toLowerCase().trim();
-    nip = (userOrNipOrEmail.nip || '').toUpperCase().trim().replace(/[\s.]/g, '');
-    id = (userOrNipOrEmail.id || '').toLowerCase();
-    name = (userOrNipOrEmail.fullName || userOrNipOrEmail.name || '').toLowerCase().trim();
+    nip = (userOrNipOrEmail.nip || userOrNipOrEmail.userNip || '').toUpperCase().trim().replace(/[\s.]/g, '');
+    id = (userOrNipOrEmail.id || userOrNipOrEmail.userId || '').toLowerCase();
+    name = (userOrNipOrEmail.fullName || userOrNipOrEmail.userName || userOrNipOrEmail.name || '').toLowerCase().trim();
+    opGroup = (userOrNipOrEmail.operationalGroup || userOrNipOrEmail.operational_group || '').toUpperCase().trim();
   }
 
-  // Guard mutlak: Karyawan operasional regu ini BUKAN 3 Petugas Lapangan Khusus Pimpinan!
+  // 0. Cek Grup Operasional Database jika sudah 'KARYAWAN TETAP'
+  if (opGroup === 'KARYAWAN TETAP' || opGroup.includes('TETAP')) {
+    return true;
+  }
+
+  // Guard mutlak: Akun resmi Rusli Matching / Wisma BUKAN Samsi / Karyawan Tetap!
   if (
-    name.includes('rusli') ||
-    name.includes('honnes') ||
-    name.includes('rusdi') ||
-    email.includes('fr07066') ||
-    email.includes('fr07065') ||
-    email.includes('fr07046') ||
-    email.includes('fr07027') ||
-    id === '5dcb6ce4-2812-494f-bf84-2260e5207a1c' || // Rusli Matching Bontoa
-    id === '0ad737f8-97f1-4a9e-bdd2-b0cc50ae1075' || // Rusli Wisma Makassar
-    id === 'c323bc67-21ef-455b-bade-68e2337da062' ||
-    id === 'f0aaf721-203c-4b45-b610-213204bc7ffe'
+    id === '5dcb6ce4-2812-494f-bf84-2260e5207a1c' || // Rusli Matching Bontoa (Shipment FR07066)
+    id === '0ad737f8-97f1-4a9e-bdd2-b0cc50ae1075' || // Rusli Wisma Makassar (Rumah Tangga FR07027)
+    email === 'fr07066@fawwazreski.co.id' ||
+    email === 'fr07027@fawwazreski.co.id' ||
+    (name.includes('rusli') && !name.includes('samsi'))
   ) {
-    return false;
-  }
-
-  // Jika NIP adalah FR07066 tetapi BUKAN akun resmi Samsi, tolak mutlak!
-  if (nip === 'FR07066' && email !== 'abangelsamsi@gmail.com' && !name.includes('samsi') && !name.includes('unga')) {
     return false;
   }
 
@@ -394,7 +391,7 @@ export const isLeadershipSpecialFieldOfficer = (userOrNipOrEmail: any): boolean 
   }
 
   // 3. Cek Nama Resmi
-  if (name.includes('aslam') || name.includes('samsi') || name.includes('unga') || (name.includes('takdir') && !name.includes('rusdi'))) {
+  if (name.includes('aslam') || name.includes('samsi') || name.includes('la unga') || name.includes('unga') || (name.includes('takdir') && !name.includes('rusdi'))) {
     return true;
   }
 
@@ -521,12 +518,22 @@ export const getEmployeeCategoryGroup = (userOrNip: any): EmployeeCategoryGroup 
   let nip = '';
   let email = '';
   let name = '';
+  let opGroup = '';
   if (typeof userOrNip === 'string') {
+    const s = userOrNip.trim().toLowerCase();
     nip = userOrNip.toUpperCase().trim().replace(/[\s.]/g, '');
+    email = s;
+    name = s;
   } else {
     nip = (userOrNip.nip || userOrNip.userNip || userOrNip.user_nip || userOrNip.employeeNip || '').toUpperCase().trim().replace(/[\s.]/g, '');
     email = (userOrNip.email || '').toLowerCase().trim();
     name = (userOrNip.fullName || userOrNip.userName || userOrNip.name || '').toLowerCase().trim();
+    opGroup = (userOrNip.operationalGroup || userOrNip.operational_group || '').toUpperCase().trim();
+  }
+
+  // Prioritas utama grup database jika Karyawan Tetap
+  if (opGroup === 'KARYAWAN TETAP' || opGroup.includes('TETAP')) {
+    return 'KARYAWAN TETAP';
   }
 
   if (
@@ -535,13 +542,18 @@ export const getEmployeeCategoryGroup = (userOrNip: any): EmployeeCategoryGroup 
     email.includes('mtakdir46') ||
     nip === 'FRP07065' ||
     nip === 'FRP07046' ||
-    (nip === 'FR07066' && email === 'abangelsamsi@gmail.com') ||
+    (nip === 'FR07066' && (email === 'abangelsamsi@gmail.com' || name.includes('samsi') || name.includes('unga'))) ||
     name.includes('aslam faisal') ||
     name.includes('unga samsi') ||
+    name.includes('la unga') ||
     (name.includes('takdir') && !name.includes('rusdi'))
   ) {
     return 'KARYAWAN TETAP';
   }
+
+  // Prioritas grup database jika sudah diset
+  if (opGroup.includes('RUMAH TANGGA') || opGroup.includes('WISMA')) return 'RUMAH TANGGA';
+  if (opGroup.includes('SHIPMENT')) return 'SHIPMENT';
 
   // 2. Ekstrak nomor urut NIP FR: FR07001-FR07033 (Rumah Tangga) vs FR07034-FR07080 (Shipment)
   const m = nip.match(/^FR(?:07)?(\d{2,3})$/);
@@ -554,10 +566,6 @@ export const getEmployeeCategoryGroup = (userOrNip: any): EmployeeCategoryGroup 
       return 'SHIPMENT';
     }
   }
-
-  const opGroup = typeof userOrNip === 'object' ? (userOrNip.operationalGroup || userOrNip.operational_group || '').toUpperCase() : '';
-  if (opGroup.includes('RUMAH TANGGA') || opGroup.includes('WISMA')) return 'RUMAH TANGGA';
-  if (opGroup.includes('SHIPMENT')) return 'SHIPMENT';
 
   return 'OTHER';
 };

@@ -157,14 +157,17 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
     };
   }, [selectedGroup]);
 
-  // Filter Target Employees
+  // Filter Target Employees (HANYA 80 Tenaga Alih Daya Sah: 47 Shipment & 33 Rumah Tangga)
   const targetEmployees = useMemo(() => {
     return employees
       .filter((emp) => {
         const nipClean = (emp.nip || '').replace(/[\s.]/g, '').toUpperCase();
         if (!nipClean.startsWith('FR')) return false;
 
-        const grp = getEmployeeCategoryGroup(emp.nip || emp.id);
+        // Karyawan Tetap (Aslam, Samsi, Takdir) BUKAN Tenaga Alih Daya!
+        const grp = getEmployeeCategoryGroup(emp);
+        if (grp === 'KARYAWAN TETAP') return false;
+
         if (selectedGroup === 'SHIPMENT') return grp === 'SHIPMENT';
         if (selectedGroup === 'RUMAH TANGGA') return grp === 'RUMAH TANGGA';
         return grp === 'SHIPMENT' || grp === 'RUMAH TANGGA';

@@ -410,7 +410,7 @@ export const HrmReportsPage: React.FC = () => {
   const payrollRows = useMemo(() => {
     return employees
       .filter((emp) => {
-        const cat = getEmployeeCategoryGroup(emp.nip || emp.id);
+        const cat = getEmployeeCategoryGroup(emp);
         if (filterCategory !== 'all' && cat !== filterCategory) return false;
         if (filterDivision !== 'all' && emp.divisionName !== filterDivision) return false;
         if (payrollSearchQuery.trim()) {
@@ -422,7 +422,7 @@ export const HrmReportsPage: React.FC = () => {
         return true;
       })
       .map((emp) => {
-        const group = getEmployeeCategoryGroup(emp.nip || emp.id);
+        const group = getEmployeeCategoryGroup(emp);
         const empNipNorm = (emp.nip || '').replace(/[\s.]/g, '').toUpperCase();
 
         // Overtime N-1 for this employee
@@ -578,7 +578,7 @@ export const HrmReportsPage: React.FC = () => {
   const monthlyRecap = useMemo(() => {
     return employees
       .filter((emp) => {
-        const cat = getEmployeeCategoryGroup(emp.nip || emp.id);
+        const cat = getEmployeeCategoryGroup(emp);
         if (filterCategory !== 'all' && cat !== filterCategory) return false;
         if (filterDivision !== 'all' && emp.divisionName !== filterDivision) return false;
         if (attSearchQuery.trim()) {
@@ -611,7 +611,7 @@ export const HrmReportsPage: React.FC = () => {
 
         return {
           employee: emp,
-          group: getEmployeeCategoryGroup(emp.nip || emp.id),
+          group: getEmployeeCategoryGroup(emp),
           hadir,
           telat,
           totalLateMins,
@@ -1775,7 +1775,7 @@ export const HrmReportsPage: React.FC = () => {
                   <tbody className="divide-y divide-border">
                     {employees
                       .filter((emp) => {
-                        const cat = getEmployeeCategoryGroup(emp.nip || emp.id);
+                        const cat = getEmployeeCategoryGroup(emp);
                         if (filterCategory !== 'all' && cat !== filterCategory) return false;
                         return true;
                       })
@@ -1783,7 +1783,7 @@ export const HrmReportsPage: React.FC = () => {
                         const quota = emp.leaveQuota || 12;
                         const used = emp.leaveUsed || 0;
                         const remaining = Math.max(0, quota - used);
-                        const grp = getEmployeeCategoryGroup(emp.nip || emp.id);
+                        const grp = getEmployeeCategoryGroup(emp);
 
                         return (
                           <tr key={emp.id} className="hover:bg-muted/30 transition-colors">

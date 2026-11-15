@@ -29,14 +29,32 @@ function classifyFrpGroup(profile) {
   if (!profile) return 'OTHER';
   const email = String(profile.email || '').trim().toLowerCase();
   const normNip = normalizeNip(profile.nip);
+  const fullName = String(profile.full_name || profile.fullName || '').trim().toLowerCase();
+  const opGroup = String(profile.operational_group || profile.operationalGroup || '').trim().toUpperCase();
+  const id = String(profile.id || '').trim().toLowerCase();
+
+  // 1. Karyawan Tetap (Muh Aslam Faisal, La Unga Samsi, Takdir)
+  if (opGroup === 'KARYAWAN TETAP' || opGroup.includes('TETAP')) {
+    return 'KARYAWAN TETAP';
+  }
+
+  if (['ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632'].includes(id)) {
+    return 'KARYAWAN TETAP';
+  }
 
   if (LEADERSHIP_EMAILS.has(email) || LEADERSHIP_NIPS.has(normNip)) {
     return 'KARYAWAN TETAP';
   }
-  if (normNip === 'FR07066' && email.includes('samsi')) {
+
+  if (email.includes('samsi') || email.includes('abangelsamsi') || fullName.includes('samsi') || fullName.includes('unga') || fullName.includes('aslam') || (fullName.includes('takdir') && !fullName.includes('rusdi'))) {
     return 'KARYAWAN TETAP';
   }
 
+  // 2. Grup Operasional Database jika sudah diset
+  if (opGroup.includes('RUMAH TANGGA') || opGroup.includes('WISMA')) return 'RUMAH TANGGA';
+  if (opGroup.includes('SHIPMENT')) return 'SHIPMENT';
+
+  // 3. Ekstrak nomor urut NIP FR: FR07001-FR07033 (Rumah Tangga) vs FR07034-FR07080 (Shipment)
   const m = normNip.match(/^FR(?:07)?(\d{2,3})$/);
   if (m) {
     const seq = parseInt(m[1], 10);
