@@ -27,15 +27,22 @@ import {
   Coins,
   BarChart3,
   Layers,
+  Calendar,
+  CalendarDays,
+  Ship,
+  Home,
+  Star,
+  Users,
 } from 'lucide-react';
 import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
 import { HrmEditLemburModal } from '@/components/hrm/superadmin/HrmEditLemburModal';
 import { HrmMonthlyFinancialRecapModal } from '@/components/hrm/HrmMonthlyFinancialRecapModal';
 import { HrmOvertimeArrearsPayrollTab } from '@/components/hrm/superadmin/HrmOvertimeArrearsPayrollTab';
 import { HrmOvertimeCostControlTab } from '@/components/hrm/superadmin/HrmOvertimeCostControlTab';
-import { getEmployeeCategoryGroup } from '@/types/hrm';
+import { getEmployeeCategoryGroup, getEmployeeCategoryLabel } from '@/types/hrm';
 import { api } from '@/services/apiClient';
-import { formatYearMonthId, getNextYearMonth } from '@/lib/frpPayrollCalculations';
+import { formatYearMonthId, getNextYearMonth, getPreviousYearMonth } from '@/lib/frpPayrollCalculations';
+import { cn } from '@/lib/utils';
 
 export const HrmLemburManagementTab: React.FC = () => {
   const curMonthYm = React.useMemo(() => {
@@ -43,6 +50,10 @@ export const HrmLemburManagementTab: React.FC = () => {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   }, []);
   const nextMonthYm = React.useMemo(() => getNextYearMonth(curMonthYm), [curMonthYm]);
+  const pastMonthYm = React.useMemo(() => getPreviousYearMonth(curMonthYm), [curMonthYm]);
+  const curMonthLabel = React.useMemo(() => formatYearMonthId(curMonthYm), [curMonthYm]);
+  const pastMonthLabel = React.useMemo(() => formatYearMonthId(pastMonthYm), [pastMonthYm]);
+
   const initialQuery = React.useMemo(() => {
     const p = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
     const t = p?.get('tab');
@@ -58,6 +69,7 @@ export const HrmLemburManagementTab: React.FC = () => {
   const [divisions, setDivisions] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedDivision, setSelectedDivision] = useState<string>('all');
+  const [periodFilter, setPeriodFilter] = useState<'current' | 'previous' | 'all'>('current');
   const [groupFilter, setGroupFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -167,38 +179,83 @@ export const HrmLemburManagementTab: React.FC = () => {
     };
   }, []);
 
-  const filteredRecords = records.filter((r) => {
-    const user = users.find((u) => u.id === r.userId);
-    const uName = r.userName || user?.fullName || '';
-    const uNip = r.userNip || user?.nip || '';
-    const uDiv = r.divisionName || user?.divisionName || user?.division || '';
+  const periodScopedRecords = React.useMemo(() => {
+    return records.filter((r) => {
+      if (periodFilter === 'all') return true;
+      const dStr = String(r.date || r.createdAt || '');
+      const targetYm = periodFilter === 'current' ? curMonthYm : pastMonthYm;
+      return dStr.startsWith(targetYm);
+    });
+  }, [records, periodFilter, curMonthYm, pastMonthYm]);
 
-    const matchesSearch =
-      uName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      uNip.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (r.taskDescription || '').toLowerCase().includes(searchQuery.toLowerCase());
+  const groupCounts = React.useMemo(() => {
+    return {
+      all: periodScopedRecords.length,
+      shipment: periodScopedRecords.filter((r) => {
+        const user = users.find((u) => u.id === r.userId);
+        return getEmployeeCategoryGroup(user || { nip: r.userNip, fullName: r.userName }) === 'SHIPMENT';
+      }).length,
+      rumahTangga: periodScopedRecords.filter((r) => {
+        const user = users.find((u) => u.id === r.userId);
+        return getEmployeeCategoryGroup(user || { nip: r.userNip, fullName: r.userName }) === 'RUMAH TANGGA';
+      }).length,
+      karyawanTetap: periodScopedRecords.filter((r) => {
+        const user = users.find((u) => u.id === r.userId);
+        return getEmployeeCategoryGroup(user || { nip: r.userNip, fullName: r.userName }) === 'KARYAWAN TETAP';
+      }).length,
+    };
+  }, [periodScopedRecords, users]);
 
-    const matchesDivision =
-      selectedDivision === 'all' || uDiv.toLowerCase() === selectedDivision.toLowerCase();
+  const filteredRecords = React.useMemo(() => {
+    return periodScopedRecords.filter((r) => {
+      const user = users.find((u) => u.id === r.userId);
+      const uName = r.userName || user?.fullName || '';
+      const uNip = r.userNip || user?.nip || '';
+      const uDiv = r.divisionName || user?.divisionName || user?.division || '';
 
-    const matchesStatus = statusFilter === 'all' || r.status === statusFilter;
+      const matchesSearch =
+        uName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        uNip.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (r.taskDescription || '').toLowerCase().includes(searchQuery.toLowerCase());
 
-    const grp = getEmployeeCategoryGroup(user || { nip: uNip, fullName: uName });
-    const matchesGroup = groupFilter === 'all' || grp === groupFilter;
+      const matchesDivision =
+        selectedDivision === 'all' || uDiv.toLowerCase() === selectedDivision.toLowerCase();
 
-    return matchesSearch && matchesDivision && matchesStatus && matchesGroup;
-  });
+      const matchesStatus = statusFilter === 'all' || r.status === statusFilter;
 
-  // Calculate Metrics
-  const totalSPKL = records.length;
-  const pendingCount = records.filter((r) => r.status === 'pending').length;
-  const approvedCount = records.filter((r) => r.status === 'approved' || r.status === 'completed').length;
-  const totalHours = records
-    .filter((r) => r.status === 'approved' || r.status === 'completed')
-    .reduce((acc, curr) => acc + (Number(curr.approvedHours ?? curr.durationHours) || 0), 0);
-  const totalPayEstimate = records
-    .filter((r) => r.status === 'approved' || r.status === 'completed')
-    .reduce((acc, curr) => acc + (Number(curr.compensationAmount ?? curr.totalPay) || 0), 0);
+      const grp = getEmployeeCategoryGroup(user || { nip: uNip, fullName: uName });
+      const matchesGroup = groupFilter === 'all' || grp === groupFilter;
+
+      return matchesSearch && matchesDivision && matchesStatus && matchesGroup;
+    });
+  }, [periodScopedRecords, users, searchQuery, selectedDivision, statusFilter, groupFilter]);
+
+  // Calculate Metrics (Scoped by active period & group)
+  const scopedMetrics = React.useMemo(() => {
+    const base = periodScopedRecords.filter((r) => {
+      if (groupFilter === 'all') return true;
+      const user = users.find((u) => u.id === r.userId);
+      const grp = getEmployeeCategoryGroup(user || { nip: r.userNip, fullName: r.userName });
+      return grp === groupFilter;
+    });
+    const totalSPKL = base.length;
+    const pendingCount = base.filter((r) => r.status === 'pending').length;
+    const approvedCount = base.filter((r) => r.status === 'approved' || r.status === 'completed').length;
+    const totalHours = base
+      .filter((r) => r.status === 'approved' || r.status === 'completed')
+      .reduce((acc, curr) => acc + (Number(curr.approvedHours ?? curr.durationHours) || 0), 0);
+    const totalPayEstimate = base
+      .filter((r) => r.status === 'approved' || r.status === 'completed')
+      .reduce((acc, curr) => acc + (Number(curr.compensationAmount ?? curr.totalPay) || 0), 0);
+
+    return { totalSPKL, pendingCount, approvedCount, totalHours, totalPayEstimate };
+  }, [periodScopedRecords, groupFilter, users]);
+
+  const totalSPKL = scopedMetrics.totalSPKL;
+  const pendingCount = scopedMetrics.pendingCount;
+  const approvedCount = scopedMetrics.approvedCount;
+  const totalHours = scopedMetrics.totalHours;
+  const totalPayEstimate = scopedMetrics.totalPayEstimate;
 
   // ─── PERHITUNGAN REALTIME KUOTA & BUDGET EFEKTIF PIMPINAN (RP 65 JT SHIPMENT + RP 4 JT WISMA = RP 69 JT) ───
   const SHIPMENT_BUDGET_CAP = liveBudgetCaps.shipmentCap;
@@ -733,7 +790,133 @@ export const HrmLemburManagementTab: React.FC = () => {
         </CardHeader>
 
         <CardContent className="pt-4 space-y-4">
-          {/* Controls Bar */}
+          {/* Segmented Controls Bar: Periode Bulan & Kelompok Operasional */}
+          <div className="p-3.5 bg-muted/20 border border-border/80 rounded-xl space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              {/* Dimensi 1: Periode Bulan */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-semibold text-muted-foreground mr-1 flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-primary" />
+                  Periode:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPeriodFilter('current')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    periodFilter === 'current'
+                      ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  <CalendarDays className="w-3 h-3" />
+                  <span>Bulan Berjalan ({curMonthLabel})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPeriodFilter('previous')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    periodFilter === 'previous'
+                      ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  <span>Bulan Sebelumnya ({pastMonthLabel})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPeriodFilter('all')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border',
+                    periodFilter === 'all'
+                      ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  Semua Periode
+                </button>
+              </div>
+
+              {/* Status Indicator */}
+              <div className="text-[11px] font-mono text-muted-foreground">
+                Menampilkan <strong className="text-foreground">{filteredRecords.length}</strong> dari <strong className="text-foreground">{records.length}</strong> SPKL
+              </div>
+            </div>
+
+            {/* Dimensi 2: Kelompok Operasional */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-border/50">
+              <span className="text-[11px] font-semibold text-muted-foreground mr-1 flex items-center gap-1">
+                <Users className="w-3.5 h-3.5 text-primary" />
+                Kelompok:
+              </span>
+              <button
+                type="button"
+                onClick={() => setGroupFilter('all')}
+                className={cn(
+                  'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                  groupFilter === 'all'
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 border-slate-900 dark:border-slate-100'
+                    : 'bg-card text-muted-foreground border-border hover:text-foreground'
+                )}
+              >
+                <span>Semua Kelompok</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-muted text-[10px] font-bold">
+                  {groupCounts.all}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setGroupFilter('SHIPMENT')}
+                className={cn(
+                  'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                  groupFilter === 'SHIPMENT'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-card text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-900/50 hover:bg-blue-50/50'
+                )}
+              >
+                <Ship className="w-3 h-3" />
+                <span>Shipment (47 Org)</span>
+                <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'SHIPMENT' ? 'bg-blue-800 text-white' : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-200')}>
+                  {groupCounts.shipment}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setGroupFilter('RUMAH TANGGA')}
+                className={cn(
+                  'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                  groupFilter === 'RUMAH TANGGA'
+                    ? 'bg-emerald-600 text-white border-emerald-600'
+                    : 'bg-card text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/50 hover:bg-emerald-50/50'
+                )}
+              >
+                <Home className="w-3 h-3" />
+                <span>Rumah Tangga (33 Org)</span>
+                <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'RUMAH TANGGA' ? 'bg-emerald-800 text-white' : 'bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-200')}>
+                  {groupCounts.rumahTangga}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setGroupFilter('KARYAWAN TETAP')}
+                className={cn(
+                  'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                  groupFilter === 'KARYAWAN TETAP'
+                    ? 'bg-purple-600 text-white border-purple-600'
+                    : 'bg-card text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-900/50 hover:bg-purple-50/50'
+                )}
+              >
+                <Star className="w-3 h-3" />
+                <span>Karyawan Tetap (3 Org)</span>
+                <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'KARYAWAN TETAP' ? 'bg-purple-800 text-white' : 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-200')}>
+                  {groupCounts.karyawanTetap}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Secondary Filter Inputs */}
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3 top-2.5 text-muted-foreground" />
@@ -751,9 +934,10 @@ export const HrmLemburManagementTab: React.FC = () => {
                   <SelectValue placeholder="Kelompok Personil" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Semua 80 Personil Lembur (RT &amp; Shipment)</SelectItem>
-                  <SelectItem value="RUMAH TANGGA">🏠 Rumah Tangga (FR07001–033)</SelectItem>
-                  <SelectItem value="SHIPMENT">🚢 Shipment (FR07034–080)</SelectItem>
+                  <SelectItem value="all">Semua Kelompok (83 Personil)</SelectItem>
+                  <SelectItem value="SHIPMENT">🚢 Shipment (47 Org - FR07034–080)</SelectItem>
+                  <SelectItem value="RUMAH TANGGA">🏠 Rumah Tangga (33 Org - FR07001–033)</SelectItem>
+                  <SelectItem value="KARYAWAN TETAP">⭐ Karyawan Tetap (3 Org)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -827,7 +1011,24 @@ export const HrmLemburManagementTab: React.FC = () => {
                         <tr key={r.id} className="hover:bg-muted/30 transition-colors">
                           <td className="py-3 px-4">
                             <div>
-                              <p className="font-semibold text-foreground">{r.userName || user?.fullName || 'Karyawan'}</p>
+                              <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                                <p className="font-semibold text-foreground">{r.userName || user?.fullName || 'Karyawan'}</p>
+                                {(() => {
+                                  const grp = getEmployeeCategoryGroup(user || { nip: r.userNip, fullName: r.userName });
+                                  const label = getEmployeeCategoryLabel(grp);
+                                  const badgeColor =
+                                    grp === 'SHIPMENT'
+                                      ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                                      : grp === 'RUMAH TANGGA'
+                                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                                      : 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800';
+                                  return (
+                                    <span className={cn('text-[9.5px] font-bold px-1.5 py-0.2 rounded border leading-none', badgeColor)}>
+                                      {label}
+                                    </span>
+                                  );
+                                })()}
+                              </div>
                               <p className="text-[10px] text-muted-foreground font-mono">{r.userNip || user?.nip || '-'}</p>
                             </div>
                           </td>

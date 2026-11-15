@@ -3,7 +3,8 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { LeaveRequest, LeaveType, OvertimeRecord, getEmployeeCategoryGroup } from '@/types/hrm';
+import { LeaveRequest, LeaveType, OvertimeRecord, getEmployeeCategoryGroup, getEmployeeCategoryLabel } from '@/types/hrm';
+import { getPreviousYearMonth } from '@/lib/frpPayrollCalculations';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
@@ -30,6 +31,12 @@ import {
   Info,
   RotateCcw,
   Trash2,
+  Calendar,
+  CalendarDays,
+  Search,
+  Ship,
+  Home,
+  Star,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -63,6 +70,104 @@ export const HrmLeavePage: React.FC = () => {
   const [viewScope, setViewScope] = useState<'incoming' | 'personal'>(isSupervisorRole ? 'incoming' : 'personal');
   const [allLeaves, setAllLeaves] = useState<LeaveRequest[]>([]);
   const [allOvertimes, setAllOvertimes] = useState<OvertimeRecord[]>([]);
+
+  // Segmentasi Periode & Kelompok Operasional Resmi PT FRP
+  const curMonthStr = React.useMemo(() => new Date().toISOString().slice(0, 7), []);
+  const pastMonthStr = React.useMemo(() => getPreviousYearMonth(curMonthStr), [curMonthStr]);
+  const curMonthLabel = React.useMemo(() => {
+    const [y, m] = curMonthStr.split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+  }, [curMonthStr]);
+  const pastMonthLabel = React.useMemo(() => {
+    const [y, m] = pastMonthStr.split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+  }, [pastMonthStr]);
+
+  const [periodFilter, setPeriodFilter] = useState<'current' | 'previous' | 'all'>('current');
+  const [groupFilter, setGroupFilter] = useState<'all' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Helper filter periode
+  const matchLeavePeriod = (l: LeaveRequest, period: 'current' | 'previous' | 'all') => {
+    if (period === 'all') return true;
+    const sStr = String(l.startDate || l.createdAt || '');
+    const eStr = String(l.endDate || sStr);
+    const targetYm = period === 'current' ? curMonthStr : pastMonthStr;
+    return sStr.startsWith(targetYm) || eStr.startsWith(targetYm);
+  };
+
+  const matchOtPeriod = (o: OvertimeRecord, period: 'current' | 'previous' | 'all') => {
+    if (period === 'all') return true;
+    const dStr = String(o.date || o.createdAt || '');
+    const targetYm = period === 'current' ? curMonthStr : pastMonthStr;
+    return dStr.startsWith(targetYm);
+  };
+
+  const targetLeavesList = isSupervisorRole && viewScope === 'incoming' ? allLeaves : leaves;
+
+  const periodScopedLeaves = React.useMemo(() => {
+    return targetLeavesList.filter((l) => matchLeavePeriod(l, periodFilter));
+  }, [targetLeavesList, periodFilter, curMonthStr, pastMonthStr]);
+
+  const leaveGroupCounts = React.useMemo(() => {
+    return {
+      all: periodScopedLeaves.length,
+      shipment: periodScopedLeaves.filter((l) => getEmployeeCategoryGroup(l) === 'SHIPMENT').length,
+      rumahTangga: periodScopedLeaves.filter((l) => getEmployeeCategoryGroup(l) === 'RUMAH TANGGA').length,
+      karyawanTetap: periodScopedLeaves.filter((l) => getEmployeeCategoryGroup(l) === 'KARYAWAN TETAP').length,
+    };
+  }, [periodScopedLeaves]);
+
+  const filteredLeaves = React.useMemo(() => {
+    return periodScopedLeaves.filter((l) => {
+      if (groupFilter !== 'all') {
+        const grp = getEmployeeCategoryGroup(l);
+        if (grp !== groupFilter) return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = (l.userName || '').toLowerCase().includes(q);
+        const matchNip = (l.userNip || '').toLowerCase().includes(q);
+        const matchReason = (l.reason || '').toLowerCase().includes(q);
+        const matchDiv = (l.divisionName || '').toLowerCase().includes(q);
+        if (!matchName && !matchNip && !matchReason && !matchDiv) return false;
+      }
+      return true;
+    });
+  }, [periodScopedLeaves, groupFilter, searchQuery]);
+
+  const targetOtList = isSupervisorRole && viewScope === 'incoming' ? allOvertimes : overtimes;
+
+  const periodScopedOvertimes = React.useMemo(() => {
+    return targetOtList.filter((o) => matchOtPeriod(o, periodFilter));
+  }, [targetOtList, periodFilter, curMonthStr, pastMonthStr]);
+
+  const otGroupCounts = React.useMemo(() => {
+    return {
+      all: periodScopedOvertimes.length,
+      shipment: periodScopedOvertimes.filter((o) => getEmployeeCategoryGroup(o) === 'SHIPMENT').length,
+      rumahTangga: periodScopedOvertimes.filter((o) => getEmployeeCategoryGroup(o) === 'RUMAH TANGGA').length,
+      karyawanTetap: periodScopedOvertimes.filter((o) => getEmployeeCategoryGroup(o) === 'KARYAWAN TETAP').length,
+    };
+  }, [periodScopedOvertimes]);
+
+  const filteredOvertimes = React.useMemo(() => {
+    return periodScopedOvertimes.filter((o) => {
+      if (groupFilter !== 'all') {
+        const grp = getEmployeeCategoryGroup(o);
+        if (grp !== groupFilter) return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = (o.userName || '').toLowerCase().includes(q);
+        const matchNip = (o.userNip || '').toLowerCase().includes(q);
+        const matchTask = (o.taskDescription || '').toLowerCase().includes(q);
+        const matchDiv = (o.divisionName || '').toLowerCase().includes(q);
+        if (!matchName && !matchNip && !matchTask && !matchDiv) return false;
+      }
+      return true;
+    });
+  }, [periodScopedOvertimes, groupFilter, searchQuery]);
 
   // Detail Modal States
   const [selectedDetailLeave, setSelectedDetailLeave] = useState<LeaveRequest | null>(null);
@@ -664,6 +769,140 @@ export const HrmLeavePage: React.FC = () => {
             </div>
           </CardHeader>
 
+          {/* Controls & Filter Bar: Periode Bulan & Kelompok Operasional */}
+          <div className="p-4 bg-muted/20 border-b border-border space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              {/* Dimensi 1: Periode Bulan */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-semibold text-muted-foreground mr-1 flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-primary" />
+                  Periode:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPeriodFilter('current')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    periodFilter === 'current'
+                      ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  <CalendarDays className="w-3 h-3" />
+                  <span>Bulan Berjalan ({curMonthLabel})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPeriodFilter('previous')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    periodFilter === 'previous'
+                      ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  <span>Bulan Sebelumnya ({pastMonthLabel})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPeriodFilter('all')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border',
+                    periodFilter === 'all'
+                      ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  Semua Periode
+                </button>
+              </div>
+
+              {/* Search bar */}
+              <div className="relative w-full lg:w-72">
+                <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <Input
+                  placeholder="Cari nama, NIP, alasan..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8 h-8 text-xs rounded-lg"
+                />
+              </div>
+            </div>
+
+            {/* Dimensi 2: Kelompok Operasional (Khusus mode supervisor/incoming) */}
+            {isSupervisorRole && viewScope === 'incoming' && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-border/50">
+                <span className="text-[11px] font-semibold text-muted-foreground mr-1 flex items-center gap-1">
+                  <Users className="w-3.5 h-3.5 text-primary" />
+                  Kelompok:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('all')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'all'
+                      ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 border-slate-900 dark:border-slate-100'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground'
+                  )}
+                >
+                  <span>Semua Kelompok</span>
+                  <span className="px-1.5 py-0.2 rounded-full bg-muted text-[10px] font-bold">
+                    {leaveGroupCounts.all}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('SHIPMENT')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'SHIPMENT'
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-card text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-900/50 hover:bg-blue-50/50'
+                  )}
+                >
+                  <Ship className="w-3 h-3" />
+                  <span>Shipment (47 Org)</span>
+                  <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'SHIPMENT' ? 'bg-blue-800 text-white' : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-200')}>
+                    {leaveGroupCounts.shipment}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('RUMAH TANGGA')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'RUMAH TANGGA'
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-card text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/50 hover:bg-emerald-50/50'
+                  )}
+                >
+                  <Home className="w-3 h-3" />
+                  <span>Rumah Tangga (33 Org)</span>
+                  <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'RUMAH TANGGA' ? 'bg-emerald-800 text-white' : 'bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-200')}>
+                    {leaveGroupCounts.rumahTangga}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('KARYAWAN TETAP')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'KARYAWAN TETAP'
+                      ? 'bg-purple-600 text-white border-purple-600'
+                      : 'bg-card text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-900/50 hover:bg-purple-50/50'
+                  )}
+                >
+                  <Star className="w-3 h-3" />
+                  <span>Karyawan Tetap (3 Org)</span>
+                  <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'KARYAWAN TETAP' ? 'bg-purple-800 text-white' : 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-200')}>
+                    {leaveGroupCounts.karyawanTetap}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs text-foreground">
               <thead className="bg-muted/40 border-b border-border uppercase text-[11px] text-muted-foreground font-medium tracking-wider">
@@ -682,7 +921,7 @@ export const HrmLeavePage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {(isSupervisorRole && viewScope === 'incoming' ? allLeaves : leaves).length === 0 ? (
+                {filteredLeaves.length === 0 ? (
                   <tr>
                     <td
                       colSpan={isSupervisorRole && viewScope === 'incoming' ? 9 : 8}
@@ -692,18 +931,35 @@ export const HrmLeavePage: React.FC = () => {
                         <CalendarCheck2 className="w-8 h-8 text-muted-foreground/40" />
                         <p className="font-medium text-xs">
                           {isSupervisorRole && viewScope === 'incoming'
-                            ? 'Belum ada berkas permohonan izin atau cuti yang diajukan oleh staf.'
+                            ? 'Tidak ada berkas permohonan izin atau cuti yang sesuai filter.'
                             : 'Belum ada riwayat permohonan izin atau cuti pribadi Anda.'}
                         </p>
                       </div>
                     </td>
                   </tr>
                 ) : (
-                  (isSupervisorRole && viewScope === 'incoming' ? allLeaves : leaves).map((l) => (
+                  filteredLeaves.map((l) => (
                     <tr key={l.id} className="hover:bg-muted/30 transition-colors">
                       {isSupervisorRole && viewScope === 'incoming' && (
                         <td className="py-3 px-4">
-                          <p className="font-semibold text-foreground">{l.userName}</p>
+                          <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                            <p className="font-semibold text-foreground">{l.userName}</p>
+                            {(() => {
+                              const cat = getEmployeeCategoryGroup(l);
+                              const label = getEmployeeCategoryLabel(cat);
+                              const badgeColor =
+                                cat === 'SHIPMENT'
+                                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                                  : cat === 'RUMAH TANGGA'
+                                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                                  : 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800';
+                              return (
+                                <span className={cn('text-[9.5px] font-bold px-1.5 py-0.2 rounded border leading-none', badgeColor)}>
+                                  {label}
+                                </span>
+                              );
+                            })()}
+                          </div>
                           <p className="text-[11px] text-muted-foreground font-mono">
                             {l.userNip || '-'} • {l.divisionName || 'Operasional'}
                           </p>
@@ -866,6 +1122,140 @@ export const HrmLeavePage: React.FC = () => {
             </div>
           </CardHeader>
 
+          {/* Controls & Filter Bar: Periode Bulan & Kelompok Operasional (Overtime) */}
+          <div className="p-4 bg-muted/20 border-b border-border space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              {/* Dimensi 1: Periode Bulan */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-semibold text-muted-foreground mr-1 flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-primary" />
+                  Periode:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPeriodFilter('current')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    periodFilter === 'current'
+                      ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  <CalendarDays className="w-3 h-3" />
+                  <span>Bulan Berjalan ({curMonthLabel})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPeriodFilter('previous')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    periodFilter === 'previous'
+                      ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  <span>Bulan Sebelumnya ({pastMonthLabel})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPeriodFilter('all')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border',
+                    periodFilter === 'all'
+                      ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  Semua Periode
+                </button>
+              </div>
+
+              {/* Search bar */}
+              <div className="relative w-full lg:w-72">
+                <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <Input
+                  placeholder="Cari nama, NIP, uraian tugas..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8 h-8 text-xs rounded-lg"
+                />
+              </div>
+            </div>
+
+            {/* Dimensi 2: Kelompok Operasional (Khusus mode supervisor/incoming) */}
+            {isSupervisorRole && viewScope === 'incoming' && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-border/50">
+                <span className="text-[11px] font-semibold text-muted-foreground mr-1 flex items-center gap-1">
+                  <Users className="w-3.5 h-3.5 text-primary" />
+                  Kelompok:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('all')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'all'
+                      ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 border-slate-900 dark:border-slate-100'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground'
+                  )}
+                >
+                  <span>Semua Kelompok</span>
+                  <span className="px-1.5 py-0.2 rounded-full bg-muted text-[10px] font-bold">
+                    {otGroupCounts.all}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('SHIPMENT')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'SHIPMENT'
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-card text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-900/50 hover:bg-blue-50/50'
+                  )}
+                >
+                  <Ship className="w-3 h-3" />
+                  <span>Shipment (47 Org)</span>
+                  <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'SHIPMENT' ? 'bg-blue-800 text-white' : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-200')}>
+                    {otGroupCounts.shipment}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('RUMAH TANGGA')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'RUMAH TANGGA'
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-card text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/50 hover:bg-emerald-50/50'
+                  )}
+                >
+                  <Home className="w-3 h-3" />
+                  <span>Rumah Tangga (33 Org)</span>
+                  <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'RUMAH TANGGA' ? 'bg-emerald-800 text-white' : 'bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-200')}>
+                    {otGroupCounts.rumahTangga}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('KARYAWAN TETAP')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'KARYAWAN TETAP'
+                      ? 'bg-purple-600 text-white border-purple-600'
+                      : 'bg-card text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-900/50 hover:bg-purple-50/50'
+                  )}
+                >
+                  <Star className="w-3 h-3" />
+                  <span>Karyawan Tetap (3 Org)</span>
+                  <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'KARYAWAN TETAP' ? 'bg-purple-800 text-white' : 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-200')}>
+                    {otGroupCounts.karyawanTetap}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs text-foreground">
               <thead className="bg-muted/40 border-y border-border uppercase text-[11px] text-muted-foreground font-medium tracking-wider">
@@ -886,7 +1276,7 @@ export const HrmLeavePage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {(isSupervisorRole && viewScope === 'incoming' ? allOvertimes : overtimes).length === 0 ? (
+                {filteredOvertimes.length === 0 ? (
                   <tr>
                     <td
                       colSpan={isSupervisorRole && viewScope === 'incoming' ? 9 : 8}
@@ -896,18 +1286,35 @@ export const HrmLeavePage: React.FC = () => {
                         <Coins className="w-8 h-8 text-muted-foreground/40" />
                         <p className="font-medium text-xs">
                           {isSupervisorRole && viewScope === 'incoming'
-                            ? 'Belum ada catatan lembur yang diajukan oleh staf.'
+                            ? 'Tidak ada catatan lembur yang sesuai filter.'
                             : 'Belum ada catatan lembur yang Anda ajukan.'}
                         </p>
                       </div>
                     </td>
                   </tr>
                 ) : (
-                  (isSupervisorRole && viewScope === 'incoming' ? allOvertimes : overtimes).map((o) => (
+                  filteredOvertimes.map((o) => (
                     <tr key={o.id} className="hover:bg-muted/30 transition-colors">
                       {isSupervisorRole && viewScope === 'incoming' && (
                         <td className="py-3 px-4">
-                          <p className="font-semibold text-foreground">{o.userName}</p>
+                          <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                            <p className="font-semibold text-foreground">{o.userName}</p>
+                            {(() => {
+                              const cat = getEmployeeCategoryGroup(o);
+                              const label = getEmployeeCategoryLabel(cat);
+                              const badgeColor =
+                                cat === 'SHIPMENT'
+                                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                                  : cat === 'RUMAH TANGGA'
+                                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                                  : 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800';
+                              return (
+                                <span className={cn('text-[9.5px] font-bold px-1.5 py-0.2 rounded border leading-none', badgeColor)}>
+                                  {label}
+                                </span>
+                              );
+                            })()}
+                          </div>
                           <p className="text-[11px] text-muted-foreground font-mono">
                             {o.userNip || '-'} • {o.divisionName || 'Operasional'}
                           </p>

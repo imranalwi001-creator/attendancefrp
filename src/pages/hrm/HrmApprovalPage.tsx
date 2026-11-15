@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
-import { LeaveRequest, OvertimeRecord, OvertimeStatus, OvertimePaymentStatus, UserProfile, ShiftSwapRecord, SmartSubstituteCandidate, SmartReliefDailySlot, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
+import { LeaveRequest, OvertimeRecord, OvertimeStatus, OvertimePaymentStatus, UserProfile, ShiftSwapRecord, SmartSubstituteCandidate, SmartReliefDailySlot, isLeadershipSpecialFieldOfficer, getEmployeeCategoryGroup, getEmployeeCategoryLabel } from '@/types/hrm';
+import { formatYearMonthId, getPreviousYearMonth } from '@/lib/frpPayrollCalculations';
 import {
   FileCheck2,
   CheckCircle2,
@@ -33,6 +34,11 @@ import {
   FileText,
   Users,
   RotateCcw,
+  Calendar,
+  CalendarDays,
+  Ship,
+  Home,
+  Star,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -141,6 +147,13 @@ export const HrmApprovalPage: React.FC = () => {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('pending');
   const [searchQuery, setSearchQuery] = useState('');
+  const [periodFilter, setPeriodFilter] = useState<'current' | 'previous' | 'all'>('current');
+  const [groupFilter, setGroupFilter] = useState<'all' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP'>('all');
+
+  const curMonthStr = useMemo(() => new Date().toISOString().slice(0, 7), []);
+  const pastMonthStr = useMemo(() => getPreviousYearMonth(curMonthStr), [curMonthStr]);
+  const curMonthLabel = useMemo(() => formatYearMonthId(curMonthStr), [curMonthStr]);
+  const pastMonthLabel = useMemo(() => formatYearMonthId(pastMonthStr), [pastMonthStr]);
 
   // Auto-focus and open targeted request when navigated from notifications
   useEffect(() => {
@@ -743,9 +756,52 @@ export const HrmApprovalPage: React.FC = () => {
 
   const targetHighlightId = searchParams.get('id');
 
-  const filteredLeaves = leaves.filter((l) => {
+  // Helper filter periode
+  const matchLeavePeriod = (l: LeaveRequest, period: 'current' | 'previous' | 'all') => {
+    if (period === 'all') return true;
+    const sStr = String(l.startDate || l.createdAt || '');
+    const eStr = String(l.endDate || sStr);
+    const targetYm = period === 'current' ? curMonthStr : pastMonthStr;
+    return sStr.startsWith(targetYm) || eStr.startsWith(targetYm);
+  };
+
+  const matchOtPeriod = (o: OvertimeRecord, period: 'current' | 'previous' | 'all') => {
+    if (period === 'all') return true;
+    const dStr = String(o.date || o.createdAt || '');
+    const targetYm = period === 'current' ? curMonthStr : pastMonthStr;
+    return dStr.startsWith(targetYm);
+  };
+
+  const activeScopedLeaves = useMemo(() => {
+    return leaves.filter((l) => matchLeavePeriod(l, periodFilter));
+  }, [leaves, periodFilter, curMonthStr, pastMonthStr]);
+
+  const leaveGroupCounts = useMemo(() => {
+    return {
+      all: activeScopedLeaves.length,
+      shipment: activeScopedLeaves.filter((l) => getEmployeeCategoryGroup(l) === 'SHIPMENT').length,
+      rumahTangga: activeScopedLeaves.filter((l) => getEmployeeCategoryGroup(l) === 'RUMAH TANGGA').length,
+      karyawanTetap: activeScopedLeaves.filter((l) => getEmployeeCategoryGroup(l) === 'KARYAWAN TETAP').length,
+    };
+  }, [activeScopedLeaves]);
+
+  const activeScopedOvertime = useMemo(() => {
+    return overtimeList.filter((o) => matchOtPeriod(o, periodFilter));
+  }, [overtimeList, periodFilter, curMonthStr, pastMonthStr]);
+
+  const otGroupCounts = useMemo(() => {
+    return {
+      all: activeScopedOvertime.length,
+      shipment: activeScopedOvertime.filter((o) => getEmployeeCategoryGroup(o) === 'SHIPMENT').length,
+      rumahTangga: activeScopedOvertime.filter((o) => getEmployeeCategoryGroup(o) === 'RUMAH TANGGA').length,
+      karyawanTetap: activeScopedOvertime.filter((o) => getEmployeeCategoryGroup(o) === 'KARYAWAN TETAP').length,
+    };
+  }, [activeScopedOvertime]);
+
+  const filteredLeaves = activeScopedLeaves.filter((l) => {
     if (targetHighlightId && l.id === targetHighlightId) return true;
     const matchStatus = filterStatus === 'all' || l.status === filterStatus;
+    const matchGroup = groupFilter === 'all' || getEmployeeCategoryGroup(l) === groupFilter;
     const q = (searchQuery || '').toLowerCase();
     const matchSearch =
       !q ||
@@ -753,12 +809,13 @@ export const HrmApprovalPage: React.FC = () => {
       (l.userNip || '').toLowerCase().includes(q) ||
       (l.reason || '').toLowerCase().includes(q) ||
       (l.divisionName || '').toLowerCase().includes(q);
-    return matchStatus && matchSearch;
+    return matchStatus && matchGroup && matchSearch;
   });
 
-  const filteredOvertime = overtimeList.filter((o) => {
+  const filteredOvertime = activeScopedOvertime.filter((o) => {
     if (targetHighlightId && o.id === targetHighlightId) return true;
     const matchStatus = filterStatus === 'all' || o.status === filterStatus;
+    const matchGroup = groupFilter === 'all' || getEmployeeCategoryGroup(o) === groupFilter;
     const q = (searchQuery || '').toLowerCase();
     const matchSearch =
       !q ||
@@ -766,7 +823,7 @@ export const HrmApprovalPage: React.FC = () => {
       (o.userNip || '').toLowerCase().includes(q) ||
       (o.taskDescription || '').toLowerCase().includes(q) ||
       (o.divisionName || '').toLowerCase().includes(q);
-    return matchStatus && matchSearch;
+    return matchStatus && matchGroup && matchSearch;
   });
 
   const filteredSwaps = shiftSwaps.filter((s) => {
@@ -998,30 +1055,155 @@ export const HrmApprovalPage: React.FC = () => {
 
       {/* Filter Toolbar */}
       <Card className="border-border bg-card rounded-xl shadow-sm">
-        <CardContent className="p-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="relative">
-              <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-              <Input
-                placeholder="Cari Nama Karyawan / NIP..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 text-xs rounded-xl"
-              />
+        <CardContent className="p-4 space-y-3">
+          {/* Top Row: Periode Bulan & Search & Status */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            {/* Dimensi 1: Periode Bulan */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] font-semibold text-muted-foreground mr-1 flex items-center gap-1">
+                <Calendar className="w-3.5 h-3.5 text-primary" />
+                Periode:
+              </span>
+              <button
+                type="button"
+                onClick={() => setPeriodFilter('current')}
+                className={cn(
+                  'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                  periodFilter === 'current'
+                    ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                    : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                )}
+              >
+                <CalendarDays className="w-3 h-3" />
+                <span>Bulan Berjalan ({curMonthLabel})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPeriodFilter('previous')}
+                className={cn(
+                  'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                  periodFilter === 'previous'
+                    ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                    : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                )}
+              >
+                <span>Bulan Sebelumnya ({pastMonthLabel})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPeriodFilter('all')}
+                className={cn(
+                  'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border',
+                  periodFilter === 'all'
+                    ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                    : 'bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/50'
+                )}
+              >
+                Semua Periode
+              </button>
             </div>
 
-            <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="text-xs rounded-xl">
-                <SelectValue placeholder="Status Persetujuan" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Status</SelectItem>
-                <SelectItem value="pending">Menunggu Persetujuan (Pending)</SelectItem>
-                <SelectItem value="approved">Sudah Disetujui</SelectItem>
-                <SelectItem value="rejected">Ditolak</SelectItem>
-              </SelectContent>
-            </Select>
+            {/* Right side: Search & Status */}
+            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+              <div className="relative w-full sm:w-64">
+                <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <Input
+                  placeholder="Cari Nama Karyawan / NIP..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 h-8 text-xs rounded-xl"
+                />
+              </div>
+
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="h-8 text-xs rounded-xl w-full sm:w-48">
+                  <SelectValue placeholder="Status Persetujuan" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Status</SelectItem>
+                  <SelectItem value="pending">Menunggu Persetujuan (Pending)</SelectItem>
+                  <SelectItem value="approved">Sudah Disetujui</SelectItem>
+                  <SelectItem value="rejected">Ditolak</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
+
+          {/* Dimensi 2: Kelompok Operasional (Leaves or Overtime) */}
+          {(activeTab === 'leaves' || activeTab === 'overtime') && (() => {
+            const counts = activeTab === 'leaves' ? leaveGroupCounts : otGroupCounts;
+            return (
+              <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-border/50">
+                <span className="text-[11px] font-semibold text-muted-foreground mr-1 flex items-center gap-1">
+                  <Users className="w-3.5 h-3.5 text-primary" />
+                  Kelompok:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('all')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'all'
+                      ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 border-slate-900 dark:border-slate-100'
+                      : 'bg-card text-muted-foreground border-border hover:text-foreground'
+                  )}
+                >
+                  <span>Semua Kelompok</span>
+                  <span className="px-1.5 py-0.2 rounded-full bg-muted text-[10px] font-bold">
+                    {counts.all}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('SHIPMENT')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'SHIPMENT'
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-card text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-900/50 hover:bg-blue-50/50'
+                  )}
+                >
+                  <Ship className="w-3 h-3" />
+                  <span>Shipment (47 Org)</span>
+                  <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'SHIPMENT' ? 'bg-blue-800 text-white' : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-200')}>
+                    {counts.shipment}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('RUMAH TANGGA')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'RUMAH TANGGA'
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-card text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/50 hover:bg-emerald-50/50'
+                  )}
+                >
+                  <Home className="w-3 h-3" />
+                  <span>Rumah Tangga (33 Org)</span>
+                  <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'RUMAH TANGGA' ? 'bg-emerald-800 text-white' : 'bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-200')}>
+                    {counts.rumahTangga}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupFilter('KARYAWAN TETAP')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border',
+                    groupFilter === 'KARYAWAN TETAP'
+                      ? 'bg-purple-600 text-white border-purple-600'
+                      : 'bg-card text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-900/50 hover:bg-purple-50/50'
+                  )}
+                >
+                  <Star className="w-3 h-3" />
+                  <span>Karyawan Tetap (3 Org)</span>
+                  <span className={cn('px-1.5 py-0.2 rounded-full text-[10px] font-bold', groupFilter === 'KARYAWAN TETAP' ? 'bg-purple-800 text-white' : 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-200')}>
+                    {counts.karyawanTetap}
+                  </span>
+                </button>
+              </div>
+            );
+          })()}
         </CardContent>
       </Card>
 
@@ -1059,7 +1241,24 @@ export const HrmApprovalPage: React.FC = () => {
                     return (
                     <tr key={l.id} className={cn("hover:bg-muted/30 transition-all", isTargetRow && "bg-primary/10 ring-2 ring-primary/40 font-semibold shadow-xs")}>
                       <td className="py-3 px-4">
-                        <p className="font-semibold text-foreground">{l.userName}</p>
+                        <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                          <p className="font-semibold text-foreground">{l.userName}</p>
+                          {(() => {
+                            const cat = getEmployeeCategoryGroup(l);
+                            const label = getEmployeeCategoryLabel(cat);
+                            const badgeColor =
+                              cat === 'SHIPMENT'
+                                ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                                : cat === 'RUMAH TANGGA'
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                                : 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800';
+                            return (
+                              <span className={cn('text-[9.5px] font-bold px-1.5 py-0.2 rounded border leading-none', badgeColor)}>
+                                {label}
+                              </span>
+                            );
+                          })()}
+                        </div>
                         <p className="text-[11px] text-muted-foreground font-mono">{l.userNip} • {l.divisionName}</p>
                         {isSup ? (
                           <Badge variant="outline" className="mt-1 bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[9.5px] rounded-md font-semibold flex items-center gap-1 w-fit">
@@ -1225,7 +1424,24 @@ export const HrmApprovalPage: React.FC = () => {
                     return (
                     <tr key={o.id} className={cn("hover:bg-muted/30 transition-all", isTargetRow && "bg-primary/10 ring-2 ring-primary/40 font-semibold shadow-xs")}>
                       <td className="py-3 px-4">
-                        <p className="font-semibold text-foreground">{o.userName}</p>
+                        <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                          <p className="font-semibold text-foreground">{o.userName}</p>
+                          {(() => {
+                            const cat = getEmployeeCategoryGroup(o);
+                            const label = getEmployeeCategoryLabel(cat);
+                            const badgeColor =
+                              cat === 'SHIPMENT'
+                                ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                                : cat === 'RUMAH TANGGA'
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                                : 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800';
+                            return (
+                              <span className={cn('text-[9.5px] font-bold px-1.5 py-0.2 rounded border leading-none', badgeColor)}>
+                                {label}
+                              </span>
+                            );
+                          })()}
+                        </div>
                         <p className="text-[11px] text-muted-foreground font-mono">{o.userNip} • {o.divisionName}</p>
                         {isSup ? (
                           <Badge variant="outline" className="mt-1 bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[9.5px] rounded-md font-semibold flex items-center gap-1 w-fit">
