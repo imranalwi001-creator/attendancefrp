@@ -391,21 +391,26 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         } else if (explicitMult === 4.0) {
           empPaid = rawDur * 4.0;
           realHours += rawDur;
+        } else if (isTimbanganOrSegel) {
+          // Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
+          // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
+          effectiveHours = rawDur;
+          empPaid = effectiveHours * 2.0;
+          realHours += effectiveHours;
+        } else if (isMatching) {
+          // Divisi Matching (Hari Kerja / OFF / Tanggal Merah):
+          // Potongan istirahat 1 jam dan langsung pengali 2.0x (tanpa 1.5x)
+          const breakDed = rawDur > 1 ? 1 : 0;
+          effectiveHours = Math.max(0, rawDur - breakDed);
+          empPaid = effectiveHours * 2.0;
+          realHours += effectiveHours;
         } else if (isReliefOrHoliday) {
-          // Aturan Baku Pengganti / OFF:
-          // Timbangan/Segel: Tanpa potongan istirahat, pengali 2.0x
-          // Matching: Potongan istirahat 1 jam jika jam tugas penuh (>= 8 jam), pengali 2.0x
-          if (isMatching) {
-            effectiveHours = rawDur >= 8 ? rawDur - 1 : rawDur;
-          } else if (isTimbanganOrSegel) {
-            effectiveHours = rawDur;
-          } else {
-            effectiveHours = rawDur;
-          }
+          // Divisi Shipment lainnya saat Lembur Pengganti / OFF: Langsung 2.0x
+          effectiveHours = rawDur;
           empPaid = effectiveHours * 2.0;
           realHours += effectiveHours;
         } else {
-          // Kelebihan Jam Hari Kerja Biasa: Jam ke-1 @ 1.5x, jam berikutnya @ 2.0x
+          // Kelebihan Jam Hari Kerja Biasa (Shipment, misal Shift 7-7): Jam ke-1 @ 1.5x, jam berikutnya @ 2.0x
           const h1 = Math.min(1, rawDur);
           const h2 = Math.max(0, rawDur - 1);
           empPaid = (h1 * 1.5) + (h2 * 2.0);

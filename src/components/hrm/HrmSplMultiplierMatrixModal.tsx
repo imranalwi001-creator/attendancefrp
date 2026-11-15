@@ -432,28 +432,20 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
             h3 = rawHours;
           } else if (explicitMult === 4.0) {
             h4 = rawHours;
+          } else if (isTimbanganOrSegel) {
+            // ATURAN BAKU DIVISI TIMBANGAN & SEGEL (Hari Kerja / OFF / Tanggal Merah):
+            // 0 Jam Potongan Istirahat (utuh) dan TANPA PENGALI 1.5x (Seluruh jam langsung 2.0x)
+            h2r = rawHours;
+          } else if (isMatching) {
+            // ATURAN BAKU DIVISI MATCHING (Hari Kerja / OFF / Tanggal Merah):
+            // Dikenakan potongan istirahat 1 jam dan TANPA PENGALI 1.5x (Sisa jam efektif langsung 2.0x)
+            const breakDed = rawHours > 1 ? 1 : 0;
+            h2r = Math.max(0, rawHours - breakDed);
           } else if (isReliefOrHoliday) {
-            // ATURAN BAKU KHUSUS LEMBUR PENGGANTI SHIFT / LIBUR / OFF:
-            // 1. Divisi Timbangan & Segel: Tanpa potongan istirahat (0 jam) & TANPA PENGALI 1.5x. Seluruh jam langsung 2.0x!
-            // 2. Divisi Matching: Dikenakan potongan istirahat 1 jam jika jam tugas penuh (>= 8 jam) & TANPA PENGALI 1.5x. Seluruh jam langsung 2.0x!
-            // 3. Divisi lain pengganti/libur: Langsung pengali 2.0x di baris Libur/Relief.
-            // PENGALI 1.5x TIDAK BERLAKU (h15 = 0, h2w = 0)!
-            let effectiveHours = rawHours;
-            if (isMatching) {
-              if (rawHours >= 8) {
-                effectiveHours = rawHours - 1; // Potongan istirahat 1 jam
-              } else {
-                effectiveHours = rawHours;
-              }
-            } else if (isTimbanganOrSegel) {
-              effectiveHours = rawHours; // Utuh tanpa potongan istirahat
-            } else {
-              effectiveHours = rawHours;
-            }
-
-            h2r = effectiveHours;
+            // Divisi Shipment lainnya saat Lembur Pengganti Pos / Hari Libur: Langsung 2.0x
+            h2r = rawHours;
           } else {
-            // ATURAN BAKU KELEBIHAN JAM REGULER DI HARI KERJA (Shift 7-7 dsb):
+            // ATURAN BAKU KELEBIHAN JAM REGULER DI HARI KERJA (Shift 7-7 dsb untuk Shipment):
             // 1 jam pertama @ 1.5x, jam ke-2 & berikutnya @ 2.0x Hari Kerja
             h15 = Math.min(1, rawHours);
             h2w = Math.max(0, rawHours - 1);

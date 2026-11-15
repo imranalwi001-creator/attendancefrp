@@ -331,30 +331,35 @@ export const HrmEditLemburModal: React.FC<HrmEditLemburModalProps> = ({
     let payHours = 0;
     let ruleAppliedLabel = '';
 
-    if (isReliefDuty) {
-      if (isTimbanganOrSegel) {
-        breakDeduction = 0;
-        effectiveHours = durationHours;
-        payHours = effectiveHours * 2.0;
-        ruleAppliedLabel = 'Timbangan & Segel (Pengganti): 0 Jam Potongan Istirahat, Langsung Pengali 2.0x';
-      } else if (isMatching) {
-        breakDeduction = durationHours > 1 ? 1 : 0;
-        effectiveHours = Math.max(0, durationHours - breakDeduction);
-        payHours = effectiveHours * 2.0;
-        ruleAppliedLabel = 'Matching (Pengganti / OFF): Potongan Istirahat 1 Jam, Langsung Pengali 2.0x';
-      } else {
-        breakDeduction = 0;
-        effectiveHours = durationHours;
-        payHours = effectiveHours * 2.0;
-        ruleAppliedLabel = 'Pengganti Shift / Hari Libur: Pengali 2.0x';
-      }
+    if (isTimbanganOrSegel) {
+      // 1. Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
+      // Tanpa potongan istirahat (0 jam) dan Langsung Pengali 2.0x (tanpa 1.5x)
+      breakDeduction = 0;
+      effectiveHours = durationHours;
+      payHours = effectiveHours * 2.0;
+      ruleAppliedLabel = 'Timbangan & Segel (Hari Kerja / OFF): 0 Jam Potongan Istirahat, Langsung Pengali 2.0x';
+    } else if (isMatching) {
+      // 2. Divisi Matching (Hari Kerja / OFF / Tanggal Merah):
+      // Dikenakan potongan istirahat 1 jam dan Langsung Pengali 2.0x (tanpa 1.5x)
+      breakDeduction = durationHours > 1 ? 1 : 0;
+      effectiveHours = Math.max(0, durationHours - breakDeduction);
+      payHours = effectiveHours * 2.0;
+      ruleAppliedLabel = 'Matching (Hari Kerja / OFF): Potongan Istirahat 1 Jam, Langsung Pengali 2.0x';
+    } else if (isReliefDuty) {
+      // 3. Divisi Shipment Lainnya (Pengganti Shift / Hari Libur OFF): Langsung Pengali 2.0x
+      breakDeduction = 0;
+      effectiveHours = durationHours;
+      payHours = effectiveHours * 2.0;
+      ruleAppliedLabel = 'Pengganti Shift / Hari Libur: Pengali 2.0x';
     } else {
+      // 4. Divisi Shipment Secara Keseluruhan (Kelebihan Jam Reguler Hari Kerja, misal Shift 7-7):
+      // Jam ke-1 @ 1.5x, Jam ke-2 & seterusnya @ 2.0x
       breakDeduction = 0;
       effectiveHours = durationHours;
       const h1 = Math.min(1, durationHours);
       const h2 = Math.max(0, durationHours - 1);
       payHours = (h1 * 1.5) + (h2 * 2.0);
-      ruleAppliedLabel = 'Hari Kerja Reguler: Jam Ke-1 (1.5x) + Jam Ke-2 & Seterusnya (2.0x)';
+      ruleAppliedLabel = 'Hari Kerja Reguler (Shipment): Jam Ke-1 (1.5x) + Jam Ke-2 & Seterusnya (2.0x)';
     }
 
     const estimatedPay = Math.round(payHours * rate);

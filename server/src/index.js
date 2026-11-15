@@ -11135,22 +11135,23 @@ app.post('/api/overtime', async (req, res) => {
 
     let comp = 0;
     let payHours = 0;
-    if (isReliefDuty) {
-      if (isTimbanganOrSegel) {
-        // Divisi Timbangan & Segel: Lembur pengganti shift di hari kerja atau hari off/tgl merah
-        // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
-        payHours = hours * 2.0;
-      } else if (isMatching) {
-        // Divisi Matching: Lembur pengganti / OFF dipotong 1 jam istirahat dan langsung pengali 2.0x
-        const breakDed = hours > 1 ? 1 : 0;
-        payHours = Math.max(0, hours - breakDed) * 2.0;
-      } else {
-        // Standar hari libur / tugas pengganti divisi lain
-        payHours = hours * 2.0;
-      }
+    if (isTimbanganOrSegel) {
+      // 1. Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
+      // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
+      payHours = hours * 2.0;
+      comp = Math.round(payHours * officialRate);
+    } else if (isMatching) {
+      // 2. Divisi Matching (Hari Kerja / OFF / Tanggal Merah):
+      // Dikenakan potongan istirahat 1 jam dan langsung pengali 2.0x (tanpa 1.5x)
+      const breakDed = hours > 1 ? 1 : 0;
+      payHours = Math.max(0, hours - breakDed) * 2.0;
+      comp = Math.round(payHours * officialRate);
+    } else if (isReliefDuty) {
+      // 3. Divisi Shipment lainnya (Pengganti Shift / Hari Libur OFF): Langsung Pengali 2.0x
+      payHours = hours * 2.0;
       comp = Math.round(payHours * officialRate);
     } else {
-      // Lembur kelebihan jam harian di hari kerja biasa (seperti Shift 7-7)
+      // 4. Divisi Shipment Secara Keseluruhan (Kelebihan Jam Reguler Hari Kerja, misal Shift 7-7):
       // Jam ke-1 @ 1.5x, jam ke-2 & ke-3 @ 2.0x
       const h1 = Math.min(1, hours);
       const h2 = Math.max(0, hours - 1);
@@ -11343,22 +11344,23 @@ app.put('/api/overtime/:id/status', async (req, res) => {
 
     let compensation = 0;
     let payHours = 0;
-    if (isReliefDuty) {
-      if (isTimbanganOrSegel) {
-        // Divisi Timbangan & Segel: Lembur pengganti shift di hari kerja atau hari off/tgl merah
-        // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
-        payHours = finalHours * 2.0;
-      } else if (isMatching) {
-        // Divisi Matching: Lembur pengganti / OFF dipotong 1 jam istirahat dan langsung pengali 2.0x
-        const breakDed = finalHours > 1 ? 1 : 0;
-        payHours = Math.max(0, finalHours - breakDed) * 2.0;
-      } else {
-        // Standar hari libur / tugas pengganti divisi lain
-        payHours = finalHours * 2.0;
-      }
+    if (isTimbanganOrSegel) {
+      // 1. Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
+      // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
+      payHours = finalHours * 2.0;
+      compensation = Math.round(payHours * officialRate);
+    } else if (isMatching) {
+      // 2. Divisi Matching (Hari Kerja / OFF / Tanggal Merah):
+      // Dikenakan potongan istirahat 1 jam dan langsung pengali 2.0x (tanpa 1.5x)
+      const breakDed = finalHours > 1 ? 1 : 0;
+      payHours = Math.max(0, finalHours - breakDed) * 2.0;
+      compensation = Math.round(payHours * officialRate);
+    } else if (isReliefDuty) {
+      // 3. Divisi Shipment lainnya (Pengganti Shift / Hari Libur OFF): Langsung Pengali 2.0x
+      payHours = finalHours * 2.0;
       compensation = Math.round(payHours * officialRate);
     } else {
-      // Lembur kelebihan jam harian di hari kerja biasa (seperti Shift 7-7)
+      // 4. Divisi Shipment Secara Keseluruhan (Kelebihan Jam Reguler Hari Kerja, misal Shift 7-7):
       // Jam ke-1 @ 1.5x, jam ke-2 & ke-3 @ 2.0x
       const h1 = Math.min(1, finalHours);
       const h2 = Math.max(0, finalHours - 1);
@@ -11510,22 +11512,23 @@ app.put('/api/overtime/:id', async (req, res) => {
 
     let compensation = 0;
     let payHours = 0;
-    if (isReliefDuty) {
-      if (isTimbanganOrSegel) {
-        // Divisi Timbangan & Segel: Lembur pengganti shift di hari kerja atau hari off/tgl merah
-        // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
-        payHours = finalHours * 2.0;
-      } else if (isMatching) {
-        // Divisi Matching: Lembur pengganti / OFF dipotong 1 jam istirahat dan langsung pengali 2.0x
-        const breakDed = finalHours > 1 ? 1 : 0;
-        payHours = Math.max(0, finalHours - breakDed) * 2.0;
-      } else {
-        // Standar hari libur / tugas pengganti divisi lain
-        payHours = finalHours * 2.0;
-      }
+    if (isTimbanganOrSegel) {
+      // 1. Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
+      // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
+      payHours = finalHours * 2.0;
+      compensation = Math.round(payHours * officialRate);
+    } else if (isMatching) {
+      // 2. Divisi Matching (Hari Kerja / OFF / Tanggal Merah):
+      // Dikenakan potongan istirahat 1 jam dan langsung pengali 2.0x (tanpa 1.5x)
+      const breakDed = finalHours > 1 ? 1 : 0;
+      payHours = Math.max(0, finalHours - breakDed) * 2.0;
+      compensation = Math.round(payHours * officialRate);
+    } else if (isReliefDuty) {
+      // 3. Divisi Shipment lainnya (Pengganti Shift / Hari Libur OFF): Langsung Pengali 2.0x
+      payHours = finalHours * 2.0;
       compensation = Math.round(payHours * officialRate);
     } else {
-      // Lembur kelebihan jam harian di hari kerja biasa (seperti Shift 7-7)
+      // 4. Divisi Shipment Secara Keseluruhan (Kelebihan Jam Reguler Hari Kerja, misal Shift 7-7):
       // Jam ke-1 @ 1.5x, jam ke-2 & ke-3 @ 2.0x
       const h1 = Math.min(1, finalHours);
       const h2 = Math.max(0, finalHours - 1);

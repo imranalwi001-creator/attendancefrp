@@ -764,23 +764,23 @@ function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRa
         reason.includes('libur')
       );
 
-      if (isReliefOrOff) {
-        // Lembur Pengganti Shift (Hari Kerja / OFF / Tanggal Merah):
-        // • Timbangan & Segel: Tanpa potongan istirahat (0 jam) & langsung pengali 2.0x
-        // • Matching: Dipotong 1 jam istirahat & langsung pengali 2.0x
-        // • Keduanya: TIDAK dikenakan pengali 1.5x
-        let breakDed = 0;
-        if (isMatching && h > 1) {
-          breakDed = 1;
-        }
+      if (isTimbanganOrSegel) {
+        // • Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
+        // Tanpa potongan istirahat (0 jam) & langsung pengali 2.0x (tanpa 1.5x)
+        paidHours += h * 2.0;
+      } else if (isMatching) {
+        // • Matching (Hari Kerja / OFF / Tanggal Merah):
+        // Dipotong 1 jam istirahat & langsung pengali 2.0x (tanpa 1.5x)
+        const breakDed = h > 1 ? 1 : 0;
         totalBreakDeductionHours += breakDed;
         const effectiveH = Math.max(0, h - breakDed);
         paidHours += effectiveH * 2.0;
+      } else if (isReliefOrOff) {
+        // • Divisi Shipment lainnya (Pengganti Shift / Libur OFF): Langsung Pengali 2.0x
+        paidHours += h * 2.0;
       } else {
-        // Lembur hari kerja biasa (Kelebihan jam harian seperti Shift 7-7):
-        // Berlaku untuk seluruh divisi Shipment:
-        // • Jam ke-1: Pengali 1.5x
-        // • Jam ke-2 & ke-3 (dan seterusnya): Pengali 2.0x
+        // • Divisi Shipment Secara Keseluruhan (Kelebihan Jam Reguler Hari Kerja, misal Shift 7-7):
+        // Jam ke-1: Pengali 1.5x, Jam ke-2 & ke-3 dst: Pengali 2.0x
         const h1 = Math.min(1, h);
         const h2 = Math.max(0, h - 1);
         paidHours += (h1 * 1.5) + (h2 * 2.0);
