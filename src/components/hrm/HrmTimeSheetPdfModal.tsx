@@ -385,11 +385,25 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         let effectiveHours = rawDur;
         let empPaid = 0;
 
-        if (explicitMult === 3.0) {
+        if (explicitMult === 1.5) {
+          // Jam ke-1 Kelebihan Shift Reguler (Pengali 1.5x)
+          effectiveHours = rawDur;
+          empPaid = rawDur * 1.5;
+          realHours += rawDur;
+        } else if (explicitMult === 3.0) {
           empPaid = rawDur * 3.0;
           realHours += rawDur;
         } else if (explicitMult === 4.0) {
           empPaid = rawDur * 4.0;
+          realHours += rawDur;
+        } else if (explicitMult === 2.0) {
+          if (isMatching && (isReliefOrHoliday || rawDur > 1) && !desc.includes('kelebihan')) {
+            const breakDed = rawDur > 1 ? 1 : 0;
+            effectiveHours = Math.max(0, rawDur - breakDed);
+          } else {
+            effectiveHours = rawDur;
+          }
+          empPaid = effectiveHours * 2.0;
           realHours += rawDur;
         } else if (isTimbanganOrSegel) {
           // Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
@@ -398,12 +412,18 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
           empPaid = effectiveHours * 2.0;
           realHours += effectiveHours;
         } else if (isMatching) {
-          // Divisi Matching (Hari Kerja / OFF / Tanggal Merah):
-          // Potongan istirahat 1 jam dan langsung pengali 2.0x (tanpa 1.5x)
-          const breakDed = rawDur > 1 ? 1 : 0;
-          effectiveHours = Math.max(0, rawDur - breakDed);
-          empPaid = effectiveHours * 2.0;
-          realHours += effectiveHours;
+          // Divisi Matching:
+          if (desc.includes('kelebihan') || desc.includes('shift 7-7') || (!isReliefOrHoliday && rawDur <= 3)) {
+            const h1 = Math.min(1, rawDur);
+            const h2 = Math.max(0, rawDur - 1);
+            empPaid = (h1 * 1.5) + (h2 * 2.0);
+            realHours += rawDur;
+          } else {
+            const breakDed = rawDur > 1 ? 1 : 0;
+            effectiveHours = Math.max(0, rawDur - breakDed);
+            empPaid = effectiveHours * 2.0;
+            realHours += effectiveHours;
+          }
         } else if (isReliefOrHoliday) {
           // Divisi Shipment lainnya saat Lembur Pengganti / OFF: Langsung 2.0x
           effectiveHours = rawDur;

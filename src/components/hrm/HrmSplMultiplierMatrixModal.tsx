@@ -428,19 +428,34 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
 
           const explicitMult = Number((matchOt as any).rate_multiplier || (matchOt as any).rateMultiplier);
 
-          if (explicitMult === 3.0) {
+          if (explicitMult === 1.5) {
+            // Jam ke-1 Kelebihan Shift Reguler (Pengali 1.5x)
+            h15 = rawHours;
+          } else if (explicitMult === 3.0) {
             h3 = rawHours;
           } else if (explicitMult === 4.0) {
             h4 = rawHours;
+          } else if (explicitMult === 2.0 && !isReliefOrHoliday && !isTimbanganOrSegel && (desc.includes('kelebihan') || desc.includes('reguler'))) {
+            // Jam ke-2 & berikutnya Kelebihan Shift Reguler di Hari Kerja (Pengali 2.0x Hari Kerja)
+            h2w = rawHours;
+          } else if (explicitMult === 2.0) {
+            // Lembur Pengganti Pos Resmi / Relief Duty / Hari Libur OFF
+            h2r = rawHours;
           } else if (isTimbanganOrSegel) {
             // ATURAN BAKU DIVISI TIMBANGAN & SEGEL (Hari Kerja / OFF / Tanggal Merah):
             // 0 Jam Potongan Istirahat (utuh) dan TANPA PENGALI 1.5x (Seluruh jam langsung 2.0x)
             h2r = rawHours;
           } else if (isMatching) {
-            // ATURAN BAKU DIVISI MATCHING (Hari Kerja / OFF / Tanggal Merah):
-            // Dikenakan potongan istirahat 1 jam dan TANPA PENGALI 1.5x (Sisa jam efektif langsung 2.0x)
-            const breakDed = rawHours > 1 ? 1 : 0;
-            h2r = Math.max(0, rawHours - breakDed);
+            // ATURAN BAKU DIVISI MATCHING:
+            // Jika kelebihan jam shift reguler (Shift 7-7): jam ke-1 1.5x, jam berikutnya 2.0x
+            if (desc.includes('kelebihan') || desc.includes('shift 7-7') || (!isReliefOrHoliday && rawHours <= 3)) {
+              h15 = Math.min(1, rawHours);
+              h2w = Math.max(0, rawHours - 1);
+            } else {
+              // Jika tugas relief / pengganti pos saat off: potongan 1 jam istirahat jika > 1 jam
+              const breakDed = rawHours > 1 ? 1 : 0;
+              h2r = Math.max(0, rawHours - breakDed);
+            }
           } else if (isReliefOrHoliday) {
             // Divisi Shipment lainnya saat Lembur Pengganti Pos / Hari Libur: Langsung 2.0x
             h2r = rawHours;
@@ -548,14 +563,14 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
     });
 
     if (existingOt) {
-      setInputRealHours(Number(existingOt.durationHours || existingOt.approvedHours || 8));
-      setInputMultiplier(Number(existingOt.rateMultiplier || multiplier));
-      setInputTaskDesc(existingOt.taskDescription || 'Tugas Pengganti Shift / Relief');
+      setInputRealHours(Number(existingOt.durationHours || existingOt.approvedHours || (multiplier === 1.5 ? 1 : 8)));
+      setInputMultiplier(Number(existingOt.rateMultiplier || (existingOt as any).rate_multiplier || multiplier));
+      setInputTaskDesc(existingOt.taskDescription || (multiplier === 1.5 ? 'Kelebihan Jam Shift Reguler' : 'Tugas Pengganti Shift / Relief'));
       setInputIsHoliday(Boolean(existingOt.isWeekendHoliday));
     } else {
-      setInputRealHours(8);
+      setInputRealHours(multiplier === 1.5 ? 1 : 8);
       setInputMultiplier(multiplier);
-      setInputTaskDesc(isWk || multiplier === 2.0 ? 'Tugas Pengganti Pos Resmi / Relief' : 'Kelebihan Jam Shift Reguler');
+      setInputTaskDesc(multiplier === 1.5 ? 'Kelebihan Jam Shift Reguler' : isWk || multiplier === 2.0 ? 'Tugas Pengganti Pos Resmi / Relief' : 'Kelebihan Jam Shift Reguler');
       setInputIsHoliday(isWk);
     }
 
@@ -573,10 +588,11 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
 
       // Division Rules:
       // Timbangan/Segel: 0 hr break, multiplier 2.0x
-      // Matching: 1 hr break, multiplier 2.0x
+      // Matching: 1 hr break HANYA jika tugas relief / pengganti pos saat libur/off dan durasi > 1 jam
+      // Kelebihan jam shift reguler (1.5x): TIDAK ADA POTONGAN ISTIRAHAT
       const divName = (editTarget.employee.divisionName || '').toLowerCase();
       let effectiveHours = duration;
-      if (divName.includes('matching')) {
+      if (divName.includes('matching') && mult === 2.0 && duration > 1 && (inputIsHoliday || inputTaskDesc.toLowerCase().includes('pengganti') || inputTaskDesc.toLowerCase().includes('relief'))) {
         effectiveHours = Math.max(0, duration - 1);
       }
       const paidHours = effectiveHours * mult;

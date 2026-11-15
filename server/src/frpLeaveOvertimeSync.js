@@ -737,6 +737,7 @@ function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRa
   const cappedRealHours = Math.min(Number(rawHours || 0), maxRealHours);
 
   const divUpper = String(divisionName || '').toUpperCase();
+  const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
   const isMatching = divUpper.includes('MATCHING');
 
   let paidHours = 0;
@@ -764,17 +765,36 @@ function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRa
         reason.includes('libur')
       );
 
-      if (isTimbanganOrSegel) {
+      const mult = Number(ot.rate_multiplier || ot.rateMultiplier);
+
+      if (mult === 1.5) {
+        // Eksplisit 1.5x (Kelebihan Jam Shift Reguler Jam ke-1)
+        paidHours += h * 1.5;
+      } else if (mult === 3.0) {
+        paidHours += h * 3.0;
+      } else if (mult === 4.0) {
+        paidHours += h * 4.0;
+      } else if (mult === 2.0 && !isReliefOrOff && !isTimbanganOrSegel && (desc.includes('kelebihan') || desc.includes('reguler'))) {
+        paidHours += h * 2.0;
+      } else if (mult === 2.0) {
+        paidHours += h * 2.0;
+      } else if (isTimbanganOrSegel) {
         // • Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
         // Tanpa potongan istirahat (0 jam) & langsung pengali 2.0x (tanpa 1.5x)
         paidHours += h * 2.0;
       } else if (isMatching) {
-        // • Matching (Hari Kerja / OFF / Tanggal Merah):
-        // Dipotong 1 jam istirahat & langsung pengali 2.0x (tanpa 1.5x)
-        const breakDed = h > 1 ? 1 : 0;
-        totalBreakDeductionHours += breakDed;
-        const effectiveH = Math.max(0, h - breakDed);
-        paidHours += effectiveH * 2.0;
+        // • Matching:
+        if (desc.includes('kelebihan') || desc.includes('shift 7-7') || (!isReliefOrOff && h <= 3)) {
+          const h1 = Math.min(1, h);
+          const h2 = Math.max(0, h - 1);
+          paidHours += (h1 * 1.5) + (h2 * 2.0);
+        } else {
+          // Relief / Off-day: Dipotong 1 jam istirahat jika > 1 jam & langsung pengali 2.0x
+          const breakDed = h > 1 ? 1 : 0;
+          totalBreakDeductionHours += breakDed;
+          const effectiveH = Math.max(0, h - breakDed);
+          paidHours += effectiveH * 2.0;
+        }
       } else if (isReliefOrOff) {
         // • Divisi Shipment lainnya (Pengganti Shift / Libur OFF): Langsung Pengali 2.0x
         paidHours += h * 2.0;

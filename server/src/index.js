@@ -10816,6 +10816,7 @@ app.get('/api/overtime', async (req, res) => {
              TO_CHAR(o.date, 'YYYY-MM-DD') as date_str,
              o.duration_hours as "durationHours",
              o.approved_hours as "approvedHours",
+             o.rate_multiplier as "rateMultiplier",
              o.user_id as "userId",
              o.task_description as "taskDescription",
              p.full_name as user_name, 
@@ -11020,6 +11021,8 @@ app.post('/api/overtime', async (req, res) => {
     startTime,
     endTime,
     durationHours,
+    rateMultiplier,
+    rate_multiplier,
     taskDescription,
     taskPhotoUrl,
     attachmentUrl,
@@ -11133,21 +11136,58 @@ app.post('/api/overtime', async (req, res) => {
       descLower.includes('libur')
     );
 
+    const reqMultiplier = rateMultiplier !== undefined ? Number(rateMultiplier) : (rate_multiplier !== undefined ? Number(rate_multiplier) : null);
+
     let comp = 0;
     let payHours = 0;
-    if (isTimbanganOrSegel) {
+    let finalRateMultiplier = 2.0;
+
+    if (reqMultiplier === 1.5) {
+      // Input eksplisit pengali 1.5x (Kelebihan Jam Shift Reguler Jam ke-1)
+      finalRateMultiplier = 1.5;
+      payHours = hours * 1.5;
+      comp = Math.round(payHours * officialRate);
+    } else if (reqMultiplier === 3.0) {
+      finalRateMultiplier = 3.0;
+      payHours = hours * 3.0;
+      comp = Math.round(payHours * officialRate);
+    } else if (reqMultiplier === 4.0) {
+      finalRateMultiplier = 4.0;
+      payHours = hours * 4.0;
+      comp = Math.round(payHours * officialRate);
+    } else if (reqMultiplier === 2.0) {
+      finalRateMultiplier = 2.0;
+      if (isMatching && (isReliefDuty || hours > 1) && !descLower.includes('kelebihan')) {
+        const breakDed = hours > 1 ? 1 : 0;
+        payHours = Math.max(0, hours - breakDed) * 2.0;
+      } else {
+        payHours = hours * 2.0;
+      }
+      comp = Math.round(payHours * officialRate);
+    } else if (isTimbanganOrSegel) {
       // 1. Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
       // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
+      finalRateMultiplier = 2.0;
       payHours = hours * 2.0;
       comp = Math.round(payHours * officialRate);
     } else if (isMatching) {
-      // 2. Divisi Matching (Hari Kerja / OFF / Tanggal Merah):
-      // Dikenakan potongan istirahat 1 jam dan langsung pengali 2.0x (tanpa 1.5x)
-      const breakDed = hours > 1 ? 1 : 0;
-      payHours = Math.max(0, hours - breakDed) * 2.0;
-      comp = Math.round(payHours * officialRate);
+      // 2. Divisi Matching:
+      // Jika kelebihan jam shift reguler (Shift 7-7): jam ke-1 1.5x, jam berikutnya 2.0x
+      if (descLower.includes('kelebihan') || descLower.includes('shift 7-7') || (!isReliefDuty && hours <= 3)) {
+        const h1 = Math.min(1, hours);
+        const h2 = Math.max(0, hours - 1);
+        payHours = (h1 * 1.5) + (h2 * 2.0);
+        finalRateMultiplier = hours === 1 ? 1.5 : 2.0;
+        comp = Math.round(payHours * officialRate);
+      } else {
+        finalRateMultiplier = 2.0;
+        const breakDed = hours > 1 ? 1 : 0;
+        payHours = Math.max(0, hours - breakDed) * 2.0;
+        comp = Math.round(payHours * officialRate);
+      }
     } else if (isReliefDuty) {
       // 3. Divisi Shipment lainnya (Pengganti Shift / Hari Libur OFF): Langsung Pengali 2.0x
+      finalRateMultiplier = 2.0;
       payHours = hours * 2.0;
       comp = Math.round(payHours * officialRate);
     } else {
@@ -11156,6 +11196,7 @@ app.post('/api/overtime', async (req, res) => {
       const h1 = Math.min(1, hours);
       const h2 = Math.max(0, hours - 1);
       payHours = (h1 * 1.5) + (h2 * 2.0);
+      finalRateMultiplier = hours === 1 ? 1.5 : 2.0;
       comp = Math.round(payHours * officialRate);
     }
 
@@ -11178,8 +11219,8 @@ app.post('/api/overtime', async (req, res) => {
 
     const query = `
       INSERT INTO hrm_overtime_records (
-        user_id, date, start_time, end_time, scheduled_end_time, duration_hours, approved_hours, task_description, rate_applied, compensation_amount, status, supervisor_name, supervisor_signature, task_photo_url, overtime_phase, approved_by, approved_by_name, approval_notes
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        user_id, date, start_time, end_time, scheduled_end_time, duration_hours, approved_hours, task_description, rate_applied, compensation_amount, status, supervisor_name, supervisor_signature, task_photo_url, overtime_phase, approved_by, approved_by_name, approval_notes, rate_multiplier
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       RETURNING *;
     `;
     const result = await pool.query(query, [
@@ -11201,6 +11242,7 @@ app.post('/api/overtime', async (req, res) => {
       targetStatus === 'approved' ? validApproverId : null,
       finalApproverName,
       finalApprovalNotes,
+      finalRateMultiplier,
     ]);
 
     const otRow = result.rows[0];
@@ -11461,6 +11503,8 @@ app.put('/api/overtime/:id', async (req, res) => {
     startTime,
     endTime,
     durationHours,
+    rateMultiplier,
+    rate_multiplier,
     taskDescription,
     status: newStatus,
     approvalNotes,
@@ -11510,21 +11554,58 @@ app.put('/api/overtime/:id', async (req, res) => {
       descLower.includes('libur')
     );
 
+    const reqMultiplier = rateMultiplier !== undefined ? Number(rateMultiplier) : (rate_multiplier !== undefined ? Number(rate_multiplier) : (ot.rate_multiplier ? Number(ot.rate_multiplier) : null));
+
     let compensation = 0;
     let payHours = 0;
-    if (isTimbanganOrSegel) {
+    let finalRateMultiplier = 2.0;
+
+    if (reqMultiplier === 1.5) {
+      // Input eksplisit pengali 1.5x (Kelebihan Jam Shift Reguler Jam ke-1)
+      finalRateMultiplier = 1.5;
+      payHours = finalHours * 1.5;
+      compensation = Math.round(payHours * officialRate);
+    } else if (reqMultiplier === 3.0) {
+      finalRateMultiplier = 3.0;
+      payHours = finalHours * 3.0;
+      compensation = Math.round(payHours * officialRate);
+    } else if (reqMultiplier === 4.0) {
+      finalRateMultiplier = 4.0;
+      payHours = finalHours * 4.0;
+      compensation = Math.round(payHours * officialRate);
+    } else if (reqMultiplier === 2.0) {
+      finalRateMultiplier = 2.0;
+      if (isMatching && (isReliefDuty || finalHours > 1) && !descLower.includes('kelebihan')) {
+        const breakDed = finalHours > 1 ? 1 : 0;
+        payHours = Math.max(0, finalHours - breakDed) * 2.0;
+      } else {
+        payHours = finalHours * 2.0;
+      }
+      compensation = Math.round(payHours * officialRate);
+    } else if (isTimbanganOrSegel) {
       // 1. Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
       // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
+      finalRateMultiplier = 2.0;
       payHours = finalHours * 2.0;
       compensation = Math.round(payHours * officialRate);
     } else if (isMatching) {
-      // 2. Divisi Matching (Hari Kerja / OFF / Tanggal Merah):
-      // Dikenakan potongan istirahat 1 jam dan langsung pengali 2.0x (tanpa 1.5x)
-      const breakDed = finalHours > 1 ? 1 : 0;
-      payHours = Math.max(0, finalHours - breakDed) * 2.0;
-      compensation = Math.round(payHours * officialRate);
+      // 2. Divisi Matching:
+      // Jika kelebihan jam shift reguler (Shift 7-7): jam ke-1 1.5x, jam berikutnya 2.0x
+      if (descLower.includes('kelebihan') || descLower.includes('shift 7-7') || (!isReliefDuty && finalHours <= 3)) {
+        const h1 = Math.min(1, finalHours);
+        const h2 = Math.max(0, finalHours - 1);
+        payHours = (h1 * 1.5) + (h2 * 2.0);
+        finalRateMultiplier = finalHours === 1 ? 1.5 : 2.0;
+        compensation = Math.round(payHours * officialRate);
+      } else {
+        finalRateMultiplier = 2.0;
+        const breakDed = finalHours > 1 ? 1 : 0;
+        payHours = Math.max(0, finalHours - breakDed) * 2.0;
+        compensation = Math.round(payHours * officialRate);
+      }
     } else if (isReliefDuty) {
       // 3. Divisi Shipment lainnya (Pengganti Shift / Hari Libur OFF): Langsung Pengali 2.0x
+      finalRateMultiplier = 2.0;
       payHours = finalHours * 2.0;
       compensation = Math.round(payHours * officialRate);
     } else {
@@ -11533,6 +11614,7 @@ app.put('/api/overtime/:id', async (req, res) => {
       const h1 = Math.min(1, finalHours);
       const h2 = Math.max(0, finalHours - 1);
       payHours = (h1 * 1.5) + (h2 * 2.0);
+      finalRateMultiplier = finalHours === 1 ? 1.5 : 2.0;
       compensation = Math.round(payHours * officialRate);
     }
 
@@ -11556,10 +11638,11 @@ app.put('/api/overtime/:id', async (req, res) => {
         task_description = $7,
         status = $5,
         approval_notes = COALESCE($8, approval_notes),
+        rate_multiplier = $9::numeric,
         updated_at = NOW()
-      WHERE id = $9
+      WHERE id = $10
       RETURNING *;
-    `, [finalDate, finalStart, finalEnd, finalHours, finalStatus, compensation, finalDesc, approvalNotes || null, id]);
+    `, [finalDate, finalStart, finalEnd, finalHours, finalStatus, compensation, finalDesc, approvalNotes || null, finalRateMultiplier, id]);
 
     res.json({ success: true, data: updateRes.rows[0], message: 'Data SPKL lembur berhasil diperbarui' });
   } catch (err) {
