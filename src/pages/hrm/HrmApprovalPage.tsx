@@ -1241,24 +1241,7 @@ export const HrmApprovalPage: React.FC = () => {
                     return (
                     <tr key={l.id} className={cn("hover:bg-muted/30 transition-all", isTargetRow && "bg-primary/10 ring-2 ring-primary/40 font-semibold shadow-xs")}>
                       <td className="py-3 px-4">
-                        <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                          <p className="font-semibold text-foreground">{l.userName}</p>
-                          {(() => {
-                            const cat = getEmployeeCategoryGroup(l);
-                            const label = getEmployeeCategoryLabel(cat);
-                            const badgeColor =
-                              cat === 'SHIPMENT'
-                                ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800'
-                                : cat === 'RUMAH TANGGA'
-                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
-                                : 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800';
-                            return (
-                              <span className={cn('text-[9.5px] font-bold px-1.5 py-0.2 rounded border leading-none', badgeColor)}>
-                                {label}
-                              </span>
-                            );
-                          })()}
-                        </div>
+                        <p className="font-semibold text-foreground">{l.userName}</p>
                         <p className="text-[11px] text-muted-foreground font-mono">{l.userNip} • {l.divisionName}</p>
                         {isSup ? (
                           <Badge variant="outline" className="mt-1 bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[9.5px] rounded-md font-semibold flex items-center gap-1 w-fit">
@@ -1424,24 +1407,7 @@ export const HrmApprovalPage: React.FC = () => {
                     return (
                     <tr key={o.id} className={cn("hover:bg-muted/30 transition-all", isTargetRow && "bg-primary/10 ring-2 ring-primary/40 font-semibold shadow-xs")}>
                       <td className="py-3 px-4">
-                        <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                          <p className="font-semibold text-foreground">{o.userName}</p>
-                          {(() => {
-                            const cat = getEmployeeCategoryGroup(o);
-                            const label = getEmployeeCategoryLabel(cat);
-                            const badgeColor =
-                              cat === 'SHIPMENT'
-                                ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800'
-                                : cat === 'RUMAH TANGGA'
-                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
-                                : 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800';
-                            return (
-                              <span className={cn('text-[9.5px] font-bold px-1.5 py-0.2 rounded border leading-none', badgeColor)}>
-                                {label}
-                              </span>
-                            );
-                          })()}
-                        </div>
+                        <p className="font-semibold text-foreground">{o.userName}</p>
                         <p className="text-[11px] text-muted-foreground font-mono">{o.userNip} • {o.divisionName}</p>
                         {isSup ? (
                           <Badge variant="outline" className="mt-1 bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[9.5px] rounded-md font-semibold flex items-center gap-1 w-fit">

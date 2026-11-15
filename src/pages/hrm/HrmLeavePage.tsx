@@ -942,24 +942,7 @@ export const HrmLeavePage: React.FC = () => {
                     <tr key={l.id} className="hover:bg-muted/30 transition-colors">
                       {isSupervisorRole && viewScope === 'incoming' && (
                         <td className="py-3 px-4">
-                          <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                            <p className="font-semibold text-foreground">{l.userName}</p>
-                            {(() => {
-                              const cat = getEmployeeCategoryGroup(l);
-                              const label = getEmployeeCategoryLabel(cat);
-                              const badgeColor =
-                                cat === 'SHIPMENT'
-                                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800'
-                                  : cat === 'RUMAH TANGGA'
-                                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
-                                  : 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800';
-                              return (
-                                <span className={cn('text-[9.5px] font-bold px-1.5 py-0.2 rounded border leading-none', badgeColor)}>
-                                  {label}
-                                </span>
-                              );
-                            })()}
-                          </div>
+                          <p className="font-semibold text-foreground">{l.userName}</p>
                           <p className="text-[11px] text-muted-foreground font-mono">
                             {l.userNip || '-'} • {l.divisionName || 'Operasional'}
                           </p>
@@ -1297,24 +1280,7 @@ export const HrmLeavePage: React.FC = () => {
                     <tr key={o.id} className="hover:bg-muted/30 transition-colors">
                       {isSupervisorRole && viewScope === 'incoming' && (
                         <td className="py-3 px-4">
-                          <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                            <p className="font-semibold text-foreground">{o.userName}</p>
-                            {(() => {
-                              const cat = getEmployeeCategoryGroup(o);
-                              const label = getEmployeeCategoryLabel(cat);
-                              const badgeColor =
-                                cat === 'SHIPMENT'
-                                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800'
-                                  : cat === 'RUMAH TANGGA'
-                                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
-                                  : 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800';
-                              return (
-                                <span className={cn('text-[9.5px] font-bold px-1.5 py-0.2 rounded border leading-none', badgeColor)}>
-                                  {label}
-                                </span>
-                              );
-                            })()}
-                          </div>
+                          <p className="font-semibold text-foreground">{o.userName}</p>
                           <p className="text-[11px] text-muted-foreground font-mono">
                             {o.userNip || '-'} • {o.divisionName || 'Operasional'}
                           </p>
