@@ -1007,16 +1007,16 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
                   <React.Fragment key={`emp-block-${empBlock.no}`}>
                     {/* 1. Baris Absensi Kehadiran */}
                     <tr className="border-t border-black bg-white">
-                      <td rowSpan={7} className="border border-black text-center font-mono font-bold align-middle bg-slate-50">
+                      <td rowSpan={6} className="border border-black text-center font-mono font-bold align-middle bg-slate-50">
                         {empBlock.no}
                       </td>
-                      <td rowSpan={7} className="border border-black text-left font-extrabold px-1.5 align-middle bg-slate-50 whitespace-nowrap">
+                      <td rowSpan={6} className="border border-black text-left font-extrabold px-1.5 align-middle bg-slate-50 whitespace-nowrap">
                         {empBlock.nama}
                       </td>
-                      <td rowSpan={7} className="border border-black text-center font-mono align-middle bg-slate-50 whitespace-nowrap">
+                      <td rowSpan={6} className="border border-black text-center font-mono align-middle bg-slate-50 whitespace-nowrap">
                         {empBlock.noId}
                       </td>
-                      <td rowSpan={7} className="border border-black text-center font-semibold align-middle bg-slate-50 whitespace-nowrap">
+                      <td rowSpan={6} className="border border-black text-center font-semibold align-middle bg-slate-50 whitespace-nowrap">
                         {empBlock.polaShift}
                       </td>
                       <td className="border border-black text-center font-bold text-slate-500 py-0.5">
