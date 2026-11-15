@@ -57,6 +57,11 @@ import {
   Ship,
   Home,
   Sparkles,
+  Sunrise,
+  Sun,
+  Moon,
+  Briefcase,
+  Coffee,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -617,24 +622,62 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     };
   }, [selectedMonth, currentMonthStr, overtimes.length]);
 
-  // Sinkronisasi jadwal roster harian (hrm_employee_schedules) sesuai tanggal aktif targetDayDate
+  // Sinkronisasi jadwal roster harian (hrm_employee_schedules), presensi, dan lembur (SPKL) sesuai tanggal aktif targetDayDate
   useEffect(() => {
     let isCancelled = false;
-    const fetchSchedulesForDate = async () => {
+    const fetchDateData = async () => {
       try {
-        const res = await fetch(`/api/employee-schedules?date=${targetDayDate}`);
-        if (res.ok) {
-          const json = await res.json();
-          if (!isCancelled && json.success && Array.isArray(json.data)) {
-            setDailySchedules(json.data);
-            hrmService.saveEmployeeSchedules(json.data);
+        const [schedRes, attRes, otRes] = await Promise.all([
+          fetch(`/api/employee-schedules?date=${targetDayDate}`),
+          fetch(`/api/attendances?date=${targetDayDate}&_t=${Date.now()}`),
+          fetch(`/api/overtime?_t=${Date.now()}`),
+        ]);
+        if (schedRes.ok) {
+          const jsonS = await schedRes.json();
+          if (!isCancelled && jsonS.success && Array.isArray(jsonS.data)) {
+            setDailySchedules(jsonS.data);
+            hrmService.saveEmployeeSchedules(jsonS.data);
+          }
+        }
+        if (attRes.ok) {
+          const jsonA = await attRes.json();
+          if (!isCancelled && jsonA.success && Array.isArray(jsonA.data)) {
+            const freshAtts: AttendanceRecord[] = jsonA.data.filter((a: any) => isOfficialFrEmployee(a));
+            setAttendances(freshAtts);
+            setAllAttendances((prev) => {
+              const withoutThisDate = prev.filter((a) => (a.attendanceDate || (a as any).date) !== targetDayDate);
+              return [...withoutThisDate, ...freshAtts];
+            });
+          }
+        }
+        if (otRes.ok) {
+          const jsonO = await otRes.json();
+          if (!isCancelled && jsonO.success && Array.isArray(jsonO.data)) {
+            const mapped = jsonO.data.map((o: any) => ({
+              ...o,
+              userId: o.userId || o.user_id,
+              userNip: o.userNip || o.user_nip,
+              userName: o.userName || o.user_name,
+              divisionName: o.divisionName || o.division_name,
+              date: String(o.date || o.overtimeDate || o.overtime_date || '').slice(0, 10),
+              startTime: o.startTime || o.start_time,
+              endTime: o.endTime || o.end_time,
+              durationHours: Number(o.durationHours || o.duration_hours || 0),
+              approvedHours: Number(o.approvedHours || o.approved_hours || o.durationHours || o.duration_hours || 0),
+              compensationAmount: Number(o.compensationAmount || o.compensation_amount || o.totalPay || o.total_pay || 0),
+              totalPay: Number(o.compensationAmount || o.compensation_amount || o.totalPay || o.total_pay || 0),
+              taskDescription: o.taskDescription || o.task_description || '',
+              status: o.status || 'pending',
+              supervisorName: o.supervisorName || o.supervisor_name || o.approvedByName || o.approved_by_name || o.approver_name || '',
+            }));
+            setOvertimes(mapped);
           }
         }
       } catch (err) {
-        console.warn('[LiveMonitoring] Fetch schedules for target date notice:', err);
+        console.warn('[LiveMonitoring] Fetch schedules/attendances for target date notice:', err);
       }
     };
-    fetchSchedulesForDate();
+    fetchDateData();
     return () => {
       isCancelled = true;
     };
@@ -757,6 +800,56 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     setSelectedDayDate(''); // reset filter hari
   };
 
+  // Helper aman pergeseran tanggal (+/- n hari tanpa bug offset zona waktu)
+  const shiftDateByDays = (dateStr: string, deltaDays: number): string => {
+    const parts = (dateStr || getTodayDateStr()).split('-');
+    if (parts.length !== 3) return dateStr;
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    const day = parseInt(parts[2], 10);
+    const d = new Date(year, month, day + deltaDays);
+    const yStr = d.getFullYear();
+    const mStr = String(d.getMonth() + 1).padStart(2, '0');
+    const dStr = String(d.getDate()).padStart(2, '0');
+    return `${yStr}-${mStr}-${dStr}`;
+  };
+
+  // Navigasi Tanggal Berurutan (H-1, H+1, Langsung ke Tanggal, Kembali ke Hari Ini)
+  const handlePrevDay = () => {
+    const cur = targetDayDate || getTodayDateStr();
+    const prevDateStr = shiftDateByDays(cur, -1);
+    setSelectedDayDate(prevDateStr);
+    const newMonth = prevDateStr.slice(0, 7);
+    if (newMonth !== selectedMonth) {
+      setSelectedMonth(newMonth);
+    }
+  };
+
+  const handleNextDay = () => {
+    const cur = targetDayDate || getTodayDateStr();
+    const nextDateStr = shiftDateByDays(cur, 1);
+    setSelectedDayDate(nextDateStr);
+    const newMonth = nextDateStr.slice(0, 7);
+    if (newMonth !== selectedMonth) {
+      setSelectedMonth(newMonth);
+    }
+  };
+
+  const handleSelectDayDate = (dateStr: string) => {
+    if (!dateStr) return;
+    setSelectedDayDate(dateStr);
+    const newMonth = dateStr.slice(0, 7);
+    if (newMonth !== selectedMonth) {
+      setSelectedMonth(newMonth);
+    }
+  };
+
+  const handleResetToToday = () => {
+    const today = getTodayDateStr();
+    setSelectedDayDate(today);
+    setSelectedMonth(today.slice(0, 7));
+  };
+
   const handleResetToCurrentMonth = () => {
     setSelectedMonth(currentMonthStr);
     setSelectedDayDate('');
@@ -775,9 +868,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   }, [selectedYearNum, selectedMonthNum]);
 
   const activePeriodAttendances = React.useMemo(() => {
-    if (periodScope === 'today') {
-      const today = getTodayDateStr();
-      return allAttendances.filter((a) => (a.attendanceDate || (a as any).date) === today);
+    const target = targetDayDate || getTodayDateStr();
+    if (periodScope === 'today' || Boolean(selectedDayDate)) {
+      return allAttendances.filter((a) => (a.attendanceDate || (a as any).date) === target);
     } else if (periodScope === 'month') {
       return allAttendances.filter((a) => {
         const d = a.attendanceDate || (a as any).date;
@@ -788,7 +881,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     } else {
       return allAttendances.filter((a) => (a.attendanceDate || (a as any).date)?.startsWith(currentYearStr));
     }
-  }, [allAttendances, periodScope, selectedMonth, selectedDayDate, currentYearStr]);
+  }, [allAttendances, periodScope, selectedMonth, selectedDayDate, targetDayDate, currentYearStr]);
 
   // Aggregate Division Summaries
   const divisionSummaries = React.useMemo(() => {
@@ -1150,19 +1243,24 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       }
 
       // Hitung lembur live hari target & lembur bulan berjalan untuk karyawan
-      const dayOt = overtimes.find((o) => {
+      const normNip = (n?: string) => (n || '').replace(/[\s.]/g, '').toUpperCase();
+      const userDayOts = overtimes.filter((o) => {
         const oUserId = o.userId || (o as any).user_id;
         const oUserNip = o.userNip || (o as any).user_nip || (o as any).employeeNip;
         const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || '').slice(0, 10);
-        const matchUser = oUserId === u.id || oUserNip === u.nip || (u.email && (o as any).email === u.email);
+        const matchUser = oUserId === u.id || (Boolean(oUserNip) && normNip(oUserNip) === normNip(u.nip)) || (u.email && (o as any).email?.toLowerCase() === u.email?.toLowerCase());
         const isApproved = o.status === 'approved' || (o as any).status === 'completed';
         return matchUser && oDate === targetDayDate && isApproved;
       });
+      const dayOt = userDayOts[0] || null;
+      const dayOtHours = userDayOts.reduce((sum, o) => sum + Number(o.approvedHours || o.durationHours || 0), 0);
+      const dayOtPay = userDayOts.reduce((sum, o) => sum + Number(o.compensationAmount || o.totalPay || 0), 0);
+
       const userMonthOts = overtimes.filter((o) => {
         const oUserId = o.userId || (o as any).user_id;
         const oUserNip = o.userNip || (o as any).user_nip || (o as any).employeeNip;
         const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || (o as any).createdAt || (o as any).created_at || '').slice(0, 10);
-        const matchUser = oUserId === u.id || oUserNip === u.nip || (u.email && (o as any).email === u.email);
+        const matchUser = oUserId === u.id || (Boolean(oUserNip) && normNip(oUserNip) === normNip(u.nip)) || (u.email && (o as any).email?.toLowerCase() === u.email?.toLowerCase());
         const isApproved = o.status === 'approved' || (o as any).status === 'completed';
         return matchUser && oDate.startsWith(currentMonthStr) && isApproved;
       });
@@ -1179,8 +1277,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         lateCount: isLate ? 1 : 0,
         totalAttCount: (att && !isAlfaRecord && !isLeaveRecord && !isOffRecord) ? 1 : 0,
         todayOvertime: dayOt || null,
-        todayOvertimeHours: dayOt ? Number(dayOt.approvedHours || dayOt.durationHours || 0) : 0,
-        todayOvertimePay: dayOt ? Number(dayOt.compensationAmount || dayOt.totalPay || 0) : 0,
+        todayOvertimeHours: dayOtHours,
+        todayOvertimePay: dayOtPay,
         monthlyOvertimeHours: userMonthOtHours,
         monthlyOvertimePay: userMonthOtPay,
         monthlyOvertimeCount: userMonthOts.length,
@@ -1313,9 +1411,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     // Filter Kolom Lembur Live
     let matchOt = true;
     if (filterOvertimeCol === 'has_ot') {
-      matchOt = (item.todayOvertimeHours > 0) || (item.monthlyOvertimeHours > 0);
+      matchOt = isDailyView ? ((item.todayOvertimeHours || 0) > 0 || Boolean(item.todayOvertime)) : (((item.todayOvertimeHours || 0) > 0) || (item.monthlyOvertimeHours > 0));
     } else if (filterOvertimeCol === 'no_ot') {
-      matchOt = (item.todayOvertimeHours === 0) && (item.monthlyOvertimeHours === 0);
+      matchOt = isDailyView ? ((item.todayOvertimeHours || 0) === 0 && !item.todayOvertime) : ((item.todayOvertimeHours === 0) && (item.monthlyOvertimeHours === 0));
     }
 
     return matchTab && matchDiv && matchSearch && matchShift && matchStatusCol && matchOt && matchCategory;
@@ -1353,6 +1451,155 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const scopedMonitoredList = filterCategory === 'all'
     ? monitoredList
     : monitoredList.filter((i) => getEmployeeCategoryGroup(i.user) === filterCategory);
+
+  // Rekapitulasi Presensi Real-Time per Shift (Shift I, Shift II, Shift III, Day Shift, OFF) untuk tanggal aktif (targetDayDate)
+  const dailyShiftBreakdown = React.useMemo(() => {
+    const list = scopedMonitoredList;
+
+    const stats = {
+      shift1: {
+        id: 'P',
+        name: 'Shift I (Pagi)',
+        time: '07:30 - 15:30 WITA',
+        total: 0,
+        present: 0,
+        late: 0,
+        pendingOrAbsent: 0,
+      },
+      shift2: {
+        id: 'S',
+        name: 'Shift II (Siang)',
+        time: '15:30 - 22:30 WITA',
+        total: 0,
+        present: 0,
+        late: 0,
+        pendingOrAbsent: 0,
+      },
+      shift3: {
+        id: 'M',
+        name: 'Shift III (Malam)',
+        time: '22:30 - 07:30 WITA',
+        total: 0,
+        present: 0,
+        late: 0,
+        pendingOrAbsent: 0,
+      },
+      dayShift: {
+        id: 'DAY',
+        name: 'Day Shift (Normal)',
+        time: '07:30 - 16:30 WITA',
+        total: 0,
+        present: 0,
+        late: 0,
+        pendingOrAbsent: 0,
+      },
+      off: {
+        id: 'OFF',
+        name: 'Libur / OFF Roster',
+        time: 'Bebas Dinas / Off Duty',
+        total: 0,
+        leave: 0,
+        regularOff: 0,
+      },
+    };
+
+    list.forEach((item) => {
+      const shiftCode = (item.shift?.code || item.shift?.name || '').toUpperCase();
+      const shiftStart = (item.shift?.startTime || '').slice(0, 5);
+      const isOff = item.absentSubtype === 'off' || item.shift?.isOff === true || shiftCode === 'OFF' || item.shift?.name?.toLowerCase().includes('libur');
+      const isLeave = item.absentSubtype === 'cuti' || item.absentSubtype === 'sakit' || item.absentSubtype === 'izin';
+      const isPresent = Boolean(item.attendance?.clockIn || item.status === 'present' || item.status === 'late');
+      const isLate = Boolean(item.status === 'late' || (item.attendance?.lateMinutes && item.attendance.lateMinutes > 0));
+
+      if (isLeave) {
+        stats.off.total++;
+        stats.off.leave++;
+      } else if (isOff) {
+        stats.off.total++;
+        stats.off.regularOff++;
+      } else if (shiftCode === 'P' || shiftCode.includes('PAGI') || shiftCode.includes('SHIFT I') || shiftCode.includes('SHIFT 1') || (shiftStart === '07:30' && item.shift?.endTime?.slice(0, 5) === '15:30')) {
+        stats.shift1.total++;
+        if (isPresent) stats.shift1.present++;
+        if (isLate) stats.shift1.late++;
+        if (!isPresent) stats.shift1.pendingOrAbsent++;
+      } else if (shiftCode === 'S' || shiftCode.includes('SIANG') || shiftCode.includes('SORE') || shiftCode.includes('SHIFT II') || shiftCode.includes('SHIFT 2') || shiftStart === '15:30') {
+        stats.shift2.total++;
+        if (isPresent) stats.shift2.present++;
+        if (isLate) stats.shift2.late++;
+        if (!isPresent) stats.shift2.pendingOrAbsent++;
+      } else if (shiftCode === 'M' || shiftCode.includes('MALAM') || shiftCode.includes('SHIFT III') || shiftCode.includes('SHIFT 3') || shiftStart === '22:30') {
+        stats.shift3.total++;
+        if (isPresent) stats.shift3.present++;
+        if (isLate) stats.shift3.late++;
+        if (!isPresent) stats.shift3.pendingOrAbsent++;
+      } else {
+        stats.dayShift.total++;
+        if (isPresent) stats.dayShift.present++;
+        if (isLate) stats.dayShift.late++;
+        if (!isPresent) stats.dayShift.pendingOrAbsent++;
+      }
+    });
+
+    return stats;
+  }, [scopedMonitoredList]);
+
+  // Rekapitulasi Presensi Real-Time Lembur (SPKL) untuk tanggal aktif (targetDayDate)
+  const dailyOvertimeStats = React.useMemo(() => {
+    const list = scopedMonitoredList;
+    const itemsWithOt = list.filter((i) => (i.todayOvertimeHours || 0) > 0 || Boolean(i.todayOvertime));
+
+    const totalCount = itemsWithOt.length;
+    const totalHours = itemsWithOt.reduce((sum, i) => sum + (i.todayOvertimeHours || 0), 0);
+    const totalPay = itemsWithOt.reduce((sum, i) => sum + (i.todayOvertimePay || 0), 0);
+
+    const shipmentCount = itemsWithOt.filter((i) => getEmployeeCategoryGroup(i.user) === 'SHIPMENT').length;
+    const rtCount = itemsWithOt.filter((i) => getEmployeeCategoryGroup(i.user) === 'RUMAH TANGGA').length;
+    const tetapCount = itemsWithOt.filter((i) => getEmployeeCategoryGroup(i.user) === 'KARYAWAN TETAP').length;
+
+    // Deteksi relief pos / setelah shift / hari off
+    let afterShiftCount = 0;
+    let beforeShiftCount = 0;
+    let offShiftCount = 0;
+
+    itemsWithOt.forEach((i) => {
+      const isOff = i.absentSubtype === 'off' || i.shift?.isOff === true || (i.shift?.code || '').toUpperCase() === 'OFF';
+      const schedStart = (i.shift?.startTime || '').slice(0, 5);
+      const otStart = (i.todayOvertime?.startTime || (i.todayOvertime as any)?.start_time || '').slice(0, 5);
+
+      if (isOff) {
+        offShiftCount++;
+      } else if (otStart && schedStart && otStart < schedStart) {
+        beforeShiftCount++;
+      } else {
+        afterShiftCount++;
+      }
+    });
+
+    const employees = itemsWithOt.map((i) => ({
+      id: i.user.id,
+      name: i.user.name,
+      nip: i.user.nip,
+      hours: i.todayOvertimeHours || 0,
+      pay: i.todayOvertimePay || 0,
+      startTime: i.todayOvertime?.startTime || (i.todayOvertime as any)?.start_time,
+      endTime: i.todayOvertime?.endTime || (i.todayOvertime as any)?.end_time,
+      task: i.todayOvertime?.taskDescription || (i.todayOvertime as any)?.task_description || '',
+      category: getEmployeeCategoryGroup(i.user),
+    }));
+
+    return {
+      totalCount,
+      totalHours,
+      totalPay,
+      shipmentCount,
+      rtCount,
+      tetapCount,
+      afterShiftCount,
+      beforeShiftCount,
+      offShiftCount,
+      employees,
+    };
+  }, [scopedMonitoredList]);
 
   const presentCount = scopedMonitoredList.filter((i) => i.status === 'present').length;
   const lateCount = scopedMonitoredList.filter((i) => i.status === 'late').length;
@@ -1469,37 +1716,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Division Summaries & Realtime Lateness Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {divisionSummaries.map((ds) => (
-          <div key={ds.division.id} className="p-3.5 bg-card border border-border rounded-2xl shadow-2xs space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="font-semibold text-xs text-foreground truncate">{ds.division.name}</span>
-              <Badge variant="outline" className="text-[10px] bg-muted/40 font-mono">
-                {ds.totalEmployees} Anggota
-              </Badge>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-border">
-              <div>
-                <span className="text-muted-foreground block text-[10px]">Hadir / Terlambat</span>
-                <span className="font-bold text-foreground font-mono">
-                  {ds.presentCount} / <span className="text-amber-600">{ds.lateCount}</span>
-                </span>
-              </div>
-              <div>
-                <span className="text-muted-foreground block text-[10px]">Menit Keterlambatan</span>
-                <span className="font-bold text-amber-600 font-mono">{ds.totalLateMinutes} mnt</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between text-[10px] pt-1 text-muted-foreground border-t border-border/60">
-              <span>Potongan Denda Payroll:</span>
-              <span className="font-bold text-rose-600 font-mono">
-                Rp {ds.lateDeductionEstimate.toLocaleString('id-ID')}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
+
 
       {/* ── REALTIME OVERTIME BUDGET GUARDRAIL & MONTHLY FINANCIAL RECAP BANNER ── */}
       <Card className="border-border/80 bg-gradient-to-br from-card via-card to-amber-500/5 rounded-2xl shadow-xs overflow-hidden">
@@ -2083,248 +2300,667 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Status Counters */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3.5">
+      {/* Status Counters (8 Cards: Responsive Balanced 8 / 4 / 2 Grid) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
+        {/* Card 1: Semua Karyawan */}
         <div
           onClick={() => setActiveTab('all')}
-          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
             activeTab === 'all'
-              ? 'border-primary bg-primary/10 ring-1 ring-primary/20 shadow-xs'
+              ? 'border-primary bg-primary/10 ring-2 ring-primary/30 shadow-xs'
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
-          <p className="text-xs font-medium text-muted-foreground">
-            {filterCategory === 'all' ? 'Semua Karyawan' : getEmployeeCategoryLabel(filterCategory)}
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span className="text-[11px] font-semibold truncate">
+              {filterCategory === 'all' ? 'Semua Karyawan' : getEmployeeCategoryLabel(filterCategory)}
+            </span>
+            <Users size={13} className="text-primary shrink-0" />
+          </div>
+          <p className="text-xl sm:text-2xl font-extrabold text-foreground mt-1.5 font-mono">
+            {scopedMonitoredList.length} <span className="text-xs font-sans font-medium text-muted-foreground">Orang</span>
           </p>
-          <p className="text-2xl font-bold text-foreground mt-1 font-mono">{scopedMonitoredList.length} Orang</p>
         </div>
 
+        {/* Card 2: Hadir Tepat Waktu */}
         <div
           onClick={() => setActiveTab('present')}
-          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
             activeTab === 'present'
-              ? 'border-emerald-500 bg-emerald-50/50 ring-1 ring-emerald-500/30 shadow-xs'
+              ? 'border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/30 shadow-xs'
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
-          <p className="text-xs font-medium text-muted-foreground">Hadir Tepat Waktu</p>
-          <p className="text-2xl font-bold text-emerald-700 mt-1 font-mono">{presentCount} Orang</p>
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 truncate">Hadir Tepat</span>
+            <UserCheck size={13} className="text-emerald-600 shrink-0" />
+          </div>
+          <p className="text-xl sm:text-2xl font-extrabold text-emerald-700 dark:text-emerald-400 mt-1.5 font-mono">
+            {presentCount} <span className="text-xs font-sans font-medium text-emerald-600/80">Orang</span>
+          </p>
         </div>
 
+        {/* Card 3: Terlambat */}
         <div
           onClick={() => setActiveTab('late')}
-          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
             activeTab === 'late'
-              ? 'border-amber-500 bg-amber-50/50 ring-1 ring-amber-500/30 shadow-xs'
+              ? 'border-amber-500 bg-amber-500/10 ring-2 ring-amber-500/30 shadow-xs'
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
-          <p className="text-xs font-medium text-muted-foreground">Terlambat</p>
-          <p className="text-2xl font-bold text-amber-700 mt-1 font-mono">{lateCount} Orang</p>
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300 truncate">Terlambat</span>
+            <Clock size={13} className="text-amber-600 shrink-0" />
+          </div>
+          <p className="text-xl sm:text-2xl font-extrabold text-amber-700 dark:text-amber-400 mt-1.5 font-mono">
+            {lateCount} <span className="text-xs font-sans font-medium text-amber-600/80">Orang</span>
+          </p>
         </div>
 
+        {/* Card 4: Mangkir / Alpa */}
         <div
           onClick={() => setActiveTab('mangkir')}
-          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
             activeTab === 'mangkir'
-              ? 'border-rose-600 bg-rose-50 ring-1 ring-rose-500/40 shadow-xs dark:bg-rose-950/40'
+              ? 'border-rose-600 bg-rose-500/15 ring-2 ring-rose-500/40 shadow-xs dark:bg-rose-950/40'
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-rose-700 dark:text-rose-400 font-semibold">Mangkir / Alpa</p>
-            {mangkirCount > 0 && (
+            <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 truncate">Mangkir / Alpa</span>
+            {mangkirCount > 0 ? (
               <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
+            ) : (
+              <UserX size={13} className="text-rose-600 shrink-0" />
             )}
           </div>
-          <p className="text-2xl font-bold text-rose-700 dark:text-rose-400 mt-1 font-mono">{mangkirCount} Orang</p>
+          <p className="text-xl sm:text-2xl font-extrabold text-rose-700 dark:text-rose-400 mt-1.5 font-mono">
+            {mangkirCount} <span className="text-xs font-sans font-medium text-rose-600/80">Orang</span>
+          </p>
         </div>
 
+        {/* Card 5: Belum Hadir / OFF */}
         <div
           onClick={() => setActiveTab('absent')}
-          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
             activeTab === 'absent'
-              ? 'border-muted-foreground bg-muted ring-1 ring-border shadow-xs'
+              ? 'border-muted-foreground bg-muted ring-2 ring-border shadow-xs'
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-muted-foreground">Belum Hadir</p>
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span className="text-[11px] font-semibold truncate">Belum Hadir</span>
+            <Clock size={13} className="text-muted-foreground shrink-0" />
           </div>
-          <p className="text-2xl font-bold text-muted-foreground mt-1 font-mono">{absentCount} Orang</p>
+          <p className="text-xl sm:text-2xl font-extrabold text-muted-foreground mt-1.5 font-mono">
+            {absentCount} <span className="text-xs font-sans font-medium text-muted-foreground/80">Orang</span>
+          </p>
         </div>
 
+        {/* Card 6: Audit Anomali */}
         <div
           onClick={() => setActiveTab('anomalies')}
-          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
             activeTab === 'anomalies'
-              ? 'border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 ring-1 ring-rose-500/30 shadow-xs'
+              ? 'border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 ring-2 ring-rose-500/30 shadow-xs'
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-muted-foreground">Audit Anomali</p>
-            {radarSummary.items.length > 0 && (
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 truncate">Audit Anomali</span>
+            {radarSummary.items.length > 0 ? (
               <span className="w-2 h-2 rounded-full bg-rose-500" />
+            ) : (
+              <AlertTriangle size={13} className="text-rose-500 shrink-0" />
             )}
           </div>
-          <p className="text-2xl font-bold text-rose-600 mt-1 font-mono">{radarSummary.items.length} Isu</p>
+          <p className="text-xl sm:text-2xl font-extrabold text-rose-600 dark:text-rose-400 mt-1.5 font-mono">
+            {radarSummary.items.length} <span className="text-xs font-sans font-medium text-rose-500/80">Isu</span>
+          </p>
         </div>
 
+        {/* Card 7: Pelanggaran Perimeter */}
         <div
           onClick={() => setActiveTab('breaches')}
-          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
             activeTab === 'breaches'
-              ? 'border-rose-500 bg-rose-500/10 ring-1 ring-rose-500/30 shadow-xs'
+              ? 'border-rose-500 bg-rose-500/10 ring-2 ring-rose-500/30 shadow-xs'
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-muted-foreground">Pelanggaran Perimeter</p>
-            {activeBreaches.length > 0 && (
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 truncate">Perimeter</span>
+            {activeBreaches.length > 0 ? (
               <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+            ) : (
+              <Lock size={13} className="text-rose-500 shrink-0" />
             )}
           </div>
-          <p className="text-2xl font-bold text-rose-600 mt-1 font-mono">{activeBreaches.length} Terkunci</p>
+          <p className="text-xl sm:text-2xl font-extrabold text-rose-600 dark:text-rose-400 mt-1.5 font-mono">
+            {activeBreaches.length} <span className="text-xs font-sans font-medium text-rose-500/80">Terkunci</span>
+          </p>
         </div>
 
+        {/* Card 8: Radar Petugas Lapangan */}
         <div
           onClick={() => setActiveTab('field_radar')}
-          className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+          className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
             activeTab === 'field_radar'
-              ? 'border-indigo-500 bg-indigo-500/15 ring-1 ring-indigo-500/40 shadow-xs'
+              ? 'border-indigo-500 bg-indigo-500/15 ring-2 ring-indigo-500/40 shadow-xs'
               : 'border-border bg-card hover:bg-muted/40'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-muted-foreground">Radar Petugas Lapangan</p>
-            <span className="flex h-2 w-2 relative">
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span className="text-[11px] font-semibold text-indigo-800 dark:text-indigo-300 truncate">Radar Lapangan</span>
+            <span className="flex h-2 w-2 relative shrink-0">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
             </span>
           </div>
-          <p className="text-2xl font-bold text-indigo-600 mt-1 font-mono">
-            {fieldAgents.length > 0 ? `${fieldAgents.length} Petugas` : '3 Petugas'}
+          <p className="text-xl sm:text-2xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1.5 font-mono">
+            {fieldAgents.length > 0 ? `${fieldAgents.length}` : '3'} <span className="text-xs font-sans font-medium text-indigo-500/80">Petugas</span>
           </p>
         </div>
       </div>
 
-      {/* ── INTERACTIVE MONTH & DATE CALENDAR NAVIGATOR ── */}
-      {periodScope === 'month' && (
-        <Card className="border-primary/30 bg-gradient-to-r from-card via-card to-primary/5 rounded-2xl shadow-xs overflow-hidden">
-          <CardContent className="p-4 space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center gap-1 bg-muted/80 p-1 rounded-xl border border-border">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handlePrevMonth}
-                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
-                    title="Bulan Sebelumnya"
-                  >
-                    <ChevronLeft size={16} />
-                  </Button>
-                  <div className="flex items-center gap-1.5 px-3 font-semibold text-xs text-foreground min-w-[140px] justify-center">
-                    <CalendarIcon size={13} className="text-primary" />
-                    <span>{selectedMonthLabel}</span>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleNextMonth}
-                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
-                    title="Bulan Berikutnya"
-                  >
-                    <ChevronRight size={16} />
-                  </Button>
-                </div>
-
-                {selectedMonth !== currentMonthStr && (
+      {/* ── FITUR PITA TANGGAL BERURUTAN (SEQUENTIAL DATE NAVIGATOR) UNTUK LAMPIRAN III ── */}
+      <Card className="border-border/80 bg-gradient-to-r from-card via-card to-primary/5 rounded-2xl shadow-xs overflow-hidden">
+        <CardContent className="p-3.5 sm:p-4 space-y-3">
+          {/* Header Baris Kontrol Navigasi Tanggal */}
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 font-bold text-xs sm:text-sm text-foreground">
+                <CalendarIcon size={16} className="text-primary shrink-0" />
+                <span>
+                  {new Date(targetDayDate).toLocaleDateString('id-ID', {
+                    weekday: 'long',
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric',
+                  })}
+                </span>
+              </div>
+              {targetDayDate === getTodayDateStr() ? (
+                <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white font-mono text-[11px] gap-1 px-2.5 py-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                  Hari Ini (Live WITA)
+                </Badge>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <Badge variant="outline" className="border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-400 font-mono text-[11px] px-2 py-0.5 font-semibold">
+                    🗓️ Tanggal Pantauan: {targetDayDate}
+                  </Badge>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={handleResetToCurrentMonth}
-                    className="h-7 px-2.5 text-xs rounded-xl border-primary/30 text-primary hover:bg-primary/10 font-medium gap-1"
+                    onClick={handleResetToToday}
+                    className="h-6 text-[10px] px-2 rounded-lg border-primary/30 text-primary hover:bg-primary/10 gap-1 font-semibold"
+                    title="Kembali ke Presensi Hari Ini"
                   >
-                    <RotateCw size={11} />
-                    Bulan Berjalan
+                    <RotateCw size={10} /> Kembali ke Hari Ini
                   </Button>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                {selectedDayDate && (
-                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30 text-xs px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                    <span>Filter: <strong>{new Date(selectedDayDate).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}</strong></span>
-                    <button
-                      onClick={() => setSelectedDayDate('')}
-                      className="ml-1 hover:text-rose-600 focus:outline-none"
-                      title="Reset ke semua hari"
-                    >
-                      <X size={12} />
-                    </button>
-                  </Badge>
-                )}
-                <Badge variant="outline" className="text-xs bg-muted/50 border-border font-mono">
-                  {isFetchingMonth ? 'Sinkronisasi PostgreSQL...' : `${activePeriodAttendances.length} Log Presensi`}
-                </Badge>
-              </div>
+                </div>
+              )}
             </div>
 
-            {/* Quick Date Selector Horizontal Scroll */}
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                <span>Pilih Tanggal Spesifik untuk Menyaring Presensi:</span>
-                {selectedDayDate && (
-                  <button
-                    onClick={() => setSelectedDayDate('')}
-                    className="text-primary hover:underline font-medium text-[11px]"
-                  >
-                    Tampilkan Seluruh Hari di {selectedMonthLabel}
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-0.5 scrollbar-thin">
+            {/* Quick Action Navigation Controls */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border">
                 <Button
                   size="sm"
-                  variant={!selectedDayDate ? 'default' : 'outline'}
-                  onClick={() => setSelectedDayDate('')}
-                  className={`h-8 px-3 text-xs rounded-xl shrink-0 font-medium ${
-                    !selectedDayDate ? 'shadow-xs' : 'border-border text-muted-foreground hover:text-foreground'
-                  }`}
+                  variant="ghost"
+                  onClick={handlePrevDay}
+                  className="h-7 px-2 text-xs rounded-lg text-muted-foreground hover:text-foreground font-semibold gap-1"
+                  title="Pindah ke 1 hari sebelumnya"
                 >
-                  Semua Hari ({daysInSelectedMonth.length} Hari)
+                  <ChevronLeft size={14} /> H-1
                 </Button>
-                {daysInSelectedMonth.map((d) => {
-                  const isSelected = selectedDayDate === d.dateStr;
-                  const isToday = d.dateStr === getTodayDateStr();
-                  const dayAttCount = allAttendances.filter((a) => (a.attendanceDate || (a as any).date) === d.dateStr).length;
+                <input
+                  type="date"
+                  value={targetDayDate}
+                  onChange={(e) => handleSelectDayDate(e.target.value)}
+                  className="h-7 text-xs bg-background px-2 py-0.5 rounded-lg border border-border/80 font-mono font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  title="Pilih langsung tanggal tertentu dari kalender"
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleNextDay}
+                  className="h-7 px-2 text-xs rounded-lg text-muted-foreground hover:text-foreground font-semibold gap-1"
+                  title="Pindah ke 1 hari berikutnya"
+                >
+                  H+1 <ChevronRight size={14} />
+                </Button>
+              </div>
 
-                  return (
-                    <button
-                      key={d.dateStr}
-                      type="button"
-                      onClick={() => setSelectedDayDate(isSelected ? '' : d.dateStr)}
-                      className={`h-8 min-w-[42px] px-2 rounded-xl flex flex-col items-center justify-center text-[10px] shrink-0 border transition-all ${
-                        isSelected
-                          ? 'bg-primary text-primary-foreground border-primary font-bold shadow-xs'
-                          : isToday
-                          ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-semibold'
-                          : 'border-border bg-card hover:bg-muted/60 text-muted-foreground hover:text-foreground'
-                      }`}
-                      title={`${d.dayName}, ${d.dateStr} (${dayAttCount} presensi)`}
-                    >
-                      <span className="leading-tight font-mono text-[11px] font-bold">{String(d.dayNum).padStart(2, '0')}</span>
-                      <span className="text-[9px] uppercase leading-none opacity-80">{d.dayName}</span>
-                    </button>
-                  );
-                })}
+              {/* Month Stepper */}
+              <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handlePrevMonth}
+                  className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
+                  title="Bulan Sebelumnya"
+                >
+                  <ChevronLeft size={14} />
+                </Button>
+                <span className="text-[11px] font-semibold text-foreground px-1.5 min-w-[95px] text-center">
+                  {selectedMonthLabel}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleNextMonth}
+                  className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
+                  title="Bulan Berikutnya"
+                >
+                  <ChevronRight size={14} />
+                </Button>
               </div>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          </div>
+
+          {/* Pita Tanggal Berurutan (Horizontal Date Pills) */}
+          <div className="space-y-1 pt-1 border-t border-border/60">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground pb-0.5">
+              <span>Klik Tanggal di Bawah untuk Melihat Presensi &amp; Jadwal Hari Tersebut:</span>
+              <span className="font-mono text-[10px]">
+                {daysInSelectedMonth.length} Hari di {selectedMonthLabel}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 pt-0.5 scrollbar-thin">
+              {daysInSelectedMonth.map((d) => {
+                const isSelected = targetDayDate === d.dateStr;
+                const isToday = d.dateStr === getTodayDateStr();
+                const dayAttCount = allAttendances.filter(
+                  (a) => (a.attendanceDate || (a as any).date) === d.dateStr && (Boolean(a.clockIn) || a.status === 'hadir' || a.status === 'terlambat')
+                ).length;
+                const dObj = new Date(d.dateStr);
+                const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
+
+                return (
+                  <button
+                    key={d.dateStr}
+                    type="button"
+                    onClick={() => handleSelectDayDate(d.dateStr)}
+                    className={`group relative flex flex-col items-center justify-center h-12 min-w-[50px] px-2 rounded-xl border transition-all shrink-0 cursor-pointer ${
+                      isSelected
+                        ? 'bg-primary text-primary-foreground border-primary font-bold shadow-md ring-2 ring-primary/40 scale-105'
+                        : isToday
+                        ? 'border-emerald-500/80 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-bold hover:bg-emerald-500/20'
+                        : isWeekend
+                        ? 'border-border/60 bg-muted/30 text-muted-foreground/80 hover:bg-muted/60'
+                        : 'border-border bg-card hover:bg-muted/50 text-foreground'
+                    }`}
+                    title={`${d.dayName}, ${d.dateStr} • ${dayAttCount} presensi hadir`}
+                  >
+                    <span className="text-[10px] uppercase font-semibold leading-none opacity-90">{d.dayName}</span>
+                    <span className="text-xs font-bold font-mono mt-0.5">{String(d.dayNum).padStart(2, '0')}</span>
+                    {dayAttCount > 0 ? (
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full mt-0.5 ${
+                          isSelected ? 'bg-primary-foreground' : 'bg-emerald-500'
+                        }`}
+                      />
+                    ) : (
+                      <span className="w-1.5 h-1.5 rounded-full mt-0.5 opacity-0" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── LIVE REKAPITULASI PRESENSI PER SHIFT & LEMBUR PADA TANGGAL INI ── */}
+          <div className="pt-2.5 border-t border-border/60 space-y-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
+              <span className="font-bold text-foreground flex items-center gap-1.5">
+                <Clock size={14} className="text-primary shrink-0" />
+                <span>
+                  Kehadiran Shift & Lembur Real-Time Tanggal{' '}
+                  <strong className="text-primary font-mono">
+                    {new Date(targetDayDate).toLocaleDateString('id-ID', {
+                      day: 'numeric',
+                      month: 'short',
+                      year: 'numeric',
+                    })}
+                  </strong>
+                </span>
+              </span>
+              <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+                <span>Klik kartu shift / lembur untuk menyaring:</span>
+                {filterShift !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => setFilterShift('all')}
+                    className="text-primary hover:underline font-semibold text-[11px] ml-1 cursor-pointer"
+                  >
+                    (Reset Filter Shift)
+                  </button>
+                )}
+                {filterOvertimeCol === 'has_ot' && (
+                  <button
+                    type="button"
+                    onClick={() => setFilterOvertimeCol('all')}
+                    className="text-purple-600 dark:text-purple-400 hover:underline font-semibold text-[11px] ml-1 cursor-pointer"
+                  >
+                    (Reset Filter Lembur)
+                  </button>
+                )}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+              {/* Card 1: Shift I (Pagi) */}
+              <button
+                type="button"
+                onClick={() => setFilterShift(filterShift === 'P' ? 'all' : 'P')}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                  filterShift === 'P'
+                    ? 'border-amber-500 bg-amber-500/15 ring-2 ring-amber-500/40 shadow-xs'
+                    : 'border-border bg-card hover:bg-muted/40'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Sunrise size={14} className="text-amber-500 shrink-0" />
+                    <span className="font-bold text-xs text-foreground">Shift I (Pagi)</span>
+                  </div>
+                  {filterShift === 'P' && (
+                    <Badge variant="outline" className="text-[9px] bg-amber-500/20 border-amber-500/40 text-amber-700 dark:text-amber-300 font-semibold px-1 py-0">
+                      Aktif
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">07:30 - 15:30 WITA</div>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-lg font-extrabold font-mono text-foreground">
+                    {dailyShiftBreakdown.shift1.present}{' '}
+                    <span className="text-xs text-muted-foreground font-normal">/ {dailyShiftBreakdown.shift1.total}</span>
+                  </span>
+                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
+                    {dailyShiftBreakdown.shift1.total > 0
+                      ? `${Math.round((dailyShiftBreakdown.shift1.present / dailyShiftBreakdown.shift1.total) * 100)}%`
+                      : '0%'}
+                  </span>
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                  {dailyShiftBreakdown.shift1.late > 0 ? (
+                    <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.shift1.late} Telat • </span>
+                  ) : null}
+                  <span>{dailyShiftBreakdown.shift1.pendingOrAbsent} Belum Masuk</span>
+                </div>
+              </button>
+
+              {/* Card 2: Shift II (Siang) */}
+              <button
+                type="button"
+                onClick={() => setFilterShift(filterShift === 'S' ? 'all' : 'S')}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                  filterShift === 'S'
+                    ? 'border-sky-500 bg-sky-500/15 ring-2 ring-sky-500/40 shadow-xs'
+                    : 'border-border bg-card hover:bg-muted/40'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Sun size={14} className="text-sky-500 shrink-0" />
+                    <span className="font-bold text-xs text-foreground">Shift II (Siang)</span>
+                  </div>
+                  {filterShift === 'S' && (
+                    <Badge variant="outline" className="text-[9px] bg-sky-500/20 border-sky-500/40 text-sky-700 dark:text-sky-300 font-semibold px-1 py-0">
+                      Aktif
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">15:30 - 22:30 WITA</div>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-lg font-extrabold font-mono text-foreground">
+                    {dailyShiftBreakdown.shift2.present}{' '}
+                    <span className="text-xs text-muted-foreground font-normal">/ {dailyShiftBreakdown.shift2.total}</span>
+                  </span>
+                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
+                    {dailyShiftBreakdown.shift2.total > 0
+                      ? `${Math.round((dailyShiftBreakdown.shift2.present / dailyShiftBreakdown.shift2.total) * 100)}%`
+                      : '0%'}
+                  </span>
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                  {dailyShiftBreakdown.shift2.late > 0 ? (
+                    <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.shift2.late} Telat • </span>
+                  ) : null}
+                  <span>{dailyShiftBreakdown.shift2.pendingOrAbsent} Belum Masuk</span>
+                </div>
+              </button>
+
+              {/* Card 3: Shift III (Malam) */}
+              <button
+                type="button"
+                onClick={() => setFilterShift(filterShift === 'M' ? 'all' : 'M')}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                  filterShift === 'M'
+                    ? 'border-purple-500 bg-purple-500/15 ring-2 ring-purple-500/40 shadow-xs'
+                    : 'border-border bg-card hover:bg-muted/40'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Moon size={14} className="text-purple-500 shrink-0" />
+                    <span className="font-bold text-xs text-foreground">Shift III (Malam)</span>
+                  </div>
+                  {filterShift === 'M' && (
+                    <Badge variant="outline" className="text-[9px] bg-purple-500/20 border-purple-500/40 text-purple-700 dark:text-purple-300 font-semibold px-1 py-0">
+                      Aktif
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">22:30 - 07:30 WITA</div>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-lg font-extrabold font-mono text-foreground">
+                    {dailyShiftBreakdown.shift3.present}{' '}
+                    <span className="text-xs text-muted-foreground font-normal">/ {dailyShiftBreakdown.shift3.total}</span>
+                  </span>
+                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
+                    {dailyShiftBreakdown.shift3.total > 0
+                      ? `${Math.round((dailyShiftBreakdown.shift3.present / dailyShiftBreakdown.shift3.total) * 100)}%`
+                      : '0%'}
+                  </span>
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                  {dailyShiftBreakdown.shift3.late > 0 ? (
+                    <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.shift3.late} Telat • </span>
+                  ) : null}
+                  <span>{dailyShiftBreakdown.shift3.pendingOrAbsent} Belum Masuk</span>
+                </div>
+              </button>
+
+              {/* Card 4: Day Shift (Normal) */}
+              <button
+                type="button"
+                onClick={() => setFilterShift(filterShift === 'DAY' ? 'all' : 'DAY')}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                  filterShift === 'DAY'
+                    ? 'border-emerald-500 bg-emerald-500/15 ring-2 ring-emerald-500/40 shadow-xs'
+                    : 'border-border bg-card hover:bg-muted/40'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Briefcase size={14} className="text-emerald-600 shrink-0" />
+                    <span className="font-bold text-xs text-foreground">Day Shift (Normal)</span>
+                  </div>
+                  {filterShift === 'DAY' && (
+                    <Badge variant="outline" className="text-[9px] bg-emerald-500/20 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-semibold px-1 py-0">
+                      Aktif
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">07:30 - 16:30 WITA</div>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-lg font-extrabold font-mono text-foreground">
+                    {dailyShiftBreakdown.dayShift.present}{' '}
+                    <span className="text-xs text-muted-foreground font-normal">/ {dailyShiftBreakdown.dayShift.total}</span>
+                  </span>
+                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
+                    {dailyShiftBreakdown.dayShift.total > 0
+                      ? `${Math.round((dailyShiftBreakdown.dayShift.present / dailyShiftBreakdown.dayShift.total) * 100)}%`
+                      : '0%'}
+                  </span>
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                  {dailyShiftBreakdown.dayShift.late > 0 ? (
+                    <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.dayShift.late} Telat • </span>
+                  ) : null}
+                  <span>{dailyShiftBreakdown.dayShift.pendingOrAbsent} Belum Hadir</span>
+                </div>
+              </button>
+
+              {/* Card 5: Libur / OFF Roster */}
+              <button
+                type="button"
+                onClick={() => setFilterShift(filterShift === 'OFF' ? 'all' : 'OFF')}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                  filterShift === 'OFF'
+                    ? 'border-muted-foreground bg-muted ring-2 ring-border shadow-xs'
+                    : 'border-border bg-card hover:bg-muted/40'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Coffee size={14} className="text-muted-foreground shrink-0" />
+                    <span className="font-bold text-xs text-foreground">Libur / OFF Roster</span>
+                  </div>
+                  {filterShift === 'OFF' && (
+                    <Badge variant="outline" className="text-[9px] bg-muted border-border text-foreground font-semibold px-1 py-0">
+                      Aktif
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">Bebas Dinas / Off Duty</div>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-lg font-extrabold font-mono text-muted-foreground">
+                    {dailyShiftBreakdown.off.total}{' '}
+                    <span className="text-xs text-muted-foreground font-normal">Karyawan</span>
+                  </span>
+                  <span className="text-[10px] font-semibold text-muted-foreground font-mono">
+                    OFF
+                  </span>
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                  {dailyShiftBreakdown.off.leave > 0 ? (
+                    <span className="text-primary font-semibold">{dailyShiftBreakdown.off.leave} Cuti Sah • </span>
+                  ) : null}
+                  <span>{dailyShiftBreakdown.off.regularOff} Jadwal Lepas</span>
+                </div>
+              </button>
+
+              {/* Card 6: Lembur (SPKL Sah) */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (filterOvertimeCol === 'has_ot') {
+                    setFilterOvertimeCol('all');
+                  } else {
+                    setFilterOvertimeCol('has_ot');
+                    setFilterShift('all');
+                  }
+                }}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                  filterOvertimeCol === 'has_ot'
+                    ? 'border-purple-500 bg-purple-500/15 ring-2 ring-purple-500/40 shadow-xs'
+                    : dailyOvertimeStats.totalCount > 0
+                    ? 'border-purple-500/40 bg-purple-500/5 hover:bg-purple-500/10'
+                    : 'border-border bg-card hover:bg-muted/40'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Flame size={14} className="text-purple-600 dark:text-purple-400 shrink-0 fill-purple-600/30" />
+                    <span className="font-bold text-xs text-foreground">Lembur (SPKL)</span>
+                  </div>
+                  {filterOvertimeCol === 'has_ot' && (
+                    <Badge variant="outline" className="text-[9px] bg-purple-500/20 border-purple-500/40 text-purple-700 dark:text-purple-300 font-semibold px-1 py-0">
+                      Aktif
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">Surat Perintah Lembur</div>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-lg font-extrabold font-mono text-purple-700 dark:text-purple-400">
+                    {dailyOvertimeStats.totalCount}{' '}
+                    <span className="text-xs text-muted-foreground font-normal">Personil</span>
+                  </span>
+                  <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400 font-mono">
+                    {dailyOvertimeStats.totalHours} Jam
+                  </span>
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 truncate font-mono">
+                  {dailyOvertimeStats.totalCount > 0 ? (
+                    <span className="font-semibold text-purple-800 dark:text-purple-300">
+                      Est: Rp {dailyOvertimeStats.totalPay.toLocaleString('id-ID')}
+                    </span>
+                  ) : (
+                    <span>Nihil Lembur Hari Ini</span>
+                  )}
+                </div>
+              </button>
+            </div>
+
+            {/* Sub-Panel: Detail Karyawan Lembur Resmi pada Tanggal Ini */}
+            {dailyOvertimeStats.totalCount > 0 && (
+              <div className="flex flex-wrap items-center gap-2 p-2.5 px-3 rounded-xl bg-purple-500/10 border border-purple-500/30 text-xs mt-1">
+                <div className="flex items-center gap-1.5 font-bold text-purple-900 dark:text-purple-200">
+                  <Flame size={14} className="text-purple-600 shrink-0 fill-purple-600/40" />
+                  <span>
+                    Detail {dailyOvertimeStats.totalCount} Personil Lembur (
+                    {new Date(targetDayDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}):
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {dailyOvertimeStats.employees.map((emp) => (
+                    <Badge
+                      key={emp.id}
+                      variant="outline"
+                      onClick={() => {
+                        setSearchQuery(emp.name);
+                      }}
+                      className="bg-background/90 hover:bg-background border-purple-500/40 text-foreground font-mono text-[11px] gap-1 cursor-pointer py-1 px-2.5 transition-all shadow-2xs hover:scale-105"
+                      title={`Klik untuk mencari ${emp.name} (${emp.task || 'Lembur'})`}
+                    >
+                      <span className="font-bold">{emp.name}</span>
+                      <span className="text-purple-600 font-extrabold">({emp.hours}J)</span>
+                      {emp.startTime && emp.endTime && (
+                        <span className="text-muted-foreground text-[10px]">[{emp.startTime.slice(0, 5)}-{emp.endTime.slice(0, 5)}]</span>
+                      )}
+                      <span className="text-emerald-700 dark:text-emerald-400 font-semibold text-[10px]">
+                        Rp {emp.pay.toLocaleString('id-ID')}
+                      </span>
+                    </Badge>
+                  ))}
+                </div>
+                <div className="ml-auto text-[11px] text-purple-800 dark:text-purple-300 font-mono font-bold flex items-center gap-2">
+                  <span>Total Biaya: <strong>Rp {dailyOvertimeStats.totalPay.toLocaleString('id-ID')}</strong></span>
+                  {filterOvertimeCol !== 'has_ot' && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setFilterOvertimeCol('has_ot');
+                        setFilterShift('all');
+                      }}
+                      className="h-6 text-[10px] px-2 rounded-lg border-purple-500/40 hover:bg-purple-500/20 text-purple-800 dark:text-purple-300 cursor-pointer"
+                    >
+                      Saring Tabel Karyawan
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Filter Bar */}
       <Card className="border-border/80 bg-card rounded-2xl shadow-xs">
@@ -2592,7 +3228,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
             )}
 
             <div className="ml-auto text-[11px] text-muted-foreground font-mono">
-              Menampilkan <strong>{filtered.length}</strong> dari {scopedMonitoredList.length} Karyawan
+              Menampilkan <strong>{filtered.length}</strong> dari {scopedMonitoredList.length} Karyawan • <strong>{new Date(targetDayDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
             </div>
           </div>
         </CardContent>
