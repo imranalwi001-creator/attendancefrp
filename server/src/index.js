@@ -11217,6 +11217,28 @@ app.post('/api/overtime', async (req, res) => {
     const finalApprovalNotes = targetStatus === 'approved' ? (approvalNotes || 'Ditugaskan dan disahkan langsung oleh Super Administrator') : null;
     const finalPhase = targetStatus === 'approved' ? 'completed' : 'requested';
 
+    // Anti-duplikasi SPKL: Cegah double click atau pengajuan ganda pending pada tanggal & jam yang sama
+    if (!isAdminDirect) {
+      const dupCheck = await pool.query(`
+        SELECT * FROM hrm_overtime_records
+        WHERE user_id = $1 AND date = $2 AND status = 'pending'
+          AND (
+            (start_time = $3 AND end_time = $4)
+            OR created_at >= NOW() - INTERVAL '30 seconds'
+          )
+        ORDER BY created_at DESC LIMIT 1
+      `, [validUserId, date, startTime, endTime]);
+
+      if (dupCheck.rows.length > 0) {
+        return res.json({
+          success: true,
+          data: dupCheck.rows[0],
+          message: 'Pengajuan lembur Anda sudah tercatat dan sedang menunggu verifikasi.',
+          isDuplicateSuppressed: true,
+        });
+      }
+    }
+
     const query = `
       INSERT INTO hrm_overtime_records (
         user_id, date, start_time, end_time, scheduled_end_time, duration_hours, approved_hours, task_description, rate_applied, compensation_amount, status, supervisor_name, supervisor_signature, task_photo_url, overtime_phase, approved_by, approved_by_name, approval_notes, rate_multiplier
@@ -11430,18 +11452,18 @@ app.put('/api/overtime/:id/status', async (req, res) => {
     const updateRes = await pool.query(`
       UPDATE hrm_overtime_records SET
         status = $1::varchar,
-        overtime_phase = $2,
-        duration_hours = $3,
-        approved_hours = CASE WHEN $1::varchar = 'approved' THEN $3 ELSE 0 END,
-        compensation_amount = $4,
-        approved_by = $5,
-        approved_by_name = $6,
-        approval_notes = $7,
+        overtime_phase = $2::varchar,
+        duration_hours = $3::numeric,
+        approved_hours = CASE WHEN $1::varchar = 'approved' THEN $3::numeric ELSE 0::numeric END,
+        compensation_amount = $4::numeric,
+        approved_by = $5::uuid,
+        approved_by_name = $6::varchar,
+        approval_notes = $7::text,
         forwarded_to_pimpinan = true,
         approved_at = NOW(),
         started_at = CASE WHEN $1::varchar = 'approved' AND started_at IS NULL THEN NOW() ELSE started_at END,
         updated_at = NOW()
-      WHERE id = $8
+      WHERE id = $8::uuid
       RETURNING *;
     `, [
       status,
