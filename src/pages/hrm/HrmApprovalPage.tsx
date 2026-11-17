@@ -186,6 +186,7 @@ export const HrmApprovalPage: React.FC = () => {
   const [selectedLeave, setSelectedLeave] = useState<LeaveRequest | null>(null);
   const [decision, setDecision] = useState<'approved' | 'rejected'>('approved');
   const [notes, setNotes] = useState('');
+  const [noSubstituteNeeded, setNoSubstituteNeeded] = useState(false);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<string | null>(null);
 
@@ -487,6 +488,7 @@ export const HrmApprovalPage: React.FC = () => {
     });
 
     setModalOpen(true);
+    setNoSubstituteNeeded(!leave.substituteId && !leave.substituteName);
     setLoadingSubstituteCandidates(true);
     setSelectedSubstituteId(leave.substituteId || '');
     setSelectedSubstituteObj(null);
@@ -568,7 +570,7 @@ export const HrmApprovalPage: React.FC = () => {
 
     const isSpecialOfficer = isLeadershipSpecialFieldOfficer(selectedLeave.userId || selectedLeave.userNip || selectedLeave.userName);
 
-    if (decision === 'approved' && !isSpecialOfficer) {
+    if (decision === 'approved' && !isSpecialOfficer && !noSubstituteNeeded) {
       if (dailySlots.length > 1) {
         // Multi-day verification
         const missingDays = dailySlots.filter((s) => !selectedDailySubs[s.date]?.substituteId);
@@ -629,11 +631,12 @@ export const HrmApprovalPage: React.FC = () => {
         selectedLeave.id,
         decision,
         user.id,
-        notes.trim(),
-        decision === 'approved' ? (dailySubsPayload ? dailySubsPayload[0]?.substituteId : selectedSubstituteId) : undefined,
-        decision === 'approved' ? subNameFormatted : undefined,
-        decision === 'approved' ? (dailySubsPayload ? dailySubsPayload[0]?.substituteNip : selectedSub?.nip) : undefined,
-        decision === 'approved' ? dailySubsPayload : undefined
+        notes.trim() || (noSubstituteNeeded ? 'Disetujui tanpa petugas pengganti (Pos aman)' : undefined),
+        decision === 'approved' && !noSubstituteNeeded ? (dailySubsPayload ? dailySubsPayload[0]?.substituteId : selectedSubstituteId) : undefined,
+        decision === 'approved' && !noSubstituteNeeded ? subNameFormatted : undefined,
+        decision === 'approved' && !noSubstituteNeeded ? (dailySubsPayload ? dailySubsPayload[0]?.substituteNip : selectedSub?.nip) : undefined,
+        decision === 'approved' && !noSubstituteNeeded ? dailySubsPayload : undefined,
+        noSubstituteNeeded
       );
 
       setModalOpen(false);
@@ -2586,8 +2589,49 @@ export const HrmApprovalPage: React.FC = () => {
               )}
             </div>
 
-            {/* Smart Substitute Recommendation Engine (Zero Vacancy Rule) */}
+            {/* Opsi Pengganti Pos (Zero Vacancy Rule) */}
             {decision === 'approved' && (
+              <div className={`p-3 rounded-xl border transition-all mb-3 ${
+                noSubstituteNeeded
+                  ? 'bg-sky-50 dark:bg-sky-950/40 border-sky-300 dark:border-sky-800'
+                  : 'bg-muted/30 border-border'
+              }`}>
+                <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={noSubstituteNeeded}
+                    onChange={(e) => {
+                      const val = e.target.checked;
+                      setNoSubstituteNeeded(val);
+                      if (val) {
+                        if (!notes) {
+                          setNotes('Disetujui tanpa petugas pengganti (Pos aman)');
+                        }
+                      } else {
+                        if (notes === 'Disetujui tanpa petugas pengganti (Pos aman)') {
+                          setNotes('');
+                        }
+                      }
+                    }}
+                    className="w-4 h-4 mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500 cursor-pointer accent-sky-600"
+                  />
+                  <div className="space-y-0.5">
+                    <span className="font-bold text-xs text-foreground flex items-center gap-1.5">
+                      <span>Tidak Membutuhkan Pengganti Pos</span>
+                      <span className="text-[10px] font-normal px-1.5 py-0.5 rounded-full bg-sky-100 dark:bg-sky-900 text-sky-700 dark:text-sky-300">
+                        Zero Vacancy Dikecualikan
+                      </span>
+                    </span>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Centang jika pos dinas aman, dicover oleh rekan seregu lainnya, bukan pos tunggal, atau izin darurat/sakit tanpa lembur pengganti.
+                    </p>
+                  </div>
+                </label>
+              </div>
+            )}
+
+            {/* Smart Substitute Recommendation Engine (Zero Vacancy Rule) */}
+            {decision === 'approved' && !noSubstituteNeeded && (
               dailySlots.length > 1 ? (
                 <div className="space-y-3 p-3.5 bg-gradient-to-br from-blue-500/10 via-indigo-500/10 to-transparent border border-blue-500/30 rounded-xl">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -3025,7 +3069,7 @@ export const HrmApprovalPage: React.FC = () => {
             </Button>
             <Button
               onClick={handleConfirmDecision}
-              disabled={submittingDecision || (decision === 'approved' && !selectedSubstituteId)}
+              disabled={submittingDecision || (decision === 'approved' && !isLeadershipSpecialFieldOfficer(selectedLeave.userId || selectedLeave.userNip || selectedLeave.userName) && !noSubstituteNeeded && (dailySlots.length > 1 ? dailySlots.some(s => !selectedDailySubs[s.date]?.substituteId) : !selectedSubstituteId))}
               className={decision === 'approved' ? 'bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl' : 'bg-destructive hover:bg-destructive/90 text-destructive-foreground rounded-xl'}
             >
               {submittingDecision ? 'Memproses Persetujuan...' : `Konfirmasi ${decision === 'approved' ? 'Setujui Pengajuan' : 'Tolak'}`}

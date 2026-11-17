@@ -4487,7 +4487,8 @@ export const hrmService = {
     substituteId?: string,
     substituteName?: string,
     substituteNip?: string,
-    dailySubstitutes?: Array<{ date: string; substituteId: string; substituteName?: string; substituteNip?: string }>
+    dailySubstitutes?: Array<{ date: string; substituteId: string; substituteName?: string; substituteNip?: string }>,
+    noSubstituteNeeded?: boolean
   ): Promise<LeaveRequest> => {
     const leaves = hrmService.getLeaves();
     const idx = leaves.findIndex((l) => l.id === leaveId);
@@ -4503,10 +4504,11 @@ export const hrmService = {
         approverId,
         approverName: approver?.fullName || 'Atasan / HRD',
         notes,
-        substituteId,
-        substituteName,
-        substituteNip,
-        dailySubstitutes,
+        substituteId: noSubstituteNeeded ? undefined : substituteId,
+        substituteName: noSubstituteNeeded ? undefined : substituteName,
+        substituteNip: noSubstituteNeeded ? undefined : substituteNip,
+        dailySubstitutes: noSubstituteNeeded ? undefined : dailySubstitutes,
+        noSubstituteNeeded: Boolean(noSubstituteNeeded),
       });
       if (statusRes?.balance) {
         statusBalance = statusRes.balance;
@@ -4521,9 +4523,16 @@ export const hrmService = {
     leaves[idx].approvedBy = approverId;
     leaves[idx].approvedByName = approver?.fullName || 'HRD / Pimpinan';
     leaves[idx].approvalNotes = notes;
-    if (substituteId) leaves[idx].substituteId = substituteId;
-    if (substituteName) leaves[idx].substituteName = substituteName;
-    if (substituteNip) leaves[idx].substituteNip = substituteNip;
+    if (noSubstituteNeeded) {
+      leaves[idx].substituteId = undefined;
+      leaves[idx].substituteName = undefined;
+      leaves[idx].substituteNip = undefined;
+      (leaves[idx] as any).noSubstituteNeeded = true;
+    } else {
+      if (substituteId) leaves[idx].substituteId = substituteId;
+      if (substituteName) leaves[idx].substituteName = substituteName;
+      if (substituteNip) leaves[idx].substituteNip = substituteNip;
+    }
     if (dailySubstitutes && dailySubstitutes.length > 0) {
       leaves[idx].dailySubstitutes = dailySubstitutes.map((d, i) => ({
         dutyDate: d.date,

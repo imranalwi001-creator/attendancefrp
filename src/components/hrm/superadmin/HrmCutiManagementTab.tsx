@@ -50,6 +50,8 @@ export const HrmCutiManagementTab: React.FC = () => {
   const [actionType, setActionType] = useState<'approve' | 'reject'>('approve');
   const [actionNotes, setActionNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [noSubstituteNeeded, setNoSubstituteNeeded] = useState(false);
+  const [chosenSubstituteId, setChosenSubstituteId] = useState<string>('');
 
   // Attachment Preview Modal
   const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
@@ -147,7 +149,16 @@ export const HrmCutiManagementTab: React.FC = () => {
   const handleOpenAction = (leave: LeaveRequest, type: 'approve' | 'reject') => {
     setSelectedLeave(leave);
     setActionType(type);
-    setActionNotes(type === 'approve' ? 'Disetujui oleh Super Administrator' : 'Permohonan cuti tidak dapat disetujui');
+    const hasExistingSub = Boolean(leave.substituteId || leave.substituteName);
+    setNoSubstituteNeeded(!hasExistingSub);
+    setChosenSubstituteId(leave.substituteId || '');
+    setActionNotes(
+      type === 'approve'
+        ? (!hasExistingSub
+            ? 'Disetujui tanpa petugas pengganti (Pos aman)'
+            : 'Disetujui oleh Super Administrator')
+        : 'Permohonan cuti tidak dapat disetujui'
+    );
     setActionModalOpen(true);
   };
 
@@ -156,19 +167,28 @@ export const HrmCutiManagementTab: React.FC = () => {
     setIsSubmitting(true);
     try {
       const currentAdmin = hrmService.getCurrentUser();
+      const pickedSub = users.find((u) => u.id === chosenSubstituteId);
+      const finalSubId = noSubstituteNeeded ? undefined : (chosenSubstituteId || selectedLeave.substituteId);
+      const finalSubName = noSubstituteNeeded ? undefined : (pickedSub?.fullName || selectedLeave.substituteName);
+      const finalSubNip = noSubstituteNeeded ? undefined : (pickedSub?.nip || selectedLeave.substituteNip);
+
       await hrmService.updateLeaveStatus(
         selectedLeave.id,
         actionType === 'approve' ? 'approved' : 'rejected',
         currentAdmin?.id || 'Super Administrator',
         actionNotes,
-        selectedLeave.substituteId,
-        selectedLeave.substituteName,
-        selectedLeave.substituteNip
+        finalSubId,
+        finalSubName,
+        finalSubNip,
+        undefined,
+        noSubstituteNeeded
       );
 
       toast.success(
         actionType === 'approve'
-          ? 'Permohonan cuti/izin disetujui dan kuota tersinkronisasi ke Database & PWA.'
+          ? (noSubstituteNeeded
+              ? 'Permohonan cuti/izin disetujui (Tanpa Pengganti) dan kuota tersinkronisasi.'
+              : 'Permohonan cuti/izin disetujui dan kuota tersinkronisasi ke Database & PWA.')
           : 'Permohonan cuti/izin ditolak dan saldo cuti dikembalikan otomatis.'
       );
       setActionModalOpen(false);
@@ -672,6 +692,76 @@ export const HrmCutiManagementTab: React.FC = () => {
                 </p>
                 <p className="text-[11px] text-muted-foreground italic mt-1">"{selectedLeave.reason}"</p>
               </div>
+
+              {/* Opsi Pengganti Pos (Zero Vacancy Rule) */}
+              {actionType === 'approve' && (
+                <div className="space-y-2.5">
+                  <div className={`p-3 rounded-xl border transition-all ${
+                    noSubstituteNeeded
+                      ? 'bg-sky-50 dark:bg-sky-950/40 border-sky-300 dark:border-sky-800'
+                      : 'bg-muted/30 border-border'
+                  }`}>
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={noSubstituteNeeded}
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setNoSubstituteNeeded(val);
+                          if (val) {
+                            if (!actionNotes || actionNotes === 'Disetujui oleh Super Administrator') {
+                              setActionNotes('Disetujui tanpa petugas pengganti (Pos aman)');
+                            }
+                          } else {
+                            if (actionNotes === 'Disetujui tanpa petugas pengganti (Pos aman)') {
+                              setActionNotes('Disetujui oleh Super Administrator');
+                            }
+                          }
+                        }}
+                        className="w-4 h-4 mt-0.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500 cursor-pointer accent-sky-600"
+                      />
+                      <div className="space-y-0.5">
+                        <span className="font-bold text-xs text-foreground flex items-center gap-1.5">
+                          <span>Tidak Membutuhkan Pengganti Pos</span>
+                          <span className="text-[10px] font-normal px-1.5 py-0.5 rounded-full bg-sky-100 dark:bg-sky-900 text-sky-700 dark:text-sky-300">
+                            Zero Vacancy Dikecualikan
+                          </span>
+                        </span>
+                        <p className="text-[11px] text-muted-foreground leading-relaxed">
+                          Centang jika pos dinas aman, dicover oleh rekan seregu lainnya, bukan pos tunggal, atau izin darurat/sakit tanpa lembur pengganti.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+
+                  {!noSubstituteNeeded && (
+                    <div className="space-y-1.5 p-3 rounded-xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40">
+                      <label className="text-xs font-semibold text-amber-900 dark:text-amber-200 flex items-center justify-between">
+                        <span>Karyawan Pengganti Pos (Zero Vacancy):</span>
+                        {selectedLeave.substituteName && (
+                          <span className="text-[10px] text-muted-foreground font-normal">
+                            Usulan: {selectedLeave.substituteName}
+                          </span>
+                        )}
+                      </label>
+                      <select
+                        value={chosenSubstituteId}
+                        onChange={(e) => setChosenSubstituteId(e.target.value)}
+                        className="w-full h-9 text-xs rounded-xl border border-input bg-background px-3 py-1 text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring"
+                      >
+                        <option value="">-- Pilih Karyawan Pengganti --</option>
+                        {users
+                          .filter((u) => u.id !== selectedLeave.userId && u.role !== 'superadmin')
+                          .map((u) => (
+                            <option key={u.id} value={u.id}>
+                              {u.fullName} ({u.nip || '-'}) - {u.divisionName || 'Operasional'}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold">Catatan Keputusan</label>
