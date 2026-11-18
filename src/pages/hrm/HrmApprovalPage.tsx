@@ -74,9 +74,10 @@ export const HrmApprovalPage: React.FC = () => {
   const canApprove = isSuperAdmin || isPimpinan || isKorlap || isDanru || isK3 || isAdmin || isLeadershipSpecialFieldOfficer(user);
 
   // Cek apakah pemohon adalah Pejabat Pengawas (Korlap / Admin / K3) atau 3 Petugas Lapangan Khusus
-  const isSupervisorApplicant = (userId: string, userNip?: string, forwardedToPimpinan?: boolean) => {
+  const isSupervisorApplicant = (userId?: string, userNip?: string, forwardedToPimpinan?: boolean) => {
     if (forwardedToPimpinan) return true;
-    const applicant = users.find((u) => u.id === userId || (userNip && u.nip === userNip));
+    if (!userId && !userNip) return false;
+    const applicant = users.find((u) => (userId && u.id === userId) || (userNip && u.nip === userNip));
     const roleCode = (applicant?.role || applicant?.roleName || '').toLowerCase();
     const applicantName = (applicant?.fullName || applicant?.name || '').toLowerCase();
     const applicantEmail = (applicant?.email || '').toLowerCase();
@@ -465,6 +466,7 @@ export const HrmApprovalPage: React.FC = () => {
   };
 
   const handleOpenProcess = async (leave: LeaveRequest, type: 'approved' | 'rejected') => {
+    if (!leave) return;
     setSelectedLeave(leave);
     setDecision(type);
     setNotes(type === 'approved' ? 'Pengajuan cuti/izin disetujui sesuai ketentuan operasional.' : 'Mohon maaf, pengajuan cuti/izin belum dapat disetujui.');
@@ -472,13 +474,13 @@ export const HrmApprovalPage: React.FC = () => {
     // 1. Calculate 1-Year Leave History of Applicant
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    const applicantAll = leaves.filter(
-      (l) => l.userId === leave.userId && new Date(l.startDate || l.createdAt) >= oneYearAgo
+    const applicantAll = (leaves || []).filter(
+      (l) => l && l.userId === leave.userId && new Date(l.startDate || l.createdAt) >= oneYearAgo
     );
     setApplicantHistoryLeaves(applicantAll);
 
     // Get applicant user profile for accurate quota (12 reguler/wisma atau 9 shipment)
-    const applicantUser = users.find((u) => u.id === leave.userId);
+    const applicantUser = (users || []).find((u) => u && (u.id === leave.userId || (leave.userNip && u.nip === leave.userNip)));
     const annualQuota = applicantUser?.annualLeaveQuota || 12;
     const usedDays = applicantUser?.usedLeaveDays || 0;
     setApplicantQuotaInfo({
@@ -568,7 +570,7 @@ export const HrmApprovalPage: React.FC = () => {
   const handleConfirmDecision = async () => {
     if (!selectedLeave || !user) return;
 
-    const isSpecialOfficer = isLeadershipSpecialFieldOfficer(selectedLeave.userId || selectedLeave.userNip || selectedLeave.userName);
+    const isSpecialOfficer = isLeadershipSpecialFieldOfficer(selectedLeave);
 
     if (decision === 'approved' && !isSpecialOfficer && !noSubstituteNeeded) {
       if (dailySlots.length > 1) {
@@ -1237,7 +1239,7 @@ export const HrmApprovalPage: React.FC = () => {
                   </tr>
                 ) : (
                   filteredLeaves.map((l) => {
-                    const isSup = isSupervisorApplicant(l.userId, l.userNip, (l as any).forwardedToPimpinan || (l as any).forwarded_to_pimpinan);
+                    const isSup = isSupervisorApplicant(l?.userId, l?.userNip, (l as any)?.forwardedToPimpinan || (l as any)?.forwarded_to_pimpinan);
                     const canCurrentApproveThis = isSup ? (isPimpinan || isDirut || isSuperAdmin) : canApprove;
 
                     const isTargetRow = targetHighlightId === l.id;
@@ -1403,7 +1405,7 @@ export const HrmApprovalPage: React.FC = () => {
                   </tr>
                 ) : (
                   filteredOvertime.map((o) => {
-                    const isSup = isSupervisorApplicant(o.userId, o.userNip, (o as any).forwardedToPimpinan || (o as any).forwarded_to_pimpinan);
+                    const isSup = isSupervisorApplicant(o?.userId, o?.userNip, (o as any)?.forwardedToPimpinan || (o as any)?.forwarded_to_pimpinan);
                     const canCurrentApproveThis = isSup ? (isPimpinan || isDirut || isSuperAdmin) : canApprove;
 
                     const isTargetRow = targetHighlightId === o.id;
@@ -2463,21 +2465,23 @@ export const HrmApprovalPage: React.FC = () => {
       </Dialog>
 
       {/* Leave Decision Dialog */}
-      <Dialog open={modalOpen} onOpenChange={setModalOpen}>
+      <Dialog open={modalOpen && Boolean(selectedLeave)} onOpenChange={setModalOpen}>
         <DialogContent className="max-w-xl rounded-2xl max-h-[92vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base">
-              {decision === 'approved' ? (
-                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-              ) : (
-                <XCircle className="w-5 h-5 text-destructive" />
-              )}
-              {decision === 'approved' ? 'Persetujuan Pengajuan Cuti / Izin' : 'Penolakan Pengajuan Cuti / Izin'}
-            </DialogTitle>
-            <DialogDescription className="text-xs">
-              {selectedLeave?.userName} ({selectedLeave?.userNip}) — {selectedLeave?.leaveType.replace('_', ' ').toUpperCase()} ({selectedLeave?.totalDays} Hari: {selectedLeave?.startDate} s/d {selectedLeave?.endDate})
-            </DialogDescription>
-          </DialogHeader>
+          {selectedLeave && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-base">
+                  {decision === 'approved' ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                  ) : (
+                    <XCircle className="w-5 h-5 text-destructive" />
+                  )}
+                  {decision === 'approved' ? 'Persetujuan Pengajuan Cuti / Izin' : 'Penolakan Pengajuan Cuti / Izin'}
+                </DialogTitle>
+                <DialogDescription className="text-xs">
+                  {selectedLeave.userName} ({selectedLeave.userNip}) — {(selectedLeave.leaveType || 'cuti').replace('_', ' ').toUpperCase()} ({selectedLeave.totalDays || 1} Hari: {selectedLeave.startDate} s/d {selectedLeave.endDate})
+                </DialogDescription>
+              </DialogHeader>
 
           <div className="space-y-3.5 my-2">
             {/* Reason */}
@@ -3069,12 +3073,14 @@ export const HrmApprovalPage: React.FC = () => {
             </Button>
             <Button
               onClick={handleConfirmDecision}
-              disabled={submittingDecision || (decision === 'approved' && !isLeadershipSpecialFieldOfficer(selectedLeave.userId || selectedLeave.userNip || selectedLeave.userName) && !noSubstituteNeeded && (dailySlots.length > 1 ? dailySlots.some(s => !selectedDailySubs[s.date]?.substituteId) : !selectedSubstituteId))}
+              disabled={submittingDecision || (decision === 'approved' && !isLeadershipSpecialFieldOfficer(selectedLeave) && !noSubstituteNeeded && (dailySlots.length > 1 ? dailySlots.some(s => !selectedDailySubs[s.date]?.substituteId) : !selectedSubstituteId))}
               className={decision === 'approved' ? 'bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl' : 'bg-destructive hover:bg-destructive/90 text-destructive-foreground rounded-xl'}
             >
               {submittingDecision ? 'Memproses Persetujuan...' : `Konfirmasi ${decision === 'approved' ? 'Setujui Pengajuan' : 'Tolak'}`}
             </Button>
           </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
