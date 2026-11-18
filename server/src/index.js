@@ -6065,76 +6065,11 @@ app.post('/api/attendances/clock-out', async (req, res) => {
       console.warn('[Clock-out Emergency Overtime Sync Error]:', emErr.message);
     }
 
-    // ─── 3. EMERGENCY POST-SHIFT OVERTIME (LAPORAN LEMBUR DARURAT PASCA-SHIFT) ───
-    let emergencyOtRecord = null;
-    const isEmergencyOvertime = req.body.isEmergencyOvertime === true || req.body.isEmergencyOvertime === 'true';
-    const rawEmergencyHours = parseFloat(req.body.emergencyOvertimeHours) || 0;
-
-    if (isEmergencyOvertime && rawEmergencyHours > 0 && updatedAttendance?.id) {
-      // 3-Hour Hard Safety Cap Enforced (Instruksi Ketat Pimpinan PT FRP)
-      const clampedEmergencyHours = Math.min(Math.max(rawEmergencyHours, 0.5), 3.0);
-      const emergencyReason = (req.body.emergencyOvertimeReason || 'Tugas operasional darurat pasca-shift').trim();
-
-      // Update Attendance record
-      await pool.query(`
-        UPDATE hrm_attendances SET
-          is_emergency_overtime = true,
-          emergency_overtime_hours = $1,
-          emergency_overtime_reason = $2,
-          emergency_overtime_status = 'pending_verification',
-          updated_at = NOW()
-        WHERE id = $3;
-      `, [clampedEmergencyHours, emergencyReason, updatedAttendance.id]);
-
-      // Generate Ticket in hrm_overtime_records
-      const otInsertRes = await pool.query(`
-        INSERT INTO hrm_overtime_records (
-          user_id, date, start_time, end_time, duration_hours, requested_hours, approved_hours,
-          task_description, task_photo_url, is_emergency, source, status, overtime_phase,
-          emergency_reported_at, approval_notes
-        ) VALUES (
-          $1, $2::date, COALESCE($3::time, '16:30'::time), COALESCE($4::time, '19:30'::time), $5, $5, $5,
-          $6, $7, true, 'emergency_post_shift', 'pending', 'completed',
-          NOW(), 'Lembur Darurat Pasca-Shift dilaporkan otomatis saat Clock-Out (Maks 3 Jam)'
-        ) RETURNING *;
-      `, [
-        validUserId,
-        date,
-        userProfile?.custom_end_time || '16:30',
-        time || '19:30',
-        clampedEmergencyHours,
-        emergencyReason,
-        photo || null
-      ]);
-      emergencyOtRecord = otInsertRes.rows[0];
-
-      // Dispatch WhatsApp Alert to Korlap, K3, Admin, Superadmin, Pimpinan, Dirut
-      const empName = userProfile?.full_name || 'Petugas Lapangan';
-      const empNip = userProfile?.nip || '-';
-      const posName = locationName || 'Pos Tugas Lapangan';
-      const waMsgEmergency = `🚨 *LAPORAN LEMBUR DARURAT PASCA-SHIFT (MAKS 3 JAM)*\n\n` +
-        `👤 *Karyawan:* ${empName} (NIP: ${empNip})\n` +
-        `🏢 *Divisi:* ${userProfile?.division_name || 'Operasional'}\n` +
-        `📍 *Pos Presensi:* ${posName}\n` +
-        `⏱️ *Jam Pulang:* ${time || '-'} WITA\n` +
-        `⚡ *Durasi Lembur:* +${clampedEmergencyHours} Jam (Terkunci Hard-Cap 3 Jam)\n` +
-        `📝 *Alasan Lapangan:* _"${emergencyReason}"_\n` +
-        `📸 *Bukti Forensik:* Selfie Pulang Ber-Watermark GPS Tersimpan\n` +
-        `⏳ *Status:* Menunggu konfirmasi Korlap / Admin di Dashboard.`;
-
-      // Alert leadership
-      alertLeadershipViaWhatsAppAndSystem({
-        title: 'Laporan Lembur Darurat Pasca-Shift',
-        message: `${empName} lapor lembur darurat +${clampedEmergencyHours} jam di ${posName}`,
-        waMessage: waMsgEmergency,
-        metadata: {
-          attendanceId: updatedAttendance.id,
-          overtimeRecordId: emergencyOtRecord?.id,
-          userId: validUserId,
-          hours: clampedEmergencyHours
-        }
-      }).catch(err => console.error('[Emergency OT Alert Error]:', err.message));
-    }
+    // ─── 3. EMERGENCY POST-SHIFT OVERTIME (DINONAKTIFKAN SESUAI KEBIJAKAN MANAJEMEN PT FRP) ───
+    // Celah klaim mandiri pasca-shift dinonaktifkan permanen untuk mencegah manipulasi lembur.
+    // Seluruh hak lembur sah HANYA terbit melalui:
+    // a) Pengajuan Cuti/Izin -> Penetapan Karyawan Pengganti oleh Korlap (shift_relief), ATAU
+    // b) Penerbitan Surat Perintah Kerja Lembur (SPKL) resmi oleh Manajemen / Pimpinan.
 
     // Ephemeral Rolling Photo Replacement: Foto checkout (pulang) yang lalu otomatis dihapus dan digantikan hanya dengan foto checkout terbaru
     if (photo && validUserId && updatedAttendance?.id) {

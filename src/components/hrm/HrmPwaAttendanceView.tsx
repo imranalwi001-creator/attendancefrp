@@ -265,15 +265,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const [isSubmittingBreachReport, setIsSubmittingBreachReport] = useState(false);
 
   // ─── TAHAP 2: RELIEF DUTY & EMERGENCY POST-SHIFT OVERTIME STATES ───
-  const [isEmergencyOtModalOpen, setIsEmergencyOtModalOpen] = useState(false);
-  const [detectedOvertimeInfo, setDetectedOvertimeInfo] = useState<{
-    isOvertime: boolean;
-    minutesOver: number;
-    hoursOver: number;
-    shiftEndStr: string;
-  } | null>(null);
-  const [selectedEmergencyOtHours, setSelectedEmergencyOtHours] = useState<number>(1.0);
-  const [emergencyOtReason, setEmergencyOtReason] = useState<string>('Tugas operasional mendesak pasca-shift');
+  // Note: Modal popup lembur pasca-shift dihilangkan sesuai instruksi resmi manajemen.
+  // Lembur hanya sah melalui penugasan resmi / pengganti (shift_relief) yang disetujui Korlap.
   const [emergencyOvertimePayload, setEmergencyOvertimePayload] = useState<{
     isEmergencyOvertime: boolean;
     emergencyOvertimeHours: number;
@@ -3509,63 +3502,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return null;
   }, [hasClockedIn, isSimulationAtVenue, isCurrentSessionClosed, nextShiftInfo, hasApprovedEmergencyLeave, clockOutWindow, todayAttendance]);
 
-  // ─── TAHAP 2: DETEKSI & ALUR LEMBUR PASCA-SHIFT OTOMATIS (MAX 3 JAM) ───
-  const checkPostShiftOvertime = () => {
-    if (!userShift?.endTime) {
-      return { isOvertime: false, minutesOver: 0, hoursOver: 0, shiftEndStr: '16:30' };
-    }
-
-    const [endH, endM] = userShift.endTime.split(':').map(Number);
-    const now = currentTime;
-    const currentMins = now.getHours() * 60 + now.getMinutes();
-
-    const [startH, startM] = (userShift.startTime || '07:30').split(':').map(Number);
-    const isCrossDay = Boolean(userShift.isCrossDay || (endH < startH) || (endH === startH && endM < startM));
-
-    const shiftEndMins = endH * 60 + endM;
-    let effectiveCurrentMins = currentMins;
-
-    if (isCrossDay) {
-      if (currentMins < (startH * 60 + startM)) {
-        effectiveCurrentMins = currentMins;
-      } else {
-        effectiveCurrentMins = currentMins - 24 * 60;
-      }
-    }
-
-    const diffMinutes = effectiveCurrentMins - shiftEndMins;
-
-    // Trigger klaim lembur pasca-shift jika selisih waktu >= 30 menit
-    if (diffMinutes >= 30) {
-      const rawHours = diffMinutes / 60;
-      // Bulatkan ke kelipatan 0.5 jam, hard cap maksimal 3.0 jam
-      const cappedHours = Math.min(3.0, Math.max(0.5, Math.round(rawHours * 2) / 2));
-      return {
-        isOvertime: true,
-        minutesOver: diffMinutes,
-        hoursOver: cappedHours,
-        shiftEndStr: userShift.endTime.substring(0, 5),
-      };
-    }
-
-    return {
-      isOvertime: false,
-      minutesOver: Math.max(0, diffMinutes),
-      hoursOver: 0,
-      shiftEndStr: userShift.endTime.substring(0, 5),
-    };
-  };
-
+  // ─── TAHAP 2: ALUR ABSEN PULANG LANGSUNG (BEBAS CELAH KLAIM LEMBUR MANDIRI) ───
+  // Sesuai Instruksi Resmi Manajemen PT FRP: Karyawan pulang murni foto selfie presensi kepulangan.
+  // Tidak ada pop-up lembur darurat pasca-shift. Lembur sah HANYA via penugasan pengganti resmi / SPKL.
   const triggerClockOutFlow = () => {
-    const otInfo = checkPostShiftOvertime();
-    if (otInfo.isOvertime) {
-      setDetectedOvertimeInfo(otInfo);
-      setSelectedEmergencyOtHours(otInfo.hoursOver);
-      setIsEmergencyOtModalOpen(true);
-    } else {
-      setEmergencyOvertimePayload(null);
-      openLiveCamera('clock_out');
-    }
+    setEmergencyOvertimePayload(null);
+    openLiveCamera('clock_out');
   };
 
   // Aksi Cerdas Gabungan Masuk & Pulang di Tombol Tengah Menu Bawah
@@ -7425,146 +7367,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         </DialogContent>
       </Dialog>
 
-      {/* ─── MODAL KLAIM LEMBUR DARURAT PASCA-SHIFT (HARD CAP MAKS 3 JAM) ─── */}
-      <Dialog open={isEmergencyOtModalOpen} onOpenChange={setIsEmergencyOtModalOpen}>
-        <DialogContent className="max-w-md w-[95%] rounded-3xl p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl">
-          <DialogHeader className="space-y-1.5 text-left">
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0 text-amber-600 dark:text-amber-400">
-                <Zap className="w-5 h-5 animate-pulse" />
-              </div>
-              <div>
-                <DialogTitle className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                  Lembur Darurat Pasca-Shift
-                </DialogTitle>
-                <DialogDescription className="text-xs text-slate-500 dark:text-slate-400">
-                  Shift berakhir pk {detectedOvertimeInfo?.shiftEndStr || '16:30'} WITA (Lebih +{detectedOvertimeInfo?.minutesOver || 0} mnt)
-                </DialogDescription>
-              </div>
-            </div>
-          </DialogHeader>
 
-          <div className="space-y-4 py-2 text-xs">
-            {/* Info Hard Cap Manajemen */}
-            <div className="p-3 rounded-2xl bg-gradient-to-r from-amber-500/10 via-orange-500/5 to-transparent border border-amber-500/25 flex items-start gap-2.5">
-              <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-              <div className="text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed">
-                <span className="font-bold">Ketentuan Manajemen PT FRP:</span>
-                <p className="mt-0.5 opacity-90">
-                  Lembur mendesak langsung kerja tanpa SPKL awal dibatasi <strong>maksimal 3.0 Jam</strong>. Bukti foto selfie dengan watermark forensik GPS & waktu WITA otomatis dilaporkan ke Pimpinan.
-                </p>
-              </div>
-            </div>
-
-            {/* Durasi Lembur Chips (Capped at 3.0) */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between">
-                <span>Pilih Durasi Lembur:</span>
-                <span className="text-emerald-700 dark:text-emerald-400 font-extrabold text-sm">
-                  {selectedEmergencyOtHours} Jam ({selectedEmergencyOtHours * 60} Menit)
-                </span>
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {[0.5, 1.0, 1.5, 2.0, 2.5, 3.0].map((hours) => {
-                  const isSelected = selectedEmergencyOtHours === hours;
-                  const isMax = hours === 3.0;
-                  return (
-                    <button
-                      key={hours}
-                      type="button"
-                      onClick={() => setSelectedEmergencyOtHours(hours)}
-                      className={`h-11 rounded-2xl font-bold text-xs flex flex-col items-center justify-center transition-all border ${
-                        isSelected
-                          ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm shadow-emerald-600/30 scale-[1.02]'
-                          : 'bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-emerald-500/50'
-                      }`}
-                    >
-                      <span>+{hours} Jam</span>
-                      <span className={`text-[9px] font-normal ${isSelected ? 'text-emerald-100' : 'text-slate-400'}`}>
-                        {isMax ? 'Maks. 3 Jam' : `${hours * 60} mnt`}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Quick Reason Chips */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                Pilih Alasan Pekerjaan Mendesak:
-              </label>
-              <div className="flex flex-wrap gap-1.5">
-                {[
-                  'Bongkar Muat Kapal Tonasa',
-                  'Perbaikan Urgent Mesin/Conveyor',
-                  'Handling Kendala Timbangan Pelabuhan',
-                  'Serah Terima Shift & Pengamanan',
-                  'Pekerjaan Lapangan Mendesak',
-                ].map((chip) => (
-                  <button
-                    key={chip}
-                    type="button"
-                    onClick={() => setEmergencyOtReason(chip)}
-                    className={`px-2.5 py-1.5 rounded-xl text-[11px] font-medium transition-all border ${
-                      emergencyOtReason === chip
-                        ? 'bg-amber-500/20 text-amber-900 dark:text-amber-200 border-amber-500/50 font-bold'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
-                    }`}
-                  >
-                    {chip}
-                  </button>
-                ))}
-              </div>
-              <Input
-                type="text"
-                value={emergencyOtReason}
-                onChange={(e) => setEmergencyOtReason(e.target.value)}
-                placeholder="Atau tuliskan alasan tugas darurat..."
-                className="text-xs rounded-xl h-10 mt-1"
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="flex-col sm:flex-row gap-2 pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                // Pulang biasa tanpa mencatat lembur darurat
-                setIsEmergencyOtModalOpen(false);
-                setEmergencyOvertimePayload(null);
-                openLiveCamera('clock_out');
-              }}
-              className="w-full sm:w-auto rounded-xl text-xs text-slate-600 dark:text-slate-400"
-            >
-              Tidak, Pulang Biasa
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                if (!emergencyOtReason.trim()) {
-                  toast.error('Mohon cantumkan alasan pekerjaan mendesak.');
-                  return;
-                }
-                setEmergencyOvertimePayload({
-                  isEmergencyOvertime: true,
-                  emergencyOvertimeHours: selectedEmergencyOtHours,
-                  emergencyOvertimeReason: emergencyOtReason.trim(),
-                });
-                setIsEmergencyOtModalOpen(false);
-                openLiveCamera('clock_out');
-              }}
-              className="w-full sm:w-auto rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm flex items-center justify-center gap-1.5"
-            >
-              <Camera className="w-4 h-4" />
-              <span>Foto & Klaim Lembur (+{selectedEmergencyOtHours}J)</span>
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* ─── MODAL ABSEN TUGAS DARURAT MANDIRI (REKOMENDASI 3: SELF-EMERGENCY OVERRIDE) ─── */}
       <Dialog open={emergencyOverrideModalOpen} onOpenChange={setEmergencyOverrideModalOpen}>
