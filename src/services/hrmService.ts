@@ -3694,6 +3694,10 @@ export const hrmService = {
           emergencyOvertimeReason: data.emergencyOvertimeReason,
         });
       }
+      // Jika existing sudah memiliki clockOut, kembalikan existing (cegah jatuh ke recordClockIn)
+      if (existing && existing.clockOut) {
+        return existing;
+      }
     }
 
     if (existing && existing.clockIn && !existing.clockOut && !data.clockOutPhoto) {
@@ -3709,6 +3713,13 @@ export const hrmService = {
         hrmService.saveAttendances(all);
         window.dispatchEvent(new Event('hrm_attendance_updated'));
       }
+      return existing;
+    }
+
+    // Jika karyawan sudah menyelesaikan shift hari ini (clockOut sudah tercatat)
+    // Cegah presensi masuk duplikat / tidak sengaja kecuali ada opsi eksplisit tugas darurat atau shift lanjutan
+    if (existing && existing.clockOut && !data.isEmergencyOverride && !data.isEmergencyOvertime && !data.shiftId) {
+      console.warn('[recordAttendance] Shift hari ini sudah selesai (clockOut sudah ada). Mencegah clock-in duplikat.');
       return existing;
     }
 

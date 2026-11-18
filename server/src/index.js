@@ -1972,6 +1972,35 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       isCrossDay = true;
     }
 
+    // ─── DEBOUNCE ANTI-DUPLICATE CLOCK-IN PASCA CLOCK-OUT (BERLAKU SEMUA KARYAWAN) ───
+    // Jika karyawan baru saja melakukan Absen Pulang (clock_out) dalam kurun waktu 15 menit,
+    // tolak presensi masuk ulang yang tidak sengaja tertekan (misal double tap / lag jaringan).
+    if (!isSimulationSession && !isEmergencyOverride) {
+      const recentClockOutCheck = await pool.query(
+        `SELECT id, shift_name, clock_in, clock_out, updated_at FROM hrm_attendances 
+         WHERE user_id = $1 AND attendance_date = $2::date AND clock_out IS NOT NULL 
+         ORDER BY updated_at DESC LIMIT 1`,
+        [validUserId, date]
+      ).catch(() => ({ rows: [] }));
+
+      if (recentClockOutCheck.rows.length > 0) {
+        const prevRow = recentClockOutCheck.rows[0];
+        const prevOutTime = (prevRow.clock_out || '').substring(0, 5);
+        if (prevRow.updated_at) {
+          const outMs = new Date(prevRow.updated_at).getTime();
+          const nowMs = Date.now();
+          const diffMinutes = (nowMs - outMs) / 60000;
+          if (diffMinutes < 15 && diffMinutes >= 0) {
+            return res.status(400).json({
+              success: false,
+              error: `Presensi Dibatalkan: Anda baru saja melakukan Absen Pulang pk ${prevOutTime} WITA (${Math.ceil(diffMinutes * 60)} detik lalu). Presensi masuk kedua untuk shift yang sama tidak diperlukan.`,
+              code: 'RECENT_CLOCKOUT_DEBOUNCE',
+            });
+          }
+        }
+      }
+    }
+
     // ─── SHIFT WINDOW GUARD (HANYA UNTUK KARYAWAN REGULER) ───
     if (!isExempt && !isSimulationSession && userProfile) {
       const otRes = await pool.query(
@@ -2511,7 +2540,16 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         req.body.isEmergencyOvertime === 'true'
       );
 
-      if (isSimulationSession || isEmployeeOffToday || isEmergencySession) {
+      // Periksa apakah ini adalah sesi kedua (shift lanjutan / tambahan di tanggal yang sama)
+      const prevSessionCheck = await pool.query(
+        `SELECT id, clock_in, clock_out FROM hrm_attendances 
+         WHERE user_id = $1 AND attendance_date = $2::date AND clock_out IS NOT NULL
+         LIMIT 1`,
+        [validUserId, date]
+      ).catch(() => ({ rows: [] }));
+      const isSecondSessionToday = prevSessionCheck.rows.length > 0;
+
+      if (isSimulationSession || isEmployeeOffToday || isEmergencySession || isSecondSessionToday) {
         finalStatus = 'hadir';
         finalLateMinutes = 0;
       } else {
@@ -6092,7 +6130,7 @@ app.post('/api/attendances/clock-out', async (req, res) => {
       [validUserId]
     ).catch(e => console.warn('[Clock-Out Profile Reset Error]:', e.message));
 
-    res.json({ success: true, data: updatedAttendance, emergencyOvertime: emergencyOtRecord });
+    res.json({ success: true, data: updatedAttendance, emergencyOvertime: null });
   } catch (err) {
     console.error('Clock-out error:', err);
     res.status(500).json({ success: false, error: err.message });
