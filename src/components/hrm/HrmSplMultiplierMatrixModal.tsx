@@ -390,12 +390,6 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
       const cells3: { hours: number; rawOt?: OvertimeRecord; isYellow: boolean }[] = [];
       const cells4: { hours: number; rawOt?: OvertimeRecord; isYellow: boolean }[] = [];
 
-      let row15Real = 0, row15Paid = 0;
-      let row2wReal = 0, row2wPaid = 0;
-      let row2rReal = 0, row2rPaid = 0;
-      let row3Real = 0, row3Paid = 0;
-      let row4Real = 0, row4Paid = 0;
-
       const empDiv = ((emp.divisionName || (emp as any).division_name || (emp as any).seksi || emp.jobTitle || '')).toLowerCase();
       const isTimbanganOrSegel = empDiv.includes('timbangan') || empDiv.includes('segel');
       const isMatching = empDiv.includes('matching');
@@ -499,26 +493,30 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
 
         // Push ke masing-masing baris pengali dengan ref rawOt independen
         cells15.push({ hours: h15, rawOt: ot15, isYellow: false });
-        row15Real += h15;
-        row15Paid += h15 * 1.5;
-
         cells2w.push({ hours: h2w, rawOt: ot2w, isYellow: false });
-        row2wReal += h2w;
-        row2wPaid += h2w * 2.0;
-
         const isYellowCell = isSchedOff || d.isWeekend;
         cells2r.push({ hours: h2r, rawOt: ot2r, isYellow: isYellowCell || h2r > 0 });
-        row2rReal += h2r;
-        row2rPaid += h2r * 2.0;
-
         cells3.push({ hours: h3, rawOt: ot3, isYellow: false });
-        row3Real += h3;
-        row3Paid += h3 * 3.0;
-
         cells4.push({ hours: h4, rawOt: ot4, isYellow: false });
-        row4Real += h4;
-        row4Paid += h4 * 4.0;
       });
+
+      // ── STANDAR REKAPITULASI RESMI SPL PT FRP ──────────────────────────────────
+      // Pengali TIDAK dikalikan satu per satu harian, melainkan dihitung dulu
+      // TOTAL rekapan jam riil selama sebulan penuh, BARU kemudian dikalikan pengali:
+      const row15Real = cells15.reduce((acc, c) => acc + c.hours, 0);
+      const row15Paid = Number((row15Real * 1.5).toFixed(1));
+
+      const row2wReal = cells2w.reduce((acc, c) => acc + c.hours, 0);
+      const row2wPaid = Number((row2wReal * 2.0).toFixed(1));
+
+      const row2rReal = cells2r.reduce((acc, c) => acc + c.hours, 0);
+      const row2rPaid = Number((row2rReal * 2.0).toFixed(1));
+
+      const row3Real = cells3.reduce((acc, c) => acc + c.hours, 0);
+      const row3Paid = Number((row3Real * 3.0).toFixed(1));
+
+      const row4Real = cells4.reduce((acc, c) => acc + c.hours, 0);
+      const row4Paid = Number((row4Real * 4.0).toFixed(1));
 
       const row15 = { mult: 1.5, label: '1.5', cells: cells15, rowReal: row15Real, rowPaid: row15Paid };
       const row2Weekday = { mult: 2.0, label: '2', cells: cells2w, rowReal: row2wReal, rowPaid: row2wPaid };
@@ -528,8 +526,8 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
 
       // Subtotal Karyawan (Peach Row)
       const subtotalDailyHours: number[] = [];
-      let totalLemburReal = row15.rowReal + row2Weekday.rowReal + row2Relief.rowReal + row3.rowReal + row4.rowReal;
-      let totalLemburPaid = row15.rowPaid + row2Weekday.rowPaid + row2Relief.rowPaid + row3.rowPaid + row4.rowPaid;
+      const totalLemburReal = row15Real + row2wReal + row2rReal + row3Real + row4Real;
+      const totalLemburPaid = row15Paid + row2wPaid + row2rPaid + row3Paid + row4Paid;
 
       daysMeta.forEach((_, dIdx) => {
         const sumOnDay =
@@ -1289,35 +1287,44 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
             </DialogHeader>
 
             <div className="space-y-3 py-2 text-xs">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-3 items-center">
                 <div>
-                  <Label className="text-xs">Jam Lembur Riil (Fisik)</Label>
+                  <Label className="text-xs font-semibold">Jam Lembur Riil (Fisik)</Label>
                   <Input
                     type="number"
                     step="0.5"
+                    min="0"
+                    max="24"
                     value={inputRealHours}
                     onChange={(e) => setInputRealHours(Number(e.target.value))}
                     className="h-9 text-xs rounded-xl mt-1 font-mono font-bold"
+                    placeholder="Contoh: 1 atau 2..."
+                    autoFocus
                   />
                 </div>
                 <div>
-                  <Label className="text-xs">Pengali (Multiplier)</Label>
-                  <Select value={String(inputMultiplier)} onValueChange={(v) => setInputMultiplier(Number(v))}>
-                    <SelectTrigger className="h-9 text-xs rounded-xl mt-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1.5">1.5x (Hari Kerja Awal)</SelectItem>
-                      <SelectItem value="2">2.0x (Hari Kerja Lanjutan / Libur / Relief)</SelectItem>
-                      <SelectItem value="3">3.0x (Hari Libur Resmi Jam Ke-8)</SelectItem>
-                      <SelectItem value="4">4.0x (Hari Libur Resmi Jam Ke-9+)</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label className="text-xs font-semibold">Pengali Baris SPL (Terkunci)</Label>
+                  <div className="h-9 px-3 mt-1 rounded-xl border border-border bg-muted/60 flex items-center justify-between text-xs font-mono font-bold text-foreground">
+                    <span className="text-indigo-600 dark:text-indigo-400">
+                      {editTarget?.multiplier || inputMultiplier}x
+                    </span>
+                    <Badge variant="secondary" className="text-[10px] py-0 px-1.5 font-sans font-medium">
+                      {editTarget?.rowKey === 'm15'
+                        ? '1 Jam Pertama'
+                        : editTarget?.rowKey === 'm2w'
+                        ? 'Jam Lanjutan'
+                        : editTarget?.rowKey === 'm2r'
+                        ? 'Libur / Relief'
+                        : editTarget?.rowKey === 'm3'
+                        ? 'Libur Jam Ke-8'
+                        : 'Libur Jam Ke-9+'}
+                    </Badge>
+                  </div>
                 </div>
               </div>
 
               <div>
-                <Label className="text-xs">Uraian Tugas / Alasan Penugasan SPKL</Label>
+                <Label className="text-xs font-semibold">Uraian Tugas / Alasan Penugasan SPKL</Label>
                 <Input
                   type="text"
                   value={inputTaskDesc}
@@ -1329,28 +1336,26 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
 
               <div className="p-3 bg-muted/40 rounded-xl border border-border flex items-center justify-between">
                 <div>
-                  <span className="font-semibold block">Jenis Hari Libur / Akhir Pekan</span>
+                  <span className="font-semibold block text-xs">Jenis Hari Libur / Akhir Pekan</span>
                   <span className="text-[10px] text-muted-foreground">Aktifkan jika penugasan pada hari OFF atau tanggal merah</span>
                 </div>
                 <input
                   type="checkbox"
                   checked={inputIsHoliday}
                   onChange={(e) => setInputIsHoliday(e.target.checked)}
-                  className="w-4 h-4 accent-primary rounded"
+                  className="w-4 h-4 accent-primary rounded cursor-pointer"
                 />
               </div>
 
-              {/* Real-time Calculation Preview */}
-              <div className="p-3 bg-primary/5 rounded-xl border border-primary/20 space-y-1">
-                <span className="text-[11px] font-bold text-primary block">Kalkulasi Otomatis Sesuai Aturan Divisi:</span>
-                <div className="flex justify-between text-xs">
-                  <span>Jam Riil: <strong>{inputRealHours} Jam</strong></span>
-                  <span>Pengali: <strong>{inputMultiplier}x</strong></span>
-                  <span>Jam Bayar: <strong>{(inputRealHours * inputMultiplier).toFixed(1)} Jam</strong></span>
+              {/* Info Standar Akumulasi Bulanan Rekap SPL */}
+              <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 rounded-xl border border-indigo-200/60 dark:border-indigo-800/60 space-y-1.5">
+                <div className="flex items-center gap-1.5 font-bold text-indigo-950 dark:text-indigo-200 text-xs">
+                  <Info size={14} className="text-indigo-600 shrink-0" />
+                  <span>Standar Rekapitulasi SPL PT FRP:</span>
                 </div>
-                <div className="text-right pt-1 font-mono font-extrabold text-foreground text-sm">
-                  Estimasi Biaya: Rp {Math.round(inputRealHours * inputMultiplier * HOURLY_RATE).toLocaleString('id-ID')}
-                </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Angka pada sel ini dicatat murni sebagai <strong>Jam Lembur Riil (Fisik)</strong> harian. Seluruh jam riil pada baris ini <strong>dijumlahkan dulu sebulan penuh</strong>, kemudian <strong>total rekapan sebulan tersebut dikalikan pengali {(editTarget?.multiplier || inputMultiplier)}x</strong> di kolom rekapitulasi akhir, bukan dikalikan harian satu per satu.
+                </p>
               </div>
             </div>
 
