@@ -26,6 +26,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { TimePicker } from '@/components/ui/time-picker';
+import { HrmDirectShiftSwapModal } from '@/components/hrm/HrmDirectShiftSwapModal';
 
 export const HrmShiftManagementTab: React.FC = () => {
   const [shifts, setShifts] = useState<Shift[]>([]);
@@ -35,6 +36,7 @@ export const HrmShiftManagementTab: React.FC = () => {
   const [selectedDivision, setSelectedDivision] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [directSwapModalOpen, setDirectSwapModalOpen] = useState(false);
 
   // Shift Modal State
   const [shiftModalOpen, setShiftModalOpen] = useState(false);
@@ -464,20 +466,38 @@ export const HrmShiftManagementTab: React.FC = () => {
         </CardContent>
       </Card>
 
-      {/* Shift Swap Requests Table */}
-      {shiftSwaps.length > 0 && (
-        <Card className="border-border bg-card shadow-xs">
-          <CardHeader className="pb-3 border-b border-border">
+      {/* Shift Swap Requests Table & Execution Hub */}
+      <Card className="border-border bg-card shadow-xs">
+        <CardHeader className="pb-3 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
             <CardTitle className="text-base font-bold text-foreground flex items-center gap-2">
-              <ArrowRightLeft className="w-4 h-4 text-primary" />
-              Permohonan Tukar Shift (Shift Swap)
+              <ArrowRightLeft className="w-4 h-4 text-emerald-600" />
+              Tukar Shift Lapangan &amp; Pengganti Pos
             </CardTitle>
             <CardDescription className="text-xs">
-              Alur persetujuan pertukaran jadwal antar rekan kerja tanpa mengacaukan rekapitulasi data.
+              Otoritas khusus Korlap &amp; Superadmin untuk penyesuaian rotasi shift tanpa mengacaukan rekapitulasi data.
             </CardDescription>
-          </CardHeader>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => setDirectSwapModalOpen(true)}
+            className="h-8 text-xs rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1.5 shadow-xs"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5" />
+            Tukar Shift Cepat Lapangan
+          </Button>
+        </CardHeader>
 
-          <CardContent className="pt-4">
+        <CardContent className="pt-4">
+          {shiftSwaps.length === 0 ? (
+            <div className="p-6 text-center space-y-2 border border-dashed border-border rounded-xl">
+              <ArrowRightLeft className="w-8 h-8 text-muted-foreground mx-auto opacity-50" />
+              <p className="text-xs font-semibold text-foreground">Belum ada riwayat pertukaran shift aktif</p>
+              <p className="text-[11px] text-muted-foreground">
+                Gunakan tombol &quot;Tukar Shift Cepat Lapangan&quot; di atas untuk melakukan pertukaran jadwal antar-karyawan resmi arahan Korlap.
+              </p>
+            </div>
+          ) : (
             <div className="border border-border rounded-xl overflow-hidden">
               <table className="w-full text-left text-xs text-foreground">
                 <thead className="bg-muted/40 border-b border-border uppercase text-[11px] text-muted-foreground font-semibold">
@@ -538,9 +558,9 @@ export const HrmShiftManagementTab: React.FC = () => {
                 </tbody>
               </table>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
 
       {/* Modal Add/Edit Master Shift */}
       <Dialog open={shiftModalOpen} onOpenChange={setShiftModalOpen}>
@@ -728,6 +748,16 @@ export const HrmShiftManagementTab: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ─── MODAL TUKAR SHIFT LAPANGAN CEPAT (KORLAP & SUPERADMIN) ─── */}
+      <HrmDirectShiftSwapModal
+        open={directSwapModalOpen}
+        onClose={() => setDirectSwapModalOpen(false)}
+        onSuccess={() => {
+          loadData();
+          toast.success('Roster jadwal dan tukar shift berhasil diperbarui.');
+        }}
+      />
     </div>
   );
 };

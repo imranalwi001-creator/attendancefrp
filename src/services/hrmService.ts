@@ -6701,6 +6701,53 @@ export const hrmService = {
     });
   },
 
+  getEmployeeSchedulePreview: async (userId: string, date: string) => {
+    try {
+      return await api.get<{ success: boolean; data: any; error?: string }>(
+        `/shift-swaps/employee-schedule-preview?userId=${encodeURIComponent(userId)}&date=${encodeURIComponent(date)}`
+      );
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Gagal memuat pratinjau jadwal' };
+    }
+  },
+
+  directExecuteShiftSwap: async (payload: {
+    employeeAId: string;
+    employeeBId: string;
+    swapDate: string;
+    swapType?: string;
+    operatorId?: string;
+    operatorRole?: string;
+    operatorName?: string;
+    reason?: string;
+    customNotes?: string;
+    forceOverrideFatigue?: boolean;
+  }) => {
+    try {
+      const res = await api.post<{
+        success: boolean;
+        message: string;
+        warning?: string;
+        code?: string;
+        error?: string;
+        data?: any;
+        swapDetail?: any;
+      }>('/shift-swaps/direct-execution', payload);
+      window.dispatchEvent(new Event('hrm_data_updated'));
+      window.dispatchEvent(new Event('hrm_swaps_updated'));
+      window.dispatchEvent(new Event('hrm_roster_updated'));
+      return res;
+    } catch (err: any) {
+      const respData = err?.response?.data;
+      return {
+        success: false,
+        error: respData?.error || err.message || 'Gagal mengeksekusi tukar shift langsung',
+        warning: respData?.warning,
+        code: respData?.code,
+      };
+    }
+  },
+
   getFieldRecap: async (params?: {
     period?: 'current_month' | 'last_month' | 'year' | 'ytd' | 'tahunan';
     divisionId?: string;

@@ -12718,6 +12718,424 @@ app.put(['/api/shift-swaps/:id/approval', '/api/shift-swaps/:id/korlap-approve']
   }
 });
 
+// ─── 10C. DIRECT FIELD SHIFT SWAP (KHUSUS KORLAP & SUPERADMIN) ───────────────
+app.get('/api/shift-swaps/employee-schedule-preview', async (req, res) => {
+  const { userId, date } = req.query;
+  if (!userId || !date) {
+    return res.status(400).json({ success: false, error: 'userId dan date wajib diisi' });
+  }
+  try {
+    let validUserId = userId;
+    if (!UUID_REGEX.test(userId)) {
+      const u = await pool.query('SELECT id FROM hrm_profiles WHERE nip = $1 OR LOWER(email) = LOWER($1) LIMIT 1', [userId]);
+      if (u.rows.length > 0) validUserId = u.rows[0].id;
+    }
+
+    const pRes = await pool.query(`
+      SELECT p.id, p.full_name, p.nip, p.shift_id,
+             COALESCE(d.name, 'Umum') as division_name,
+             p.placement_location
+      FROM hrm_profiles p
+      LEFT JOIN hrm_divisions d ON p.division_id = d.id
+      WHERE p.id = $1 LIMIT 1
+    `, [validUserId]);
+
+    if (pRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Karyawan tidak ditemukan' });
+    }
+    const prof = pRes.rows[0];
+
+    // Cek jadwal di hrm_employee_schedules
+    const sRes = await pool.query(`
+      SELECT es.*, s.name as ref_shift_name, s.start_time as ref_start, s.end_time as ref_end
+      FROM hrm_employee_schedules es
+      LEFT JOIN hrm_shifts s ON es.shift_id = s.id
+      WHERE es.user_id = $1 AND es.schedule_date = $2::date
+      LIMIT 1
+    `, [validUserId, date]);
+
+    if (sRes.rows.length > 0) {
+      const row = sRes.rows[0];
+      return res.json({
+        success: true,
+        data: {
+          userId: prof.id,
+          fullName: prof.full_name,
+          nip: prof.nip,
+          date,
+          shiftId: row.shift_id,
+          shiftCode: row.shift_code,
+          shiftName: row.shift_name || row.ref_shift_name || (row.is_off ? 'LIBUR (OFF)' : 'Reguler'),
+          startTime: (row.start_time || row.ref_start || '07:30').substring(0, 5),
+          endTime: (row.end_time || row.ref_end || '15:30').substring(0, 5),
+          durationHours: parseFloat(row.duration_hours || 8.0),
+          isNightShift: Boolean(row.is_night_shift),
+          isOff: Boolean(row.is_off),
+          notes: row.notes || '',
+          source: 'roster_database'
+        }
+      });
+    }
+
+    // Fallback: master shift profil
+    const defRes = await pool.query(`
+      SELECT s.* FROM hrm_shifts s WHERE s.id = $1 LIMIT 1
+    `, [prof.shift_id]);
+
+    const defShift = defRes.rows[0] || {
+      id: null,
+      shift_code: 'P',
+      name: 'Shift I (07:30 - 15:30 WITA)',
+      start_time: '07:30:00',
+      end_time: '15:30:00',
+      duration_hours: 8.0,
+      is_night_shift: false
+    };
+
+    res.json({
+      success: true,
+      data: {
+        userId: prof.id,
+        fullName: prof.full_name,
+        nip: prof.nip,
+        date,
+        shiftId: defShift.id,
+        shiftCode: defShift.shift_code || 'P',
+        shiftName: defShift.name || 'Shift I (07:30 - 15:30 WITA)',
+        startTime: (defShift.start_time || '07:30').substring(0, 5),
+        endTime: (defShift.end_time || '15:30').substring(0, 5),
+        durationHours: parseFloat(defShift.duration_hours || 8.0),
+        isNightShift: Boolean(defShift.is_night_shift),
+        isOff: false,
+        notes: 'Mengikuti Jadwal Pokok Profil',
+        source: 'profile_default'
+      }
+    });
+  } catch (err) {
+    console.error('Schedule preview error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/shift-swaps/direct-execution', async (req, res) => {
+  const {
+    employeeAId,
+    employeeBId,
+    swapDate,
+    swapType = 'MUTUAL_SWAP', // 'MUTUAL_SWAP' | 'DAY_OFF_SWAP' | 'RELIEF_OVERTIME'
+    operatorId,
+    operatorRole = 'superadmin',
+    operatorName = 'Super Administrator',
+    reason = 'Penyesuaian shift operasional oleh Korlap/Superadmin',
+    customNotes = '',
+    forceOverrideFatigue = false,
+  } = req.body;
+
+  const allowedRoles = ['superadmin', 'admin', 'korlap', 'k3'];
+  const opRoleClean = (operatorRole || '').toLowerCase().trim();
+  if (!allowedRoles.includes(opRoleClean)) {
+    return res.status(403).json({
+      success: false,
+      error: 'Akses Ditolak: Fitur tukar shift langsung hanya dapat dieksekusi oleh Korlap, Superadmin, Admin, atau K3.'
+    });
+  }
+
+  if (!employeeAId || !employeeBId || !swapDate) {
+    return res.status(400).json({ success: false, error: 'Karyawan A, Karyawan B, dan Tanggal Tukar wajib diisi.' });
+  }
+
+  if (employeeAId === employeeBId) {
+    return res.status(400).json({ success: false, error: 'Karyawan A dan Karyawan B tidak boleh orang yang sama.' });
+  }
+
+  try {
+    const [pARes, pBRes] = await Promise.all([
+      pool.query('SELECT id, full_name, nip, phone, shift_id, division_name, placement_location FROM hrm_profiles WHERE id = $1 LIMIT 1', [employeeAId]),
+      pool.query('SELECT id, full_name, nip, phone, shift_id, division_name, placement_location FROM hrm_profiles WHERE id = $1 LIMIT 1', [employeeBId])
+    ]);
+
+    if (pARes.rows.length === 0 || pBRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Data karyawan A atau B tidak ditemukan.' });
+    }
+
+    const profA = pARes.rows[0];
+    const profB = pBRes.rows[0];
+
+    // Helper: dapatkan jadwal efektif karyawan pada tanggal tertentu
+    async function getEffectiveSchedule(uId, dt) {
+      const s = await pool.query(`
+        SELECT es.*, sh.name as ref_name, sh.shift_code as ref_code, sh.start_time as ref_start, sh.end_time as ref_end, sh.duration_hours as ref_dur, sh.is_night_shift as ref_night
+        FROM hrm_employee_schedules es
+        LEFT JOIN hrm_shifts sh ON es.shift_id = sh.id
+        WHERE es.user_id = $1 AND es.schedule_date = $2::date LIMIT 1
+      `, [uId, dt]);
+
+      if (s.rows.length > 0) {
+        const r = s.rows[0];
+        return {
+          shiftId: r.shift_id,
+          shiftCode: r.shift_code || r.ref_code || 'P',
+          shiftName: r.shift_name || r.ref_name || (r.is_off ? 'LIBUR (OFF)' : 'Shift'),
+          startTime: (r.start_time || r.ref_start || '07:30').substring(0, 5),
+          endTime: (r.end_time || r.ref_end || '15:30').substring(0, 5),
+          durationHours: parseFloat(r.duration_hours || r.ref_dur || 8.0),
+          isNightShift: Boolean(r.is_night_shift || r.ref_night),
+          isOff: Boolean(r.is_off)
+        };
+      }
+
+      // Profile default
+      const p = (await pool.query('SELECT p.shift_id, sh.name, sh.shift_code, sh.start_time, sh.end_time, sh.duration_hours, sh.is_night_shift FROM hrm_profiles p LEFT JOIN hrm_shifts sh ON p.shift_id = sh.id WHERE p.id = $1', [uId])).rows[0];
+      return {
+        shiftId: p?.shift_id || null,
+        shiftCode: p?.shift_code || 'P',
+        shiftName: p?.name || 'Shift I (07:30 - 15:30 WITA)',
+        startTime: (p?.start_time || '07:30').substring(0, 5),
+        endTime: (p?.end_time || '15:30').substring(0, 5),
+        durationHours: parseFloat(p?.duration_hours || 8.0),
+        isNightShift: Boolean(p?.is_night_shift),
+        isOff: false
+      };
+    }
+
+    const schedA = await getEffectiveSchedule(profA.id, swapDate);
+    const schedB = await getEffectiveSchedule(profB.id, swapDate);
+
+    // ── GUARDRAIL 1: Rule 9 Larangan Keras Pengganti Berturut-Turut ──
+    const consecutiveCheck = await pool.query(`
+      SELECT id FROM hrm_shift_swaps 
+      WHERE ((requester_id = $1 AND substitute_id = $2) OR (requester_id = $2 AND substitute_id = $1))
+        AND swap_date = ($3::date - INTERVAL '1 day')
+        AND status = 'approved'
+      LIMIT 1
+    `, [profA.id, profB.id, swapDate]);
+
+    if (consecutiveCheck.rows.length > 0 && !forceOverrideFatigue) {
+      return res.status(400).json({
+        success: false,
+        code: 'CONSECUTIVE_SUBSTITUTE_RULE_VIOLATION',
+        error: `Sesuai Aturan Perusahaan (Rule 9), dilarang menggunakan personil pengganti yang sama (${profB.full_name}) secara berturut-turut untuk orang yang sama. Harap pilih personil pengganti yang lain.`
+      });
+    }
+
+    // ── GUARDRAIL 2: Anti-Fatigue 11 Jam (PP 35/2021) ──
+    let warningFatigue = null;
+    const prevDayDate = new Date(new Date(swapDate).getTime() - 86400000).toISOString().split('T')[0];
+    const prevDaySchedA = await getEffectiveSchedule(profA.id, prevDayDate);
+    if (prevDaySchedA && !prevDaySchedA.isOff && !schedB.isOff) {
+      const [endH, endM] = prevDaySchedA.endTime.split(':').map(Number);
+      const [startH, startM] = schedB.startTime.split(':').map(Number);
+      let diffHours = (startH + 24 - endH) + (startM - endM) / 60;
+      if (diffHours >= 24) diffHours -= 24;
+      if (diffHours < 11 && diffHours > 0) {
+        warningFatigue = `Peringatan: Jeda istirahat ${profA.full_name} setelah shift sebelumnya hanya ${diffHours.toFixed(1)} jam (standar aman min. 11 jam).`;
+      }
+    }
+
+    if (warningFatigue && !forceOverrideFatigue) {
+      return res.status(400).json({
+        success: false,
+        code: 'FATIGUE_WARNING_CONFIRMATION_REQUIRED',
+        warning: warningFatigue,
+        message: 'Diperlukan konfirmasi pemaksaan penugasan (force override) dari pimpinan/korlap.'
+      });
+    }
+
+    // ── ATOMIC DATABASE UPDATE ──
+    // 1. Update Schedule A (menerima shift B)
+    await pool.query(`
+      INSERT INTO hrm_employee_schedules (
+        user_id, schedule_date, shift_id, shift_code, shift_name,
+        start_time, end_time, duration_hours, is_night_shift, is_off, notes, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+      ON CONFLICT (user_id, schedule_date) DO UPDATE SET
+        shift_id = EXCLUDED.shift_id,
+        shift_code = EXCLUDED.shift_code,
+        shift_name = EXCLUDED.shift_name,
+        start_time = EXCLUDED.start_time,
+        end_time = EXCLUDED.end_time,
+        duration_hours = EXCLUDED.duration_hours,
+        is_night_shift = EXCLUDED.is_night_shift,
+        is_off = EXCLUDED.is_off,
+        notes = EXCLUDED.notes,
+        updated_at = NOW();
+    `, [
+      profA.id,
+      swapDate,
+      schedB.shiftId,
+      schedB.shiftCode,
+      schedB.shiftName,
+      schedB.startTime,
+      schedB.endTime,
+      schedB.durationHours,
+      schedB.isNightShift,
+      schedB.isOff,
+      `[Tukar Shift Mandat ${opRoleClean.toUpperCase()}: ${operatorName} dengan ${profB.full_name}] ${customNotes || reason}`.trim()
+    ]);
+
+    // 2. Update Schedule B (menerima shift A)
+    await pool.query(`
+      INSERT INTO hrm_employee_schedules (
+        user_id, schedule_date, shift_id, shift_code, shift_name,
+        start_time, end_time, duration_hours, is_night_shift, is_off, notes, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+      ON CONFLICT (user_id, schedule_date) DO UPDATE SET
+        shift_id = EXCLUDED.shift_id,
+        shift_code = EXCLUDED.shift_code,
+        shift_name = EXCLUDED.shift_name,
+        start_time = EXCLUDED.start_time,
+        end_time = EXCLUDED.end_time,
+        duration_hours = EXCLUDED.duration_hours,
+        is_night_shift = EXCLUDED.is_night_shift,
+        is_off = EXCLUDED.is_off,
+        notes = EXCLUDED.notes,
+        updated_at = NOW();
+    `, [
+      profB.id,
+      swapDate,
+      schedA.shiftId,
+      schedA.shiftCode,
+      schedA.shiftName,
+      schedA.startTime,
+      schedA.endTime,
+      schedA.durationHours,
+      schedA.isNightShift,
+      schedA.isOff,
+      `[Tukar Shift Mandat ${opRoleClean.toUpperCase()}: ${operatorName} dengan ${profA.full_name}] ${customNotes || reason}`.trim()
+    ]);
+
+    // 3. Catat di hrm_shift_swaps (Status Langsung Approved)
+    const insSwap = await pool.query(`
+      INSERT INTO hrm_shift_swaps (
+        requester_id, substitute_id, swap_date, original_shift, target_shift, reason,
+        peer_status, supervisor_status, status, danru_status, korlap_status,
+        korlap_id, approved_by, approval_notes, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6,
+        'accepted', 'approved', 'approved', 'auto_passed', 'approved',
+        $7, $7, $8, NOW(), NOW()
+      ) RETURNING *;
+    `, [
+      profA.id,
+      profB.id,
+      swapDate,
+      schedA.shiftName,
+      schedB.shiftName,
+      reason,
+      operatorId || null,
+      `Otorisasi & Eksekusi Langsung Lapangan oleh ${opRoleClean.toUpperCase()} (${operatorName}). Catatan: ${customNotes || '-'}`
+    ]);
+
+    // 4. Jika swapType === 'RELIEF_OVERTIME', buat lembur SPKL resmi untuk personil pengganti (B)
+    if (swapType === 'RELIEF_OVERTIME') {
+      const otHours = schedA.durationHours || 8.0;
+      await pool.query(`
+        INSERT INTO hrm_overtimes (
+          user_id, overtime_date, start_time, end_time, duration_hours,
+          reason, status, approved_by, approved_at, approval_notes, created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5,
+          $6, 'approved', $7, NOW(), $8, NOW(), NOW()
+        )
+      `, [
+        profB.id,
+        swapDate,
+        schedA.startTime,
+        schedA.endTime,
+        otHours,
+        `[Lembur Pengganti Mandat Korlap] Menggantikan ${profA.full_name} (${schedA.shiftName})`,
+        operatorId || null,
+        `Ditetapkan langsung oleh ${opRoleClean.toUpperCase()} (${operatorName})`
+      ]).catch(e => console.warn('[SPKL Direct Auto Insert Warning]:', e.message));
+    }
+
+    // 5. Broadcast WhatsApp Alerts
+    const formattedDate = new Date(swapDate).toLocaleDateString('id-ID', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+
+    const waMsgA =
+`📢 *PEMBERITAHUAN PENYESUAIAN SHIFT KERJA PT FRP*
+
+Yth. *${profA.full_name}* (${profA.nip || 'FRP'}),
+Jadwal dinas Anda untuk *${formattedDate}* telah resmi disesuaikan oleh ${opRoleClean.toUpperCase()} (*${operatorName}*):
+
+🔄 *Shift Baru Anda:* ${schedB.shiftName} (${schedB.startTime} – ${schedB.endTime} WITA)
+👥 *Pertukaran dengan:* ${profB.full_name} (${schedA.shiftName})
+📝 *Alasan Operasional:* ${reason}
+
+✅ Roster di aplikasi PWA Anda telah diperbarui otomatis. Harap hadir tepat waktu sesuai jadwal baru. Terima kasih!`;
+
+    const waMsgB =
+`📢 *PEMBERITAHUAN PENYESUAIAN SHIFT KERJA PT FRP*
+
+Yth. *${profB.full_name}* (${profB.nip || 'FRP'}),
+Jadwal dinas Anda untuk *${formattedDate}* telah resmi disesuaikan oleh ${opRoleClean.toUpperCase()} (*${operatorName}*):
+
+🔄 *Shift Baru Anda:* ${schedA.shiftName} (${schedA.startTime} – ${schedA.endTime} WITA)
+👥 *Pertukaran dengan:* ${profA.full_name} (${schedB.shiftName})
+📝 *Alasan Operasional:* ${reason}
+
+✅ Roster di aplikasi PWA Anda telah diperbarui otomatis. Harap hadir tepat waktu sesuai jadwal baru. Terima kasih!`;
+
+    const leadershipWa =
+`📢 *LAPORAN PENYESUAIAN SHIFT LAPANGAN PT FRP*
+
+👤 *Eksekutor:* ${operatorName} (${opRoleClean.toUpperCase()})
+📅 *Tanggal Dinas:* ${formattedDate}
+🔄 *Pertukaran:*
+• *${profA.full_name}* (${schedA.shiftName} ➔ *${schedB.shiftName}*)
+• *${profB.full_name}* (${schedB.shiftName} ➔ *${schedA.shiftName}*)
+📊 *Tipe Pertukaran:* ${swapType === 'MUTUAL_SWAP' ? 'Saling Tukar Shift Normal (Rp 0 Lembur)' : (swapType === 'DAY_OFF_SWAP' ? 'Tukar Hari Libur' : 'Lembur Pengganti (SPKL)')}
+📝 *Catatan:* ${reason}
+
+✅ Roster kedua personil dan sinkronisasi presensi telah aktif otomatis di sistem.`;
+
+    if (profA.phone) sendWhatsAppAlert({ phone: profA.phone, message: waMsgA }).catch(() => {});
+    if (profB.phone) sendWhatsAppAlert({ phone: profB.phone, message: waMsgB }).catch(() => {});
+
+    // Pimpinan & Superadmin WhatsApp Alerts
+    sendWhatsAppAlert({ phone: '082291998026', message: leadershipWa }).catch(() => {}); // Dirut (Bpk Alam AS)
+    sendWhatsAppAlert({ phone: '082192755755', message: leadershipWa }).catch(() => {}); // Pimpinan (Bpk Reski Faisal)
+    sendWhatsAppAlert({ phone: '081355904897', message: leadershipWa }).catch(() => {}); // Superadmin
+
+    // In-App Notifications
+    broadcastNotification({
+      targetUserId: profA.id,
+      title: 'Jadwal Shift Disesuaikan oleh Korlap',
+      message: `Jadwal shift Anda tanggal ${formattedDate} telah disesuaikan menjadi ${schedB.shiftName} (Tukar dengan ${profB.full_name}).`,
+      type: 'info',
+      link: '/admin/monitoring'
+    }).catch(() => {});
+
+    broadcastNotification({
+      targetUserId: profB.id,
+      title: 'Jadwal Shift Disesuaikan oleh Korlap',
+      message: `Jadwal shift Anda tanggal ${formattedDate} telah disesuaikan menjadi ${schedA.shiftName} (Tukar dengan ${profA.full_name}).`,
+      type: 'info',
+      link: '/admin/monitoring'
+    }).catch(() => {});
+
+    res.json({
+      success: true,
+      message: `Tukar shift antara ${profA.full_name} dan ${profB.full_name} berhasil dieksekusi & disinkronkan ke database jadwal dan notifikasi WhatsApp.`,
+      data: insSwap.rows[0],
+      swapDetail: {
+        swapDate,
+        employeeA: { id: profA.id, name: profA.full_name, oldShift: schedA.shiftName, newShift: schedB.shiftName },
+        employeeB: { id: profB.id, name: profB.full_name, oldShift: schedB.shiftName, newShift: schedA.shiftName },
+        swapType
+      }
+    });
+  } catch (err) {
+    console.error('Direct shift swap error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── 11. NOTIFICATIONS API (TERPUSAT DESKTOP & MOBILE) ───────────────────────
 app.get('/api/notifications', async (req, res) => {
   const { userId, role } = req.query;

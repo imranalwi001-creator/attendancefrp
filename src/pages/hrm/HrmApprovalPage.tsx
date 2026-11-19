@@ -50,6 +50,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DatePicker } from '@/components/ui/date-picker';
+import { HrmDirectShiftSwapModal } from '@/components/hrm/HrmDirectShiftSwapModal';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -61,6 +62,7 @@ export const HrmApprovalPage: React.FC = () => {
   const [overtimeList, setOvertimeList] = useState<OvertimeRecord[]>([]);
   const [shiftSwaps, setShiftSwaps] = useState<ShiftSwapRecord[]>([]);
   const [loadingSwaps, setLoadingSwaps] = useState(false);
+  const [directSwapModalOpen, setDirectSwapModalOpen] = useState(false);
 
   // User role checking (Korlap, Admin, K3, Danru, Superadmin, Dirut, Pimpinan)
   const userRoleName = (user?.roleName || user?.role || '').toLowerCase();
@@ -1047,6 +1049,16 @@ export const HrmApprovalPage: React.FC = () => {
           >
             <Plus className="w-3.5 h-3.5" />
             Tugaskan Lembur (SPL Mandat)
+          </Button>
+        )}
+
+        {activeTab === 'swaps' && (
+          <Button
+            onClick={() => setDirectSwapModalOpen(true)}
+            className="rounded-xl text-xs h-9 gap-1.5 font-semibold shadow-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5" />
+            Tukar Shift Cepat (Korlap &amp; Superadmin)
           </Button>
         )}
       </div>
@@ -3768,6 +3780,17 @@ export const HrmApprovalPage: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ─── MODAL TUKAR SHIFT LAPANGAN CEPAT (KORLAP & SUPERADMIN) ─── */}
+      <HrmDirectShiftSwapModal
+        open={directSwapModalOpen}
+        onClose={() => setDirectSwapModalOpen(false)}
+        onSuccess={() => {
+          loadData();
+          toast.success('Roster jadwal dan tukar shift berhasil diperbarui.');
+        }}
+        currentUser={user}
+      />
     </div>
   );
 };
