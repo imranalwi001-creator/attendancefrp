@@ -1706,7 +1706,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       const isLeave = item.absentSubtype === 'cuti' || item.absentSubtype === 'sakit' || item.absentSubtype === 'izin';
       const isPresent = Boolean(item.attendance?.clockIn || item.status === 'present' || item.status === 'late');
       const isLate = Boolean(item.status === 'late' || (item.attendance?.lateMinutes && item.attendance.lateMinutes > 0));
-      const isUnregistered = item.absentSubtype === 'unregistered' || !item.user?.faceDescriptor;
+      const isUnregistered = item.absentSubtype === 'unregistered';
 
       // Opsi 1: Seluruh personil dinas pagi (07:30 / Shift I / Day Shift kebersihan/staf Rumah Tangga) disatukan ke Shift I (Pagi)
       const isMorningDuty = !isOff && !isLeave && (
