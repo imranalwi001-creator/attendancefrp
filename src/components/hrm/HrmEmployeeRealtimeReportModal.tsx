@@ -396,15 +396,44 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       });
 
       // 3. Cari semua presensi pada tanggal ini (1 tanggal = 1 baris; jika ada Shift Asli + Shift Pengganti, pisahkan ke ABSEN & LEMBUR)
-      const dayAtts = combinedAttendances
+      const rawDayAtts = combinedAttendances
         .filter((a) => (a.attendanceDate || (a as any).date || '').slice(0, 10) === dateStr)
         .sort((a, b) => String(a.clockIn || '').localeCompare(String(b.clockIn || '')));
+
+      // Filter out duplicate ghost sessions: sesi tanpa clock_out yang terbuat dalam hitungan menit pasca clock_out sesi sebelumnya
+      const dayAtts = rawDayAtts.filter((a, idx) => {
+        if (!a.clockOut && rawDayAtts.some((other, oIdx) => {
+          if (oIdx === idx || !other.clockOut) return false;
+          const [oH, oM] = String(other.clockOut).split(':').map(Number);
+          const [aH, aM] = String(a.clockIn || '').split(':').map(Number);
+          if (Number.isFinite(oH) && Number.isFinite(aH)) {
+            let diff = (aH * 60 + aM) - (oH * 60 + oM);
+            if (diff < 0) diff += 1440;
+            return diff >= 0 && diff <= 15; // Terbuat dalam kurun waktu 15 menit pasca checkout
+          }
+          return false;
+        })) {
+          return false; // Abaikan sesi siluman / re-tap tidak sengaja
+        }
+        return true;
+      });
 
       // 4. Cari lembur pada tanggal ini (sinkron PostgreSQL snake_case & camelCase)
       const ot = combinedOvertimes.find((o) => {
         const oDate = String(o.date || o.overtimeDate || o.overtime_date || '').slice(0, 10);
         return oDate === dateStr;
       });
+
+      // Helper hitung selisih waktu dalam menit antara 2 string 'HH:mm'
+      const getTimeDistanceMinutes = (t1?: string, t2?: string): number => {
+        if (!t1 || !t2) return 9999;
+        const [h1, m1] = String(t1).substring(0, 5).split(':').map(Number);
+        const [h2, m2] = String(t2).substring(0, 5).split(':').map(Number);
+        if (!Number.isFinite(h1) || !Number.isFinite(h2)) return 9999;
+        let diff = Math.abs((h1 * 60 + (m1 || 0)) - (h2 * 60 + (m2 || 0)));
+        if (diff > 720) diff = 1440 - diff;
+        return diff;
+      };
 
       const isSubstituteAtt = (a: any) => {
         const sName = String(a?.shiftName || a?.shift_name || '').toLowerCase();
@@ -420,11 +449,21 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           subAtt = foundSub;
           att = dayAtts.find((a) => a !== foundSub) || dayAtts[0];
         } else if (ot && (ot.startTime || ot.start_time)) {
-          // Cocokkan sesi yang jam masuknya paling dekat dengan jam mulai OT sebagai sesi lembur
+          // Cocokkan sesi yang jam masuknya paling mendekati jam mulai OT (toleransi waktu wajar)
           const otStart = String(ot.startTime || ot.start_time).substring(0, 5);
-          const otMatch = dayAtts.find((a) => String(a.clockIn || '').substring(0, 5) === otStart) || dayAtts[dayAtts.length - 1];
-          subAtt = otMatch;
-          att = dayAtts.find((a) => a !== otMatch) || dayAtts[0];
+          let bestMatch = dayAtts[0];
+          let minScore = 9999;
+          for (const a of dayAtts) {
+            const dist = getTimeDistanceMinutes(a.clockIn, otStart);
+            // Beri bobot lebih tinggi jika sesi memiliki clockOut lengkap
+            const score = dist - (a.clockOut ? 20 : 0);
+            if (score < minScore) {
+              minScore = score;
+              bestMatch = a;
+            }
+          }
+          subAtt = bestMatch;
+          att = dayAtts.find((a) => a !== bestMatch) || dayAtts[0];
         } else {
           // Default sorting: jika sesi pertama jam masuknya sebelum jam shift resmi dan ada SPKL lembur -> Lembur Sebelum Shift
           const s1 = dayAtts[0];
@@ -657,8 +696,26 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       if (ot) {
         const rawStart = ot.startTime || ot.start_time || '';
         const rawEnd = ot.endTime || ot.end_time || '';
-        lemburMulai = subAtt?.clockIn ? String(subAtt.clockIn).substring(0, 5) : (rawStart ? String(rawStart).substring(0, 5) : '-');
-        lemburSelesai = subAtt?.clockOut ? String(subAtt.clockOut).substring(0, 5) : (isToday && !subAtt?.clockOut ? 'Bertugas' : (rawEnd ? String(rawEnd).substring(0, 5) : '-'));
+        let startVal = subAtt?.clockIn ? String(subAtt.clockIn).substring(0, 5) : (rawStart ? String(rawStart).substring(0, 5) : '-');
+        let endVal = subAtt?.clockOut ? String(subAtt.clockOut).substring(0, 5) : (isToday && !subAtt?.clockOut ? 'Bertugas' : (rawEnd ? String(rawEnd).substring(0, 5) : '-'));
+
+        // 🛡️ PARADOX GUARD GLOBAL: Jam Mulai Lembur TIDAK BOLEH SAMA PERSIS dengan Jam Selesai Lembur jika durasi SPKL > 0
+        // (Contoh: Mulai 22:30 & Selesai 22:30 dengan durasi 7 jam adalah mustahil secara fisik)
+        if (startVal !== '-' && endVal !== '-' && startVal === endVal && rawStart && rawEnd && rawStart !== rawEnd) {
+          const distToRawStart = getTimeDistanceMinutes(startVal, rawStart);
+          const distToRawEnd = getTimeDistanceMinutes(startVal, rawEnd);
+          if (distToRawEnd <= 30 && distToRawStart > 60) {
+            // startVal sebenarnya adalah jam kepulangan / selesai lembur, bukan jam mulai!
+            startVal = String(rawStart).substring(0, 5);
+            endVal = subAtt?.clockOut ? String(subAtt.clockOut).substring(0, 5) : String(rawEnd).substring(0, 5);
+          } else {
+            startVal = String(rawStart).substring(0, 5);
+            endVal = String(rawEnd).substring(0, 5);
+          }
+        }
+
+        lemburMulai = startVal;
+        lemburSelesai = endVal;
         const approvedVal = Number(ot.approvedHours || ot.approved_hours || 0);
         const durationVal = Number(ot.durationHours || ot.duration_hours || 0);
         let hours = approvedVal > 0 ? approvedVal : durationVal;

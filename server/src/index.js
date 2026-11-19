@@ -476,7 +476,8 @@ function formatUserRow(r) {
     (typeof r.face_enrolled_photo === 'string' && r.face_enrolled_photo.length > 50) ||
     (typeof r.latest_attendance_photo === 'string' && r.latest_attendance_photo.length > 50)
   );
-  const avatarEndpointUrl = hasPhoto ? `/api/users/${r.id}/avatar` : null;
+  const photoVer = r.face_enrolled_at ? new Date(r.face_enrolled_at).getTime() : (r.updated_at ? new Date(r.updated_at).getTime() : 1);
+  const avatarEndpointUrl = hasPhoto ? `/api/users/${r.id}/avatar?v=${photoVer}` : null;
 
   return {
     id: r.id,
@@ -546,7 +547,7 @@ function formatUserRow(r) {
     isActive: r.is_active !== false,
     isFaceEnrolled: r.is_face_enrolled === true || r.has_face_descriptor === true || !!descriptor || (Array.isArray(r.face_embedding) && r.face_embedding.length > 0) || !!r.face_descriptor,
     faceDescriptor: null, // Lean payload: AI descriptor disimpan di backend, tidak perlu ditransfer ke browser
-    faceEnrolledPhoto: avatarEndpointUrl,
+    faceEnrolledPhoto: (r.is_face_enrolled || r.face_enrolled_photo) ? avatarEndpointUrl : null,
     faceEnrolledAt: r.face_enrolled_at || null,
     deviceId: r.device_id || null,
     registeredDeviceId: r.device_id || r.registered_device_id || null,

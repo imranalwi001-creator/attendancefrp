@@ -90,10 +90,15 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
       )}&token=${user.id.substring(0, 8)}`
     : '';
 
+  const modalOpenedAtRef = useRef<number>(Date.now());
+  const initialEnrolledAtRef = useRef<string | null>(null);
+
   // Generate high-resolution QR Code when modal opens or user changes
   useEffect(() => {
     if (!open || !user || !mobileEnrollUrl) return;
 
+    modalOpenedAtRef.current = Date.now();
+    initialEnrolledAtRef.current = user?.faceEnrolledAt || null;
     setIsMobileEnrolledSuccess(false);
     setEnrolledPhotoPreview(null);
     setEnrolledUserObj(null);
@@ -118,44 +123,46 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
       // 1. Poll PostgreSQL database on server
       try {
         const res = await api.get<{ success: boolean; data: UserProfile }>(`/users/${user.id}`);
-        if (res && res.success && res.data && (res.data.isFaceEnrolled || res.data.faceEnrolledPhoto || res.data.avatarUrl)) {
-          const photo = res.data.faceEnrolledPhoto || res.data.avatarUrl || null;
-          setIsMobileEnrolledSuccess(true);
-          setEnrolledPhotoPreview(photo);
-          setEnrolledUserObj(res.data);
+        if (res && res.success && res.data && res.data.isFaceEnrolled) {
+          const freshEnrolledAt = res.data.faceEnrolledAt;
+          // Validasi ketat: Hanya picu sukses jika ada proses pendaftaran baru setelah modal dibuka
+          const isNewEnrollment = Boolean(
+            freshEnrolledAt && (
+              freshEnrolledAt !== initialEnrolledAtRef.current ||
+              new Date(freshEnrolledAt).getTime() >= (modalOpenedAtRef.current - 5000)
+            )
+          );
 
-          // Update local cache immediately
-          const currentUsers = hrmService.getUsers();
-          const uIdx = currentUsers.findIndex((u) => u.id === user.id || u.nip === user.nip);
-          if (uIdx !== -1) {
-            currentUsers[uIdx] = {
-              ...currentUsers[uIdx],
-              ...res.data,
-              isFaceEnrolled: true,
-              avatarUrl: photo || currentUsers[uIdx].avatarUrl,
-              faceEnrolledPhoto: photo || currentUsers[uIdx].faceEnrolledPhoto,
-            };
-            safeSetJson('hrm_users', currentUsers);
-            window.dispatchEvent(new Event('hrm_users_updated'));
+          if (isNewEnrollment) {
+            let photo = res.data.faceEnrolledPhoto || res.data.avatarUrl || null;
+            if (photo && !photo.startsWith('data:')) {
+              photo = `${photo}${photo.includes('?') ? '&' : '?'}t=${Date.now()}`;
+            }
+            setIsMobileEnrolledSuccess(true);
+            setEnrolledPhotoPreview(photo);
+            setEnrolledUserObj(res.data);
+
+            // Update local cache immediately
+            const currentUsers = hrmService.getUsers();
+            const uIdx = currentUsers.findIndex((u) => u.id === user.id || u.nip === user.nip);
+            if (uIdx !== -1) {
+              currentUsers[uIdx] = {
+                ...currentUsers[uIdx],
+                ...res.data,
+                isFaceEnrolled: true,
+                avatarUrl: photo || currentUsers[uIdx].avatarUrl,
+                faceEnrolledPhoto: photo || currentUsers[uIdx].faceEnrolledPhoto,
+              };
+              safeSetJson('hrm_users', currentUsers);
+              window.dispatchEvent(new Event('hrm_users_updated'));
+            }
+
+            if (onSuccess) onSuccess(res.data);
+            return;
           }
-
-          if (onSuccess) onSuccess(res.data);
-          return;
         }
       } catch (err) {
-        // Silent fallback to local storage check
-      }
-
-      // 2. Fallback check local storage
-      const freshUsers = hrmService.getUsers();
-      const targetUser = freshUsers.find((u) => u.id === user.id || u.nip === user.nip);
-
-      if (targetUser && (targetUser.isFaceEnrolled || targetUser.faceEnrolledPhoto || targetUser.avatarUrl)) {
-        const photo = targetUser.faceEnrolledPhoto || targetUser.avatarUrl || null;
-        setIsMobileEnrolledSuccess(true);
-        setEnrolledPhotoPreview(photo);
-        setEnrolledUserObj(targetUser);
-        if (onSuccess) onSuccess(targetUser);
+        // Silent fallback
       }
     }, 1800);
 
@@ -444,7 +451,15 @@ export const HrmFaceEnrollmentModal: React.FC<HrmFaceEnrollmentModalProps> = ({
 
                 {enrolledPhotoPreview && (
                   <div className="w-28 h-28 rounded-full overflow-hidden mx-auto border-4 border-emerald-500/40 shadow-xl">
-                    <img src={enrolledPhotoPreview} alt="Enrolled Master Face" className="w-full h-full object-cover" />
+                    <img
+                      src={
+                        enrolledPhotoPreview.startsWith('data:')
+                          ? enrolledPhotoPreview
+                          : `${enrolledPhotoPreview}${enrolledPhotoPreview.includes('?') ? '&' : '?'}t=${Date.now()}`
+                      }
+                      alt="Enrolled Master Face"
+                      className="w-full h-full object-cover"
+                    />
                   </div>
                 )}
 
