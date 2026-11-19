@@ -483,12 +483,19 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
             subAtt = s2;
           }
         }
-      } else if (dayAtts.length === 1 && (isRosterOff || isSubstituteAtt(dayAtts[0]) || (ot && (ot.source === 'shift_relief' || ot.source === 'emergency_override_clockin' || (ot as any).isEmergency)))) {
-        // Karyawan bertugas lembur sebagai pengganti atau lembur di hari libur (OFF)
+      } else if (
+        dayAtts.length === 1 &&
+        (isRosterOff ||
+          isSubstituteAtt(dayAtts[0]) ||
+          (ot &&
+            (ot.source === 'shift_relief' || ot.source === 'emergency_override_clockin' || (ot as any).isEmergency) &&
+            getTimeDistanceMinutes(dayAtts[0].clockIn, ot.startTime || ot.start_time) <= 60))
+      ) {
+        // Karyawan bertugas lembur sebagai pengganti di hari libur (OFF) atau hanya hadir di jam sesi pengganti
         // Shift lembur dialokasikan ke subAtt (kolom LEMBUR), sedangkan kolom ABSEN tetap mencerminkan jadwal resmi (OFF)
         subAtt = dayAtts[0];
         att = undefined;
-      } else if (dayAtts.length === 1 && ot && sched && !sched.isOff && sched.startTime) {
+      } else if (dayAtts.length === 1 && ot && sched && !sched.isOff) {
         // DETEKSI CERDAS: LEMBUR SEBELUM SHIFT ATAU LEMBUR SETELAH SHIFT
         // (Karyawan datang lebih awal di shift pengganti sebelum shift resminya dimulai, atau lanjut lembur pasca shift resmi)
         const singleAtt = dayAtts[0];
@@ -496,8 +503,14 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         const singleClockOut = String(singleAtt.clockOut || '').substring(0, 5);
         const otStart = String(ot.startTime || ot.start_time || '').substring(0, 5);
         const otEnd = String(ot.endTime || ot.end_time || '').substring(0, 5);
-        const schedStart = String(sched.startTime || '').substring(0, 5);
-        const schedEnd = String(sched.endTime || '').substring(0, 5);
+        const schedStart = String(
+          sched.startTime ||
+            (singleAtt.shiftName?.includes('Shift II') ? '15:30' : singleAtt.shiftName?.includes('Shift III') ? '22:30' : '07:30')
+        ).substring(0, 5);
+        const schedEnd = String(
+          sched.endTime ||
+            (singleAtt.shiftName?.includes('Shift II') ? '22:30' : singleAtt.shiftName?.includes('Shift III') ? '07:30' : '15:30')
+        ).substring(0, 5);
 
         // Kasus 1: Lembur Sebelum Shift (misal: lembur 15:30 - 22:30, shift resmi 22:30 - 07:30)
         if (otStart && schedStart && singleClockIn < schedStart && otStart < schedStart) {
