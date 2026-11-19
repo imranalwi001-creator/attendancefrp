@@ -12784,7 +12784,7 @@ app.get('/api/shift-swaps/employee-schedule-preview', async (req, res) => {
 
     const defShift = defRes.rows[0] || {
       id: null,
-      shift_code: 'P',
+      code: 'P',
       name: 'Shift I (07:30 - 15:30 WITA)',
       start_time: '07:30:00',
       end_time: '15:30:00',
@@ -12800,7 +12800,7 @@ app.get('/api/shift-swaps/employee-schedule-preview', async (req, res) => {
         nip: prof.nip,
         date,
         shiftId: defShift.id,
-        shiftCode: defShift.shift_code || 'P',
+        shiftCode: defShift.code || 'P',
         shiftName: defShift.name || 'Shift I (07:30 - 15:30 WITA)',
         startTime: (defShift.start_time || '07:30').substring(0, 5),
         endTime: (defShift.end_time || '15:30').substring(0, 5),
@@ -12861,10 +12861,16 @@ app.post('/api/shift-swaps/direct-execution', async (req, res) => {
     const profA = pARes.rows[0];
     const profB = pBRes.rows[0];
 
+    let validOpId = null;
+    if (operatorId && typeof operatorId === 'string' && UUID_REGEX.test(operatorId)) {
+      const opCheck = await pool.query('SELECT id FROM hrm_profiles WHERE id = $1 LIMIT 1', [operatorId]);
+      if (opCheck.rows.length > 0) validOpId = operatorId;
+    }
+
     // Helper: dapatkan jadwal efektif karyawan pada tanggal tertentu
     async function getEffectiveSchedule(uId, dt) {
       const s = await pool.query(`
-        SELECT es.*, sh.name as ref_name, sh.shift_code as ref_code, sh.start_time as ref_start, sh.end_time as ref_end, sh.duration_hours as ref_dur, sh.is_night_shift as ref_night
+        SELECT es.*, sh.name as ref_name, sh.code as ref_code, sh.start_time as ref_start, sh.end_time as ref_end, sh.is_cross_day as ref_cross
         FROM hrm_employee_schedules es
         LEFT JOIN hrm_shifts sh ON es.shift_id = sh.id
         WHERE es.user_id = $1 AND es.schedule_date = $2::date LIMIT 1
@@ -12878,22 +12884,22 @@ app.post('/api/shift-swaps/direct-execution', async (req, res) => {
           shiftName: r.shift_name || r.ref_name || (r.is_off ? 'LIBUR (OFF)' : 'Shift'),
           startTime: (r.start_time || r.ref_start || '07:30').substring(0, 5),
           endTime: (r.end_time || r.ref_end || '15:30').substring(0, 5),
-          durationHours: parseFloat(r.duration_hours || r.ref_dur || 8.0),
-          isNightShift: Boolean(r.is_night_shift || r.ref_night),
+          durationHours: parseFloat(r.duration_hours || 8.0),
+          isNightShift: Boolean(r.is_night_shift || r.ref_cross),
           isOff: Boolean(r.is_off)
         };
       }
 
       // Profile default
-      const p = (await pool.query('SELECT p.shift_id, sh.name, sh.shift_code, sh.start_time, sh.end_time, sh.duration_hours, sh.is_night_shift FROM hrm_profiles p LEFT JOIN hrm_shifts sh ON p.shift_id = sh.id WHERE p.id = $1', [uId])).rows[0];
+      const p = (await pool.query('SELECT p.shift_id, sh.name, sh.code, sh.start_time, sh.end_time, sh.is_cross_day FROM hrm_profiles p LEFT JOIN hrm_shifts sh ON p.shift_id = sh.id WHERE p.id = $1', [uId])).rows[0];
       return {
         shiftId: p?.shift_id || null,
-        shiftCode: p?.shift_code || 'P',
+        shiftCode: p?.code || 'P',
         shiftName: p?.name || 'Shift I (07:30 - 15:30 WITA)',
         startTime: (p?.start_time || '07:30').substring(0, 5),
         endTime: (p?.end_time || '15:30').substring(0, 5),
-        durationHours: parseFloat(p?.duration_hours || 8.0),
-        isNightShift: Boolean(p?.is_night_shift),
+        durationHours: 8.0,
+        isNightShift: Boolean(p?.is_cross_day),
         isOff: false
       };
     }
@@ -13022,7 +13028,7 @@ app.post('/api/shift-swaps/direct-execution', async (req, res) => {
       schedA.shiftName,
       schedB.shiftName,
       reason,
-      operatorId || null,
+      validOpId,
       `Otorisasi & Eksekusi Langsung Lapangan oleh ${opRoleClean.toUpperCase()} (${operatorName}). Catatan: ${customNotes || '-'}`
     ]);
 
@@ -13044,7 +13050,7 @@ app.post('/api/shift-swaps/direct-execution', async (req, res) => {
         schedA.endTime,
         otHours,
         `[Lembur Pengganti Mandat Korlap] Menggantikan ${profA.full_name} (${schedA.shiftName})`,
-        operatorId || null,
+        validOpId,
         `Ditetapkan langsung oleh ${opRoleClean.toUpperCase()} (${operatorName})`
       ]).catch(e => console.warn('[SPKL Direct Auto Insert Warning]:', e.message));
     }
