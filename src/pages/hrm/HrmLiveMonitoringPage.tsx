@@ -1542,18 +1542,44 @@ export const HrmLiveMonitoringPage: React.FC = () => {
     let matchShift = true;
     if (filterShift !== 'all') {
       const shiftCode = (item.shift?.code || item.shift?.name || '').toUpperCase();
+      const shiftStart = (item.shift?.startTime || '').slice(0, 5);
       if (filterShift === 'OFF') {
         matchShift = item.shift?.isOff === true || shiftCode === 'OFF' || item.shift?.name?.toLowerCase().includes('libur');
       } else if (filterShift === 'cuti') {
         matchShift = item.absentSubtype === 'cuti';
       } else if (filterShift === 'P') {
-        matchShift = !item.shift?.isOff && (shiftCode === 'P' || shiftCode.includes('PAGI') || shiftCode.includes('SHIFT I ') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('07')));
+        matchShift = !item.shift?.isOff && item.absentSubtype !== 'cuti' && (
+          shiftCode === 'P' || 
+          shiftCode.includes('PAGI') || 
+          shiftCode.includes('SHIFT I') || 
+          shiftCode.includes('SHIFT 1') || 
+          (Boolean(item.shift?.startTime) && shiftStart.startsWith('07'))
+        );
       } else if (filterShift === 'S') {
-        matchShift = !item.shift?.isOff && (shiftCode === 'S' || shiftCode.includes('SIANG') || shiftCode.includes('SHIFT II ') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('15')));
+        matchShift = !item.shift?.isOff && item.absentSubtype !== 'cuti' && (
+          shiftCode === 'S' || 
+          shiftCode.includes('SIANG') || 
+          shiftCode.includes('SORE') || 
+          shiftCode.includes('SHIFT II') || 
+          shiftCode.includes('SHIFT 2') || 
+          (Boolean(item.shift?.startTime) && shiftStart.startsWith('15'))
+        );
       } else if (filterShift === 'M') {
-        matchShift = !item.shift?.isOff && (shiftCode === 'M' || shiftCode.includes('MALAM') || shiftCode.includes('SHIFT III ') || (Boolean(item.shift?.startTime) && item.shift!.startTime.startsWith('22')));
+        matchShift = !item.shift?.isOff && item.absentSubtype !== 'cuti' && (
+          shiftCode === 'M' || 
+          shiftCode.includes('MALAM') || 
+          shiftCode.includes('SHIFT III') || 
+          shiftCode.includes('SHIFT 3') || 
+          (Boolean(item.shift?.startTime) && shiftStart.startsWith('22'))
+        );
       } else if (filterShift === 'DAY') {
-        matchShift = !item.shift?.isOff && (shiftCode.includes('DAY') || shiftCode.includes('PIMPINAN') || (!item.shift?.code && !['P', 'S', 'M'].includes(shiftCode)));
+        matchShift = !item.shift?.isOff && item.absentSubtype !== 'cuti' && !shiftStart.startsWith('07') && (
+          shiftCode.includes('DAY') || 
+          shiftCode.includes('PIMPINAN') || 
+          shiftCode.includes('NORMAL') || 
+          shiftStart.startsWith('08') || 
+          (!item.shift?.code && !['P', 'S', 'M'].includes(shiftCode))
+        );
       }
     }
 
@@ -1626,10 +1652,11 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       shift1: {
         id: 'P',
         name: 'Shift I (Pagi)',
-        time: '07:30 - 15:30 WITA',
+        time: '07:30 WITA (Shift I & Day)',
         total: 0,
         present: 0,
         late: 0,
+        unregistered: 0,
         pendingOrAbsent: 0,
       },
       shift2: {
@@ -1639,6 +1666,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         total: 0,
         present: 0,
         late: 0,
+        unregistered: 0,
         pendingOrAbsent: 0,
       },
       shift3: {
@@ -1648,15 +1676,17 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         total: 0,
         present: 0,
         late: 0,
+        unregistered: 0,
         pendingOrAbsent: 0,
       },
       dayShift: {
         id: 'DAY',
         name: 'Day Shift (Normal)',
-        time: '07:30 - 16:30 WITA',
+        time: '08:00 - 16:00 / Khusus',
         total: 0,
         present: 0,
         late: 0,
+        unregistered: 0,
         pendingOrAbsent: 0,
       },
       off: {
@@ -1676,6 +1706,16 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       const isLeave = item.absentSubtype === 'cuti' || item.absentSubtype === 'sakit' || item.absentSubtype === 'izin';
       const isPresent = Boolean(item.attendance?.clockIn || item.status === 'present' || item.status === 'late');
       const isLate = Boolean(item.status === 'late' || (item.attendance?.lateMinutes && item.attendance.lateMinutes > 0));
+      const isUnregistered = item.absentSubtype === 'unregistered' || !item.user?.faceDescriptor;
+
+      // Opsi 1: Seluruh personil dinas pagi (07:30 / Shift I / Day Shift kebersihan/staf Rumah Tangga) disatukan ke Shift I (Pagi)
+      const isMorningDuty = !isOff && !isLeave && (
+        shiftCode === 'P' || 
+        shiftCode.includes('PAGI') || 
+        shiftCode.includes('SHIFT I') || 
+        shiftCode.includes('SHIFT 1') || 
+        (shiftStart.startsWith('07'))
+      );
 
       if (isLeave) {
         stats.off.total++;
@@ -1683,26 +1723,47 @@ export const HrmLiveMonitoringPage: React.FC = () => {
       } else if (isOff) {
         stats.off.total++;
         stats.off.regularOff++;
-      } else if (shiftCode === 'P' || shiftCode.includes('PAGI') || shiftCode.includes('SHIFT I') || shiftCode.includes('SHIFT 1') || (shiftStart === '07:30' && item.shift?.endTime?.slice(0, 5) === '15:30')) {
+      } else if (isMorningDuty) {
         stats.shift1.total++;
-        if (isPresent) stats.shift1.present++;
-        if (isLate) stats.shift1.late++;
-        if (!isPresent) stats.shift1.pendingOrAbsent++;
+        if (isPresent) {
+          stats.shift1.present++;
+          if (isLate) stats.shift1.late++;
+        } else if (isUnregistered) {
+          stats.shift1.unregistered++;
+        } else {
+          stats.shift1.pendingOrAbsent++;
+        }
       } else if (shiftCode === 'S' || shiftCode.includes('SIANG') || shiftCode.includes('SORE') || shiftCode.includes('SHIFT II') || shiftCode.includes('SHIFT 2') || shiftStart === '15:30') {
         stats.shift2.total++;
-        if (isPresent) stats.shift2.present++;
-        if (isLate) stats.shift2.late++;
-        if (!isPresent) stats.shift2.pendingOrAbsent++;
+        if (isPresent) {
+          stats.shift2.present++;
+          if (isLate) stats.shift2.late++;
+        } else if (isUnregistered) {
+          stats.shift2.unregistered++;
+        } else {
+          stats.shift2.pendingOrAbsent++;
+        }
       } else if (shiftCode === 'M' || shiftCode.includes('MALAM') || shiftCode.includes('SHIFT III') || shiftCode.includes('SHIFT 3') || shiftStart === '22:30') {
         stats.shift3.total++;
-        if (isPresent) stats.shift3.present++;
-        if (isLate) stats.shift3.late++;
-        if (!isPresent) stats.shift3.pendingOrAbsent++;
+        if (isPresent) {
+          stats.shift3.present++;
+          if (isLate) stats.shift3.late++;
+        } else if (isUnregistered) {
+          stats.shift3.unregistered++;
+        } else {
+          stats.shift3.pendingOrAbsent++;
+        }
       } else {
+        // Day Shift Staf Khusus / Non-07:30
         stats.dayShift.total++;
-        if (isPresent) stats.dayShift.present++;
-        if (isLate) stats.dayShift.late++;
-        if (!isPresent) stats.dayShift.pendingOrAbsent++;
+        if (isPresent) {
+          stats.dayShift.present++;
+          if (isLate) stats.dayShift.late++;
+        } else if (isUnregistered) {
+          stats.dayShift.unregistered++;
+        } else {
+          stats.dayShift.pendingOrAbsent++;
+        }
       }
     });
 
@@ -3093,7 +3154,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     </Badge>
                   )}
                 </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">07:30 - 15:30 WITA</div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">07:30 WITA (Shift I &amp; Day)</div>
                 <div className="mt-2 flex items-baseline justify-between">
                   <span className="text-lg font-extrabold font-mono text-foreground">
                     {dailyShiftBreakdown.shift1.present}{' '}
@@ -3108,6 +3169,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                 <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
                   {dailyShiftBreakdown.shift1.late > 0 ? (
                     <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.shift1.late} Telat • </span>
+                  ) : null}
+                  {dailyShiftBreakdown.shift1.unregistered > 0 ? (
+                    <span className="text-rose-500 font-semibold">{dailyShiftBreakdown.shift1.unregistered} Belum Daftar Wajah • </span>
                   ) : null}
                   <span>{dailyShiftBreakdown.shift1.pendingOrAbsent} Belum Masuk</span>
                 </div>
@@ -3150,6 +3214,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   {dailyShiftBreakdown.shift2.late > 0 ? (
                     <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.shift2.late} Telat • </span>
                   ) : null}
+                  {dailyShiftBreakdown.shift2.unregistered > 0 ? (
+                    <span className="text-rose-500 font-semibold">{dailyShiftBreakdown.shift2.unregistered} Belum Daftar Wajah • </span>
+                  ) : null}
                   <span>{dailyShiftBreakdown.shift2.pendingOrAbsent} Belum Masuk</span>
                 </div>
               </button>
@@ -3191,6 +3258,9 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   {dailyShiftBreakdown.shift3.late > 0 ? (
                     <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.shift3.late} Telat • </span>
                   ) : null}
+                  {dailyShiftBreakdown.shift3.unregistered > 0 ? (
+                    <span className="text-rose-500 font-semibold">{dailyShiftBreakdown.shift3.unregistered} Belum Daftar Wajah • </span>
+                  ) : null}
                   <span>{dailyShiftBreakdown.shift3.pendingOrAbsent} Belum Masuk</span>
                 </div>
               </button>
@@ -3216,7 +3286,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     </Badge>
                   )}
                 </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">07:30 - 16:30 WITA</div>
+                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">08:00 - 16:00 / Khusus</div>
                 <div className="mt-2 flex items-baseline justify-between">
                   <span className="text-lg font-extrabold font-mono text-foreground">
                     {dailyShiftBreakdown.dayShift.present}{' '}
@@ -3229,10 +3299,19 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   </span>
                 </div>
                 <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                  {dailyShiftBreakdown.dayShift.late > 0 ? (
-                    <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.dayShift.late} Telat • </span>
-                  ) : null}
-                  <span>{dailyShiftBreakdown.dayShift.pendingOrAbsent} Belum Hadir</span>
+                  {dailyShiftBreakdown.dayShift.total === 0 ? (
+                    <span className="text-muted-foreground italic">Tergabung di Shift Pagi (07:30)</span>
+                  ) : (
+                    <>
+                      {dailyShiftBreakdown.dayShift.late > 0 ? (
+                        <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.dayShift.late} Telat • </span>
+                      ) : null}
+                      {dailyShiftBreakdown.dayShift.unregistered > 0 ? (
+                        <span className="text-rose-500 font-semibold">{dailyShiftBreakdown.dayShift.unregistered} Belum Daftar Wajah • </span>
+                      ) : null}
+                      <span>{dailyShiftBreakdown.dayShift.pendingOrAbsent} Belum Hadir</span>
+                    </>
+                  )}
                 </div>
               </button>
 
