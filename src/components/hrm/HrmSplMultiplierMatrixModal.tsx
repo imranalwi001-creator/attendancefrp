@@ -21,6 +21,7 @@ import {
   Save,
   RotateCw,
   Sparkles,
+  UserCheck,
 } from 'lucide-react';
 import { api } from '@/services/apiClient';
 import { toast } from 'sonner';
@@ -154,6 +155,19 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
   const [inputIsHoliday, setInputIsHoliday] = useState<boolean>(true);
   const [isSavingCell, setIsSavingCell] = useState(false);
 
+  // Attendance Editor Modal State (Khusus Rekonsiliasi Pra-PWA Oktober 2026)
+  const [attEditOpen, setAttEditOpen] = useState(false);
+  const [attEditTarget, setAttEditTarget] = useState<{
+    employee: UserProfile;
+    dateStr: string;
+    dayNumber: number;
+    currentVal: string;
+    attRecord?: AttendanceRecord | null;
+  } | null>(null);
+  const [selectedAttStatus, setSelectedAttStatus] = useState<string>('hadir');
+  const [attNotes, setAttNotes] = useState<string>('');
+  const [isSavingAtt, setIsSavingAtt] = useState(false);
+
   // Month & Day Meta
   const [yearNum, monthNum] = useMemo(() => {
     const parts = selectedMonth.split('-').map(Number);
@@ -278,8 +292,9 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
       });
 
       // Baris 1: Presensi Harian (1 = Hadir, 0 = Off, A = Alfa/Mangkir, S = Sakit, I = Izin, CT = Cuti)
-      const attendanceCells: { val: string; isHoliday: boolean }[] = [];
+      const attendanceCells: { val: string; isHoliday: boolean; attRecord?: any; leaveRecord?: any }[] = [];
       let totalHariKerja = 0;
+      const isOctober2026 = selectedMonth === '2026-10';
 
       daysMeta.forEach((d) => {
         // A. Cek Cuti / Izin / Sakit Resmi Disahkan
@@ -291,11 +306,11 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         if (leave) {
           const t = ((leave as any).leave_type || (leave as any).leaveType || '').toLowerCase();
           if (t.includes('sakit') || t.includes('sick')) {
-            attendanceCells.push({ val: 'S', isHoliday: d.isWeekend });
+            attendanceCells.push({ val: 'S', isHoliday: d.isWeekend, leaveRecord: leave });
           } else if (t.includes('izin') || t.includes('permission')) {
-            attendanceCells.push({ val: 'I', isHoliday: d.isWeekend });
+            attendanceCells.push({ val: 'I', isHoliday: d.isWeekend, leaveRecord: leave });
           } else {
-            attendanceCells.push({ val: 'CT', isHoliday: d.isWeekend });
+            attendanceCells.push({ val: 'CT', isHoliday: d.isWeekend, leaveRecord: leave });
           }
           return;
         }
@@ -324,25 +339,25 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         if (att) {
           const st = (att.status || '').toLowerCase().trim();
           if (st === 'cuti' || st.includes('cuti')) {
-            attendanceCells.push({ val: 'CT', isHoliday: d.isWeekend });
+            attendanceCells.push({ val: 'CT', isHoliday: d.isWeekend, attRecord: att });
           } else if (st === 'sakit' || st.includes('sakit')) {
-            attendanceCells.push({ val: 'S', isHoliday: d.isWeekend });
+            attendanceCells.push({ val: 'S', isHoliday: d.isWeekend, attRecord: att });
           } else if (st === 'izin' || st.includes('izin')) {
-            attendanceCells.push({ val: 'I', isHoliday: d.isWeekend });
-          } else if (st === 'mangkir' || st === 'alpa') {
-            attendanceCells.push({ val: 'A', isHoliday: d.isWeekend });
+            attendanceCells.push({ val: 'I', isHoliday: d.isWeekend, attRecord: att });
+          } else if (st === 'mangkir' || st === 'alfa') {
+            attendanceCells.push({ val: 'A', isHoliday: d.isWeekend, attRecord: att });
           } else if (isSchedOff || st === 'off' || st === 'libur') {
-            attendanceCells.push({ val: '0', isHoliday: d.isWeekend });
+            attendanceCells.push({ val: '0', isHoliday: d.isWeekend, attRecord: att });
           } else if (st === 'hadir' || st === 'terlambat' || st === 'present' || (att as any).clock_in || (att as any).clockIn) {
             if (isSchedOff) {
-              attendanceCells.push({ val: '0', isHoliday: d.isWeekend });
+              attendanceCells.push({ val: '0', isHoliday: d.isWeekend, attRecord: att });
             } else {
-              attendanceCells.push({ val: '1', isHoliday: d.isWeekend });
+              attendanceCells.push({ val: '1', isHoliday: d.isWeekend, attRecord: att });
               totalHariKerja++;
             }
           } else {
             // Status lain (e.g. 'belum absen'): jika belum masuk di hari kerja tetap '0'
-            attendanceCells.push({ val: '0', isHoliday: d.isWeekend });
+            attendanceCells.push({ val: '0', isHoliday: d.isWeekend, attRecord: att });
           }
           return;
         }
@@ -354,26 +369,37 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         }
 
         // F. Fallback Presensi:
-        if (d.isWeekend) {
-          attendanceCells.push({ val: '0', isHoliday: true });
-        } else if (d.dateStr < todayWitaStr) {
-          // Hari kerja lampau: jika ada jadwal shift kerja aktif (bukan OFF) dan tidak ada presensi -> ALPA / MANGKIR (A)
-          if (sched && !sched.isOff) {
-            attendanceCells.push({ val: 'A', isHoliday: false });
-          } else if (!sched) {
-            if (otOnDay) {
-              attendanceCells.push({ val: '0', isHoliday: false });
-            } else {
+        if (isOctober2026) {
+          // KHUSUS BULAN OKTOBER 2026:
+          // Karena absensi mobile PWA baru resmi diberlakukan pada bulan November 2026,
+          // seluruh hari kerja yang bukan jadwal OFF secara default diisi '1' (Hadir),
+          // dan dapat diedit langsung oleh Admin (Hadir / Cuti / Sakit / Izin / Alfa / Off).
+          if (isSchedOff || (d.isWeekend && !sched)) {
+            attendanceCells.push({ val: '0', isHoliday: true, attRecord: att });
+          } else {
+            attendanceCells.push({ val: '1', isHoliday: false, attRecord: att });
+            totalHariKerja++;
+          }
+        } else {
+          // BULAN NOVEMBER 2026 DAN SETERUSNYA (Data Aktual & Real-Time PWA):
+          if (d.isWeekend) {
+            attendanceCells.push({ val: '0', isHoliday: true });
+          } else if (d.dateStr < todayWitaStr) {
+            // Hari kerja lampau: jika ada jadwal shift kerja aktif (bukan OFF) dan tidak ada presensi -> ALPA / MANGKIR (A)
+            if (sched && !sched.isOff) {
               attendanceCells.push({ val: 'A', isHoliday: false });
+            } else if (!sched) {
+              if (otOnDay) {
+                attendanceCells.push({ val: '0', isHoliday: false });
+              } else {
+                attendanceCells.push({ val: 'A', isHoliday: false });
+              }
+            } else {
+              attendanceCells.push({ val: '0', isHoliday: false });
             }
           } else {
             attendanceCells.push({ val: '0', isHoliday: false });
           }
-        } else {
-          // Tanggal hari ini (jika belum absen) atau tanggal mendatang (seperti 14 dan seterusnya yang belum dimulai)
-          // Sesuai aturan pimpinan: Hari mendatang atau hari ini yang belum clock-in tetap '0'.
-          // Hanya berubah menjadi '1' jika sudah masuk di hari kerja (status hadir/terlambat/clock_in di atas).
-          attendanceCells.push({ val: '0', isHoliday: false });
         }
       });
 
@@ -737,6 +763,82 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
       toast.error(err.message || 'Gagal menghapus lembur');
     } finally {
       setIsSavingCell(false);
+    }
+  };
+
+  // Open Attendance Editor Dialog (Khusus Rekonsiliasi Pra-PWA Oktober 2026)
+  const handleAttendanceCellClick = (
+    employee: UserProfile,
+    dayNumber: number,
+    currentVal: string,
+    attRecord?: AttendanceRecord | null
+  ) => {
+    const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(dayNumber).padStart(2, '0')}`;
+    setAttEditTarget({
+      employee,
+      dateStr,
+      dayNumber,
+      currentVal,
+      attRecord,
+    });
+
+    if (currentVal === 'CT') setSelectedAttStatus('cuti');
+    else if (currentVal === 'S' || currentVal === 'SK') setSelectedAttStatus('sakit');
+    else if (currentVal === 'I') setSelectedAttStatus('izin');
+    else if (currentVal === 'A') setSelectedAttStatus('alfa');
+    else if (currentVal === '0') setSelectedAttStatus('off');
+    else setSelectedAttStatus('hadir');
+
+    setAttNotes((attRecord as any)?.notes || 'Rekonsiliasi Kehadiran Oktober 2026');
+    setAttEditOpen(true);
+  };
+
+  // Save Attendance directly to PostgreSQL Database
+  const handleSaveAttendance = async () => {
+    if (!attEditTarget) return;
+
+    try {
+      setIsSavingAtt(true);
+      const res: any = await api.post('/attendances/manual-entry', {
+        userId: attEditTarget.employee.id,
+        attendanceDate: attEditTarget.dateStr,
+        status: selectedAttStatus,
+        notes: attNotes || 'Rekonsiliasi Kehadiran Oktober 2026',
+        clockIn: selectedAttStatus === 'hadir' ? '07:30:00' : null,
+        clockOut: selectedAttStatus === 'hadir' ? '15:30:00' : null,
+      });
+
+      if (res?.success) {
+        const statusLabel =
+          selectedAttStatus === 'hadir'
+            ? 'HADIR (1)'
+            : selectedAttStatus === 'cuti'
+            ? 'CUTI (CT)'
+            : selectedAttStatus === 'sakit'
+            ? 'SAKIT (S)'
+            : selectedAttStatus === 'izin'
+            ? 'IZIN (I)'
+            : selectedAttStatus === 'alfa'
+            ? 'ALFA (A)'
+            : 'OFF / LIBUR (0)';
+        toast.success(
+          `Kehadiran ${attEditTarget.employee.fullName} tgl ${attEditTarget.dayNumber} Okt diperbarui: ${statusLabel}`
+        );
+        setAttEditOpen(false);
+        setAttEditTarget(null);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('hrm_attendance_updated'));
+          window.dispatchEvent(new CustomEvent('hrm_data_updated'));
+        }
+        fetchLatestMatrixData(selectedMonth);
+        if (onDataChanged) onDataChanged();
+      } else {
+        toast.error(res?.error || 'Gagal menyimpan status kehadiran');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Gagal menyimpan status kehadiran');
+    } finally {
+      setIsSavingAtt(false);
     }
   };
 
@@ -1106,13 +1208,24 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
                       {/* Absen Cells */}
                       {empBlock.attendanceCells.map((cell, dIdx) => {
                         const isWk = daysMeta[dIdx]?.isWeekend;
+                        const isOctober2026 = selectedMonth === '2026-10';
                         return (
                           <td
                             key={`att-${empBlock.no}-${dIdx}`}
+                            onClick={() => isOctober2026 && handleAttendanceCellClick(empBlock.emp, dIdx + 1, cell.val, cell.attRecord)}
+                            title={
+                              isOctober2026
+                                ? `Klik untuk edit kehadiran ${empBlock.nama} tgl ${dIdx + 1} Okt (${cell.val})`
+                                : undefined
+                            }
                             className={`border border-black text-center font-mono font-bold py-0.5 ${
+                              isOctober2026
+                                ? 'cursor-pointer hover:ring-2 hover:ring-indigo-500 hover:opacity-80 transition-all select-none'
+                                : ''
+                            } ${
                               cell.val === 'CT'
                                 ? 'bg-sky-100 text-sky-800'
-                                : cell.val === 'SK'
+                                : cell.val === 'SK' || cell.val === 'S'
                                 ? 'bg-rose-100 text-rose-800'
                                 : cell.val === 'I'
                                 ? 'bg-amber-100 text-amber-800'
@@ -1381,6 +1494,135 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
                 className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs gap-1 font-bold shadow-sm"
               >
                 <Save size={13} /> Simpan &amp; Sinkronkan
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+
+        {/* Modal Dialog Edit Status Kehadiran (Khusus Pra-PWA Oktober 2026) */}
+        <Dialog open={attEditOpen} onOpenChange={setAttEditOpen}>
+          <DialogContent className="max-w-md rounded-2xl shadow-2xl p-6">
+            <DialogHeader>
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 rounded-xl">
+                  <UserCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-bold">
+                    Edit Status Kehadiran (Oktober 2026)
+                  </DialogTitle>
+                  <DialogDescription className="text-xs">
+                    {attEditTarget?.employee.fullName} ({attEditTarget?.employee.nip || '-'}) • Tanggal {attEditTarget?.dayNumber} Okt 2026
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+
+            <div className="space-y-4 py-2">
+              <div className="p-3 bg-muted/40 rounded-xl border border-border/80 text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Karyawan:</span>
+                  <span className="font-bold text-foreground">{attEditTarget?.employee.fullName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Divisi / Penugasan:</span>
+                  <span className="font-semibold">{attEditTarget?.employee.divisionName || 'SHIPMENT'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Tanggal:</span>
+                  <span className="font-mono font-semibold">{attEditTarget?.dateStr}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Status Saat Ini:</span>
+                  <span className="font-mono font-bold text-indigo-600">
+                    {attEditTarget?.currentVal === '1'
+                      ? '1 (Hadir)'
+                      : attEditTarget?.currentVal === 'CT'
+                      ? 'CT (Cuti)'
+                      : attEditTarget?.currentVal === 'S' || attEditTarget?.currentVal === 'SK'
+                      ? 'S (Sakit)'
+                      : attEditTarget?.currentVal === 'I'
+                      ? 'I (Izin)'
+                      : attEditTarget?.currentVal === 'A'
+                      ? 'A (Alfa)'
+                      : '0 (OFF)'}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-xs font-semibold mb-2 block">Pilih Status Kehadiran:</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { key: 'hadir', val: '1', label: 'Hadir', desc: 'Masuk kerja normal', color: 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-300' },
+                    { key: 'cuti', val: 'CT', label: 'Cuti', desc: 'Cuti resmi disahkan', color: 'bg-sky-50 hover:bg-sky-100 text-sky-900 border-sky-300' },
+                    { key: 'sakit', val: 'S', label: 'Sakit', desc: 'Keterangan dokter', color: 'bg-rose-50 hover:bg-rose-100 text-rose-900 border-rose-300' },
+                    { key: 'izin', val: 'I', label: 'Izin', desc: 'Izin resmi disahkan', color: 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300' },
+                    { key: 'alfa', val: 'A', label: 'Alfa', desc: 'Mangkir / tanpa kabar', color: 'bg-red-50 hover:bg-red-100 text-red-900 border-red-300' },
+                    { key: 'off', val: '0', label: 'OFF', desc: 'Jadwal lepas / libur', color: 'bg-slate-50 hover:bg-slate-100 text-slate-800 border-slate-300' },
+                  ].map((opt) => {
+                    const isSelected = selectedAttStatus === opt.key;
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => setSelectedAttStatus(opt.key)}
+                        className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                          isSelected
+                            ? 'ring-2 ring-emerald-600 border-emerald-600 bg-emerald-50/80 shadow-sm'
+                            : `${opt.color} opacity-80 hover:opacity-100`
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-sm font-black">{opt.val}</span>
+                          {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
+                        </div>
+                        <div className="mt-1">
+                          <span className="font-bold text-xs block leading-tight">{opt.label}</span>
+                          <span className="text-[10px] text-muted-foreground block leading-tight">{opt.desc}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-xs font-semibold">Keterangan / Catatan Tambahan (Opsional):</Label>
+                <Input
+                  type="text"
+                  value={attNotes}
+                  onChange={(e) => setAttNotes(e.target.value)}
+                  placeholder="Contoh: Rekonsiliasi Kehadiran Manual Oktober 2026..."
+                  className="h-9 text-xs rounded-xl mt-1"
+                />
+              </div>
+
+              <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 rounded-xl border border-amber-200 text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-1.5">
+                <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>
+                  Perubahan status kehadiran akan langsung disimpan ke database PostgreSQL dan memperbarui total hari kerja pada matriks ini secara real-time.
+                </span>
+              </div>
+            </div>
+
+            <DialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setAttEditOpen(false)}
+                className="rounded-xl text-xs"
+              >
+                Batal
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSaveAttendance}
+                disabled={isSavingAtt}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs gap-1 font-bold shadow-sm"
+              >
+                <Save size={13} /> {isSavingAtt ? 'Menyimpan...' : 'Simpan Status Kehadiran'}
               </Button>
             </DialogFooter>
           </DialogContent>
