@@ -419,10 +419,15 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       });
 
       // 4. Cari lembur pada tanggal ini (sinkron PostgreSQL snake_case & camelCase)
-      const ot = combinedOvertimes.find((o) => {
+      const dayOts = combinedOvertimes.filter((o) => {
         const oDate = String(o.date || o.overtimeDate || o.overtime_date || '').slice(0, 10);
         return oDate === dateStr;
       });
+      const ot = dayOts[0];
+      const totalDayOtHours = dayOts.reduce((sum, o) => {
+        const h = Number(o.approvedHours || o.approved_hours || o.durationHours || o.duration_hours || 0);
+        return sum + (Number.isFinite(h) ? h : 0);
+      }, 0);
 
       // Helper hitung selisih waktu dalam menit antara 2 string 'HH:mm'
       const getTimeDistanceMinutes = (t1?: string, t2?: string): number => {
@@ -537,6 +542,13 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         // Kasus 2: Lembur Setelah Shift (misal: shift resmi 07:30 - 15:30, lanjut lembur pengganti 15:30 - 22:30)
         else if (otStart && schedEnd && (otStart >= schedEnd || otStart >= schedStart)) {
           const nowWita = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Makassar', hour12: false }).substring(0, 5);
+          // singleClockOut HANYA dianggap sebagai clock-out lembur jika terjadi jauh setelah schedEnd (>45 mnt) atau mendekati otEnd
+          const isOvertimeClockOut = Boolean(
+            singleClockOut && (
+              (otEnd && getTimeDistanceMinutes(singleClockOut, otEnd) <= 45) ||
+              getTimeDistanceMinutes(singleClockOut, schedEnd) >= 60
+            )
+          );
           const isShiftDone = singleClockOut || (isToday && nowWita >= schedEnd) || !isToday;
           att = {
             ...singleAtt,
@@ -547,7 +559,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           subAtt = {
             ...singleAtt,
             clockIn: otStart || schedEnd,
-            clockOut: singleClockOut && singleClockOut > schedEnd ? singleClockOut : (isToday && nowWita < (otEnd || '23:59') ? undefined : (otEnd || '-')),
+            clockOut: isOvertimeClockOut ? singleClockOut : (otEnd || (isToday && nowWita < (otEnd || '23:59') ? undefined : '-')),
             shiftName: 'Shift Pengganti (Lembur)',
           };
         }
@@ -694,31 +706,37 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
       // Lembur / SPKL Realtime Sync (prioritaskan data ot, atau sesi presensi pengganti/lembur jika ada)
       if (ot) {
-        const rawStart = ot.startTime || ot.start_time || '';
-        const rawEnd = ot.endTime || ot.end_time || '';
+        let rawStart = ot.startTime || ot.start_time || '';
+        let rawEnd = ot.endTime || ot.end_time || '';
+        if (dayOts && dayOts.length > 1) {
+          dayOts.forEach((o) => {
+            const s = o.startTime || o.start_time || '';
+            const e = o.endTime || o.end_time || '';
+            if (s && (!rawStart || s < rawStart)) rawStart = s;
+            if (e && (!rawEnd || e > rawEnd)) rawEnd = e;
+          });
+        }
+
         let startVal = subAtt?.clockIn ? String(subAtt.clockIn).substring(0, 5) : (rawStart ? String(rawStart).substring(0, 5) : '-');
         let endVal = subAtt?.clockOut ? String(subAtt.clockOut).substring(0, 5) : (isToday && !subAtt?.clockOut ? 'Bertugas' : (rawEnd ? String(rawEnd).substring(0, 5) : '-'));
 
-        // 🛡️ PARADOX GUARD GLOBAL: Jam Mulai Lembur TIDAK BOLEH SAMA PERSIS dengan Jam Selesai Lembur jika durasi SPKL > 0
-        // (Contoh: Mulai 22:30 & Selesai 22:30 dengan durasi 7 jam adalah mustahil secara fisik)
-        if (startVal !== '-' && endVal !== '-' && startVal === endVal && rawStart && rawEnd && rawStart !== rawEnd) {
-          const distToRawStart = getTimeDistanceMinutes(startVal, rawStart);
-          const distToRawEnd = getTimeDistanceMinutes(startVal, rawEnd);
-          if (distToRawEnd <= 30 && distToRawStart > 60) {
-            // startVal sebenarnya adalah jam kepulangan / selesai lembur, bukan jam mulai!
-            startVal = String(rawStart).substring(0, 5);
-            endVal = subAtt?.clockOut ? String(subAtt.clockOut).substring(0, 5) : String(rawEnd).substring(0, 5);
-          } else {
-            startVal = String(rawStart).substring(0, 5);
-            endVal = String(rawEnd).substring(0, 5);
-          }
+        const approvedVal = Number(ot.approvedHours || ot.approved_hours || 0);
+        const durationVal = Number(ot.durationHours || ot.duration_hours || 0);
+        let hours = totalDayOtHours > 0 ? totalDayOtHours : (approvedVal > 0 ? approvedVal : durationVal);
+
+        // 🛡️ PARADOX GUARD GLOBAL:
+        // 1. Jam Mulai Lembur TIDAK BOLEH SAMA PERSIS dengan Jam Selesai Lembur jika durasi SPKL > 0
+        // 2. Jika selisih jam mulai & jam selesai < 30 menit (misal 16:30 - 16:32 = 2 mnt) padahal SPKL durasi >= 1 jam,
+        //    maka jam selesai wajib dikembalikan ke rawEnd resmi (misal 20:00).
+        const diffStartEnd = (startVal !== '-' && endVal !== '-') ? getTimeDistanceMinutes(startVal, endVal) : 999;
+        if (rawStart && rawEnd && (startVal === endVal || (diffStartEnd < 30 && hours >= 1.0))) {
+          startVal = String(rawStart).substring(0, 5);
+          endVal = String(rawEnd).substring(0, 5);
         }
 
         lemburMulai = startVal;
         lemburSelesai = endVal;
-        const approvedVal = Number(ot.approvedHours || ot.approved_hours || 0);
-        const durationVal = Number(ot.durationHours || ot.duration_hours || 0);
-        let hours = approvedVal > 0 ? approvedVal : durationVal;
+
         if (hours <= 0 && subAtt?.clockIn && subAtt?.clockOut) {
           const [inH, inM] = String(subAtt.clockIn).split(':').map(Number);
           const [outH, outM] = String(subAtt.clockOut).split(':').map(Number);
@@ -729,13 +747,11 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           }
         }
         realisasiJamLembur = hours > 0 ? String(hours) : '-';
-        const taskDesc = ot.taskDescription || ot.task_description || '';
+
+        const taskDesc = (ot.taskDescription || ot.task_description || '').trim();
         if (taskDesc) {
-          if (uraianPekerjaan && uraianPekerjaan !== '-' && !uraianPekerjaan.includes('Mangkir') && !uraianPekerjaan.includes('Libur Sesuai Matriks Roster')) {
-            uraianPekerjaan = `${uraianPekerjaan} • Lembur: ${taskDesc}`;
-          } else {
-            uraianPekerjaan = taskDesc;
-          }
+          const cleanDesc = taskDesc.startsWith('[CUSTOM]') ? taskDesc.replace('[CUSTOM]', '').trim() : taskDesc;
+          uraianPekerjaan = cleanDesc;
         }
         const otSupervisor = ot.supervisorName || ot.supervisor_name || ot.approvedByName || ot.approved_by_name || ot.approver_name;
         if (otSupervisor) {
@@ -2221,7 +2237,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
                         </td>
 
                         {/* URAIAN PEKERJAAN */}
-                        <td className="border border-slate-300 dark:border-slate-700 py-[2.5px] text-left px-2 text-slate-700 dark:text-slate-300 text-[9.5px] truncate max-w-[200px]">
+                        <td className="border border-slate-300 dark:border-slate-700 py-[2.5px] text-left px-2 text-slate-700 dark:text-slate-300 text-[9.5px] truncate max-w-[200px]" title={r.uraianPekerjaan}>
                           {r.uraianPekerjaan}
                         </td>
 

@@ -254,7 +254,8 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
       const otStart = ot?.startTime ? ot.startTime.slice(0, 5) : '-';
       const otEnd = ot?.endTime ? ot.endTime.slice(0, 5) : '-';
       const otHours = ot?.durationHours != null ? `${Number(ot.durationHours).toFixed(1)} Jam` : '-';
-      const otTask = ot?.taskDescription || (ot ? 'Tugas Lembur Operasional' : '-');
+      const rawTask = ot?.taskDescription || '';
+      const otTask = rawTask ? (rawTask.startsWith('[CUSTOM]') ? rawTask.replace('[CUSTOM]', '').trim() : rawTask) : (ot ? 'Tugas Lembur Operasional' : '-');
       const otApprover = ot?.approvedByName || (ot ? kaurName : '-');
       const otNotes = ot?.status === 'approved' ? 'Disetujui' : (ot?.status === 'pending' ? 'Menunggu' : '-');
 

@@ -565,7 +565,15 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         subtotalDailyHours.push(sumOnDay);
       });
 
-      const shiftName = emp.jobTitle?.includes('DAY') ? 'DAY SIFT' : 'SIFT 213';
+      const hasDayShift =
+        empSchedules.some((s) => {
+          const sName = (s.shiftName || s.shift_name || (s as any).name || '').toUpperCase();
+          return sName.includes('DAY');
+        }) ||
+        (emp.jobTitle || '').toUpperCase().includes('DAY') ||
+        (emp.divisionName || (emp as any).division_name || '').toLowerCase().includes('kantor pusat');
+
+      const shiftName = hasDayShift ? 'DAY SIFT' : 'SIFT 213';
 
       return {
         emp,
