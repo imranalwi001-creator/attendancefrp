@@ -25,6 +25,7 @@ import {
   ShieldCheck,
   Sparkles,
   ArrowRight,
+  ArrowRightLeft,
   Info,
   FileSpreadsheet,
   Layers,
