@@ -43,6 +43,7 @@ interface CellClickTarget {
   dayNumber: number;
   multiplier: number;
   existingOt?: OvertimeRecord | null;
+  rowKey?: 'm15' | 'm2w' | 'm2r' | 'm3' | 'm4';
 }
 
 export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalProps> = ({
@@ -403,92 +404,118 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         const schedOnDay = empSchedules.find((s) => (s.scheduleDate || s.schedule_date || '').slice(0, 10) === d.dateStr);
         const isSchedOff = Boolean(schedOnDay && (schedOnDay.isOff || schedOnDay.is_off || schedOnDay.shiftCode === 'OFF' || schedOnDay.shift_code === 'OFF'));
 
-        const matchOt = empOts.find((o) => {
+        // Ambil SEMUA rekaman lembur pada tanggal ini (mendukung multi-baris pengali di tanggal yang sama)
+        const dayOts = empOts.filter((o) => {
           const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
           return oDateStr === d.dateStr;
         });
 
+        let ot15: OvertimeRecord | undefined;
+        let ot2w: OvertimeRecord | undefined;
+        let ot2r: OvertimeRecord | undefined;
+        let ot3: OvertimeRecord | undefined;
+        let ot4: OvertimeRecord | undefined;
+
         let h15 = 0, h2w = 0, h2r = 0, h3 = 0, h4 = 0;
 
-        if (matchOt) {
-          const rawHours = parseFloat((matchOt as any).duration_hours || (matchOt as any).durationHours || (matchOt as any).approved_hours || (matchOt as any).approvedHours || 0);
-          const desc = ((matchOt as any).task_description || (matchOt as any).taskDescription || '').toLowerCase();
+        dayOts.forEach((o) => {
+          const rawHours = parseFloat((o as any).duration_hours || (o as any).durationHours || (o as any).approved_hours || (o as any).approvedHours || 0);
+          const desc = ((o as any).task_description || (o as any).taskDescription || '').toLowerCase();
+          const notes = ((o as any).approval_notes || (o as any).approvalNotes || '').toLowerCase();
+          const tagInfo = `${desc} ${notes}`;
+          const explicitMult = Number((o as any).rate_multiplier || (o as any).rateMultiplier || 2.0);
 
-          const isReliefOrHoliday =
-            Boolean((matchOt as any).is_weekend_holiday || (matchOt as any).isWeekendHoliday) ||
-            isSchedOff ||
-            d.isWeekend ||
-            desc.includes('pengganti') ||
-            desc.includes('mengganti') ||
-            desc.includes('menggantikan') ||
-            desc.includes('ganti') ||
-            desc.includes('relief') ||
-            desc.includes('sambung') ||
-            desc.includes('libur') ||
-            desc.includes('off') ||
-            desc.includes('cuti') ||
-            desc.includes('pos');
-
-          const explicitMult = Number((matchOt as any).rate_multiplier || (matchOt as any).rateMultiplier);
-
-          if (explicitMult === 1.5) {
-            // Jam ke-1 Kelebihan Shift Reguler (Pengali 1.5x)
-            h15 = rawHours;
-          } else if (explicitMult === 3.0) {
-            h3 = rawHours;
-          } else if (explicitMult === 4.0) {
-            h4 = rawHours;
-          } else if (explicitMult === 2.0 && !isReliefOrHoliday && !isTimbanganOrSegel && (desc.includes('kelebihan') || desc.includes('reguler'))) {
-            // Jam ke-2 & berikutnya Kelebihan Shift Reguler di Hari Kerja (Pengali 2.0x Hari Kerja)
-            h2w = rawHours;
-          } else if (explicitMult === 2.0) {
-            // Lembur Pengganti Pos Resmi / Relief Duty / Hari Libur OFF
-            h2r = rawHours;
-          } else if (isTimbanganOrSegel) {
-            // ATURAN BAKU DIVISI TIMBANGAN & SEGEL (Hari Kerja / OFF / Tanggal Merah):
-            // 0 Jam Potongan Istirahat (utuh) dan TANPA PENGALI 1.5x (Seluruh jam langsung 2.0x)
-            h2r = rawHours;
-          } else if (isMatching) {
-            // ATURAN BAKU DIVISI MATCHING:
-            // Jika kelebihan jam shift reguler (Shift 7-7): jam ke-1 1.5x, jam berikutnya 2.0x
-            if (desc.includes('kelebihan') || desc.includes('shift 7-7') || (!isReliefOrHoliday && rawHours <= 3)) {
-              h15 = Math.min(1, rawHours);
-              h2w = Math.max(0, rawHours - 1);
-            } else {
-              // Jika tugas relief / pengganti pos saat off: potongan 1 jam istirahat jika > 1 jam
-              const breakDed = rawHours > 1 ? 1 : 0;
-              h2r = Math.max(0, rawHours - breakDed);
-            }
-          } else if (isReliefOrHoliday) {
-            // Divisi Shipment lainnya saat Lembur Pengganti Pos / Hari Libur: Langsung 2.0x
-            h2r = rawHours;
+          if (explicitMult === 1.5 || tagInfo.includes('[m15]')) {
+            ot15 = o;
+            h15 += rawHours;
+          } else if (explicitMult === 3.0 || tagInfo.includes('[m3]')) {
+            ot3 = o;
+            h3 += rawHours;
+          } else if (explicitMult === 4.0 || tagInfo.includes('[m4]')) {
+            ot4 = o;
+            h4 += rawHours;
           } else {
-            // ATURAN BAKU KELEBIHAN JAM REGULER DI HARI KERJA (Shift 7-7 dsb untuk Shipment):
-            // 1 jam pertama @ 1.5x, jam ke-2 & berikutnya @ 2.0x Hari Kerja
-            h15 = Math.min(1, rawHours);
-            h2w = Math.max(0, rawHours - 1);
-          }
-        }
+            // Pengali 2.0x: Tentukan apakah baris 2.0x Reguler (m2w) atau 2.0x Libur/Relief (m2r)
+            if (tagInfo.includes('[m2w]')) {
+              ot2w = o;
+              h2w += rawHours;
+            } else if (tagInfo.includes('[m2r]')) {
+              ot2r = o;
+              h2r += rawHours;
+            } else {
+              // Rekaman legacy / tanpa tag eksplisit:
+              const isReliefOrHoliday =
+                Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday) ||
+                desc.includes('pengganti') ||
+                desc.includes('mengganti') ||
+                desc.includes('menggantikan') ||
+                desc.includes('ganti') ||
+                desc.includes('relief') ||
+                desc.includes('sambung') ||
+                desc.includes('pos');
 
-        // Push ke masing-masing baris (Tanpa Duplikasi / Alokasi Presisi)
-        cells15.push({ hours: h15, rawOt: matchOt, isYellow: false });
+              const isRegularExcess =
+                desc.includes('kelebihan') ||
+                desc.includes('reguler') ||
+                desc.includes('shift 7-7') ||
+                desc.includes('jam kerja');
+
+              if (isRegularExcess && !isReliefOrHoliday) {
+                // Kelebihan jam reguler hari kerja (baris 2)
+                if (!ot2w) {
+                  ot2w = o;
+                  h2w += rawHours;
+                } else if (!ot2r) {
+                  ot2r = o;
+                  h2r += rawHours;
+                } else {
+                  h2w += rawHours;
+                }
+              } else if (isReliefOrHoliday || isTimbanganOrSegel || isSchedOff || d.isWeekend) {
+                // Tugas pengganti / hari off / relief
+                if (!ot2r) {
+                  ot2r = o;
+                  h2r += rawHours;
+                } else if (!ot2w) {
+                  ot2w = o;
+                  h2w += rawHours;
+                } else {
+                  h2r += rawHours;
+                }
+              } else {
+                if (!ot2w) {
+                  ot2w = o;
+                  h2w += rawHours;
+                } else if (!ot2r) {
+                  ot2r = o;
+                  h2r += rawHours;
+                } else {
+                  h2w += rawHours;
+                }
+              }
+            }
+          }
+        });
+
+        // Push ke masing-masing baris pengali dengan ref rawOt independen
+        cells15.push({ hours: h15, rawOt: ot15, isYellow: false });
         row15Real += h15;
         row15Paid += h15 * 1.5;
 
-        cells2w.push({ hours: h2w, rawOt: matchOt, isYellow: false });
+        cells2w.push({ hours: h2w, rawOt: ot2w, isYellow: false });
         row2wReal += h2w;
         row2wPaid += h2w * 2.0;
 
         const isYellowCell = isSchedOff || d.isWeekend;
-        cells2r.push({ hours: h2r, rawOt: matchOt, isYellow: isYellowCell || h2r > 0 });
+        cells2r.push({ hours: h2r, rawOt: ot2r, isYellow: isYellowCell || h2r > 0 });
         row2rReal += h2r;
         row2rPaid += h2r * 2.0;
 
-        cells3.push({ hours: h3, rawOt: matchOt, isYellow: false });
+        cells3.push({ hours: h3, rawOt: ot3, isYellow: false });
         row3Real += h3;
         row3Paid += h3 * 3.0;
 
-        cells4.push({ hours: h4, rawOt: matchOt, isYellow: false });
+        cells4.push({ hours: h4, rawOt: ot4, isYellow: false });
         row4Real += h4;
         row4Paid += h4 * 4.0;
       });
@@ -552,7 +579,13 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
   }, [matrixData]);
 
   // Open Cell Input Dialog
-  const handleCellClick = (employee: UserProfile, dayNumber: number, multiplier: number, existingOt?: OvertimeRecord | null) => {
+  const handleCellClick = (
+    employee: UserProfile,
+    dayNumber: number,
+    multiplier: number,
+    existingOt?: OvertimeRecord | null,
+    rowKey?: 'm15' | 'm2w' | 'm2r' | 'm3' | 'm4'
+  ) => {
     const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(dayNumber).padStart(2, '0')}`;
     const dt = new Date(yearNum, monthNum - 1, dayNumber);
     const isWk = dt.getDay() === 0 || dt.getDay() === 6;
@@ -563,18 +596,39 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
       dayNumber,
       multiplier,
       existingOt,
+      rowKey,
     });
 
     if (existingOt) {
-      setInputRealHours(Number(existingOt.durationHours || existingOt.approvedHours || (multiplier === 1.5 ? 1 : 8)));
+      setInputRealHours(Number(existingOt.durationHours || (existingOt as any).duration_hours || existingOt.approvedHours || (existingOt as any).approved_hours || (multiplier === 1.5 ? 1 : 2)));
       setInputMultiplier(Number(existingOt.rateMultiplier || (existingOt as any).rate_multiplier || multiplier));
-      setInputTaskDesc(existingOt.taskDescription || (multiplier === 1.5 ? 'Kelebihan Jam Shift Reguler' : 'Tugas Pengganti Shift / Relief'));
-      setInputIsHoliday(Boolean(existingOt.isWeekendHoliday));
+      setInputTaskDesc(existingOt.taskDescription || (existingOt as any).task_description || (
+        multiplier === 1.5
+          ? 'Kelebihan Jam Shift Reguler (Jam ke-1)'
+          : rowKey === 'm2w'
+          ? 'Kelebihan Jam Shift Reguler (Jam ke-2 dst)'
+          : rowKey === 'm2r'
+          ? 'Tugas Pengganti Pos Resmi / Relief'
+          : rowKey === 'm3'
+          ? 'Lembur Hari Libur Resmi Jam Ke-8'
+          : 'Lembur Hari Libur Resmi Jam Ke-9+'
+      ));
+      setInputIsHoliday(Boolean(existingOt.isWeekendHoliday || (existingOt as any).is_weekend_holiday || rowKey === 'm2r' || isWk));
     } else {
-      setInputRealHours(multiplier === 1.5 ? 1 : 8);
+      setInputRealHours(multiplier === 1.5 ? 1 : rowKey === 'm2w' ? 2 : rowKey === 'm2r' ? 8 : 1);
       setInputMultiplier(multiplier);
-      setInputTaskDesc(multiplier === 1.5 ? 'Kelebihan Jam Shift Reguler' : isWk || multiplier === 2.0 ? 'Tugas Pengganti Pos Resmi / Relief' : 'Kelebihan Jam Shift Reguler');
-      setInputIsHoliday(isWk);
+      setInputTaskDesc(
+        multiplier === 1.5
+          ? 'Kelebihan Jam Shift Reguler (Jam ke-1)'
+          : rowKey === 'm2w'
+          ? 'Kelebihan Jam Shift Reguler (Jam ke-2 dst)'
+          : rowKey === 'm2r'
+          ? 'Tugas Pengganti Pos Resmi / Relief'
+          : rowKey === 'm3'
+          ? 'Lembur Hari Libur Resmi Jam Ke-8'
+          : 'Lembur Hari Libur Resmi Jam Ke-9+'
+      );
+      setInputIsHoliday(rowKey === 'm2r' || isWk);
     }
 
     setCellEditOpen(true);
@@ -587,19 +641,22 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
     try {
       setIsSavingCell(true);
       const duration = Number(inputRealHours) || 0;
-      const mult = Number(inputMultiplier) || 2.0;
+      const mult = Number(inputMultiplier) || editTarget.multiplier || 2.0;
 
       // Division Rules:
       // Timbangan/Segel: 0 hr break, multiplier 2.0x
       // Matching: 1 hr break HANYA jika tugas relief / pengganti pos saat libur/off dan durasi > 1 jam
       // Kelebihan jam shift reguler (1.5x): TIDAK ADA POTONGAN ISTIRAHAT
-      const divName = (editTarget.employee.divisionName || '').toLowerCase();
+      const divName = (editTarget.employee.divisionName || (editTarget.employee as any).division_name || '').toLowerCase();
       let effectiveHours = duration;
       if (divName.includes('matching') && mult === 2.0 && duration > 1 && (inputIsHoliday || inputTaskDesc.toLowerCase().includes('pengganti') || inputTaskDesc.toLowerCase().includes('relief'))) {
         effectiveHours = Math.max(0, duration - 1);
       }
       const paidHours = effectiveHours * mult;
       const compensationAmount = Math.round(paidHours * HOURLY_RATE);
+
+      const rowTag = editTarget.rowKey ? `[${editTarget.rowKey.toUpperCase()}]` : (mult === 1.5 ? '[M15]' : '[M2W]');
+      const finalApprovalNotes = `${rowTag} Ditugaskan dan disahkan langsung oleh Super Administrator`;
 
       const payload = {
         userId: editTarget.employee.id,
@@ -608,7 +665,7 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         divisionName: editTarget.employee.divisionName || 'SHIPMENT',
         date: editTarget.dateStr,
         startTime: '07:30:00',
-        endTime: `${String(7 + Math.floor(duration)).padStart(2, '0')}:30:00`,
+        endTime: `${String(7 + Math.floor(duration)).padStart(2, '0')}:${duration % 1 !== 0 ? '30' : '00'}:00`,
         durationHours: duration,
         approvedHours: duration,
         rateMultiplier: mult,
@@ -616,16 +673,25 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         totalPay: compensationAmount,
         compensationAmount,
         taskDescription: inputTaskDesc,
+        approvalNotes: finalApprovalNotes,
         isWeekendHoliday: inputIsHoliday,
         status: 'approved',
         paymentStatus: 'unpaid',
+        isManualAdmin: true,
+        assignedByAdmin: true,
       };
 
-      if (editTarget.existingOt?.id) {
+      if (duration === 0 && editTarget.existingOt?.id) {
+        // Hapus jika diisi 0 jam
+        const res: any = await api.delete(`/overtime/${editTarget.existingOt.id}`);
+        if (res?.success) {
+          toast.success(`Jam lembur tgl ${editTarget.dayNumber} dihapus`);
+        }
+      } else if (editTarget.existingOt?.id) {
         // Update existing record
         const res: any = await api.put(`/overtime/${editTarget.existingOt.id}`, payload);
         if (res?.success) {
-          toast.success(`Jam lembur ${editTarget.employee.fullName} tgl ${editTarget.dayNumber} berhasil diperbarui!`);
+          toast.success(`Jam lembur ${editTarget.employee.fullName} tgl ${editTarget.dayNumber} (${mult}x) berhasil diperbarui!`);
         }
       } else {
         // Create new overtime record
@@ -653,15 +719,20 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
   // Delete Overtime Cell
   const handleDeleteCell = async () => {
     if (!editTarget?.existingOt?.id) return;
-    if (!window.confirm('Yakin ingin menghapus lembur pada tanggal ini?')) return;
+    if (!window.confirm('Yakin ingin menghapus lembur pada baris ini?')) return;
 
     try {
       setIsSavingCell(true);
       const res: any = await api.delete(`/overtime/${editTarget.existingOt.id}`);
       if (res?.success) {
-        toast.success('Catatan lembur pada tanggal tersebut berhasil dihapus!');
+        toast.success('Catatan lembur pada baris tersebut berhasil dihapus!');
         setCellEditOpen(false);
         setEditTarget(null);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('hrm_overtime_updated'));
+          window.dispatchEvent(new CustomEvent('hrm_data_updated'));
+        }
+        fetchLatestMatrixData(selectedMonth);
         if (onDataChanged) onDataChanged();
       }
     } catch (err: any) {
@@ -1082,8 +1153,8 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
                           return (
                             <td
                               key={`cell-${empBlock.no}-${mRow.key}-${dIdx}`}
-                              onClick={() => handleCellClick(empBlock.emp, dIdx + 1, mRow.mult, cell.rawOt)}
-                              title={`Klik untuk edit lembur ${empBlock.nama} tgl ${dIdx + 1}`}
+                              onClick={() => handleCellClick(empBlock.emp, dIdx + 1, mRow.mult, cell.rawOt, mRow.key as any)}
+                              title={`Klik untuk input/edit lembur ${empBlock.nama} tgl ${dIdx + 1} (Baris ${mRow.pengaliLabel}x)`}
                               className={`border border-black text-center font-mono cursor-pointer transition-colors py-0.5 ${
                                 hasHours && cell.isYellow
                                   ? 'bg-yellow-300 text-red-700 font-extrabold hover:bg-yellow-400'
@@ -1203,10 +1274,15 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         <Dialog open={cellEditOpen} onOpenChange={setCellEditOpen}>
           <DialogContent className="max-w-md rounded-2xl p-6">
             <DialogHeader>
-              <DialogTitle className="text-base font-bold flex items-center gap-2">
-                <Clock size={16} className="text-indigo-600" />
-                Input / Edit Jam Lembur Matriks SPL
-              </DialogTitle>
+              <div className="flex items-center justify-between gap-2">
+                <DialogTitle className="text-sm md:text-base font-bold flex items-center gap-2">
+                  <Clock size={16} className="text-indigo-600" />
+                  {editTarget?.existingOt ? 'Edit Jam Lembur' : 'Input Lembur Baru'}
+                </DialogTitle>
+                <Badge variant="outline" className="font-mono text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200">
+                  Baris {editTarget?.rowKey === 'm15' ? '1.5x (Reguler)' : editTarget?.rowKey === 'm2w' ? '2.0x (Reguler)' : editTarget?.rowKey === 'm2r' ? '2.0x (Libur/Relief)' : editTarget?.rowKey === 'm3' ? '3.0x' : '4.0x'}
+                </Badge>
+              </div>
               <DialogDescription className="text-xs text-muted-foreground">
                 {editTarget?.employee.fullName} ({editTarget?.employee.nip}) • Tanggal: {editTarget?.dateStr}
               </DialogDescription>

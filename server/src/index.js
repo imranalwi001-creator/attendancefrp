@@ -3109,6 +3109,14 @@ async function notifyAllPartiesViaWhatsApp({
   quota = null,
 }) {
   try {
+    // 🛡️ REKONSILIASI & BACKFILL LEMBUR OKTOBER 2026:
+    // Sesuai mandat operasional, matikan seluruh notifikasi WhatsApp lembur untuk periode Oktober 2026
+    const checkDetailStr = `${details || ''} ${applicantDetails || ''} ${reasonOrTask || ''}`;
+    if (checkDetailStr.includes('2026-10') && (submissionType || '').toUpperCase().includes('LEMBUR')) {
+      console.log('[notifyAllPartiesViaWhatsApp] WhatsApp alert MUTED for October 2026 overtime recap/backfill.');
+      return;
+    }
+
     const isApproved = decisionStatus === 'approved';
 
     // 🛡️ KEBIJAKAN KERAHASIAAN NOMINAL PAYROLL PT FRP:
@@ -10967,7 +10975,8 @@ async function verifyOvertimeBudgetGuardrail(dbPool, userId, otDateStr, newCompe
   }
 
   // WhatsApp Early Warning (dedup per bulan & ambang zona 55jt / 60jt)
-  if (!isWisma && newTotalGroup >= effBudgets.targetMin) {
+  // Khusus rekonsiliasi Oktober 2026: mute early warning WhatsApp
+  if (!isWisma && newTotalGroup >= effBudgets.targetMin && monthStr !== '2026-10') {
     const zoneKey = newTotalGroup > effBudgets.targetMax ? 'ORANGE_60JT' : 'YELLOW_55JT';
     const dedupKey = `${monthStr}_${zoneKey}`;
     if (!overtimeCostAlertSent.has(dedupKey)) {
@@ -11243,8 +11252,10 @@ app.post('/api/overtime', async (req, res) => {
 
     const otRow = result.rows[0];
 
+    const isOctober2026 = typeof date === 'string' && date.startsWith('2026-10');
+
     if (isAdminDirect && targetStatus === 'approved') {
-      if (userProfile.phone) {
+      if (userProfile.phone && !isOctober2026) {
         const empWaMsg = `⏱️ *SURAT PERINTAH KERJA LEMBUR (SPKL) RESMI DITERBITKAN*\n\n` +
           `Halo *${userProfile.full_name}*,\n` +
           `Anda telah resmi ditugaskan lembur oleh *${finalApproverName}*:\n\n` +
@@ -11284,22 +11295,24 @@ app.post('/api/overtime', async (req, res) => {
     }
 
     // 📢 NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
-    await notifyAllPartiesViaWhatsApp({
-      submissionType: 'LEMBUR (SPL)',
-      details: `${date} (${startTime} - ${endTime}, ${hours} Jam) - Est. Rp ${comp.toLocaleString('id-ID')}`,
-      applicantDetails: `${date} (${startTime} - ${endTime}, ${hours} Jam)`,
-      applicant: {
-        id: userProfile.id,
-        fullName: userProfile.full_name,
-        nip: userProfile.nip,
-        phone: userProfile.phone,
-        divisionName: userProfile.division_name,
-      },
-      reasonOrTask: taskDescription,
-      approvalLink: '/admin/approval?tab=overtime',
-      isSpecialOfficer: isSpecial3FieldOfficer,
-      execToken: execOtToken,
-    });
+    if (!isOctober2026) {
+      await notifyAllPartiesViaWhatsApp({
+        submissionType: 'LEMBUR (SPL)',
+        details: `${date} (${startTime} - ${endTime}, ${hours} Jam) - Est. Rp ${comp.toLocaleString('id-ID')}`,
+        applicantDetails: `${date} (${startTime} - ${endTime}, ${hours} Jam)`,
+        applicant: {
+          id: userProfile.id,
+          fullName: userProfile.full_name,
+          nip: userProfile.nip,
+          phone: userProfile.phone,
+          divisionName: userProfile.division_name,
+        },
+        reasonOrTask: taskDescription,
+        approvalLink: '/admin/approval?tab=overtime',
+        isSpecialOfficer: isSpecial3FieldOfficer,
+        execToken: execOtToken,
+      });
+    }
 
     // Broadcast Notifikasi In-App
     await broadcastNotification({
@@ -11452,23 +11465,27 @@ app.put('/api/overtime/:id/status', async (req, res) => {
 
     // 📢 NOTIFIKASI WHATSAPP KE SELURUH PIHAK: Pemohon, Korlap, K3, Admin, Superadmin, Pimpinan & Dirut
     // Kebijakan PT FRP: Informasi nominal dirahasiakan dari teks pengumuman/karyawan
-    await notifyAllPartiesViaWhatsApp({
-      submissionType: 'LEMBUR (SPL)',
-      details: `${ot.date} (${ot.start_time} - ${ot.end_time}, ${finalHours} Jam)`,
-      applicant: {
-        id: ot.user_id,
-        fullName: ot.user_name,
-        nip: ot.user_nip,
-        phone: ot.user_phone,
-        divisionName: ot.division_name,
-      },
-      reasonOrTask: ot.task_description,
-      isDecision: true,
-      decisionStatus: status,
-      approverName: approverName || 'Atasan Lapangan',
-      approvalNotes: notes || '',
-      approvalLink: '/admin/approval?tab=overtime',
-    });
+    // Khusus rekonsiliasi & backfill lembur Oktober 2026: Jangan kirim notifikasi WhatsApp
+    const isOtOctober2026 = ot.date && String(ot.date).startsWith('2026-10');
+    if (!isOtOctober2026) {
+      await notifyAllPartiesViaWhatsApp({
+        submissionType: 'LEMBUR (SPL)',
+        details: `${ot.date} (${ot.start_time} - ${ot.end_time}, ${finalHours} Jam)`,
+        applicant: {
+          id: ot.user_id,
+          fullName: ot.user_name,
+          nip: ot.user_nip,
+          phone: ot.user_phone,
+          divisionName: ot.division_name,
+        },
+        reasonOrTask: ot.task_description,
+        isDecision: true,
+        decisionStatus: status,
+        approverName: approverName || 'Atasan Lapangan',
+        approvalNotes: notes || '',
+        approvalLink: '/admin/approval?tab=overtime',
+      });
+    }
 
     // Send notification to employee
     const statusText = status === 'approved' ? 'DISETUJUI' : 'DITOLAK';
