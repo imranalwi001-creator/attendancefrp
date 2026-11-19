@@ -512,19 +512,28 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
             (singleAtt.shiftName?.includes('Shift II') ? '22:30' : singleAtt.shiftName?.includes('Shift III') ? '07:30' : '15:30')
         ).substring(0, 5);
 
-        // Kasus 1: Lembur Sebelum Shift (misal: lembur 15:30 - 22:30, shift resmi 22:30 - 07:30)
-        if (otStart && schedStart && singleClockIn < schedStart && otStart < schedStart) {
+        // Kasus 1: Lembur Sebelum Shift (misal: lembur 15:30 - 22:30, shift resmi 22:30 - 07:30, atau lembur 07:30 - 15:30, shift resmi 15:30 - 22:30)
+        if (otStart && schedStart && otStart < schedStart) {
+          // singleClockIn dianggap sebagai clock-in lembur awal jika mendekati otStart (<=45 mnt) atau terjadi jauh sebelum shift resmi (>=60 mnt)
+          const isOvertimeClockIn = Boolean(
+            singleClockIn && (
+              (otStart && getTimeDistanceMinutes(singleClockIn, otStart) <= 45) ||
+              getTimeDistanceMinutes(singleClockIn, schedStart) >= 60
+            )
+          );
+
           subAtt = {
             ...singleAtt,
-            clockIn: singleClockIn,
+            clockIn: isOvertimeClockIn ? singleClockIn : otStart,
             clockOut: otEnd || schedStart,
             shiftName: 'Shift Pengganti (Lembur)',
           };
+
           if (singleAtt.clockOut) {
-            // Sesi kerja telah tuntas: shift resmi selesai saat clock-out pagi/akhir shift
+            // Sesi kerja telah tuntas: shift resmi selesai saat clock-out akhir dinas
             att = {
               ...singleAtt,
-              clockIn: schedStart,
+              clockIn: isOvertimeClockIn ? schedStart : singleClockIn,
               clockOut: singleClockOut,
               shiftName: sched.shiftName || 'Shift Resmi',
             };
@@ -535,7 +544,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               // Jam lembur pengganti usai -> Kolom Absensi otomatis terisi aktif bertugas di shift resminya!
               att = {
                 ...singleAtt,
-                clockIn: schedStart,
+                clockIn: isOvertimeClockIn ? schedStart : singleClockIn,
                 clockOut: singleClockOut || undefined,
                 shiftName: sched.shiftName || 'Shift Resmi',
               };
@@ -546,13 +555,13 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           } else {
             att = {
               ...singleAtt,
-              clockIn: schedStart,
+              clockIn: isOvertimeClockIn ? schedStart : singleClockIn,
               clockOut: sched.endTime ? String(sched.endTime).substring(0, 5) : '-',
               shiftName: sched.shiftName || 'Shift Resmi',
             };
           }
         }
-        // Kasus 2: Lembur Setelah Shift (misal: shift resmi 07:30 - 15:30, lanjut lembur pengganti 15:30 - 22:30)
+        // Kasus 2: Lembur Setelah Shift (misal: shift resmi 07:30 - 15:30, lanjut lembur pengganti 15:30 - 22:30, atau Day Shift 07:30 - 16:30 lanjut 16:30 - 20:00)
         else if (otStart && schedEnd && (otStart >= schedEnd || otStart >= schedStart)) {
           const nowWita = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Makassar', hour12: false }).substring(0, 5);
           // singleClockOut HANYA dianggap sebagai clock-out lembur jika terjadi jauh setelah schedEnd (>45 mnt) atau mendekati otEnd
@@ -566,7 +575,9 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           att = {
             ...singleAtt,
             clockIn: singleClockIn || schedStart,
-            clockOut: singleClockOut || (isShiftDone ? schedEnd : undefined),
+            // Jika clock-out adalah akhir lembur lanjutan, maka shift resmi selesai tepat pada schedEnd!
+            // Jika bukan clock-out lembur (misal kepulangan shift reguler normal 16:32), gunakan singleClockOut
+            clockOut: isOvertimeClockOut ? schedEnd : (singleClockOut || (isShiftDone ? schedEnd : undefined)),
             shiftName: sched.shiftName || 'Shift Resmi',
           };
           subAtt = {
@@ -746,6 +757,9 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           startVal = String(rawStart).substring(0, 5);
           endVal = String(rawEnd).substring(0, 5);
         }
+
+        if ((!startVal || startVal === '-') && rawStart) startVal = String(rawStart).substring(0, 5);
+        if ((!endVal || endVal === '-') && rawEnd) endVal = String(rawEnd).substring(0, 5);
 
         lemburMulai = startVal;
         lemburSelesai = endVal;

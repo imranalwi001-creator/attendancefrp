@@ -195,7 +195,17 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
       if (att) {
         clockInDisplay = att.clockIn ? att.clockIn.slice(0, 5) : '-';
         clockOutDisplay = att.clockOut ? att.clockOut.slice(0, 5) : (att.clockIn ? 'Aktif' : '-');
-        statusBadge = att.status ? att.status.toUpperCase() : 'HADIR';
+        statusBadge = att.status ? (ot ? 'HADIR + LEMBUR' : att.status.toUpperCase()) : (ot ? 'HADIR + LEMBUR' : 'HADIR');
+
+        // Jika lembur sambung setelah shift dan ceklok pulang di akhir sesi lembur, kembalikan jam pulang reguler ke jam mulai lembur/akhir shift
+        if (ot && att.clockIn && att.clockOut) {
+          const rawOtStart = ot.startTime ? ot.startTime.slice(0, 5) : '';
+          const cIn = att.clockIn.slice(0, 5);
+          const cOut = att.clockOut.slice(0, 5);
+          if (rawOtStart && cOut > rawOtStart && (cIn <= rawOtStart)) {
+            clockOutDisplay = rawOtStart;
+          }
+        }
 
         // Check Lateness
         const rawLate = Number(att.lateMinutes) || 0;
