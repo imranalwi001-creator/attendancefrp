@@ -92,9 +92,13 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     }
   }, [initialUser, initialAttendance, initialShift]);
 
+  const isInitialUserActive = Boolean(
+    currentUser && initialUser && (currentUser.id === initialUser.id || currentUser.nip === initialUser.nip)
+  );
   const user = currentUser || initialUser;
-  const attendance = currentAttendance || initialAttendance;
-  const shift = currentShift || initialShift;
+  // Pastikan attendance dan shift TIDAK bocor ke karyawan lain saat berpindah karyawan
+  const attendance = isInitialUserActive ? (currentAttendance || initialAttendance) : currentAttendance;
+  const shift = isInitialUserActive ? (currentShift || initialShift) : currentShift;
 
   // State daftar seluruh karyawan & pencarian
   const [employeeList, setEmployeeList] = useState<UserProfile[]>(allEmployees);
@@ -165,9 +169,15 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     setIsEditingMeta(false);
 
     const today = getTodayDateStr();
-    const todayAtt = (allAttendances || []).find(
-      (a) => (a.userId === targetEmp.id || a.userNip === targetEmp.nip) && (a.attendanceDate || (a as any).date) === today
-    );
+    const validTargetIds = [targetEmp.id, targetEmp.nip, targetEmp.email].filter(Boolean).map((s) => String(s).toLowerCase().trim());
+    const todayAtt = (allAttendances || []).find((a) => {
+      const aDate = (a.attendanceDate || (a as any).date || '').slice(0, 10);
+      const aUser = String(a.userId || (a as any).user_id || a.userNip || (a as any).user_nip || '').toLowerCase().trim();
+      return aDate === today && validTargetIds.includes(aUser);
+    }) || hrmService.getAttendances(today).find((a) => {
+      const aUser = String(a.userId || a.userNip || '').toLowerCase().trim();
+      return validTargetIds.includes(aUser);
+    });
     setCurrentAttendance(todayAtt || null);
 
     const empShift = hrmService.getEmployeeTodaySchedule(targetEmp.id, today);
@@ -464,17 +474,27 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   // Gabungkan attendance hari ini agar realtime
   const combinedAttendances = useMemo(() => {
     if (!user) return [];
-    const list = [...serverAttendances];
+    const validIds = [user.id, user.nip, user.email].filter(Boolean).map((s) => String(s).toLowerCase().trim());
 
+    // 1. Filter serverAttendances strictly for this user
+    const list = serverAttendances.filter((a) => {
+      const aUser = String(a.userId || (a as any).user_id || a.userNip || (a as any).user_nip || '').toLowerCase().trim();
+      return !aUser || validIds.includes(aUser);
+    });
+
+    // 2. Hanya masukkan attendance hari ini jika BENAR-BENAR milik user ini (mencegah kebocoran data antar user)
     if (attendance) {
-      const attDate = attendance.attendanceDate || (attendance as any).date || todayStr;
-      const idx = attendance.id
-        ? list.findIndex((a) => a.id === attendance.id)
-        : list.findIndex((a) => (a.attendanceDate || (a as any).date) === attDate);
-      if (idx !== -1) {
-        list[idx] = { ...list[idx], ...attendance };
-      } else if (attendance.id || !list.some((a) => (a.attendanceDate || (a as any).date) === attDate)) {
-        list.unshift({ ...attendance, attendanceDate: attDate, date: attDate as any });
+      const attUser = String(attendance.userId || (attendance as any).user_id || attendance.userNip || (attendance as any).user_nip || '').toLowerCase().trim();
+      if (!attUser || validIds.includes(attUser)) {
+        const attDate = attendance.attendanceDate || (attendance as any).date || todayStr;
+        const idx = attendance.id
+          ? list.findIndex((a) => a.id === attendance.id)
+          : list.findIndex((a) => (a.attendanceDate || (a as any).date) === attDate);
+        if (idx !== -1) {
+          list[idx] = { ...list[idx], ...attendance };
+        } else if (attendance.id || !list.some((a) => (a.attendanceDate || (a as any).date) === attDate)) {
+          list.unshift({ ...attendance, attendanceDate: attDate, date: attDate as any });
+        }
       }
     }
 
@@ -541,7 +561,12 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
       // 3. Cari semua presensi pada tanggal ini (1 tanggal = 1 baris; jika ada Shift Asli + Shift Pengganti, pisahkan ke ABSEN & LEMBUR)
       const rawDayAtts = combinedAttendances
-        .filter((a) => (a.attendanceDate || (a as any).date || '').slice(0, 10) === dateStr)
+        .filter((a) => {
+          const aDate = (a.attendanceDate || (a as any).date || '').slice(0, 10);
+          if (aDate !== dateStr) return false;
+          const aUser = String(a.userId || (a as any).user_id || a.userNip || (a as any).user_nip || '').toLowerCase().trim();
+          return !aUser || validUserIds.includes(aUser);
+        })
         .sort((a, b) => String(a.clockIn || '').localeCompare(String(b.clockIn || '')));
 
       // Filter out duplicate ghost sessions: sesi tanpa clock_out yang terbuat dalam hitungan menit pasca clock_out sesi sebelumnya
@@ -622,9 +647,18 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
           if (ot && schedStart && s1In < schedStart) {
             subAtt = s1;
             att = s2;
-          } else {
+          } else if (ot) {
             att = s1;
             subAtt = s2;
+          } else {
+            // TIDAK ADA SPKL LEMBUR (ot) & tidak ada keterangan shift pengganti:
+            // Sesi-sesi pada hari yang sama BUKAN lembur! (Hanya re-tap/duplikasi presensi shift reguler)
+            att = {
+              ...s1,
+              clockOut: s2.clockOut || s1.clockOut,
+            };
+            // Jangan pernah buat subAtt (lembur) jika tidak ada SPKL resmi
+            subAtt = undefined;
           }
         }
       } else if (
