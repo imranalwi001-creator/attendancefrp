@@ -42,8 +42,12 @@ import {
   Loader2,
   CalendarCheck,
   Trash2,
+  ChevronLeft,
+  ChevronRight,
+  Search,
+  Users,
 } from 'lucide-react';
-import { UserProfile, AttendanceRecord, OvertimeRecord, AttendanceStatus, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isSimulationAccount } from '@/types/hrm';
+import { UserProfile, AttendanceRecord, OvertimeRecord, AttendanceStatus, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isSimulationAccount, isOfficialFrEmployee } from '@/types/hrm';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
 import defaultLogo from '@/assets/logo.png';
@@ -58,18 +62,158 @@ interface Props {
   shift?: any;
   initialMonth?: string;
   schedules?: any[];
+  allEmployees?: UserProfile[];
+  onSelectUser?: (u: UserProfile) => void;
 }
 
 export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
   isOpen,
   onClose,
-  user,
-  attendance,
+  user: initialUser,
+  attendance: initialAttendance,
   allAttendances = [],
-  shift,
+  shift: initialShift,
   initialMonth,
   schedules,
+  allEmployees = [],
+  onSelectUser,
 }) => {
+  // State user aktif yang sedang dilihat (mendukung navigasi Next, Prev, dan Pencarian)
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(initialUser);
+  const [currentAttendance, setCurrentAttendance] = useState<AttendanceRecord | null>(initialAttendance);
+  const [currentShift, setCurrentShift] = useState<any>(initialShift);
+
+  // Sinkronkan state saat props user dari parent berubah
+  useEffect(() => {
+    if (initialUser) {
+      setCurrentUser(initialUser);
+      setCurrentAttendance(initialAttendance);
+      setCurrentShift(initialShift);
+    }
+  }, [initialUser, initialAttendance, initialShift]);
+
+  const user = currentUser || initialUser;
+  const attendance = currentAttendance || initialAttendance;
+  const shift = currentShift || initialShift;
+
+  // State daftar seluruh karyawan & pencarian
+  const [employeeList, setEmployeeList] = useState<UserProfile[]>(allEmployees);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [isSearchFocused, setIsSearchFocused] = useState<boolean>(false);
+
+  // Ambil data seluruh karyawan jika belum terisi dari props
+  useEffect(() => {
+    if (allEmployees && allEmployees.length > 0) {
+      setEmployeeList(allEmployees);
+    } else {
+      const cached = hrmService.getUsers().filter((u) => u.isActive && isOfficialFrEmployee(u));
+      if (cached.length > 0) {
+        setEmployeeList(cached);
+      } else {
+        api.get<{ success: boolean; data: UserProfile[] }>('/users').then((res) => {
+          if (res && res.data && Array.isArray(res.data)) {
+            setEmployeeList(res.data.filter((u) => u.isActive && isOfficialFrEmployee(u)));
+          }
+        }).catch(() => {});
+      }
+    }
+  }, [allEmployees]);
+
+  // Urutkan daftar karyawan secara rapi dan konsisten (berdasarkan urutan NIP FR07001 - FR07080, dsb)
+  const sortedEmployees = useMemo(() => {
+    return [...employeeList]
+      .filter((u) => isOfficialFrEmployee(u))
+      .sort((a, b) => {
+        const nipA = (a.nip || '').replace(/[^0-9]/g, '');
+        const nipB = (b.nip || '').replace(/[^0-9]/g, '');
+        const numA = parseInt(nipA, 10);
+        const numB = parseInt(nipB, 10);
+        if (!isNaN(numA) && !isNaN(numB) && numA !== numB) {
+          return numA - numB;
+        }
+        return (a.fullName || a.name || '').localeCompare(b.fullName || b.name || '');
+      });
+  }, [employeeList]);
+
+  // Indeks karyawan aktif saat ini di dalam daftar
+  const currentEmployeeIndex = useMemo(() => {
+    if (!user) return -1;
+    return sortedEmployees.findIndex(
+      (e) => (e.id && user.id && e.id === user.id) || (e.nip && user.nip && e.nip.toLowerCase() === user.nip.toLowerCase())
+    );
+  }, [sortedEmployees, user]);
+
+  // Filter pencarian nama / NIP
+  const filteredEmployees = useMemo(() => {
+    if (!searchQuery.trim()) return sortedEmployees;
+    const q = searchQuery.toLowerCase().trim();
+    return sortedEmployees.filter((emp) => {
+      const name = (emp.fullName || emp.name || '').toLowerCase();
+      const nip = (emp.nip || '').toLowerCase();
+      const div = (emp.divisionName || '').toLowerCase();
+      const grp = (emp.operationalGroup || '').toLowerCase();
+      return name.includes(q) || nip.includes(q) || div.includes(q) || grp.includes(q);
+    });
+  }, [sortedEmployees, searchQuery]);
+
+  // Fungsi ganti karyawan aktif
+  const handleSelectEmployee = (targetEmp: UserProfile) => {
+    if (!targetEmp) return;
+    setCurrentUser(targetEmp);
+    setManualLeaveOverride(null);
+    setEditingRow(null);
+    setIsEditingMeta(false);
+
+    const today = getTodayDateStr();
+    const todayAtt = (allAttendances || []).find(
+      (a) => (a.userId === targetEmp.id || a.userNip === targetEmp.nip) && (a.attendanceDate || (a as any).date) === today
+    );
+    setCurrentAttendance(todayAtt || null);
+
+    const empShift = hrmService.getEmployeeTodaySchedule(targetEmp.id, today);
+    setCurrentShift(empShift || null);
+
+    if (onSelectUser) {
+      onSelectUser(targetEmp);
+    }
+  };
+
+  // Navigasi ke Karyawan Sebelumnya (Prev)
+  const handlePrevEmployee = () => {
+    if (currentEmployeeIndex > 0) {
+      handleSelectEmployee(sortedEmployees[currentEmployeeIndex - 1]);
+    }
+  };
+
+  // Navigasi ke Karyawan Selanjutnya (Next)
+  const handleNextEmployee = () => {
+    if (currentEmployeeIndex >= 0 && currentEmployeeIndex < sortedEmployees.length - 1) {
+      handleSelectEmployee(sortedEmployees[currentEmployeeIndex + 1]);
+    }
+  };
+
+  // Shortcut keyboard: Panah Kiri (Prev) & Panah Kanan (Next)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = document.activeElement?.tagName?.toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+        return;
+      }
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        handlePrevEmployee();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        handleNextEmployee();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, currentEmployeeIndex, sortedEmployees]);
   // 3 Petugas Lapangan Khusus Pimpinan (Muh Aslam Faisal, La Unga Samsi, Takdir)
   const isSpecialTarget = useMemo(() => {
     if (!user) return false;
@@ -1901,6 +2045,131 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
               >
                 <Printer className="w-3.5 h-3.5" /> Cetak
               </Button>
+            </div>
+          </div>
+
+          {/* BAR NAVIGASI & PENCARIAN KARYAWAN */}
+          <div className="px-5 py-2.5 border-b border-border/70 bg-slate-50/90 dark:bg-slate-900/70 flex flex-wrap items-center justify-between gap-3 no-print">
+            {/* Sisi Kiri: Tombol Prev, Indikator Posisi, dan Tombol Next */}
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handlePrevEmployee}
+                disabled={currentEmployeeIndex <= 0}
+                className="h-8 px-3 text-xs rounded-xl gap-1.5 font-semibold hover:bg-primary/10 border-border shadow-2xs disabled:opacity-40"
+                title="Lihat Karyawan Sebelumnya (Shortcut Keyboard: Panah Kiri)"
+              >
+                <ChevronLeft className="w-4 h-4 text-primary" />
+                <span>Prev</span>
+              </Button>
+
+              <div className="px-3 py-1 rounded-xl bg-background border border-border text-xs font-mono font-medium text-foreground flex items-center gap-1.5 shadow-2xs">
+                <Users className="w-3.5 h-3.5 text-primary" />
+                <span className="font-bold text-primary">{currentEmployeeIndex >= 0 ? currentEmployeeIndex + 1 : '-'}</span>
+                <span className="text-muted-foreground">/</span>
+                <span>{sortedEmployees.length}</span>
+              </div>
+
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleNextEmployee}
+                disabled={currentEmployeeIndex < 0 || currentEmployeeIndex >= sortedEmployees.length - 1}
+                className="h-8 px-3 text-xs rounded-xl gap-1.5 font-semibold hover:bg-primary/10 border-border shadow-2xs disabled:opacity-40"
+                title="Lihat Karyawan Selanjutnya (Shortcut Keyboard: Panah Kanan)"
+              >
+                <span>Next</span>
+                <ChevronRight className="w-4 h-4 text-primary" />
+              </Button>
+            </div>
+
+            {/* Sisi Kanan: Input Pencarian Realtime & Pilihan Dropdown Langsung */}
+            <div className="flex flex-1 items-center justify-end gap-2.5 min-w-[280px]">
+              {/* Input Pencarian dengan Popover Hasil */}
+              <div className="relative flex-1 max-w-xs sm:max-w-sm">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                <Input
+                  type="text"
+                  placeholder="Cari nama atau NIP... (mis: Rudini, FR07045)"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setIsSearchFocused(true);
+                  }}
+                  onFocus={() => setIsSearchFocused(true)}
+                  onBlur={() => setTimeout(() => setIsSearchFocused(false), 250)}
+                  className="h-8 pl-8 pr-7 text-xs rounded-xl bg-background border-border shadow-2xs"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setIsSearchFocused(false);
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded"
+                    title="Hapus kata kunci"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                {/* Popover Hasil Pencarian */}
+                {isSearchFocused && filteredEmployees.length > 0 && (
+                  <div className="absolute z-50 left-0 right-0 top-full mt-1.5 max-h-64 overflow-y-auto rounded-xl border border-border bg-popover shadow-xl py-1 backdrop-blur-md">
+                    <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-border/50">
+                      Ditemukan {filteredEmployees.length} Karyawan
+                    </div>
+                    {filteredEmployees.map((emp) => {
+                      const isSelected =
+                        (emp.id && user?.id && emp.id === user.id) ||
+                        (emp.nip && user?.nip && emp.nip.toLowerCase() === user.nip.toLowerCase());
+                      return (
+                        <button
+                          key={emp.id || emp.nip}
+                          type="button"
+                          onMouseDown={() => {
+                            handleSelectEmployee(emp);
+                            setSearchQuery('');
+                            setIsSearchFocused(false);
+                          }}
+                          className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-muted/80 transition-colors border-b border-border/30 last:border-0 ${
+                            isSelected ? 'bg-primary/10 font-bold text-primary' : 'text-foreground'
+                          }`}
+                        >
+                          <div className="truncate mr-2">
+                            <div className="font-semibold truncate">{emp.fullName || emp.name}</div>
+                            <div className="text-[11px] text-muted-foreground font-mono">{emp.nip}</div>
+                          </div>
+                          <Badge variant="outline" className="text-[10px] shrink-0 font-normal">
+                            {emp.operationalGroup || emp.divisionName || 'Operasional'}
+                          </Badge>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Dropdown Pemilih Cepat Karyawan */}
+              <select
+                value={user?.id || user?.nip || ''}
+                onChange={(e) => {
+                  const found = sortedEmployees.find(
+                    (emp) => emp.id === e.target.value || emp.nip === e.target.value
+                  );
+                  if (found) handleSelectEmployee(found);
+                }}
+                className="h-8 px-2.5 text-xs rounded-xl border border-border bg-background text-foreground font-medium focus:ring-1 focus:ring-primary truncate max-w-[180px] sm:max-w-[220px] shadow-2xs"
+                title="Pilih langsung dari daftar seluruh karyawan"
+              >
+                {sortedEmployees.map((emp, idx) => (
+                  <option key={emp.id || emp.nip} value={emp.id || emp.nip}>
+                    {idx + 1}. {emp.fullName || emp.name} ({emp.nip})
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 

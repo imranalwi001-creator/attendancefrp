@@ -5610,6 +5610,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         allAttendances={allAttendances}
         shift={selectedReportShift}
         initialMonth={selectedMonth}
+        allEmployees={users}
+        onSelectUser={(u) => setSelectedReportUser(u)}
       />
 
       {/* Modal Rekapitulasi Gaji & Lembur Realtime Seluruh Karyawan */}
