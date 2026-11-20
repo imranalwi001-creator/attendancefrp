@@ -32,6 +32,7 @@ import {
   DisciplinaryStatus,
   EmployeeKpiRecord,
   isLeadershipSpecialFieldOfficer,
+  isExecutiveMobileSupportOfficer,
   isMacciniBajiOfficer,
   isSimulationAccount,
   isOfficialFrEmployee,
@@ -3326,8 +3327,8 @@ export const hrmService = {
       flags.push(`GEOFENCE_BREACH_${Math.round(data.geofenceDistance || 0)}M`);
     }
 
-    // Pengecualian 3 Petugas Lapangan Khusus (Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI)
-    const isExemptFieldOfficer = isLeadershipSpecialFieldOfficer(user);
+    // Pengecualian 3 Petugas Lapangan Khusus (Muh Aslam Faisal, TAKDIR, LA UNGA SAMSI) & 2 Petugas Dukungan Direksi (Hasri. S & Ita Purnamasari)
+    const isExemptFieldOfficer = isLeadershipSpecialFieldOfficer(user) || isExecutiveMobileSupportOfficer(user);
 
     // Validasi Pos OGS (Khusus Ceklok Pulang bagi karyawan biasa / divisi yang ditentukan)
     // Radius OGS disesuaikan ke 60m agar tidak bertabrakan dengan Segel 4/5 (jarak 207m) atau Timbangan 4/5 (jarak 205m)

@@ -321,6 +321,70 @@ export const ONLINE_MOBILE_SPECIALIST_USERS = [
   { name: 'Ichtiar', nip: 'FR07044', email: 'fr07044@fawwazreski.co.id', id: '2939502e-e63c-4c63-aafb-a69abccba828' },
 ];
 
+// ─── 2 KARYAWAN KHUSUS DUKUNGAN DIREKSI & MOBILITAS TINGGI (HASRI. S & ITA PURNAMASARI) ───
+export const EXECUTIVE_MOBILE_SUPPORT_USERS = [
+  {
+    name: 'Hasri. S',
+    nip: 'FR07001',
+    cleanNip: 'FR07001',
+    email: 'fr07001@fawwazreski.co.id',
+    id: '4a28c8e5-ce1d-4663-815e-6e53888ef17a',
+    phone: '082345095657',
+    role: 'Petugas Dukungan Khusus Direksi & Kantor Pusat',
+  },
+  {
+    name: 'Ita Purnamasari',
+    nip: 'FR07016',
+    cleanNip: 'FR07016',
+    email: 'fr07016@fawwazreski.co.id',
+    id: 'd9ebc69e-64d1-4192-871e-f4f09a9c24ba',
+    phone: '089660466946',
+    role: 'Petugas Dukungan Khusus Direksi & Wisma Biring Ere',
+  },
+];
+
+export const isExecutiveMobileSupportOfficer = (userOrNipOrEmail: any): boolean => {
+  if (!userOrNipOrEmail) return false;
+  let email = '';
+  let nip = '';
+  let id = '';
+  let name = '';
+  if (typeof userOrNipOrEmail === 'string') {
+    const s = userOrNipOrEmail.trim().toLowerCase();
+    email = s;
+    id = s;
+    nip = userOrNipOrEmail.toUpperCase().replace(/[\s.]/g, '');
+    name = s;
+  } else {
+    email = (userOrNipOrEmail.email || '').toLowerCase().trim();
+    nip = (userOrNipOrEmail.nip || userOrNipOrEmail.userNip || userOrNipOrEmail.employeeNip || '').toUpperCase().trim().replace(/[\s.]/g, '');
+    id = (userOrNipOrEmail.id || userOrNipOrEmail.userId || userOrNipOrEmail.user_id || '').toLowerCase();
+    name = (userOrNipOrEmail.fullName || userOrNipOrEmail.full_name || userOrNipOrEmail.name || '').toLowerCase().trim();
+  }
+
+  // 1. Cek UUID
+  if (['4a28c8e5-ce1d-4663-815e-6e53888ef17a', 'd9ebc69e-64d1-4192-871e-f4f09a9c24ba'].includes(id)) {
+    return true;
+  }
+
+  // 2. Cek NIP
+  if (['FR07001', 'FR.07.001', 'FRP07001', 'FRP.07.001', 'FR07016', 'FR.07.016', 'FRP07016', 'FRP.07.016'].includes(nip)) {
+    return true;
+  }
+
+  // 3. Cek Email
+  if (['fr07001@fawwazreski.co.id', 'fr07016@fawwazreski.co.id'].includes(email)) {
+    return true;
+  }
+
+  // 4. Cek Nama
+  if (name.includes('hasri') || name.includes('ita purnamasari')) {
+    return true;
+  }
+
+  return false;
+};
+
 export const isMobileOnlineOfficer = (userOrNipOrEmail: any): boolean => {
   if (!userOrNipOrEmail) return false;
   let email = '';
@@ -404,7 +468,7 @@ export const isLeadershipSpecialFieldOfficer = (userOrNipOrEmail: any): boolean 
 };
 
 export const isSpecialDutyOfficer = (userOrNipOrEmail: any): boolean => {
-  return isMobileOnlineOfficer(userOrNipOrEmail) || isLeadershipSpecialFieldOfficer(userOrNipOrEmail);
+  return isMobileOnlineOfficer(userOrNipOrEmail) || isLeadershipSpecialFieldOfficer(userOrNipOrEmail) || isExecutiveMobileSupportOfficer(userOrNipOrEmail);
 };
 
 export const isMacciniBajiOfficer = (userOrNipOrEmail: any): boolean => {

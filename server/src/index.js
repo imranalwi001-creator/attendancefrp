@@ -427,9 +427,58 @@ export function isLeadershipSpecialFieldOfficer(user) {
   return false;
 }
 
-// Helper: 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir) yang 100% Bebas Aturan Divisi & Pos OGS
+// Helper: 2 Petugas Khusus Dukungan Direksi & Mobilitas Tinggi Perusahaan (Hasri. S & Ita Purnamasari)
+export function isExecutiveMobileSupportOfficer(user) {
+  if (!user) return false;
+  let email = '';
+  let rawNip = '';
+  let id = '';
+  let name = '';
+  if (typeof user === 'string') {
+    const s = user.trim().toLowerCase();
+    email = s;
+    id = s;
+    rawNip = user.toUpperCase().trim();
+    name = s;
+  } else {
+    email = (user.email || '').toLowerCase().trim();
+    rawNip = (user.nip || user.userNip || user.employeeNip || user.employee_nip || '').toUpperCase().trim();
+    id = (user.id || user.userId || user.user_id || '').toString().toLowerCase();
+    name = (user.full_name || user.fullName || user.name || '').toLowerCase().trim();
+  }
+
+  const cleanNip = rawNip.replace(/[\s.]/g, '');
+
+  // 1. UUID Resmi
+  const exemptIds = [
+    '4a28c8e5-ce1d-4663-815e-6e53888ef17a', // Hasri. S
+    'd9ebc69e-64d1-4192-871e-f4f09a9c24ba', // Ita Purnamasari
+  ];
+  if (exemptIds.includes(id)) return true;
+
+  // 2. Email Resmi
+  const exemptEmails = [
+    'fr07001@fawwazreski.co.id',
+    'fr07016@fawwazreski.co.id',
+  ];
+  if (exemptEmails.includes(email)) return true;
+
+  // 3. NIP Resmi
+  if (['FR07001', 'FRP07001', 'FR07016', 'FRP07016'].includes(cleanNip)) {
+    return true;
+  }
+
+  // 4. Nama Resmi
+  if (name.includes('hasri') || name.includes('ita purnamasari')) {
+    return true;
+  }
+
+  return false;
+}
+
+// Helper: Petugas Lapangan Khusus Pimpinan & Petugas Dukungan Direksi (Bebas Aturan Divisi & Pos OGS)
 function isExemptFieldOfficer(user) {
-  return isLeadershipSpecialFieldOfficer(user);
+  return isLeadershipSpecialFieldOfficer(user) || isExecutiveMobileSupportOfficer(user);
 }
 
 // Helper: Memeriksa apakah karyawan merupakan personil resmi PT FRP (NIP berawalan FR)
@@ -2331,8 +2380,16 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       } else if (evaluated.length > 0) {
         const nearest = evaluated.sort((a, b) => a.distance - b.distance)[0];
         serverDistance = Math.round(nearest.distance);
-        isServerGeofenceValid = false;
-        locationName = nearest.name;
+        if (isExecutiveMobileSupportOfficer(userProfile)) {
+          isServerGeofenceValid = true;
+          locationName = `Dinas Luar Dukungan Direksi (${nearest.name})`;
+        } else {
+          isServerGeofenceValid = false;
+          locationName = nearest.name;
+        }
+      } else if (isExecutiveMobileSupportOfficer(userProfile)) {
+        isServerGeofenceValid = true;
+        locationName = 'Dinas Luar Dukungan Direksi & Perusahaan';
       }
 
       // ─── STRICT POST LOCK GUARD (OPSI A): TOLAK CLOCK-IN JIKA PERSONIL LAPANGAN DI LUAR POS TUGAS ───
@@ -2797,10 +2854,48 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       ).catch((err) => console.warn('[Photo Retention] Error syncing avatar to profile:', err));
     }
 
-    // 📲 MANDAT PIMPINAN: Laporan Notifikasi WhatsApp Instan saat Aslam, Samsi, atau Takdir Clock-In
+    // 📲 MANDAT KHUSUS: Laporan Notifikasi WhatsApp Instan saat Clock-In
     const isLeadershipSpecial = isLeadershipSpecialFieldOfficer(userProfile || { id: validUserId });
+    const isExecutiveSupport = isExecutiveMobileSupportOfficer(userProfile || { id: validUserId });
 
-    if (isLeadershipSpecial) {
+    if (isExecutiveSupport) {
+      // 🚗 KHUSUS HASRI. S & ITA PURNAMASARI: Notifikasi HANYA dikirim ke Korlap (085342470909) dan Superadmin (081355904897) saja!
+      const witaTimeStr = new Date().toLocaleTimeString('id-ID', {
+        timeZone: 'Asia/Makassar',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }) + ' WITA';
+      const posName = locationName || 'Dinas Luar Dukungan Direksi & Perusahaan';
+      const waArrivalMsg =
+`🚗 *LAPORAN PRESENSI MASUK DINAS (PT. FAWWAZ RESKI PERWIRA)*
+
+👤 Petugas: *${userProfile?.full_name || 'Petugas'}* (NIP: ${userProfile?.nip || '-'})
+🟢 Status: *BERHASIL CLOCK-IN DINAS LUAR*
+📍 Lokasi / Pos: *${posName}*
+📏 Jarak Geofence: ${serverDistance != null ? Math.round(serverDistance) : 0} meter
+⏰ Waktu Masuk: *${time || '-'} WITA* (Tercatat: ${witaTimeStr})
+📸 Biometrik Wajah: *${computedBiometricScore != null ? computedBiometricScore : 100}% Confidence*
+
+✅ Kehadiran sah dan terverifikasi di database VPS PT FRP. Laporan diteruskan kepada Korlap dan Superadmin.`;
+
+      broadcastNotification({
+        title: `🚗 ${userProfile?.full_name} Masuk Dinas di ${posName}`,
+        message: `${userProfile?.full_name} telah melakukan absen masuk di ${posName} pada ${time} WITA.`,
+        type: 'info',
+        link: '/admin/monitoring',
+        metadata: {
+          type: 'executive_clockin',
+          userId: validUserId,
+          attendanceId: insertedAttendance.id,
+          locationName: posName
+        }
+      });
+
+      sendWhatsAppAlert({ phone: '085342470909', message: waArrivalMsg }).catch(e => console.warn('[WA Korlap Clock-In Error]:', e.message)); // Korlap (Muh Aslam Faisal)
+      sendWhatsAppAlert({ phone: '081355904897', message: waArrivalMsg }).catch(e => console.warn('[WA Superadmin Clock-In Error]:', e.message)); // Superadmin
+    } else if (isLeadershipSpecial) {
+      // 3 Petugas Lapangan Khusus Pimpinan (Aslam, Samsi, Takdir): Laporan ke Pimpinan, Dirut, dan Superadmin
       const witaTimeStr = new Date().toLocaleTimeString('id-ID', {
         timeZone: 'Asia/Makassar',
         hour: '2-digit',
@@ -3417,6 +3512,14 @@ Status presensi dan rekapan kuota cuti Anda telah otomatis diperbarui.`;
       operationalRecipients.add('085242606150'); // TAKDIR
     }
 
+    // 🚗 MANDAT KHUSUS: Untuk Hasri. S dan Ita Purnamasari, notifikasi HANYA dikirim ke Korlap dan Superadmin saja!
+    const isExecutiveApplicant = isExecutiveMobileSupportOfficer(applicant?.id || applicant?.nip || applicant?.fullName);
+    if (isExecutiveApplicant) {
+      operationalRecipients.clear();
+      operationalRecipients.add('085342470909'); // Korlap (Muh Aslam Faisal)
+      operationalRecipients.add('081355904897'); // Superadmin
+    }
+
     // 🛡️ FILTER MUTLAK ANTI-LEAK: Hapus nomor Pimpinan dan Dirut agar TIDAK PERNAH terkirim untuk 80 karyawan reguler
     operationalRecipients.delete('082192755755');
     operationalRecipients.delete('6282192755755');
@@ -3856,8 +3959,8 @@ app.post('/api/field-sentinel/location-ping', async (req, res) => {
     // 4. Berada dalam jam shift atau sedang lembur resmi
     const isCurrentlyOnDuty = hasClockedInToday && !hasClockedOutToday && !hasActiveLeaveToday && (!isOutsideShiftHours || hasActiveOvertime);
 
-    // Karyawan dikecualikan dari alarm pelanggaran perimeter jika tidak aktif bertugas, sedang istirahat, izin pulang cepat, atau petugas mobile
-    const isExcusedFromBreach = !isCurrentlyOnDuty || isOnBreakToday || isEarlyLeaveToday || isMobileOnlineSpecialist;
+    // Karyawan dikecualikan dari alarm pelanggaran perimeter jika tidak aktif bertugas, sedang istirahat, izin pulang cepat, petugas mobile, atau petugas dukungan direksi
+    const isExcusedFromBreach = !isCurrentlyOnDuty || isOnBreakToday || isEarlyLeaveToday || isMobileOnlineSpecialist || isExecutiveMobileSupportOfficer(prof || { id: validUserId });
 
     // ─── QUERY ALL REGISTERED ACTIVE POSTS IN THE BANK (Titik A, Titik B, Titik C, ...) ───
     const postsRes = await pool.query(
@@ -6017,7 +6120,13 @@ app.post('/api/attendances/clock-out', async (req, res) => {
       } else if (evaluated.length > 0) {
         const nearest = evaluated.sort((a, b) => a.distance - b.distance)[0];
         serverDistance = Math.round(nearest.distance);
-        isServerGeofenceValid = false;
+        if (isExecutiveMobileSupportOfficer(userProfile)) {
+          isServerGeofenceValid = true;
+        } else {
+          isServerGeofenceValid = false;
+        }
+      } else if (isExecutiveMobileSupportOfficer(userProfile)) {
+        isServerGeofenceValid = true;
       }
     }
 
@@ -6183,6 +6292,40 @@ app.post('/api/attendances/clock-out', async (req, res) => {
        WHERE id = $1;`,
       [validUserId]
     ).catch(e => console.warn('[Clock-Out Profile Reset Error]:', e.message));
+
+    // 📲 MANDAT KHUSUS: Laporan WhatsApp saat Hasri. S & Ita Purnamasari Clock-Out HANYA ke Korlap dan Superadmin
+    if (isExecutiveMobileSupportOfficer(userProfile || { id: validUserId })) {
+      const witaTimeStr = new Date().toLocaleTimeString('id-ID', {
+        timeZone: 'Asia/Makassar',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }) + ' WITA';
+      const waClockOutMsg =
+`🚗 *LAPORAN PRESENSI PULANG / SELESAI DINAS (PT. FAWWAZ RESKI PERWIRA)*
+
+👤 Petugas: *${userProfile?.full_name || 'Petugas'}* (NIP: ${userProfile?.nip || '-'})
+🛑 Status: *SELESAI BERTUGAS DINAS (CLOCK-OUT)*
+⏰ Waktu Pulang: *${time || '-'} WITA* (Tercatat: ${witaTimeStr})
+📸 Biometrik Wajah: *${computedClockOutScore != null ? computedClockOutScore : 100}% Confidence*
+
+✅ Presensi pulang terverifikasi di database VPS PT FRP. Laporan diteruskan kepada Korlap dan Superadmin.`;
+
+      broadcastNotification({
+        title: `🚗 ${userProfile?.full_name} Selesai Tugas Dinas`,
+        message: `${userProfile?.full_name} telah melakukan absen pulang tugas dinas pada ${time} WITA.`,
+        type: 'info',
+        link: '/admin/monitoring',
+        metadata: {
+          type: 'executive_clockout',
+          userId: validUserId,
+          attendanceId: updatedAttendance?.id
+        }
+      });
+
+      sendWhatsAppAlert({ phone: '085342470909', message: waClockOutMsg }).catch(e => console.warn('[WA Korlap Clock-Out Error]:', e.message)); // Korlap (Muh Aslam Faisal)
+      sendWhatsAppAlert({ phone: '081355904897', message: waClockOutMsg }).catch(e => console.warn('[WA Superadmin Clock-Out Error]:', e.message)); // Superadmin
+    }
 
     res.json({ success: true, data: updatedAttendance, emergencyOvertime: null });
   } catch (err) {
@@ -6361,7 +6504,7 @@ Izin pulang darurat diproses mandiri tanpa konfirmasi agar tidak menghambat pena
     }
 
     // 4. Jika karyawan adalah salah satu dari 3 Petugas Lapangan Khusus, teruskan juga ke Dirut & Pimpinan
-    const isSpecialOfficer = isExemptFieldOfficer(prof);
+    const isSpecialOfficer = isLeadershipSpecialFieldOfficer(prof);
 
     if (isSpecialOfficer) {
       // Dirut: 082291998026
@@ -10170,7 +10313,7 @@ app.post('/api/leaves', async (req, res) => {
     }
     const typeLabel = type.replace(/_/g, ' ').toUpperCase();
     const submitterRole = (userProfile.role_name || '').toLowerCase();
-    const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
+    const isSpecial3FieldOfficer = isLeadershipSpecialFieldOfficer(userProfile);
     const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
 
     const annualQuota = Number(userProfile.annual_leave_quota || 12);
@@ -11330,7 +11473,7 @@ app.post('/api/overtime', async (req, res) => {
     }
 
     const submitterRole = (userProfile.role_name || userProfile.role_code || '').toLowerCase();
-    const isSpecial3FieldOfficer = isExemptFieldOfficer(userProfile);
+    const isSpecial3FieldOfficer = isLeadershipSpecialFieldOfficer(userProfile);
     const requiresLeadershipApproval = ['korlap', 'admin', 'k3'].some(r => submitterRole.includes(r)) || isSpecial3FieldOfficer;
 
     let execOtToken = null;
@@ -15860,7 +16003,7 @@ app.post('/api/attendances/submit-breach-report', async (req, res) => {
     const nowWita = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19) + ' WITA';
 
     // 6. Cek apakah termasuk 3 Petugas Lapangan Khusus
-    const isSpecialOfficer = isExemptFieldOfficer(prof);
+    const isSpecialOfficer = isLeadershipSpecialFieldOfficer(prof);
 
     if (isSpecialOfficer) {
       // Dispatch WhatsApp ke Dirut, Pimpinan, dan Superadmin (Tembusan)

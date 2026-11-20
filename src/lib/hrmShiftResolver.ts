@@ -1,4 +1,4 @@
-import { Shift, UserProfile, EmployeeSchedule, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer } from '@/types/hrm';
+import { Shift, UserProfile, EmployeeSchedule, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isExecutiveMobileSupportOfficer } from '@/types/hrm';
 
 /**
  * Helper untuk mengekstrak jam dari string seperti "Shift III (22:30 - 07:30 WITA)" atau "22:30 - 07:30"
@@ -93,6 +93,39 @@ export function resolveEffectiveShift(
       earliestClockInMinutes: 120,
       isCrossDay: false,
       colorTag: '#10b981',
+    };
+  }
+
+  // 0B. KHUSUS 2 PETUGAS DUKUNGAN DIREKSI & MOBILITAS TINGGI (Hasri. S & Ita Purnamasari)
+  const isExecutiveSupport = isExecutiveMobileSupportOfficer(user);
+  if (isExecutiveSupport) {
+    if (dailySchedule && (dailySchedule.isOff || dailySchedule.shiftCode === 'OFF' || dailySchedule.shiftName?.toLowerCase().includes('libur') || dailySchedule.shiftName?.toLowerCase().includes('off'))) {
+      return {
+        id: 'shift-off',
+        code: 'OFF',
+        name: 'Libur Rotasi (OFF)',
+        startTime: '00:00',
+        endTime: '00:00',
+        lateToleranceMinutes: 0,
+        earliestClockInMinutes: 0,
+        isCrossDay: false,
+        isOff: true,
+        colorTag: '#64748b',
+      };
+    }
+    const sStart = (user?.customStartTime || (user as any)?.custom_start_time || dailySchedule?.startTime || '07:30').substring(0, 5);
+    const sEnd = (user?.customEndTime || (user as any)?.custom_end_time || dailySchedule?.endTime || '16:30').substring(0, 5);
+    const tol = Number(user?.lateToleranceMinutes ?? (user as any)?.late_tolerance_minutes ?? 15);
+    return {
+      id: 'shift-executive-mobile-support',
+      code: 'EXEC-MOBILE',
+      name: 'Day Shift Fleksibel / Dukungan Direksi (07:30 - 16:30 WITA)',
+      startTime: sStart,
+      endTime: sEnd,
+      lateToleranceMinutes: tol > 0 ? tol : 15,
+      earliestClockInMinutes: 120,
+      isCrossDay: false,
+      colorTag: '#059669',
     };
   }
 

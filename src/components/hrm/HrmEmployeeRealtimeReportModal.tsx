@@ -47,7 +47,7 @@ import {
   Search,
   Users,
 } from 'lucide-react';
-import { UserProfile, AttendanceRecord, OvertimeRecord, AttendanceStatus, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isSimulationAccount, isOfficialFrEmployee } from '@/types/hrm';
+import { UserProfile, AttendanceRecord, OvertimeRecord, AttendanceStatus, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isExecutiveMobileSupportOfficer, isSimulationAccount, isOfficialFrEmployee } from '@/types/hrm';
 import { hrmService, getTodayDateStr } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
 import defaultLogo from '@/assets/logo.png';
@@ -330,9 +330,13 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     const nipUpper = (user.nip || '').toUpperCase();
     const opGroupUpper = (user.operationalGroup || (user as any).operational_group || '').toUpperCase();
     const divUpper = (user.divisionName || (user as any).division_name || '').toUpperCase();
+    const isExecutive = isExecutiveMobileSupportOfficer(user);
 
     // 1. Wisma Biring Ere / Rumah Tangga (33 Personil FR07001 - FR07033)
+    const nipNum = parseInt(nipUpper.replace(/[^0-9]/g, ''), 10);
+    const isNipRumahTangga = Number.isFinite(nipNum) && nipNum >= 7001 && nipNum <= 7033;
     const isWisma =
+      isNipRumahTangga ||
       opGroupUpper === 'RUMAH TANGGA' ||
       divUpper.includes('WISMA') ||
       divUpper.includes('RUMAH TANGGA') ||
@@ -340,16 +344,22 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
     // 2. Shipment Management (47 Personil FR07034 - FR07080)
     const isShipment =
-      !isWisma && (
+      !isWisma && !isExecutive && (
         opGroupUpper === 'SHIPMENT' ||
         divUpper.includes('SHIPMENT') ||
         divUpper.includes('TIMBANGAN') ||
         divUpper.includes('SEGEL') ||
         divUpper.includes('MATCHING') ||
-        nipUpper.includes('FR07')
+        (Number.isFinite(nipNum) && nipNum >= 7034 && nipNum <= 7080)
       );
 
-    if (isWisma) {
+    if (isExecutive) {
+      setEmployeeSeksi('Seksi Dukungan Khusus Direksi & Hubungan Eksternal');
+      setEmployeeUnit('Unit Mobilitas Luar & Protokoler Direksi');
+      setEmployeeDept('Direksi PT. Fawwaz Reski Perwira');
+      setEmployeeShiftPattern('Day Shift Fleksibel / Mobile Support');
+      setEmployeeKaur('Direksi PT. FRP / Pimpinan');
+    } else if (isWisma) {
       setEmployeeSeksi(user.divisionName ? `Seksi ${user.divisionName}` : 'Seksi Pengelolaan Wisma');
       setEmployeeUnit('Unit Wisma Biring Ere');
       setEmployeeDept('kantor pusat semen tonasa');
@@ -366,7 +376,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       setEmployeeUnit('Unit Operasional Lapangan');
       setEmployeeDept('kantor pusat semen tonasa');
       setEmployeeShiftPattern(shift?.name || user.shiftName || 'SIFT NORMAL ( 2/1/3)');
-      setEmployeeKaur(isSpecialTarget ? 'Pimpinan PT. FRP' : (user.kepalaReguName || 'Kaur Operasional'));
+      setEmployeeKaur(isSpecialTarget ? 'Direksi PT. FRP / Pimpinan' : (user.kepalaReguName || 'Kaur Operasional'));
     }
   }, [user, shift]);
 
@@ -538,12 +548,20 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
     const opGroupUpper = (user.operationalGroup || (user as any).operational_group || '').toUpperCase();
     const divUpper = (user.divisionName || (user as any).division_name || '').toUpperCase();
+    const nipUpper = (user.nip || '').toUpperCase();
+    const nipNum = parseInt(nipUpper.replace(/[^0-9]/g, ''), 10);
+    const isExecutive = isExecutiveMobileSupportOfficer(user);
     const isWismaUser =
+      (Number.isFinite(nipNum) && nipNum >= 7001 && nipNum <= 7033) ||
       opGroupUpper === 'RUMAH TANGGA' ||
       divUpper.includes('WISMA') ||
       divUpper.includes('RUMAH TANGGA') ||
       divUpper.includes('HOUSEHOLD');
-    const defaultKaur = isWismaUser ? 'Kaur Rumah Tangga & Wisma' : 'Kaur Sec. of Shipment Management';
+    const defaultKaur = isExecutive
+      ? 'Direksi PT. FRP / Pimpinan'
+      : isWismaUser
+      ? 'Kaur Rumah Tangga & Wisma'
+      : 'Kaur Sec. of Shipment Management';
     const activeKaurName = employeeKaur || defaultKaur;
 
     const rows = [];
@@ -862,9 +880,11 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         if (att.notes) {
           uraianPekerjaan = att.notes;
         } else {
-          uraianPekerjaan = isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : (att.shiftName || sched?.shiftName || 'Tugas Lapangan Operasional');
+          uraianPekerjaan = isExecutive
+            ? 'Dinas Luar Dukungan Direksi & Perusahaan (Mobile/WFA)'
+            : (isSpecialTarget ? 'Pengawasan Lapangan Khusus Pimpinan' : (att.shiftName || sched?.shiftName || 'Tugas Lapangan Operasional'));
         }
-        memerintahkanKaur = isSpecialTarget ? 'Pimpinan PT. FRP' : activeKaurName;
+        memerintahkanKaur = isExecutive ? 'Direksi PT. FRP / Pimpinan' : (isSpecialTarget ? 'Pimpinan PT. FRP' : activeKaurName);
       }
       // PRIORITAS 4: Hari Libur Roster (OFF) atau Akhir Pekan tanpa jadwal shift kerja atau status OFF di attendance
       else if (isRosterOff || (!hasSched && isWeekend) || attStatus === 'off' || attStatus === 'libur') {
@@ -1045,8 +1065,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         }
       }
 
-      // Default KAUR / Pengesahan: Khusus 3 Petugas Lapangan Khusus Pimpinan langsung oleh Pimpinan PT. FRP
-      if (isSpecialTarget) {
+      // Default KAUR / Pengesahan: Khusus Petugas Dukungan Direksi & Petugas Lapangan Khusus Pimpinan
+      if (isExecutive) {
+        memerintahkanKaur = ket === 'OFF' ? '-' : 'Direksi PT. FRP / Pimpinan';
+      } else if (isSpecialTarget) {
         memerintahkanKaur = ket === 'OFF' ? '-' : 'Pimpinan PT. FRP';
       } else if (hasClockIn && memerintahkanKaur === '-') {
         memerintahkanKaur = employeeKaur || '-';

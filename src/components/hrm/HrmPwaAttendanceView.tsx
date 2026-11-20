@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useHrmAuth } from '@/contexts/HrmAuthContext';
 import { hrmService, getTodayDateStr, getYesterdayDateStr, normalizeAttendanceRecord, normalizeDateString } from '@/services/hrmService';
 import { api } from '@/services/apiClient';
-import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, EmployeeSchedule, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isFieldOperationalWorker, isMacciniBajiOfficer } from '@/types/hrm';
+import { AttendanceRecord, OfficeLocation, Shift, OvertimeRecord, LeaveRequest, EmployeeSchedule, FIELD_SENTINEL_6_POST_PRESETS, isMobileOnlineOfficer, isLeadershipSpecialFieldOfficer, isSpecialDutyOfficer, isExecutiveMobileSupportOfficer, isFieldOperationalWorker, isMacciniBajiOfficer } from '@/types/hrm';
 import {
   Clock,
   MapPin,
@@ -1314,6 +1314,36 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     setCurrentCoords(coords);
     setCoordsAccuracy(accuracy);
 
+    // 🚗 Pengecualian Petugas Khusus Dukungan Direksi & Mobilitas Luar Perusahaan (Hasri. S & Ita Purnamasari)
+    if (isExecutiveMobileSupportOfficer(user)) {
+      let matchedName = '';
+      let matchedDist = 0;
+      if (activePosts && activePosts.length > 0) {
+        const postsWithDist = activePosts.map((p) => {
+          const d = geofenceService.calculateDistance(coords, { latitude: p.latitude, longitude: p.longitude });
+          const r = p.radiusMeters || 250;
+          return { ...p, distance: d, radius: r, isInside: d <= r };
+        });
+        const insidePost = postsWithDist.find((p) => p.isInside);
+        if (insidePost) {
+          matchedName = `${insidePost.postName} [${insidePost.postCode}]`;
+          matchedDist = Math.round(insidePost.distance);
+        }
+      }
+      if (!matchedName && fallbackOffice) {
+        const evalResult = geofenceService.evaluateGeofence(coords, fallbackOffice);
+        if (evalResult.isInside) {
+          matchedName = fallbackOffice.name;
+          matchedDist = Math.round(evalResult.distanceMeters);
+        }
+      }
+
+      setDistanceToOffice(matchedDist);
+      setLocationStatus('inside');
+      setAssignedPostName(matchedName || 'Area Mobile Dinas Luar Dukungan Direksi & Perusahaan');
+      return;
+    }
+
     // ⚡ Pengecualian Petugas Online Distribusi (Rusdi, Reza, Ichtiar): Fleksibilitas Luas (Matching/Pusat/Cafe/Rumah)
     if (isMobileOnlineOfficer(user)) {
       let matchedName = '';
@@ -2247,7 +2277,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     isAlarmSilencedRef.current = true;
     emergencyAlertService.stopEmergencyAlert();
 
-    const isSpecialMobile = isMobileOnlineOfficer(user);
+    const isSpecialMobile = isMobileOnlineOfficer(user) || isExecutiveMobileSupportOfficer(user);
     const isOnCallAction = type === 'emergency_on_call' || type === 'emergency_on_call_out';
     const isOverrideActive = Boolean(options?.isEmergencyOverride || emergencyOverridePayload?.isEmergencyOverride);
 
@@ -2554,7 +2584,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       }
     }
 
-    if (isOnCall || isMobileOnlineOfficer(user)) {
+    if (isOnCall || isMobileOnlineOfficer(user) || isExecutiveMobileSupportOfficer(user)) {
       isSahDiPos = true;
     }
 
@@ -2592,9 +2622,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
     ctx.shadowBlur = Math.round(3 * scale);
     const isMobileWfa = isMobileOnlineOfficer(user);
+    const isExecutiveSupport = isExecutiveMobileSupportOfficer(user);
     const isMacciniWatermark = isMacciniBajiOfficer(user);
     const headerTitle = isSpotCheck
       ? `PT FAWWAZ RESKI PERWIRA • SELFIE REALTIME • SKOR: ${matchScore || 98}%`
+      : isExecutiveSupport
+      ? `PT FAWWAZ RESKI PERWIRA • PROTOKOL DUKUNGAN DIREKSI • SKOR: ${matchScore || 98}%`
       : isMacciniWatermark && macciniVesselStatus.status === 'docking'
       ? `PT FAWWAZ RESKI PERWIRA • STANDBY DERMAGA (KAPAL BERSANDAR) • SKOR: ${matchScore || 98}%`
       : isMacciniWatermark && macciniVesselStatus.status === 'idle'
@@ -4680,6 +4713,42 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <RotateCw className="w-4 h-4" />
               </button>
             </div>
+
+            {/* ─── BANNER / KONTROL KHUSUS: DUKUNGAN DIREKSI & MOBILITAS TINGGI (HASRI. S & ITA PURNAMASARI) ─── */}
+            {isExecutiveMobileSupportOfficer(user) && (
+              <div className="bg-gradient-to-r from-emerald-900/15 via-teal-900/10 to-emerald-900/15 dark:from-emerald-950/40 dark:via-teal-950/40 dark:to-emerald-950/40 border-2 border-emerald-500/40 rounded-2xl p-3.5 shadow-sm space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                      <ShieldCheck className="w-4 h-4 text-white" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-emerald-950 dark:text-emerald-100">
+                          DUKUNGAN DIREKSI & MOBILITAS TINGGI
+                        </span>
+                        <span className="bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                          VIP PROTOKOL
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-emerald-700 dark:text-emerald-300">
+                        Kantor Pusat • Wisma • Bandara • Perwakilan Makassar • Tugas Luar Direksi
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white/70 dark:bg-slate-900/70 p-2.5 rounded-xl border border-emerald-200/60 dark:border-emerald-900/60 text-[10.5px] text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span className="truncate">Multi-Titik Bank Pos Sah & Fleksibel</span>
+                  </div>
+                  <span className="font-mono font-bold text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-300/40 shrink-0">
+                    🟢 DIREKSI APPROVED
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* ─── BANNER / KONTROL KHUSUS: MODE TUGAS DARURAT ONLINE (ON-CALL DUTY) ─── */}
             {isMobileOnlineOfficer(user) && (
