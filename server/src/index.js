@@ -16369,7 +16369,7 @@ async function runAutoMarkMangkirAttendance(targetDateStr = null) {
       // - Prioritas 2: Jika cuti habis, dipotong 100% ke uang lembur (SPKL) jika ada lembur bulan tersebut. Masuk Penilaian Kinerja sebagai Mangkir.
       // - Prioritas 3: Jika cuti habis & tidak ada lembur, dipotong otomatis ke gaji pokok. Masuk Penilaian Kinerja sebagai Mangkir.
       const profRes = await pool.query(
-        'SELECT annual_leave_quota, used_leave_days, base_salary FROM hrm_profiles WHERE id = $1',
+        'SELECT annual_leave_quota, used_leave_days FROM hrm_profiles WHERE id = $1',
         [emp.id]
       );
       const profile = profRes.rows[0] || {};
@@ -16786,6 +16786,311 @@ app.post('/api/whatsapp/send-personal', async (req, res) => {
   }
 });
 
+// ─── 4E. LAPORAN REKAPITULASI SHIFT & PRESENSI OTOMATIS KE SUPERADMIN ───────
+// Sesuai instruksi baku Pimpinan & Superadmin:
+// Dikirim otomatis setiap hari rentang waktu 2 jam setelah shift dibuka:
+// 1. Day Shift & Shift I: 09:30 WITA (Buka 07:30 WITA)
+// 2. Shift II: 17:30 WITA (Buka 15:30 WITA)
+// 3. Shift III: 00:30 WITA (Buka 22:30 WITA malam sebelumnya)
+// Menjangkau 83 personil sah resmi PT FRP (Shipment: 47, Rumah Tangga: 33, Karyawan Tetap: 3)
+// Rincian: OFF, HADIR, MANGKIR, CUTI, IZIN/SAKIT, LEMBUR pada Dayshift, Shift I, II, dan III.
+// Penerima: KHUSUS SUPERADMIN (081355904897). Dilarang broadcast berkala ini ke Dirut/Pimpinan.
+
+const sentShiftCheckpoints = new Set();
+
+async function generateAndSendSuperadminShiftReport(targetDateStr = null, checkpointTitle = null) {
+  try {
+    const nowWita = new Date(Date.now() + 8 * 3600000); // WITA
+    const finalDateStr = targetDateStr || `${nowWita.getUTCFullYear()}-${String(nowWita.getUTCMonth() + 1).padStart(2, '0')}-${String(nowWita.getUTCDate()).padStart(2, '0')}`;
+
+    const monthsIndo = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    const daysIndo = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const dObj = new Date(finalDateStr + 'T00:00:00Z');
+    const formattedDate = `${daysIndo[dObj.getUTCDay()]}, ${dObj.getUTCDate()} ${monthsIndo[dObj.getUTCMonth()]} ${dObj.getUTCFullYear()}`;
+    const formattedTime = `${String(nowWita.getUTCHours()).padStart(2, '0')}:${String(nowWita.getUTCMinutes()).padStart(2, '0')} WITA`;
+
+    // Ambil nomor Superadmin dari database
+    const sRes = await pool.query("SELECT value FROM hrm_system_settings WHERE key = 'wa_superadmin_phone'");
+    const superadminPhone = sRes.rows[0]?.value || '081355904897';
+
+    // Query Rekap 83 Personil Resmi
+    const query = `
+      WITH official_83 AS (
+        SELECT p.id, p.full_name, p.nip,
+          CASE 
+            WHEN p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632') THEN 'KARYAWAN TETAP'
+            WHEN substring(regexp_replace(p.nip, '[^0-9]', '', 'g') from 1 for 5)::int BETWEEN 7001 AND 7033 THEN 'RUMAH TANGGA'
+            WHEN substring(regexp_replace(p.nip, '[^0-9]', '', 'g') from 1 for 5)::int BETWEEN 7034 AND 7080 THEN 'SHIPMENT'
+            ELSE 'OTHER'
+          END as grp
+        FROM hrm_profiles p
+        WHERE p.is_active = true
+          AND (
+            p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632')
+            OR substring(regexp_replace(p.nip, '[^0-9]', '', 'g') from 1 for 5)::int BETWEEN 7001 AND 7080
+          )
+      ),
+      target_schedule AS (
+        SELECT o.id, o.full_name, o.nip, o.grp,
+          COALESCE(es.shift_code, 'DAY') as raw_shift_code,
+          COALESCE(es.is_off, false) as is_off,
+          CASE 
+            WHEN COALESCE(es.is_off, false) = true OR COALESCE(es.shift_code, '') = 'OFF' THEN 'OFF'
+            WHEN es.shift_code IN ('DAY', 'D') OR es.shift_name ILIKE '%day%' THEN 'DAYSHIFT'
+            WHEN es.shift_code IN ('P', '1') OR es.shift_name ILIKE '%shift I%' OR es.shift_name ILIKE '%shift 1%' THEN 'SHIFT I'
+            WHEN es.shift_code IN ('S', '2') OR es.shift_name ILIKE '%shift II%' OR es.shift_name ILIKE '%shift 2%' THEN 'SHIFT II'
+            WHEN es.shift_code IN ('M', '3') OR es.shift_name ILIKE '%shift III%' OR es.shift_name ILIKE '%shift 3%' THEN 'SHIFT III'
+            ELSE 'DAYSHIFT'
+          END as shift_group
+        FROM official_83 o
+        LEFT JOIN hrm_employee_schedules es ON es.user_id = o.id AND es.schedule_date = $1
+      ),
+      att_data AS (
+        SELECT a.user_id,
+          bool_or(a.clock_in IS NOT NULL OR a.status IN ('present', 'late', 'hadir', 'telat')) as has_presence,
+          bool_or(a.status = 'late' OR (a.late_minutes IS NOT NULL AND a.late_minutes > 0)) as is_late,
+          bool_or(a.status ILIKE '%lembur%' OR a.is_emergency_overtime = true OR (a.emergency_overtime_hours IS NOT NULL AND a.emergency_overtime_hours > 0)) as has_att_overtime
+        FROM hrm_attendances a
+        WHERE a.attendance_date = $1
+        GROUP BY a.user_id
+      ),
+      ot_data AS (
+        SELECT ov.user_id, true as has_spl_overtime
+        FROM hrm_overtime_records ov
+        WHERE ov.date = $1 AND ov.status IN ('approved', 'completed', 'in_progress')
+        GROUP BY ov.user_id
+      ),
+      leave_data AS (
+        SELECT l.user_id,
+          CASE 
+            WHEN l.leave_type IN ('sick', 'sakit') THEN 'SAKIT'
+            WHEN l.leave_type IN ('permit', 'izin') THEN 'IZIN'
+            ELSE 'CUTI'
+          END as leave_category
+        FROM hrm_leave_requests l
+        WHERE $1 BETWEEN l.start_date AND l.end_date AND l.status = 'approved'
+      ),
+      emp_status AS (
+        SELECT 
+          ts.id,
+          ts.full_name,
+          ts.nip,
+          ts.grp,
+          ts.shift_group,
+          CASE 
+            WHEN ld.leave_category = 'CUTI' THEN 'CUTI'
+            WHEN ld.leave_category IN ('IZIN', 'SAKIT') THEN 'IZIN'
+            WHEN COALESCE(att.has_presence, false) = true THEN 'HADIR'
+            WHEN ts.shift_group = 'OFF' THEN 'OFF'
+            ELSE 'MANGKIR'
+          END as final_status,
+          (COALESCE(att.has_att_overtime, false) = true OR COALESCE(ot.has_spl_overtime, false) = true) as is_lembur
+        FROM target_schedule ts
+        LEFT JOIN att_data att ON att.user_id = ts.id
+        LEFT JOIN ot_data ot ON ot.user_id = ts.id
+        LEFT JOIN leave_data ld ON ld.user_id = ts.id
+      )
+      SELECT 
+        id, full_name, nip, grp, shift_group, final_status, is_lembur
+      FROM emp_status
+      ORDER BY 
+        CASE shift_group
+          WHEN 'DAYSHIFT' THEN 1
+          WHEN 'SHIFT I' THEN 2
+          WHEN 'SHIFT II' THEN 3
+          WHEN 'SHIFT III' THEN 4
+          WHEN 'OFF' THEN 5
+          ELSE 6
+        END,
+        nip ASC;
+    `;
+
+    const resDb = await pool.query(query, [finalDateStr]);
+    const rows = resDb.rows;
+
+    const stats = {
+      'DAYSHIFT': { total: 0, hadir: 0, off: 0, mangkir: 0, cuti: 0, izin: 0, lembur: 0, details: [] },
+      'SHIFT I': { total: 0, hadir: 0, off: 0, mangkir: 0, cuti: 0, izin: 0, lembur: 0, details: [] },
+      'SHIFT II': { total: 0, hadir: 0, off: 0, mangkir: 0, cuti: 0, izin: 0, lembur: 0, details: [] },
+      'SHIFT III': { total: 0, hadir: 0, off: 0, mangkir: 0, cuti: 0, izin: 0, lembur: 0, details: [] },
+      'OFF': { total: 0, hadir: 0, off: 0, mangkir: 0, cuti: 0, izin: 0, lembur: 0, details: [] },
+    };
+
+    let totalOfficial = rows.length;
+    let totHadir = 0;
+    let totOff = 0;
+    let totMangkir = 0;
+    let totCuti = 0;
+    let totIzin = 0;
+    let totLembur = 0;
+
+    let shipmentCount = 0;
+    let rumahTanggaCount = 0;
+    let tetapCount = 0;
+
+    rows.forEach((r) => {
+      if (r.grp === 'SHIPMENT') shipmentCount++;
+      else if (r.grp === 'RUMAH TANGGA') rumahTanggaCount++;
+      else if (r.grp === 'KARYAWAN TETAP') tetapCount++;
+
+      const sg = stats[r.shift_group] ? r.shift_group : 'DAYSHIFT';
+      stats[sg].total++;
+
+      if (r.final_status === 'HADIR') {
+        stats[sg].hadir++;
+        totHadir++;
+      } else if (r.final_status === 'OFF') {
+        stats[sg].off++;
+        totOff++;
+      } else if (r.final_status === 'MANGKIR') {
+        stats[sg].mangkir++;
+        totMangkir++;
+        stats[sg].details.push(`• ⚠️ ${r.full_name} (${r.nip}) [Mangkir]`);
+      } else if (r.final_status === 'CUTI') {
+        stats[sg].cuti++;
+        totCuti++;
+        stats[sg].details.push(`• 📝 ${r.full_name} (${r.nip}) [Cuti]`);
+      } else if (r.final_status === 'IZIN') {
+        stats[sg].izin++;
+        totIzin++;
+        stats[sg].details.push(`• 🏥 ${r.full_name} (${r.nip}) [Izin/Sakit]`);
+      }
+
+      if (r.is_lembur) {
+        stats[sg].lembur++;
+        totLembur++;
+        stats[sg].details.push(`• ⚡ ${r.full_name} (${r.nip}) [Lembur]`);
+      }
+    });
+
+    const formatShiftSection = (title, key, timeRange) => {
+      const s = stats[key];
+      let str = `*${title} (${timeRange})*\n`;
+      str += `• Terjadwal: ${s.total} Orang\n`;
+      str += `• Hadir: ${s.hadir} | Off: ${s.off} | Mangkir: ${s.mangkir}\n`;
+      str += `• Cuti: ${s.cuti} | Izin/Sakit: ${s.izin} | Lembur: ${s.lembur}`;
+      if (s.details.length > 0) {
+        str += `\n  _Catatan Khusus:_\n  ` + s.details.slice(0, 5).join('\n  ');
+        if (s.details.length > 5) {
+          str += `\n  _...dan ${s.details.length - 5} personil lainnya_`;
+        }
+      }
+      return str;
+    };
+
+    const message = [
+      `📊 *UPDATE REALTIME PRESENSI & SHIFT SDM PT FRP*`,
+      `🏢 *PT. FAWWAZ RESKI PERWIRA*`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `📅 *Hari/Tanggal:* ${formattedDate}`,
+      `⏰ *Waktu Laporan:* ${formattedTime}`,
+      `📌 *Status:* ${checkpointTitle || 'Laporan Checkpoint 2 Jam Pasca Buka Shift'}`,
+      `👥 *Total SDM Resmi Sah:* ${totalOfficial} Orang`,
+      `   • Shipment Lapangan: ${shipmentCount} Orang`,
+      `   • Rumah Tangga Wisma: ${rumahTanggaCount} Orang`,
+      `   • Karyawan Tetap: ${tetapCount} Orang`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      ``,
+      `📋 *RINCIAN STATUS PER SHIFT:*`,
+      ``,
+      formatShiftSection('☀️ 1. DAY SHIFT', 'DAYSHIFT', '07:30 - 16:30 WITA'),
+      ``,
+      formatShiftSection('🌅 2. SHIFT I', 'SHIFT I', '07:30 - 15:30 WITA'),
+      ``,
+      formatShiftSection('🌆 3. SHIFT II', 'SHIFT II', '15:30 - 22:30 WITA'),
+      ``,
+      formatShiftSection('🌙 4. SHIFT III', 'SHIFT III', '22:30 - 07:30 WITA'),
+      ``,
+      `🏖️ *5. OFF ROSTER / LIBUR:* ${stats['OFF'].total} Orang`,
+      ``,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `📈 *REKAPITULASI TOTAL HARI INI (${totalOfficial} PERSONIL):*`,
+      `✅ *Total Hadir:* ${totHadir} Orang`,
+      `🏖️ *Total Off:* ${totOff} Orang`,
+      `⚠️ *Total Mangkir:* ${totMangkir} Orang`,
+      `📝 *Total Cuti:* ${totCuti} Orang`,
+      `🏥 *Total Izin / Sakit:* ${totIzin} Orang`,
+      `⚡ *Total Bertugas Lembur:* ${totLembur} Orang`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `_Sistem Otomatis Radar Presensi & SDM PT FRP (Pemberitahuan Khusus Superadmin)_`
+    ].join('\n');
+
+    console.log(`[Superadmin Shift Report] Mengirim update presensi ke Superadmin (${superadminPhone})...`);
+    const waRes = await sendWhatsAppAlert({ phone: superadminPhone, message });
+    console.log(`[Superadmin Shift Report] Sukses dikirim.`);
+
+    return {
+      success: true,
+      targetDate: finalDateStr,
+      recipient: superadminPhone,
+      summary: {
+        totalOfficial,
+        totHadir,
+        totOff,
+        totMangkir,
+        totCuti,
+        totIzin,
+        totLembur,
+        stats
+      },
+      waRes
+    };
+  } catch (err) {
+    console.error('[generateAndSendSuperadminShiftReport Error]:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+// Background scheduler pemeriksaan jam checkpoint shift
+async function checkAndSendScheduledShiftReports() {
+  try {
+    const nowWita = new Date(Date.now() + 8 * 3600000); // WITA
+    const hours = String(nowWita.getUTCHours()).padStart(2, '0');
+    const minutes = String(nowWita.getUTCMinutes()).padStart(2, '0');
+    const timeStr = `${hours}:${minutes}`;
+    const dateStr = `${nowWita.getUTCFullYear()}-${String(nowWita.getUTCMonth() + 1).padStart(2, '0')}-${String(nowWita.getUTCDate()).padStart(2, '0')}`;
+
+    let checkpointTitle = null;
+    let targetDate = dateStr;
+
+    if (timeStr === '09:30') {
+      checkpointTitle = 'Checkpoint 1 (2 Jam Pasca Buka Day Shift & Shift I - 07:30 WITA)';
+    } else if (timeStr === '17:30') {
+      checkpointTitle = 'Checkpoint 2 (2 Jam Pasca Buka Shift II - 15:30 WITA)';
+    } else if (timeStr === '00:30') {
+      checkpointTitle = 'Checkpoint 3 (2 Jam Pasca Buka Shift III - 22:30 WITA)';
+      // Shift III dibuka 22:30 pada malam sebelumnya (N-1)
+      const prevDate = new Date(nowWita.getTime() - 24 * 3600000);
+      targetDate = `${prevDate.getUTCFullYear()}-${String(prevDate.getUTCMonth() + 1).padStart(2, '0')}-${String(prevDate.getUTCDate()).padStart(2, '0')}`;
+    }
+
+    if (checkpointTitle) {
+      const checkpointKey = `${targetDate}_${timeStr}`;
+      if (!sentShiftCheckpoints.has(checkpointKey)) {
+        sentShiftCheckpoints.add(checkpointKey);
+        console.log(`[Scheduler] Triggering Superadmin Shift Report for ${checkpointKey}: ${checkpointTitle}`);
+        await generateAndSendSuperadminShiftReport(targetDate, checkpointTitle);
+      }
+    }
+  } catch (err) {
+    console.warn('[checkAndSendScheduledShiftReports Error]:', err.message);
+  }
+}
+
+// Endpoint manual trigger laporan shift ke Superadmin
+app.post('/api/admin/reports/send-shift-checkpoint', async (req, res) => {
+  try {
+    const { targetDate, checkpointTitle } = req.body;
+    const result = await generateAndSendSuperadminShiftReport(targetDate || null, checkpointTitle || null);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Start Server
 async function start() {
   try {
@@ -16807,6 +17112,10 @@ async function start() {
     setInterval(() => runAutoMarkMangkirAttendance().catch(() => {}), 30 * 60 * 1000);
     // Jalankan satu kali saat startup
     runAutoMarkMangkirAttendance().catch(() => {});
+
+    // Jalankan scheduler laporan berkala shift 83 SDM ke Superadmin setiap 1 menit (09:30, 17:30, 00:30 WITA)
+    setInterval(checkAndSendScheduledShiftReports, 60 * 1000);
+    checkAndSendScheduledShiftReports().catch(() => {});
 
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`[HRM-Backend] Server running on port ${PORT}`);
