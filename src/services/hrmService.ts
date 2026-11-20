@@ -4101,9 +4101,20 @@ export const hrmService = {
         const user = users.find((u) => u.id === att.userId);
         const shift = shifts.find((s) => s.id === user?.shiftId) || shifts[0];
         const dailySchedule = hrmService.getEmployeeTodaySchedule(att.userId, today);
-        const activeEndTime = dailySchedule && !dailySchedule.isOff ? dailySchedule.endTime : shift.endTime;
+        const resolvedShift = resolveEffectiveShift(user, shifts, dailySchedule);
+        const activeStartTime = dailySchedule && !dailySchedule.isOff ? dailySchedule.startTime : (resolvedShift.startTime || shift.startTime || '07:30');
+        const activeEndTime = dailySchedule && !dailySchedule.isOff ? dailySchedule.endTime : (resolvedShift.endTime || shift.endTime || '16:30');
+        const [startH, startM] = activeStartTime.split(':').map(Number);
         const [endH, endM] = activeEndTime.split(':').map(Number);
-        const shiftEndMins = endH * 60 + endM;
+        const shiftStartMins = (startH || 0) * 60 + (startM || 0);
+        const shiftEndMins = (endH || 0) * 60 + (endM || 0);
+        const isCrossDay = Boolean(dailySchedule?.isNightShift || resolvedShift?.isCrossDay || shiftEndMins < shiftStartMins);
+
+        // Shift lintas hari (Shift III malam: 22:30 - 07:30) DILARANG KERAS dikunci di malam tanggal berjalan H!
+        // Jam dinas baru selesai besok pagi (H+1) pada pk 07:30 WITA
+        if (isCrossDay && currentMins >= shiftStartMins - 120) {
+          return;
+        }
 
         // Check if user has an approved overtime today
         const ot = hrmService.getUserTodayApprovedOvertime(att.userId, today);
@@ -4117,7 +4128,7 @@ export const hrmService = {
         if (currentMins >= allowedEndMins + 90) {
           const idx = all.findIndex((a) => a.id === att.id);
           if (idx !== -1) {
-            const clockOutTime = ot && ot.endTime ? ot.endTime + ':00' : shift.endTime + ':00';
+            const clockOutTime = ot && ot.endTime ? ot.endTime + ':00' : activeEndTime + ':00';
             const [inH, inM] = att.clockIn.split(':').map(Number);
             const inMins = inH * 60 + inM;
             const duration = Math.max(0, allowedEndMins - inMins);

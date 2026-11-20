@@ -2474,10 +2474,37 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       }
     }
 
-    if (resolvedShiftId && !resolvedShiftName) {
-      const shRes = await pool.query('SELECT name FROM hrm_shifts WHERE id = $1 LIMIT 1', [resolvedShiftId]);
-      if (shRes.rows.length > 0) {
-        resolvedShiftName = shRes.rows[0].name;
+    if (resolvedShiftId) {
+      try {
+        const shInfo = await pool.query('SELECT name, start_time, end_time, is_cross_day FROM hrm_shifts WHERE id = $1 LIMIT 1', [resolvedShiftId]);
+        if (shInfo.rows.length > 0) {
+          const shRow = shInfo.rows[0];
+          if (!resolvedShiftName) resolvedShiftName = shRow.name;
+          if (shRow.start_time) shiftStartTime = shRow.start_time.substring(0, 5);
+          if (shRow.end_time) shiftEndTime = shRow.end_time.substring(0, 5);
+          isCrossDay = Boolean(shRow.is_cross_day || ((Number(shiftStartTime.split(':')[0]) * 60 + Number(shiftStartTime.split(':')[1])) > (Number(shiftEndTime.split(':')[0]) * 60 + Number(shiftEndTime.split(':')[1]))));
+        }
+      } catch (shErr) {
+        console.warn('[ClockIn] Target shift time sync warn:', shErr.message);
+      }
+    } else if (resolvedShiftName) {
+      const timeMatch = resolvedShiftName.match(/(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/);
+      if (timeMatch) {
+        shiftStartTime = timeMatch[1];
+        shiftEndTime = timeMatch[2];
+        isCrossDay = shiftStartTime > shiftEndTime;
+      } else if (resolvedShiftName.toLowerCase().includes('shift iii') || resolvedShiftName.toLowerCase().includes('shift 3')) {
+        shiftStartTime = '22:30';
+        shiftEndTime = '07:30';
+        isCrossDay = true;
+      } else if (resolvedShiftName.toLowerCase().includes('shift ii') || resolvedShiftName.toLowerCase().includes('shift 2')) {
+        shiftStartTime = '15:30';
+        shiftEndTime = '22:30';
+        isCrossDay = false;
+      } else if (resolvedShiftName.toLowerCase().includes('shift i') || resolvedShiftName.toLowerCase().includes('shift 1')) {
+        shiftStartTime = '07:30';
+        shiftEndTime = '15:30';
+        isCrossDay = false;
       }
     }
 
@@ -2554,6 +2581,24 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         finalStatus = 'hadir';
         finalLateMinutes = 0;
       } else {
+        // Definitif: Pastikan shiftStartTime, shiftEndTime, dan isCrossDay akurat sesuai shift resmi karyawan
+        const activeNameNorm = (resolvedShiftName || activeShiftName || '').toLowerCase();
+        if (activeNameNorm.includes('shift iii') || activeNameNorm.includes('shift 3') || activeNameNorm.includes('22:30')) {
+          shiftStartTime = '22:30';
+          shiftEndTime = '07:30';
+          isCrossDay = true;
+        } else if (activeNameNorm.includes('shift ii') || activeNameNorm.includes('shift 2') || activeNameNorm.includes('15:30')) {
+          shiftStartTime = '15:30';
+          shiftEndTime = '22:30';
+          isCrossDay = false;
+        } else if (activeNameNorm.includes('shift i') || activeNameNorm.includes('shift 1') || activeNameNorm.includes('07:30')) {
+          if (!activeNameNorm.includes('shift ii') && !activeNameNorm.includes('shift iii')) {
+            shiftStartTime = '07:30';
+            shiftEndTime = '15:30';
+            isCrossDay = false;
+          }
+        }
+
         const [sH, sM] = shiftStartTime.split(':').map(Number);
         const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 0);
         let curMins = 0;
@@ -15929,15 +15974,36 @@ async function runAutoCloseCompliantAttendance() {
         ? row.attendance_date.substring(0, 10)
         : (row.attendance_date.toISOString ? row.attendance_date.toISOString().split('T')[0] : String(row.attendance_date).substring(0, 10));
 
-      const shiftStartStr = (row.shift_start_time || '07:30').substring(0, 5);
-      const shiftEndStr = (row.shift_end_time || '16:30').substring(0, 5);
+      let shiftStartStr = (row.shift_start_time || '07:30').substring(0, 5);
+      let shiftEndStr = (row.shift_end_time || '16:30').substring(0, 5);
+      let isCrossDay = Boolean(row.is_cross_day);
+
+      // Prioritas Utama: Ekstraksi jam dan cross-day langsung dari att_shift_name
+      const attNameLower = (row.att_shift_name || '').toLowerCase();
+      const timeMatch = (row.att_shift_name || '').match(/(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/);
+      if (timeMatch) {
+        shiftStartStr = timeMatch[1];
+        shiftEndStr = timeMatch[2];
+        isCrossDay = shiftStartStr > shiftEndStr;
+      } else if (attNameLower.includes('shift iii') || attNameLower.includes('shift 3')) {
+        shiftStartStr = '22:30';
+        shiftEndStr = '07:30';
+        isCrossDay = true;
+      } else if (attNameLower.includes('shift ii') || attNameLower.includes('shift 2')) {
+        shiftStartStr = '15:30';
+        shiftEndStr = '22:30';
+        isCrossDay = false;
+      } else if (attNameLower.includes('shift i') || attNameLower.includes('shift 1')) {
+        shiftStartStr = '07:30';
+        shiftEndStr = '15:30';
+        isCrossDay = false;
+      }
+
       const [startH, startM] = shiftStartStr.split(':').map(Number);
       const [endH, endM] = shiftEndStr.split(':').map(Number);
-
-      const isCrossDay = Boolean(
-        row.is_cross_day || 
-        (startH * 60 + startM) > (endH * 60 + endM)
-      );
+      if ((startH * 60 + startM) > (endH * 60 + endM)) {
+        isCrossDay = true;
+      }
 
       // Hitung waktu awal dan akhir shift sebagai timestamp absolut UTC+8 (WITA)
       const [attY, attM, attD] = attDateStr.split('-').map(Number);

@@ -121,14 +121,22 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
   // Sync default employee metadata when employee changes
   React.useEffect(() => {
     if (selectedEmployee) {
-      if (selectedEmployee.divisionName) {
-        setDepartemen(selectedEmployee.divisionName);
-      }
-      if (selectedEmployee.kepalaReguName) {
-        setKaurName(selectedEmployee.kepalaReguName);
-      }
-      if (selectedEmployee.operationalGroup) {
-        setRegu(selectedEmployee.operationalGroup);
+      const opGroup = (selectedEmployee.operationalGroup || '').toUpperCase();
+      const div = (selectedEmployee.divisionName || '').toUpperCase();
+      const isWisma = opGroup === 'RUMAH TANGGA' || div.includes('WISMA') || div.includes('RUMAH TANGGA');
+
+      if (isWisma) {
+        setSeksi(selectedEmployee.divisionName ? `Seksi ${selectedEmployee.divisionName}` : 'Seksi Pengelolaan Wisma');
+        setUnit('Unit Wisma Biring Ere');
+        setDepartemen('kantor pusat semen tonasa');
+        setKaurName(selectedEmployee.kepalaReguName || 'Kaur Rumah Tangga & Wisma');
+        setRegu('RUMAH TANGGA');
+      } else {
+        setSeksi(selectedEmployee.divisionName ? `Sec. of ${selectedEmployee.divisionName}` : 'Sec. of Shipment Management 2');
+        setUnit('Unit of Outbond Inventory I & IV');
+        setDepartemen('kantor pusat semen tonasa');
+        setKaurName(selectedEmployee.kepalaReguName || 'Kaur Sec. of Shipment Management');
+        setRegu(selectedEmployee.operationalGroup || 'SHIPMENT');
       }
     }
   }, [selectedEmployee]);
