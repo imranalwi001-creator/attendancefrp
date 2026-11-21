@@ -11335,7 +11335,7 @@ app.post('/api/overtime', async (req, res) => {
     const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
     const isMatchingOrIchtiar = divUpper.includes('MATCHING') || nameLower.includes('ichtiar') || nameLower.includes('icthiar') || nipUpper.includes('7044') || nipUpper.includes('7047');
     const descLower = String(taskDescription || '').toLowerCase();
-    const isDayOff = Boolean(isHolidayOrWeekend || descLower.includes('off') || descLower.includes('libur'));
+    const isDayOff = Boolean(isHolidayOrWeekend || descLower.includes('[off]') || descLower.includes('libur roster') || descLower.includes('hari libur'));
 
     const reqMultiplier = rateMultiplier !== undefined ? Number(rateMultiplier) : (rate_multiplier !== undefined ? Number(rate_multiplier) : null);
 
@@ -11356,9 +11356,13 @@ app.post('/api/overtime', async (req, res) => {
       finalRateMultiplier = 4.0;
       payHours = hours * 4.0;
       comp = Math.round(payHours * officialRate);
-    } else if (reqMultiplier === 2.0) {
+    } else if (reqMultiplier === 2.0 && !isDayOff && (descLower.includes('[m2w]') || descLower.includes('kelebihan') || descLower.includes('reguler'))) {
       finalRateMultiplier = 2.0;
-      if (isMatchingOrIchtiar && isDayOff) {
+      payHours = hours * 2.0;
+      comp = Math.round(payHours * officialRate);
+    } else if (reqMultiplier === 2.0 && isDayOff) {
+      finalRateMultiplier = 2.0;
+      if (isMatchingOrIchtiar) {
         const breakDed = hours > 1 ? 1 : 0;
         payHours = Math.max(0, hours - breakDed) * 2.0;
       } else {
@@ -11790,7 +11794,7 @@ app.put('/api/overtime/:id', async (req, res) => {
     const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
     const isMatchingOrIchtiar = divUpper.includes('MATCHING') || nameLower.includes('ichtiar') || nameLower.includes('icthiar') || nipUpper.includes('7044') || nipUpper.includes('7047');
     const descLower = String(finalDesc || '').toLowerCase();
-    const isDayOff = Boolean(isHolidayOrWeekend || descLower.includes('off') || descLower.includes('libur'));
+    const isDayOff = Boolean(isHolidayOrWeekend || descLower.includes('[off]') || descLower.includes('libur roster') || descLower.includes('hari libur'));
 
     const reqMultiplier = rateMultiplier !== undefined ? Number(rateMultiplier) : (rate_multiplier !== undefined ? Number(rate_multiplier) : (ot.rate_multiplier ? Number(ot.rate_multiplier) : null));
 
@@ -11811,9 +11815,13 @@ app.put('/api/overtime/:id', async (req, res) => {
       finalRateMultiplier = 4.0;
       payHours = finalHours * 4.0;
       compensation = Math.round(payHours * officialRate);
-    } else if (reqMultiplier === 2.0) {
+    } else if (reqMultiplier === 2.0 && !isDayOff && (descLower.includes('[m2w]') || descLower.includes('kelebihan') || descLower.includes('reguler'))) {
       finalRateMultiplier = 2.0;
-      if (isMatchingOrIchtiar && isDayOff) {
+      payHours = finalHours * 2.0;
+      compensation = Math.round(payHours * officialRate);
+    } else if (reqMultiplier === 2.0 && isDayOff) {
+      finalRateMultiplier = 2.0;
+      if (isMatchingOrIchtiar) {
         const breakDed = finalHours > 1 ? 1 : 0;
         payHours = Math.max(0, finalHours - breakDed) * 2.0;
       } else {

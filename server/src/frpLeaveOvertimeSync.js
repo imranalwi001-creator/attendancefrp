@@ -772,10 +772,11 @@ function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRa
       const isDayOff = Boolean(
         ot.is_weekend_holiday ||
         ot.isWeekendHoliday ||
-        desc.includes('off') ||
-        desc.includes('libur') ||
-        reason.includes('off') ||
-        reason.includes('libur')
+        desc.includes('[off]') ||
+        desc.includes('libur roster') ||
+        desc.includes('hari libur') ||
+        reason.includes('[off]') ||
+        reason.includes('libur roster')
       );
       const isReliefDuty = Boolean(
         ot.leave_request_id ||
@@ -797,10 +798,10 @@ function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRa
         paidHours += h * 3.0;
       } else if (mult === 4.0) {
         paidHours += h * 4.0;
-      } else if (mult === 2.0 && !isDayOff && (desc.includes('kelebihan') || desc.includes('reguler'))) {
+      } else if (mult === 2.0 && !isDayOff && (desc.includes('[m2w]') || desc.includes('kelebihan') || desc.includes('reguler'))) {
         paidHours += h * 2.0;
-      } else if (mult === 2.0) {
-        if (isMatchingOrIchtiar && isDayOff) {
+      } else if (mult === 2.0 && isDayOff) {
+        if (isMatchingOrIchtiar) {
           const breakDed = h > 1 ? 1 : 0;
           totalBreakDeductionHours += breakDed;
           paidHours += Math.max(0, h - breakDed) * 2.0;

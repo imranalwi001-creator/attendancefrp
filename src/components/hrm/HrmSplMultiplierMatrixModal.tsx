@@ -473,7 +473,20 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
             h4 += rawHours;
           } else {
             // Rekaman tanpa tag eksplisit baris (didekomposisi sesuai aturan baku PT FRP)
-            const isDayOff = Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday || isSchedOff || d.isWeekend);
+            // Karyawan bertugas di shift kerja aktif (Shift I/II/III/Day Shift) atau tercatat Hadir:
+            const hasActiveWorkShift = Boolean(schedOnDay && !isSchedOff);
+            const isPresentOnDay = Boolean(attendanceCells[daysMeta.indexOf(d)]?.val === '1');
+            const isDayOff = (hasActiveWorkShift || isPresentOnDay)
+              ? false
+              : Boolean(
+                  isSchedOff ||
+                  (!schedOnDay && d.isWeekend) ||
+                  (o as any).is_weekend_holiday ||
+                  (o as any).isWeekendHoliday ||
+                  desc.includes('[off]') ||
+                  desc.includes('libur roster') ||
+                  desc.includes('hari libur')
+                );
             const isReliefDuty = Boolean(
               (o as any).leave_request_id ||
               desc.includes('pengganti') ||
@@ -483,7 +496,7 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
               desc.includes('relief') ||
               desc.includes('sambung') ||
               desc.includes('cuti') ||
-              desc.includes('off') ||
+              desc.includes('[off]') ||
               desc.includes('libur') ||
               desc.includes('pos')
             );
@@ -550,7 +563,7 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         // Push ke masing-masing baris pengali dengan ref rawOt independen
         cells15.push({ hours: h15, rawOt: ot15, isYellow: false });
         cells2w.push({ hours: h2w, rawOt: ot2w, isYellow: false });
-        const isYellowCell = isSchedOff || d.isWeekend;
+        const isYellowCell = isSchedOff || (!schedOnDay && d.isWeekend);
         cells2r.push({ hours: h2r, rawOt: ot2r, isYellow: isYellowCell || h2r > 0 });
         cells3.push({ hours: h3, rawOt: ot3, isYellow: false });
         cells4.push({ hours: h4, rawOt: ot4, isYellow: false });

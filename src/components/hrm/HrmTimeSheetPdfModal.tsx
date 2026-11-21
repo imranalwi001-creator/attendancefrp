@@ -370,7 +370,17 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
         const schedOnDay = empSchedules.find((s) => (s.scheduleDate || s.schedule_date || '').slice(0, 10) === oDateStr);
         const isSchedOff = Boolean(schedOnDay && (schedOnDay.isOff || schedOnDay.is_off || schedOnDay.shiftCode === 'OFF' || schedOnDay.shift_code === 'OFF'));
-        const isDayOff = Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday || isSchedOff || desc.includes('off') || desc.includes('libur'));
+        const hasActiveWorkShift = Boolean(schedOnDay && !isSchedOff);
+        const isDayOff = hasActiveWorkShift
+          ? false
+          : Boolean(
+              isSchedOff ||
+              (o as any).is_weekend_holiday ||
+              (o as any).isWeekendHoliday ||
+              desc.includes('[off]') ||
+              desc.includes('libur roster') ||
+              desc.includes('hari libur')
+            );
 
         const explicitMult = Number((o as any).rate_multiplier || (o as any).rateMultiplier);
 
@@ -388,8 +398,14 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         } else if (explicitMult === 4.0) {
           empPaid = rawDur * 4.0;
           realHours += rawDur;
-        } else if (explicitMult === 2.0) {
-          if (isMatchingOrIchtiar && isDayOff) {
+        } else if (explicitMult === 2.0 && !isDayOff && (desc.includes('[m2w]') || desc.includes('kelebihan'))) {
+          // Khusus sub-row m2w (jam ke-2 dst hari kerja)
+          effectiveHours = rawDur;
+          empPaid = rawDur * 2.0;
+          realHours += rawDur;
+        } else if (explicitMult === 2.0 && isDayOff) {
+          // Khusus lembur di Hari OFF murni
+          if (isMatchingOrIchtiar) {
             const breakDed = rawDur > 1 ? 1 : 0;
             effectiveHours = Math.max(0, rawDur - breakDed);
           } else {
