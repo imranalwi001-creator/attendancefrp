@@ -412,7 +412,7 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
       estimatedPay,
       ruleAppliedLabel,
     };
-  }, [selectedUser, isReliefDuty, isTimbanganOrSegel, isMatching, durationHours]);
+  }, [selectedUser, isReliefDuty, isTimbanganOrSegel, isMatchingOrIchtiar, durationHours]);
 
   const estimatedPay = overtimeCalculation.estimatedPay;
   const hourlyRate = overtimeCalculation.hourlyRate;
@@ -558,15 +558,15 @@ export const HrmManualLemburModal: React.FC<HrmManualLemburModalProps> = ({
                   <div className="mt-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-[10px] flex items-start gap-1.5 font-medium">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
                     <span>
-                      <strong>Aturan Baku Divisi Timbangan & Segel:</strong> Lembur pengganti shift di hari kerja atau di hari off/tanggal merah <strong>TANPA POTONGAN ISTIRAHAT (0 jam)</strong> dan <strong>LANGSUNG PENGALI 2,0x</strong>.
+                      <strong>Aturan Baku Divisi Timbangan & Segel:</strong> Lembur di bawah 5 jam atau relief hari kerja tanpa potongan istirahat (1.5x di 1 jam pertama, sisa 2.0x). Relief hari OFF <strong>TANPA POTONGAN ISTIRAHAT</strong> dan <strong>LANGSUNG PENGALI 2,0x</strong>.
                     </span>
                   </div>
                 )}
-                {isMatching && (
+                {isMatchingOrIchtiar && (
                   <div className="mt-2 p-2 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-800 dark:text-indigo-300 text-[10px] flex items-start gap-1.5 font-medium">
                     <Info className="w-3.5 h-3.5 text-indigo-600 shrink-0 mt-0.5" />
                     <span>
-                      <strong>Aturan Baku Divisi Matching:</strong> Lembur pengganti shift atau saat hari off/tanggal merah dikenakan <strong>POTONGAN ISTIRAHAT 1 JAM</strong> dan seluruh sisa jam efektif <strong>LANGSUNG PENGALI 2,0x</strong>.
+                      <strong>Aturan Baku Divisi Matching & Ichtiar:</strong> Hari kerja &le; 6 jam tanpa potongan (1.5x jam pertama, sisa 2.0x); hari kerja &gt; 6 jam potong 1 jam istirahat. Hari OFF potong 1 jam istirahat dan <strong>LANGSUNG PENGALI 2,0x</strong>.
                     </span>
                   </div>
                 )}

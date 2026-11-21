@@ -393,7 +393,7 @@ export const HrmEditLemburModal: React.FC<HrmEditLemburModalProps> = ({
       estimatedPay,
       ruleAppliedLabel,
     };
-  }, [record, isReliefDuty, isTimbanganOrSegel, isMatching, durationHours]);
+  }, [record, isReliefDuty, isTimbanganOrSegel, isMatchingOrIchtiar, durationHours]);
 
   const estimatedPay = overtimeCalculation.estimatedPay;
   const hourlyRate = overtimeCalculation.hourlyRate;
