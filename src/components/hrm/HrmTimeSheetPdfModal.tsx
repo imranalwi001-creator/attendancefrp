@@ -356,7 +356,6 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
       // Overtime Real & Overtime Paid Sesuai Aturan Baku PT FRP
       let realHours = 0;
       let paidHours = 0;
-      let totalPay = 0;
 
       const empDiv = ((emp.divisionName || (emp as any).division_name || (emp as any).seksi || emp.jobTitle || '')).toLowerCase();
       const empName = ((emp.fullName || (emp as any).full_name || (emp as any).name || '')).toLowerCase();
@@ -466,17 +465,10 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         }
 
         paidHours += empPaid;
-        const comp = parseFloat((o as any).compensation_amount || (o as any).compensationAmount || (o as any).totalPay || 0);
-        if (comp > 0) {
-          totalPay += comp;
-        } else {
-          totalPay += Math.round(empPaid * HOURLY_RATE);
-        }
       });
 
-      if (totalPay === 0 && paidHours > 0) {
-        totalPay = Math.round(paidHours * HOURLY_RATE);
-      }
+      // Total Upah Lembur Bayar selalu sinkron persis: paidHours * HOURLY_RATE (Rp 23.381,79/jam)
+      const totalPay = Math.round(paidHours * HOURLY_RATE);
 
       // Default shift pattern name
       const shiftPattern = emp.jobTitle?.includes('DAY') ? 'DAY SIFT' : emp.shiftId ? 'SIFT 213' : 'SIFT 213';
