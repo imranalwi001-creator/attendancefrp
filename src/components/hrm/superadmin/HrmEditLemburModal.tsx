@@ -301,29 +301,37 @@ export const HrmEditLemburModal: React.FC<HrmEditLemburModalProps> = ({
 
   // Deteksi Divisi & Sifat Lembur Sesuai Kebijakan Direksi PT FRP
   const divUpper = (record?.divisionName || '').toUpperCase();
+  const nameLower = (record?.userName || (record as any)?.employeeName || '').toLowerCase();
+  const nipUpper = (record?.userNip || (record as any)?.employeeNip || '').toUpperCase();
   const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
-  const isMatching = divUpper.includes('MATCHING');
+  const isMatchingOrIchtiar = divUpper.includes('MATCHING') || nameLower.includes('ichtiar') || nameLower.includes('icthiar') || nipUpper.includes('7044') || nipUpper.includes('7047');
+
+  const isDayOff = Boolean(isWeekendHoliday);
 
   const isReliefDuty = useMemo(() => {
     const desc = (taskDescription || '').toLowerCase();
     return (
-      isWeekendHoliday ||
+      isDayOff ||
       desc.includes('pengganti') ||
+      desc.includes('mengganti') ||
+      desc.includes('menggantikan') ||
+      desc.includes('ganti') ||
       desc.includes('sambung') ||
       desc.includes('relief') ||
       desc.includes('cuti') ||
       desc.includes('off') ||
       desc.includes('libur')
     );
-  }, [taskDescription, isWeekendHoliday]);
+  }, [taskDescription, isDayOff]);
 
   // Perhitungan Presisi Sesuai Aturan Baku PT FRP:
-  // 1. Timbangan & Segel: Lembur pengganti shift di hari kerja atau di hari off/tgl merah:
-  //    -> TANPA POTONGAN ISTIRAHAT (0 jam) dan LANGSUNG PENGALI 2.0x.
-  // 2. Matching: Lembur pengganti shift / hari OFF:
-  //    -> POTONGAN ISTIRAHAT 1 JAM dan LANGSUNG PENGALI 2.0x pada sisa jam efektif.
-  // 3. Kelebihan jam kerja reguler harian (seperti Shift 7-7 kelebihan 3 jam di hari kerja biasa):
-  //    -> 1 jam pertama @ 1.5x, jam berikutnya @ 2.0x.
+  // 1. Matching & Ichtiar:
+  //    • Hari Kerja: Jika <= 6 jam (termasuk < 4 jam) TIDAK DIPOTONG ISTIRAHAT; jika > 6 jam DIPOTONG ISTIRAHAT 1 JAM.
+  //      Pengali: 1 jam pertama 1.5x, jam berikutnya 2.0x.
+  //    • Hari OFF: DIPOTONG ISTIRAHAT 1 JAM jika > 1 jam, seluruh jam efektif PENGALI 2.0x.
+  // 2. Timbangan & Segel:
+  //    • Hari Kerja (< 5 jam atau ganti cuti/izin): TANPA POTONGAN ISTIRAHAT, 1 jam pertama 1.5x, jam berikutnya 2.0x.
+  //    • Hari OFF (ganti cuti/izin di hari off): TANPA POTONGAN ISTIRAHAT, seluruh jam PENGALI 2.0x.
   const overtimeCalculation = useMemo(() => {
     const rate = record?.hourlyRate || 23381.79;
     let breakDeduction = 0;
@@ -331,35 +339,48 @@ export const HrmEditLemburModal: React.FC<HrmEditLemburModalProps> = ({
     let payHours = 0;
     let ruleAppliedLabel = '';
 
-    if (isTimbanganOrSegel) {
-      // 1. Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
-      // Tanpa potongan istirahat (0 jam) dan Langsung Pengali 2.0x (tanpa 1.5x)
-      breakDeduction = 0;
-      effectiveHours = durationHours;
-      payHours = effectiveHours * 2.0;
-      ruleAppliedLabel = 'Timbangan & Segel (Hari Kerja / OFF): 0 Jam Potongan Istirahat, Langsung Pengali 2.0x';
-    } else if (isMatching) {
-      // 2. Divisi Matching (Hari Kerja / OFF / Tanggal Merah):
-      // Dikenakan potongan istirahat 1 jam dan Langsung Pengali 2.0x (tanpa 1.5x)
+    if (isMatchingOrIchtiar) {
+      if (isDayOff) {
+        breakDeduction = durationHours > 1 ? 1 : 0;
+        effectiveHours = Math.max(0, durationHours - breakDeduction);
+        payHours = effectiveHours * 2.0;
+        ruleAppliedLabel = 'Matching & Ichtiar (Hari OFF): Potongan Istirahat 1 Jam, Pengali 2.0x';
+      } else {
+        breakDeduction = durationHours > 6 ? 1 : 0;
+        effectiveHours = Math.max(0, durationHours - breakDeduction);
+        const h1 = Math.min(1, effectiveHours);
+        const h2 = Math.max(0, effectiveHours - 1);
+        payHours = (h1 * 1.5) + (h2 * 2.0);
+        ruleAppliedLabel = breakDeduction > 0
+          ? 'Matching & Ichtiar (Hari Kerja > 6 Jam): Potongan Istirahat 1 Jam, 1 Jam Pertama 1.5x, Sisa 2.0x'
+          : 'Matching & Ichtiar (Hari Kerja <= 6 Jam): Tanpa Potongan Istirahat, 1 Jam Pertama 1.5x, Sisa 2.0x';
+      }
+    } else if (isTimbanganOrSegel) {
+      if (isDayOff) {
+        breakDeduction = 0;
+        effectiveHours = durationHours;
+        payHours = effectiveHours * 2.0;
+        ruleAppliedLabel = 'Timbangan & Segel (Hari OFF / Ganti Cuti): Tanpa Potongan Istirahat, Pengali 2.0x';
+      } else {
+        breakDeduction = 0;
+        effectiveHours = durationHours;
+        const h1 = Math.min(1, durationHours);
+        const h2 = Math.max(0, durationHours - 1);
+        payHours = (h1 * 1.5) + (h2 * 2.0);
+        ruleAppliedLabel = 'Timbangan & Segel (Hari Kerja): Tanpa Potongan Istirahat, 1 Jam Pertama 1.5x, Sisa 2.0x';
+      }
+    } else if (isDayOff) {
       breakDeduction = durationHours > 1 ? 1 : 0;
       effectiveHours = Math.max(0, durationHours - breakDeduction);
       payHours = effectiveHours * 2.0;
-      ruleAppliedLabel = 'Matching (Hari Kerja / OFF): Potongan Istirahat 1 Jam, Langsung Pengali 2.0x';
-    } else if (isReliefDuty) {
-      // 3. Divisi Shipment Lainnya (Pengganti Shift / Hari Libur OFF): Langsung Pengali 2.0x
-      breakDeduction = 0;
-      effectiveHours = durationHours;
-      payHours = effectiveHours * 2.0;
-      ruleAppliedLabel = 'Pengganti Shift / Hari Libur: Pengali 2.0x';
+      ruleAppliedLabel = 'Hari OFF / Libur: Potongan 1 Jam Istirahat, Pengali 2.0x';
     } else {
-      // 4. Divisi Shipment Secara Keseluruhan (Kelebihan Jam Reguler Hari Kerja, misal Shift 7-7):
-      // Jam ke-1 @ 1.5x, Jam ke-2 & seterusnya @ 2.0x
-      breakDeduction = 0;
-      effectiveHours = durationHours;
-      const h1 = Math.min(1, durationHours);
-      const h2 = Math.max(0, durationHours - 1);
+      breakDeduction = durationHours > 6 ? 1 : 0;
+      effectiveHours = Math.max(0, durationHours - breakDeduction);
+      const h1 = Math.min(1, effectiveHours);
+      const h2 = Math.max(0, effectiveHours - 1);
       payHours = (h1 * 1.5) + (h2 * 2.0);
-      ruleAppliedLabel = 'Hari Kerja Reguler (Shipment): Jam Ke-1 (1.5x) + Jam Ke-2 & Seterusnya (2.0x)';
+      ruleAppliedLabel = 'Hari Kerja: 1 Jam Pertama 1.5x + Sisa Jam 2.0x';
     }
 
     const estimatedPay = Math.round(payHours * rate);

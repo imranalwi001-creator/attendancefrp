@@ -359,8 +359,10 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
       let totalPay = 0;
 
       const empDiv = ((emp.divisionName || (emp as any).division_name || (emp as any).seksi || emp.jobTitle || '')).toLowerCase();
+      const empName = ((emp.fullName || (emp as any).full_name || (emp as any).name || '')).toLowerCase();
+      const empNip = ((emp.nip || '')).toUpperCase();
       const isTimbanganOrSegel = empDiv.includes('timbangan') || empDiv.includes('segel');
-      const isMatching = empDiv.includes('matching');
+      const isMatchingOrIchtiar = empDiv.includes('matching') || empName.includes('ichtiar') || empName.includes('icthiar') || empNip.includes('7044') || empNip.includes('7047');
 
       empOts.forEach((o) => {
         const rawDur = parseFloat((o as any).duration_hours || (o as any).durationHours || (o as any).approved_hours || (o as any).approvedHours || 0);
@@ -368,20 +370,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);
         const schedOnDay = empSchedules.find((s) => (s.scheduleDate || s.schedule_date || '').slice(0, 10) === oDateStr);
         const isSchedOff = Boolean(schedOnDay && (schedOnDay.isOff || schedOnDay.is_off || schedOnDay.shiftCode === 'OFF' || schedOnDay.shift_code === 'OFF'));
-
-        const isReliefOrHoliday =
-          Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday) ||
-          isSchedOff ||
-          desc.includes('pengganti') ||
-          desc.includes('mengganti') ||
-          desc.includes('menggantikan') ||
-          desc.includes('ganti') ||
-          desc.includes('relief') ||
-          desc.includes('sambung') ||
-          desc.includes('libur') ||
-          desc.includes('off') ||
-          desc.includes('cuti') ||
-          desc.includes('pos');
+        const isDayOff = Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday || isSchedOff || desc.includes('off') || desc.includes('libur'));
 
         const explicitMult = Number((o as any).rate_multiplier || (o as any).rateMultiplier);
 
@@ -400,7 +389,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
           empPaid = rawDur * 4.0;
           realHours += rawDur;
         } else if (explicitMult === 2.0) {
-          if (isMatching && (isReliefOrHoliday || rawDur > 1) && !desc.includes('kelebihan')) {
+          if (isMatchingOrIchtiar && isDayOff) {
             const breakDed = rawDur > 1 ? 1 : 0;
             effectiveHours = Math.max(0, rawDur - breakDed);
           } else {
@@ -408,34 +397,54 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
           }
           empPaid = effectiveHours * 2.0;
           realHours += rawDur;
+        } else if (isMatchingOrIchtiar) {
+          // ── 1. MATCHING & ICHTIAR ───────────────────────────────────────────
+          if (isDayOff) {
+            // Hari OFF: dipotong 1 jam istirahat jika > 1 jam, langsung pengali 2.0x
+            const breakDed = rawDur > 1 ? 1 : 0;
+            effectiveHours = Math.max(0, rawDur - breakDed);
+            empPaid = effectiveHours * 2.0;
+            realHours += rawDur;
+          } else {
+            // Hari Kerja:
+            // - Jika <= 6 jam (termasuk < 4 jam): TIDAK DIPOTONG ISTIRAHAT
+            // - Jika > 6 jam: DIPOTONG ISTIRAHAT 1 JAM
+            // - Pengali: 1 jam pertama 1.5x, sisanya 2.0x
+            const breakDed = rawDur > 6 ? 1 : 0;
+            effectiveHours = Math.max(0, rawDur - breakDed);
+            const h1 = Math.min(1, effectiveHours);
+            const h2 = Math.max(0, effectiveHours - 1);
+            empPaid = (h1 * 1.5) + (h2 * 2.0);
+            realHours += rawDur;
+          }
         } else if (isTimbanganOrSegel) {
-          // Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
-          // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
-          effectiveHours = rawDur;
-          empPaid = effectiveHours * 2.0;
-          realHours += effectiveHours;
-        } else if (isMatching) {
-          // Divisi Matching:
-          if (desc.includes('kelebihan') || desc.includes('shift 7-7') || (!isReliefOrHoliday && rawDur <= 3)) {
+          // ── 2. TIMBANGAN & SEGEL ────────────────────────────────────────────
+          if (isDayOff) {
+            // Lembur mengganti cuti/izin di hari OFF: TANPA POTONGAN ISTIRAHAT, langsung 2.0x
+            effectiveHours = rawDur;
+            empPaid = effectiveHours * 2.0;
+            realHours += rawDur;
+          } else {
+            // Hari Kerja (lembur < 5 jam maupun mengganti cuti/izin di hari kerja):
+            // TANPA POTONGAN ISTIRAHAT, 1 jam pertama 1.5x, sisanya 2.0x
+            effectiveHours = rawDur;
             const h1 = Math.min(1, rawDur);
             const h2 = Math.max(0, rawDur - 1);
             empPaid = (h1 * 1.5) + (h2 * 2.0);
             realHours += rawDur;
-          } else {
-            const breakDed = rawDur > 1 ? 1 : 0;
-            effectiveHours = Math.max(0, rawDur - breakDed);
-            empPaid = effectiveHours * 2.0;
-            realHours += effectiveHours;
           }
-        } else if (isReliefOrHoliday) {
-          // Divisi Shipment lainnya saat Lembur Pengganti / OFF: Langsung 2.0x
-          effectiveHours = rawDur;
+        } else if (isDayOff) {
+          // ── 3. SHIPMENT UMUM LAINNYA ────────────────────────────────────────
+          const breakDed = rawDur > 1 ? 1 : 0;
+          effectiveHours = Math.max(0, rawDur - breakDed);
           empPaid = effectiveHours * 2.0;
-          realHours += effectiveHours;
+          realHours += rawDur;
         } else {
-          // Kelebihan Jam Hari Kerja Biasa (Shipment, misal Shift 7-7): Jam ke-1 @ 1.5x, jam berikutnya @ 2.0x
-          const h1 = Math.min(1, rawDur);
-          const h2 = Math.max(0, rawDur - 1);
+          // Hari Kerja Biasa:
+          const breakDed = rawDur > 6 ? 1 : 0;
+          effectiveHours = Math.max(0, rawDur - breakDed);
+          const h1 = Math.min(1, effectiveHours);
+          const h2 = Math.max(0, effectiveHours - 1);
           empPaid = (h1 * 1.5) + (h2 * 2.0);
           realHours += rawDur;
         }

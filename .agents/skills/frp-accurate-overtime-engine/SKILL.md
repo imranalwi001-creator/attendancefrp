@@ -62,34 +62,41 @@ Pada pola kerja shift 12 jam (seperti **Shift 7-7 Pagi `07:30–19:30`** atau **
 
 ---
 
-### C. Aturan Khusus Lembur Pengganti Shift & Hari Libur per Sub-Divisi
-Sesuai arahan operasional manajemen PT. FAWWAZ RESKI PERWIRA:
+### C. Aturan Khusus Lembur Sesuai Arahan Pimpinan & Operasional PT FRP
 
-1. **Divisi Timbangan & Divisi Segel:**
-   - **Lembur Pengganti Shift (Hari Kerja / Sambung Shift maupun Hari OFF / Tanggal Merah):**
-   - **Potongan Istirahat:** **TIDAK DIKENAKAN POTONGAN ISTIRAHAT** (0 jam potongan, seluruh jam penugasan dihitung utuh).
-   - **Aturan Pengali:** **TIDAK DIKENAKAN PENGALI 1.5x** (seluruh jam penugasan pengganti langsung menggunakan **Pengali 2.0x**).
-   - *Contoh Kasus Timbangan & Segel:*
-     - Lembur Pengganti Shift 1 (8 Jam) di hari kerja / OFF $\to 8 \times 2.0 = \mathbf{16.0\text{ Jam Bayar}}$.
-     - Lembur Pengganti Shift 2 (7 Jam) di hari kerja / OFF $\to 7 \times 2.0 = \mathbf{14.0\text{ Jam Bayar}}$.
-     - Lembur Pengganti Shift 3 (9 Jam) di hari kerja / OFF $\to 9 \times 2.0 = \mathbf{18.0\text{ Jam Bayar}}$.
-     - Lembur Pengganti Shift 7-7 Malam (12 Jam) di hari kerja / OFF $\to 12 \times 2.0 = \mathbf{24.0\text{ Jam Bayar}}$ (0 jam potongan istirahat, tanpa pengali 1.5x).
+Sesuai arahan resmi dan definitif operasional manajemen PT. FAWWAZ RESKI PERWIRA:
 
-2. **Divisi Matching (Matching Bontoa, Matching Maccini Baji, dll):**
-   - **Lembur Pengganti Shift / Lembur Hari OFF / Tanggal Merah:**
-   - **Potongan Istirahat:** **DIKENAKAN POTONGAN ISTIRAHAT 1 JAM** ($\text{Jam Efektif} = \max(0, \text{Jam Riil} - 1)$).
-   - **Aturan Pengali:** **TIDAK DIKENAKAN PENGALI 1.5x** (jam efektif setelah dipotong 1 jam istirahat seluruhnya menggunakan **Pengali 2.0x**).
-   - *Contoh Kasus Matching:*
-     - Lembur 12 Jam pengganti / OFF $\to$ Potongan istirahat 1 jam = 11 Jam Efektif $\to 11 \times 2.0 = \mathbf{22.0\text{ Jam Bayar}}$.
-     - Lembur 9 Jam pengganti / OFF $\to$ Potongan istirahat 1 jam = 8 Jam Efektif $\to 8 \times 2.0 = \mathbf{16.0\text{ Jam Bayar}}$.
-     - Lembur 8 Jam pengganti / OFF $\to$ Potongan istirahat 1 jam = 7 Jam Efektif $\to 7 \times 2.0 = \mathbf{14.0\text{ Jam Bayar}}$.
+1. **Bagian Matching & Karyawan atas nama Ichtiar (FR07044 / FR07047):**
+   - **Hari Kerja (Weekday):**
+     - Jika durasi lembur $\le 6$ jam (termasuk lembur di bawah 4 jam): **TIDAK DIPOTONG ISTIRAHAT** (0 jam potongan).
+     - Jika durasi lembur $> 6$ jam: **DIPOTONG ISTIRAHAT 1 JAM** ($\text{Jam Efektif} = \text{Jam Riil} - 1$).
+     - **Aturan Pengali:** Baik lembur di bawah 4 jam maupun di atas 6 jam, **TETAP MENGGUNAKAN PENGALI 1.5x DI 1 JAM PERTAMA**, dan jam berikutnya menggunakan **Pengali 2.0x** (masuk ke baris 2.0x Reguler / `m2w`).
+   - **Hari OFF (Hari Libur Roster / Tanggal Merah):**
+     - **DIPOTONG ISTIRAHAT 1 JAM** (jika durasi lembur > 1 jam).
+     - **Aturan Pengali:** Seluruh jam efektif lembur **MENGGUNAKAN PENGALI 2.0x UTUH** (masuk ke baris 2.0x Libur/Relief / `m2r` tanpa pengali 1.5x).
+   - *Contoh Kasus Matching & Ichtiar:*
+     - Lembur Hari Kerja 3 Jam $\to$ Tidak dipotong istirahat. Jam ke-1: $1 \times 1.5 = 1.5$, Jam ke-2 & ke-3: $2 \times 2.0 = 4.0 \to \mathbf{5.5\text{ Jam Bayar}}$.
+     - Lembur Hari Kerja 8 Jam (Relief Shift 1) $\to$ Dipotong istirahat 1 jam = 7 Jam Efektif. Jam ke-1: $1 \times 1.5 = 1.5$, Jam ke-2 s/d ke-7: $6 \times 2.0 = 12.0 \to \mathbf{13.5\text{ Jam Bayar}}$.
+     - Lembur Hari OFF 8 Jam $\to$ Dipotong istirahat 1 jam = 7 Jam Efektif. Seluruhnya $7 \times 2.0 = \mathbf{14.0\text{ Jam Bayar}}$.
 
-3. **Divisi Shipment Secara Keseluruhan (Timbangan, Segel, Matching, Outbound, dll) pada Kelebihan Jam Kerja Reguler:**
-   - **Kelebihan Jam Harian Shift Normal (seperti kelebihan 3 jam pada pola kerja Shift 7-7):**
-   - **WAJIB DIKENAKAN PENGALI 1.5x untuk jam pertama**, dan **Pengali 2.0x untuk jam berikutnya**:
-     - Jam lembur ke-1: Pengali **1.5x** (1.5 jam bayar).
-     - Jam lembur ke-2 & ke-3: Pengali **2.0x** (4.0 jam bayar).
-     - Total kelebihan 3 jam riil di hari kerja reguler = **5.5 Jam Bayar**.
+2. **Bagian Segel & Timbangan:**
+   - **Lembur di Bawah 5 Jam (Kelebihan Jam Shift Biasa):**
+     - **TIDAK DIPOTONG ISTIRAHAT** (0 jam potongan).
+     - Menggunakan **Pengali 1.5x di jam pertama**, jam berikutnya **Pengali 2.0x**.
+   - **Lembur Mengganti Karyawan Cuti / Izin di Hari Kerja (Relief Weekday):**
+     - **TANPA POTONGAN ISTIRAHAT** (0 jam potongan, dihitung utuh).
+     - Menggunakan **Pengali 1.5x di 1 jam pertama**, jam berikutnya **Pengali 2.0x**.
+   - **Lembur Mengganti Karyawan Cuti / Izin di Hari OFF (Relief Day Off):**
+     - **TANPA POTONGAN ISTIRAHAT** (0 jam potongan, dihitung utuh).
+     - Seluruh jam lembur **MENGGUNAKAN PENGALI 2.0x UTUH** (masuk ke baris 2.0x Libur/Relief / `m2r` tanpa pengali 1.5x).
+   - *Contoh Kasus Segel & Timbangan:*
+     - Lembur Hari Kerja 4 Jam $\to$ 0 potongan. Jam ke-1: $1 \times 1.5 = 1.5$, Jam ke-2 s/d ke-4: $3 \times 2.0 = 6.0 \to \mathbf{7.5\text{ Jam Bayar}}$.
+     - Lembur Pengganti Hari Kerja 8 Jam $\to$ 0 potongan. Jam ke-1: $1 \times 1.5 = 1.5$, Jam ke-2 s/d ke-8: $7 \times 2.0 = 14.0 \to \mathbf{15.5\text{ Jam Bayar}}$.
+     - Lembur Pengganti Hari OFF 8 Jam $\to$ 0 potongan. Seluruhnya $8 \times 2.0 = \mathbf{16.0\text{ Jam Bayar}}$.
+
+3. **Divisi Shipment Secara Keseluruhan (General):**
+   - **Hari Kerja:** Dipotong istirahat 1 jam hanya jika durasi $> 6$ jam. 1 jam pertama pengali 1.5x, jam berikutnya pengali 2.0x.
+   - **Hari OFF:** Dipotong istirahat 1 jam (jika durasi $> 1$ jam). Seluruh jam efektif pengali 2.0x Libur/Relief (`m2r`).
 
 ---
 

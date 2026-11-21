@@ -417,8 +417,10 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
       const cells4: { hours: number; rawOt?: OvertimeRecord; isYellow: boolean }[] = [];
 
       const empDiv = ((emp.divisionName || (emp as any).division_name || (emp as any).seksi || emp.jobTitle || '')).toLowerCase();
+      const empName = ((emp.fullName || (emp as any).full_name || (emp as any).name || '')).toLowerCase();
+      const empNip = ((emp.nip || '')).toUpperCase();
       const isTimbanganOrSegel = empDiv.includes('timbangan') || empDiv.includes('segel');
-      const isMatching = empDiv.includes('matching');
+      const isMatchingOrIchtiar = empDiv.includes('matching') || empName.includes('ichtiar') || empName.includes('icthiar') || empNip.includes('7044') || empNip.includes('7047');
 
       daysMeta.forEach((d) => {
         const schedOnDay = empSchedules.find((s) => (s.scheduleDate || s.schedule_date || '').slice(0, 10) === d.dateStr);
@@ -443,75 +445,103 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
           const desc = ((o as any).task_description || (o as any).taskDescription || '').toLowerCase();
           const notes = ((o as any).approval_notes || (o as any).approvalNotes || '').toLowerCase();
           const tagInfo = `${desc} ${notes}`;
-          const explicitMult = Number((o as any).rate_multiplier || (o as any).rateMultiplier || 2.0);
+          const explicitMult = Number((o as any).rate_multiplier || (o as any).rateMultiplier);
 
-          if (explicitMult === 1.5 || tagInfo.includes('[m15]')) {
+          if (tagInfo.includes('[m15]')) {
             ot15 = o;
             h15 += rawHours;
-          } else if (explicitMult === 3.0 || tagInfo.includes('[m3]')) {
+          } else if (tagInfo.includes('[m3]')) {
             ot3 = o;
             h3 += rawHours;
-          } else if (explicitMult === 4.0 || tagInfo.includes('[m4]')) {
+          } else if (tagInfo.includes('[m4]')) {
+            ot4 = o;
+            h4 += rawHours;
+          } else if (tagInfo.includes('[m2w]')) {
+            ot2w = o;
+            h2w += rawHours;
+          } else if (tagInfo.includes('[m2r]')) {
+            ot2r = o;
+            h2r += rawHours;
+          } else if (explicitMult === 1.5) {
+            ot15 = o;
+            h15 += rawHours;
+          } else if (explicitMult === 3.0) {
+            ot3 = o;
+            h3 += rawHours;
+          } else if (explicitMult === 4.0) {
             ot4 = o;
             h4 += rawHours;
           } else {
-            // Pengali 2.0x: Tentukan apakah baris 2.0x Reguler (m2w) atau 2.0x Libur/Relief (m2r)
-            if (tagInfo.includes('[m2w]')) {
-              ot2w = o;
-              h2w += rawHours;
-            } else if (tagInfo.includes('[m2r]')) {
-              ot2r = o;
-              h2r += rawHours;
-            } else {
-              // Rekaman legacy / tanpa tag eksplisit:
-              const isReliefOrHoliday =
-                Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday) ||
-                desc.includes('pengganti') ||
-                desc.includes('mengganti') ||
-                desc.includes('menggantikan') ||
-                desc.includes('ganti') ||
-                desc.includes('relief') ||
-                desc.includes('sambung') ||
-                desc.includes('pos');
+            // Rekaman tanpa tag eksplisit baris (didekomposisi sesuai aturan baku PT FRP)
+            const isDayOff = Boolean((o as any).is_weekend_holiday || (o as any).isWeekendHoliday || isSchedOff || d.isWeekend);
+            const isReliefDuty = Boolean(
+              (o as any).leave_request_id ||
+              desc.includes('pengganti') ||
+              desc.includes('mengganti') ||
+              desc.includes('menggantikan') ||
+              desc.includes('ganti') ||
+              desc.includes('relief') ||
+              desc.includes('sambung') ||
+              desc.includes('cuti') ||
+              desc.includes('off') ||
+              desc.includes('libur') ||
+              desc.includes('pos')
+            );
 
-              const isRegularExcess =
-                desc.includes('kelebihan') ||
-                desc.includes('reguler') ||
-                desc.includes('shift 7-7') ||
-                desc.includes('jam kerja');
-
-              if (isRegularExcess && !isReliefOrHoliday) {
-                // Kelebihan jam reguler hari kerja (baris 2)
-                if (!ot2w) {
-                  ot2w = o;
-                  h2w += rawHours;
-                } else if (!ot2r) {
-                  ot2r = o;
-                  h2r += rawHours;
-                } else {
-                  h2w += rawHours;
-                }
-              } else if (isReliefOrHoliday || isTimbanganOrSegel || isSchedOff || d.isWeekend) {
-                // Tugas pengganti / hari off / relief
-                if (!ot2r) {
-                  ot2r = o;
-                  h2r += rawHours;
-                } else if (!ot2w) {
-                  ot2w = o;
-                  h2w += rawHours;
-                } else {
-                  h2r += rawHours;
-                }
+            if (isMatchingOrIchtiar) {
+              // ── 1. MATCHING & ICHTIAR ──────────────────────────────────────────
+              if (isDayOff) {
+                // Hari OFF: Dipotong 1 jam istirahat (jika > 1 jam), seluruh jam efektif pengali 2.0x Libur (m2r)
+                const breakDed = rawHours > 1 ? 1 : 0;
+                const eff = Math.max(0, rawHours - breakDed);
+                h2r += eff;
+                ot2r = o;
               } else {
-                if (!ot2w) {
-                  ot2w = o;
-                  h2w += rawHours;
-                } else if (!ot2r) {
-                  ot2r = o;
-                  h2r += rawHours;
-                } else {
-                  h2w += rawHours;
-                }
+                // Hari Kerja:
+                // - Jika <= 6 jam (termasuk < 4 jam): TIDAK DIPOTONG ISTIRAHAT
+                // - Jika > 6 jam: DIPOTONG ISTIRAHAT 1 JAM
+                // - Tetap menggunakan pengali 1.5x di 1 jam pertama, sisanya 2.0x Reguler (m2w)
+                const breakDed = rawHours > 6 ? 1 : 0;
+                const eff = Math.max(0, rawHours - breakDed);
+                const p15 = Math.min(1, eff);
+                const p2w = Math.max(0, eff - 1);
+                h15 += p15;
+                if (!ot15) ot15 = o;
+                h2w += p2w;
+                if (!ot2w) ot2w = o;
+              }
+            } else if (isTimbanganOrSegel) {
+              // ── 2. TIMBANGAN & SEGEL ─────────────────────────────────────────
+              if (isDayOff) {
+                // Lembur mengganti cuti/izin di hari OFF: TANPA POTONGAN ISTIRAHAT, langsung pengali 2.0x Libur (m2r)
+                h2r += rawHours;
+                ot2r = o;
+              } else {
+                // Hari Kerja (lembur < 5 jam maupun mengganti cuti/izin di hari kerja):
+                // TANPA POTONGAN ISTIRAHAT, pengali 1.5x di 1 jam pertama, sisanya 2.0x Reguler (m2w)
+                const p15 = Math.min(1, rawHours);
+                const p2w = Math.max(0, rawHours - 1);
+                h15 += p15;
+                if (!ot15) ot15 = o;
+                h2w += p2w;
+                if (!ot2w) ot2w = o;
+              }
+            } else {
+              // ── 3. SHIPMENT UMUM LAINNYA ─────────────────────────────────────
+              if (isDayOff) {
+                const breakDed = rawHours > 1 ? 1 : 0;
+                const eff = Math.max(0, rawHours - breakDed);
+                h2r += eff;
+                ot2r = o;
+              } else {
+                const breakDed = rawHours > 6 ? 1 : 0;
+                const eff = Math.max(0, rawHours - breakDed);
+                const p15 = Math.min(1, eff);
+                const p2w = Math.max(0, eff - 1);
+                h15 += p15;
+                if (!ot15) ot15 = o;
+                h2w += p2w;
+                if (!ot2w) ot2w = o;
               }
             }
           }
@@ -675,14 +705,37 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
       const duration = Number(inputRealHours) || 0;
       const mult = Number(inputMultiplier) || editTarget.multiplier || 2.0;
 
-      // Division Rules:
-      // Timbangan/Segel: 0 hr break, multiplier 2.0x
-      // Matching: 1 hr break HANYA jika tugas relief / pengganti pos saat libur/off dan durasi > 1 jam
-      // Kelebihan jam shift reguler (1.5x): TIDAK ADA POTONGAN ISTIRAHAT
+      // Division Rules Sesuai Kebijakan Direksi & Operasional PT FRP:
+      // 1. Matching & Ichtiar:
+      //    • Hari Kerja: Jika duration <= 6 jam (termasuk < 4 jam) TIDAK DIPOTONG ISTIRAHAT; jika > 6 jam dipotong 1 jam istirahat.
+      //    • Hari OFF: Dipotong 1 jam istirahat (jika duration > 1 jam).
+      // 2. Timbangan & Segel:
+      //    • Hari Kerja & Hari OFF (lembur < 5 jam maupun mengganti cuti/izin): TANPA POTONGAN ISTIRAHAT (0 jam).
+      // 3. Divisi Shipment Lainnya:
+      //    • Hari OFF: Dipotong 1 jam istirahat (jika duration > 1 jam).
+      //    • Hari Kerja: Dipotong 1 jam istirahat hanya jika duration > 6 jam.
       const divName = (editTarget.employee.divisionName || (editTarget.employee as any).division_name || '').toLowerCase();
+      const empName = (editTarget.employee.fullName || (editTarget.employee as any).full_name || (editTarget.employee as any).name || '').toLowerCase();
+      const empNip = (editTarget.employee.nip || '').toUpperCase();
+      const isMatchingOrIchtiar = divName.includes('matching') || empName.includes('ichtiar') || empName.includes('icthiar') || empNip.includes('7044') || empNip.includes('7047');
+      const isTimbanganOrSegel = divName.includes('timbangan') || divName.includes('segel');
+
       let effectiveHours = duration;
-      if (divName.includes('matching') && mult === 2.0 && duration > 1 && (inputIsHoliday || inputTaskDesc.toLowerCase().includes('pengganti') || inputTaskDesc.toLowerCase().includes('relief'))) {
-        effectiveHours = Math.max(0, duration - 1);
+      if (isMatchingOrIchtiar) {
+        if (inputIsHoliday || editTarget.rowKey === 'm2r') {
+          effectiveHours = duration > 1 ? Math.max(0, duration - 1) : duration;
+        } else {
+          effectiveHours = duration > 6 ? Math.max(0, duration - 1) : duration;
+        }
+      } else if (isTimbanganOrSegel) {
+        // Timbangan & Segel: TANPA POTONGAN ISTIRAHAT
+        effectiveHours = duration;
+      } else {
+        if (inputIsHoliday || editTarget.rowKey === 'm2r') {
+          effectiveHours = duration > 1 ? Math.max(0, duration - 1) : duration;
+        } else {
+          effectiveHours = duration > 6 ? Math.max(0, duration - 1) : duration;
+        }
       }
       const paidHours = effectiveHours * mult;
       const compensationAmount = Math.round(paidHours * HOURLY_RATE);

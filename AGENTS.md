@@ -101,7 +101,25 @@ Khusus penugasan di **Pelabuhan Maccini Baji** (Koordinat: `-4.773545, 119.48752
    - **Aturan Penyimpanan & Auto-Close**: Kedua sesi pada tanggal yang sama WAJIB tersimpan sebagai **2 baris terpisah** di `hrm_attendances` (tidak ada unique index tunggal `(user_id, attendance_date)`), masing-masing dengan `shift_id` dan `shift_name` sendiri, dan service auto-close wajib membaca `shift_id` milik sesi tersebut (`a.shift_id`), bukan jadwal pengganti.
    - **Aturan Laporan Rekap (1 Tanggal = 1 Baris)**: Pada lembar rekap presensi & lembur karyawan, 1 tanggal hanya boleh tampil **1 baris**. **Shift Asli** masuk ke kolom **ABSEN** (`MASUK`, `PULANG`, `TELAT`), sedangkan **Shift Pengganti** masuk ke kolom **LEMBUR** (`MULAI`, `SELESAI`, `REALISASI JAM LEMBUR`).
    - **Larangan Keras Pengganti Berturut-Turut**: Jika seorang karyawan cuti/izin lebih dari 1 hari (misal 3 hari), **DILARANG KERAS** menggunakan karyawan pengganti yang sama secara berturut-turut (1 pengganti maksimal 1 hari berturut-turut).
-10. **Aturan Baku Lembur Divisi Timbangan, Segel, Matching, dan Shipment Keseluruhan**:
-   - **Divisi Timbangan & Segel**: Jika lembur di hari off/tanggal merah **maupun di hari kerja**: **TIDAK DIKENAKAN POTONGAN ISTIRAHAT** (0 jam potongan, dihitung utuh) dan **TIDAK DIKENAKAN PENGALI 1,5x** (seluruh jam penugasan lembur langsung menggunakan **Pengali 2,0x**).
-   - **Divisi Matching**: Jika lembur saat off/tanggal merah **maupun di hari kerja**: **TIDAK DIKENAKAN PENGALI 1,5x** (langsung menggunakan **Pengali 2,0x**), namun **DIKENAKAN POTONGAN ISTIRAHAT 1 JAM** (jam riil dikurangi 1 jam istirahat jika durasi > 1 jam; sisa jam efektif dikalikan 2,0x).
-   - **Divisi Shipment Secara Keseluruhan (di luar Timbangan/Segel/Matching, atau kelebihan jam harian reguler seperti kelebihan 3 jam pada pola Shift 7-7)**: **DIKENAKAN PENGALI 1,5x untuk jam pertama**, dan **Pengali 2,0x untuk jam ke-2 & ke-3** (sehingga kelebihan 3 jam = 5,5 jam bayar, tanpa potongan istirahat).
+10. **Aturan Baku Lembur Divisi Matching & Ichtiar, Segel & Timbangan, dan Shipment Keseluruhan**:
+   - **Divisi Matching & Karyawan Atas Nama Ichtiar (FR07044)**:
+     - **Lembur di Hari Kerja**:
+       - Jika lembur <= 6 jam (termasuk di bawah 4 jam): **TIDAK DIPOTONG ISTIRAHAT** (0 jam potongan).
+       - Jika lembur > 6 jam: **DIPOTONG ISTIRAHAT 1 JAM** (jam efektif = jam riil - 1).
+       - Pengali: Baik di bawah 4 jam atau di atas 6 jam, **TETAP MENGGUNAKAN PENGALI 1,5x DI 1 JAM PERTAMA**, dan sisanya menggunakan **Pengali 2,0x** (masuk ke baris 2.0x Reguler).
+     - **Lembur di Hari OFF / Libur Roster**:
+       - **DIPOTONG ISTIRAHAT 1 JAM** (jika durasi > 1 jam).
+       - Seluruh sisa jam efektif **MENGGUNAKAN PENGALI 2,0x** (langsung masuk ke baris 2.0x Libur/Relief tanpa pengali 1,5x).
+   - **Divisi Segel & Timbangan**:
+     - **Lembur di Bawah 5 Jam (Kelebihan Jam Harian Reguler)**:
+       - **TIDAK DIPOTONG ISTIRAHAT** (0 jam potongan).
+       - Menggunakan **Pengali 1,5x di jam pertama**, dan jam berikutnya **Pengali 2,0x**.
+     - **Lembur Mengganti Karyawan Cuti / Izin di Hari Kerja (Relief Duty Hari Kerja)**:
+       - **TANPA POTONGAN ISTIRAHAT** (0 jam potongan, dihitung utuh).
+       - Menggunakan **Pengali 1,5x di 1 jam pertama**, dan jam berikutnya **Pengali 2,0x**.
+     - **Lembur Mengganti Karyawan Cuti / Izin di Hari OFF (Relief Duty Hari OFF)**:
+       - **TANPA POTONGAN ISTIRAHAT** (0 jam potongan, dihitung utuh).
+       - Seluruh jam lembur **MENGGUNAKAN PENGALI 2,0x UTUH** (masuk ke baris 2.0x Libur/Relief tanpa pengali 1,5x).
+   - **Divisi Shipment Secara Keseluruhan (di luar ketentuan khusus di atas)**:
+     - Hari kerja: Dipotong 1 jam istirahat jika durasi > 6 jam; jam ke-1 pengali 1,5x, jam berikutnya pengali 2,0x.
+     - Hari OFF: Dipotong 1 jam istirahat jika durasi > 1 jam; seluruh sisa jam efektif pengali 2,0x.

@@ -2126,6 +2126,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
             </div>
           </div>
 
+             
           {/* BAR NAVIGASI & PENCARIAN KARYAWAN */}
           <div className="px-5 py-2.5 border-b border-border/70 bg-slate-50/90 dark:bg-slate-900/70 flex flex-wrap items-center justify-between gap-3 no-print">
             {/* Sisi Kiri: Tombol Prev, Indikator Posisi, dan Tombol Next */}

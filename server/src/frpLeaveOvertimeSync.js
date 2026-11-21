@@ -748,15 +748,17 @@ function getPreviousMonthKey(payrollMonthKey) {
   return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
 }
 
-function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRate, divisionName = '', ots = []) {
+function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRate, divisionName = '', ots = [], userName = '', userNip = '') {
   const effectiveSalary = Number(baseSalary || 4045050);
   const hourlyRate = overrideRate && overrideRate > 0 ? Number(overrideRate) : (effectiveSalary / 173);
   const maxRealHours = isDayShift ? 56 : 30;
   const cappedRealHours = Math.min(Number(rawHours || 0), maxRealHours);
 
   const divUpper = String(divisionName || '').toUpperCase();
+  const nameLower = String(userName || '').toLowerCase();
+  const nipUpper = String(userNip || '').toUpperCase();
   const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
-  const isMatching = divUpper.includes('MATCHING');
+  const isMatchingOrIchtiar = divUpper.includes('MATCHING') || nameLower.includes('ichtiar') || nameLower.includes('icthiar') || nipUpper.includes('7044') || nipUpper.includes('7047');
 
   let paidHours = 0;
   let totalBreakDeductionHours = 0;
@@ -767,60 +769,87 @@ function calculateFwpOvertimeServer(baseSalary, rawHours, isDayShift, overrideRa
       if (h <= 0) continue;
       const desc = String(ot.task_description || '').toLowerCase();
       const reason = String(ot.reason || '').toLowerCase();
-      const isReliefOrOff = Boolean(
+      const isDayOff = Boolean(
+        ot.is_weekend_holiday ||
+        ot.isWeekendHoliday ||
+        desc.includes('off') ||
+        desc.includes('libur') ||
+        reason.includes('off') ||
+        reason.includes('libur')
+      );
+      const isReliefDuty = Boolean(
         ot.leave_request_id ||
         desc.includes('pengganti') ||
         desc.includes('sambung') ||
         desc.includes('relief') ||
         desc.includes('cuti') ||
-        desc.includes('off') ||
-        desc.includes('libur') ||
         reason.includes('pengganti') ||
         reason.includes('sambung') ||
         reason.includes('relief') ||
-        reason.includes('cuti') ||
-        reason.includes('off') ||
-        reason.includes('libur')
+        reason.includes('cuti')
       );
 
       const mult = Number(ot.rate_multiplier || ot.rateMultiplier);
 
       if (mult === 1.5) {
-        // Eksplisit 1.5x (Kelebihan Jam Shift Reguler Jam ke-1)
         paidHours += h * 1.5;
       } else if (mult === 3.0) {
         paidHours += h * 3.0;
       } else if (mult === 4.0) {
         paidHours += h * 4.0;
-      } else if (mult === 2.0 && !isReliefOrOff && !isTimbanganOrSegel && (desc.includes('kelebihan') || desc.includes('reguler'))) {
+      } else if (mult === 2.0 && !isDayOff && (desc.includes('kelebihan') || desc.includes('reguler'))) {
         paidHours += h * 2.0;
       } else if (mult === 2.0) {
-        paidHours += h * 2.0;
+        if (isMatchingOrIchtiar && isDayOff) {
+          const breakDed = h > 1 ? 1 : 0;
+          totalBreakDeductionHours += breakDed;
+          paidHours += Math.max(0, h - breakDed) * 2.0;
+        } else {
+          paidHours += h * 2.0;
+        }
+      } else if (isMatchingOrIchtiar) {
+        // ── 1. MATCHING & ICHTIAR ──────────────────────────────────────────
+        if (isDayOff) {
+          // Hari OFF: Dipotong 1 jam istirahat jika > 1 jam, langsung pengali 2.0x
+          const breakDed = h > 1 ? 1 : 0;
+          totalBreakDeductionHours += breakDed;
+          paidHours += Math.max(0, h - breakDed) * 2.0;
+        } else {
+          // Hari Kerja:
+          // - Jika <= 6 jam (termasuk < 4 jam): TIDAK DIPOTONG ISTIRAHAT
+          // - Jika > 6 jam: DIPOTONG ISTIRAHAT 1 JAM
+          // - Pengali: 1 jam pertama 1.5x, sisanya 2.0x
+          const breakDed = h > 6 ? 1 : 0;
+          totalBreakDeductionHours += breakDed;
+          const eff = Math.max(0, h - breakDed);
+          const h1 = Math.min(1, eff);
+          const h2 = Math.max(0, eff - 1);
+          paidHours += (h1 * 1.5) + (h2 * 2.0);
+        }
       } else if (isTimbanganOrSegel) {
-        // • Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
-        // Tanpa potongan istirahat (0 jam) & langsung pengali 2.0x (tanpa 1.5x)
-        paidHours += h * 2.0;
-      } else if (isMatching) {
-        // • Matching:
-        if (desc.includes('kelebihan') || desc.includes('shift 7-7') || (!isReliefOrOff && h <= 3)) {
+        // ── 2. TIMBANGAN & SEGEL ───────────────────────────────────────────
+        if (isDayOff) {
+          // Lembur mengganti cuti/izin di hari OFF: TANPA POTONGAN ISTIRAHAT, langsung 2.0x
+          paidHours += h * 2.0;
+        } else {
+          // Hari Kerja (lembur < 5 jam maupun mengganti cuti/izin di hari kerja):
+          // TANPA POTONGAN ISTIRAHAT, 1 jam pertama 1.5x, sisanya 2.0x
           const h1 = Math.min(1, h);
           const h2 = Math.max(0, h - 1);
           paidHours += (h1 * 1.5) + (h2 * 2.0);
-        } else {
-          // Relief / Off-day: Dipotong 1 jam istirahat jika > 1 jam & langsung pengali 2.0x
-          const breakDed = h > 1 ? 1 : 0;
-          totalBreakDeductionHours += breakDed;
-          const effectiveH = Math.max(0, h - breakDed);
-          paidHours += effectiveH * 2.0;
         }
-      } else if (isReliefOrOff) {
-        // • Divisi Shipment lainnya (Pengganti Shift / Libur OFF): Langsung Pengali 2.0x
-        paidHours += h * 2.0;
+      } else if (isDayOff) {
+        // ── 3. SHIPMENT UMUM LAINNYA ───────────────────────────────────────
+        const breakDed = h > 1 ? 1 : 0;
+        totalBreakDeductionHours += breakDed;
+        paidHours += Math.max(0, h - breakDed) * 2.0;
       } else {
-        // • Divisi Shipment Secara Keseluruhan (Kelebihan Jam Reguler Hari Kerja, misal Shift 7-7):
-        // Jam ke-1: Pengali 1.5x, Jam ke-2 & ke-3 dst: Pengali 2.0x
-        const h1 = Math.min(1, h);
-        const h2 = Math.max(0, h - 1);
+        // Hari Kerja Reguler:
+        const breakDed = h > 6 ? 1 : 0;
+        totalBreakDeductionHours += breakDed;
+        const eff = Math.max(0, h - breakDed);
+        const h1 = Math.min(1, eff);
+        const h2 = Math.max(0, eff - 1);
         paidHours += (h1 * 1.5) + (h2 * 2.0);
       }
     }
@@ -954,7 +983,7 @@ async function buildPayrollArrearsOvertimeRecap(pool, payrollMonthKey) {
 
       const rawApprovedHours = approvedOts.reduce((s, r) => s + Number(r.approved_hours ?? r.duration_hours ?? 0), 0);
       const recordedCompSum = Math.round(approvedOts.reduce((s, r) => s + Number(r.compensation_amount || 0), 0));
-      const calc = calculateFwpOvertimeServer(p.effective_salary, rawApprovedHours, isDayShift, p.hourly_overtime_rate, p.division_name, approvedOts);
+      const calc = calculateFwpOvertimeServer(p.effective_salary, rawApprovedHours, isDayShift, p.hourly_overtime_rate, p.division_name, approvedOts, p.full_name, p.nip);
 
       // Gunakan recordedCompSum dari SPKL jika ada, fallback ke calc.totalPay
       let finalPay = recordedCompSum > 0 ? recordedCompSum : calc.totalPay;

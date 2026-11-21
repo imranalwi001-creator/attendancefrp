@@ -8876,15 +8876,51 @@ async function assignReliefSubstituteHelper({
 
   const hourlyRate = parseFloat(reliefUser.hourly_overtime_rate || 23381.79);
   const divUpper = String(reliefUser.division_name || '').toUpperCase();
+  const nameLower = String(reliefUser.full_name || '').toLowerCase();
+  const nipUpper = String(reliefUser.nip || '').toUpperCase();
   const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
-  const isMatching = divUpper.includes('MATCHING');
+  const isMatchingOrIchtiar = divUpper.includes('MATCHING') || nameLower.includes('ichtiar') || nameLower.includes('icthiar') || nipUpper.includes('7044') || nipUpper.includes('7047');
 
   let breakDed = 0;
-  if (isMatching && appliedDuration > 1) {
-    breakDed = 1;
+  let payHours = 0;
+
+  if (isMatchingOrIchtiar) {
+    if (reliefIsOff) {
+      // Hari OFF: dipotong 1 jam istirahat jika > 1 jam, langsung pengali 2.0x
+      breakDed = appliedDuration > 1 ? 1 : 0;
+      const effectiveHours = Math.max(0, appliedDuration - breakDed);
+      payHours = effectiveHours * 2.0;
+    } else {
+      // Hari Kerja: jika <= 6 jam tidak dipotong, jika > 6 jam dipotong 1 jam. Jam ke-1 @ 1.5x, sisa @ 2.0x
+      breakDed = appliedDuration > 6 ? 1 : 0;
+      const effectiveHours = Math.max(0, appliedDuration - breakDed);
+      const h1 = Math.min(1, effectiveHours);
+      const h2 = Math.max(0, effectiveHours - 1);
+      payHours = (h1 * 1.5) + (h2 * 2.0);
+    }
+  } else if (isTimbanganOrSegel) {
+    breakDed = 0;
+    if (reliefIsOff) {
+      // Ganti di hari OFF: tanpa potongan istirahat, langsung pengali 2.0x
+      payHours = appliedDuration * 2.0;
+    } else {
+      // Ganti di hari kerja: tanpa potongan istirahat, 1 jam pertama 1.5x, sisa 2.0x
+      const h1 = Math.min(1, appliedDuration);
+      const h2 = Math.max(0, appliedDuration - 1);
+      payHours = (h1 * 1.5) + (h2 * 2.0);
+    }
+  } else if (reliefIsOff) {
+    breakDed = appliedDuration > 1 ? 1 : 0;
+    const effectiveHours = Math.max(0, appliedDuration - breakDed);
+    payHours = effectiveHours * 2.0;
+  } else {
+    breakDed = appliedDuration > 6 ? 1 : 0;
+    const effectiveHours = Math.max(0, appliedDuration - breakDed);
+    const h1 = Math.min(1, effectiveHours);
+    const h2 = Math.max(0, effectiveHours - 1);
+    payHours = (h1 * 1.5) + (h2 * 2.0);
   }
-  const effectiveHours = Math.max(0, appliedDuration - breakDed);
-  const payHours = effectiveHours * 2.0; // Lembur pengganti: langsung 2.0x tanpa 1.5x
+
   const overtimeAmount = Math.round(payHours * hourlyRate);
 
   const subRes = await pool.query(
@@ -11294,18 +11330,12 @@ app.post('/api/overtime', async (req, res) => {
 
     // Formula Lembur Berjenjang & Aturan Khusus Sub-Divisi PT FRP
     const divUpper = String(userProfile.division_name || '').toUpperCase();
+    const nameLower = String(userProfile.full_name || '').toLowerCase();
+    const nipUpper = String(userProfile.nip || '').toUpperCase();
     const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
-    const isMatching = divUpper.includes('MATCHING');
+    const isMatchingOrIchtiar = divUpper.includes('MATCHING') || nameLower.includes('ichtiar') || nameLower.includes('icthiar') || nipUpper.includes('7044') || nipUpper.includes('7047');
     const descLower = String(taskDescription || '').toLowerCase();
-    const isReliefDuty = Boolean(
-      isHolidayOrWeekend ||
-      descLower.includes('pengganti') ||
-      descLower.includes('sambung') ||
-      descLower.includes('relief') ||
-      descLower.includes('cuti') ||
-      descLower.includes('off') ||
-      descLower.includes('libur')
-    );
+    const isDayOff = Boolean(isHolidayOrWeekend || descLower.includes('off') || descLower.includes('libur'));
 
     const reqMultiplier = rateMultiplier !== undefined ? Number(rateMultiplier) : (rate_multiplier !== undefined ? Number(rate_multiplier) : null);
 
@@ -11328,44 +11358,57 @@ app.post('/api/overtime', async (req, res) => {
       comp = Math.round(payHours * officialRate);
     } else if (reqMultiplier === 2.0) {
       finalRateMultiplier = 2.0;
-      if (isMatching && (isReliefDuty || hours > 1) && !descLower.includes('kelebihan')) {
+      if (isMatchingOrIchtiar && isDayOff) {
         const breakDed = hours > 1 ? 1 : 0;
         payHours = Math.max(0, hours - breakDed) * 2.0;
       } else {
         payHours = hours * 2.0;
       }
       comp = Math.round(payHours * officialRate);
+    } else if (isMatchingOrIchtiar) {
+      // 1. MATCHING & ICHTIAR:
+      // • Hari OFF: Dipotong 1 jam istirahat jika > 1 jam, langsung pengali 2.0x
+      // • Hari Kerja: <= 6 jam (termasuk < 4 jam) TIDAK DIPOTONG ISTIRAHAT; > 6 jam dipotong 1 jam. Jam ke-1 1.5x, sisa 2.0x
+      if (isDayOff) {
+        finalRateMultiplier = 2.0;
+        const breakDed = hours > 1 ? 1 : 0;
+        payHours = Math.max(0, hours - breakDed) * 2.0;
+        comp = Math.round(payHours * officialRate);
+      } else {
+        const breakDed = hours > 6 ? 1 : 0;
+        const eff = Math.max(0, hours - breakDed);
+        const h1 = Math.min(1, eff);
+        const h2 = Math.max(0, eff - 1);
+        payHours = (h1 * 1.5) + (h2 * 2.0);
+        finalRateMultiplier = hours === 1 ? 1.5 : 2.0;
+        comp = Math.round(payHours * officialRate);
+      }
     } else if (isTimbanganOrSegel) {
-      // 1. Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
-      // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
-      finalRateMultiplier = 2.0;
-      payHours = hours * 2.0;
-      comp = Math.round(payHours * officialRate);
-    } else if (isMatching) {
-      // 2. Divisi Matching:
-      // Jika kelebihan jam shift reguler (Shift 7-7): jam ke-1 1.5x, jam berikutnya 2.0x
-      if (descLower.includes('kelebihan') || descLower.includes('shift 7-7') || (!isReliefDuty && hours <= 3)) {
+      // 2. TIMBANGAN & SEGEL:
+      // • Hari OFF (ganti cuti/izin di hari off): TANPA POTONGAN ISTIRAHAT, langsung 2.0x
+      // • Hari Kerja (< 5 jam atau ganti cuti/izin): TANPA POTONGAN ISTIRAHAT, 1 jam pertama 1.5x, sisa 2.0x
+      if (isDayOff) {
+        finalRateMultiplier = 2.0;
+        payHours = hours * 2.0;
+        comp = Math.round(payHours * officialRate);
+      } else {
         const h1 = Math.min(1, hours);
         const h2 = Math.max(0, hours - 1);
         payHours = (h1 * 1.5) + (h2 * 2.0);
         finalRateMultiplier = hours === 1 ? 1.5 : 2.0;
         comp = Math.round(payHours * officialRate);
-      } else {
-        finalRateMultiplier = 2.0;
-        const breakDed = hours > 1 ? 1 : 0;
-        payHours = Math.max(0, hours - breakDed) * 2.0;
-        comp = Math.round(payHours * officialRate);
       }
-    } else if (isReliefDuty) {
-      // 3. Divisi Shipment lainnya (Pengganti Shift / Hari Libur OFF): Langsung Pengali 2.0x
+    } else if (isDayOff) {
+      // 3. SHIPMENT UMUM LAINNYA:
       finalRateMultiplier = 2.0;
-      payHours = hours * 2.0;
+      const breakDed = hours > 1 ? 1 : 0;
+      payHours = Math.max(0, hours - breakDed) * 2.0;
       comp = Math.round(payHours * officialRate);
     } else {
-      // 4. Divisi Shipment Secara Keseluruhan (Kelebihan Jam Reguler Hari Kerja, misal Shift 7-7):
-      // Jam ke-1 @ 1.5x, jam ke-2 & ke-3 @ 2.0x
-      const h1 = Math.min(1, hours);
-      const h2 = Math.max(0, hours - 1);
+      const breakDed = hours > 6 ? 1 : 0;
+      const eff = Math.max(0, hours - breakDed);
+      const h1 = Math.min(1, eff);
+      const h2 = Math.max(0, eff - 1);
       payHours = (h1 * 1.5) + (h2 * 2.0);
       finalRateMultiplier = hours === 1 ? 1.5 : 2.0;
       comp = Math.round(payHours * officialRate);
@@ -11742,18 +11785,12 @@ app.put('/api/overtime/:id', async (req, res) => {
     }
 
     const divUpper = String(ot.division_name || '').toUpperCase();
+    const nameLower = String(ot.user_name || '').toLowerCase();
+    const nipUpper = String(ot.user_nip || '').toUpperCase();
     const isTimbanganOrSegel = divUpper.includes('TIMBANGAN') || divUpper.includes('SEGEL');
-    const isMatching = divUpper.includes('MATCHING');
+    const isMatchingOrIchtiar = divUpper.includes('MATCHING') || nameLower.includes('ichtiar') || nameLower.includes('icthiar') || nipUpper.includes('7044') || nipUpper.includes('7047');
     const descLower = String(finalDesc || '').toLowerCase();
-    const isReliefDuty = Boolean(
-      isHolidayOrWeekend ||
-      descLower.includes('pengganti') ||
-      descLower.includes('sambung') ||
-      descLower.includes('relief') ||
-      descLower.includes('cuti') ||
-      descLower.includes('off') ||
-      descLower.includes('libur')
-    );
+    const isDayOff = Boolean(isHolidayOrWeekend || descLower.includes('off') || descLower.includes('libur'));
 
     const reqMultiplier = rateMultiplier !== undefined ? Number(rateMultiplier) : (rate_multiplier !== undefined ? Number(rate_multiplier) : (ot.rate_multiplier ? Number(ot.rate_multiplier) : null));
 
@@ -11776,44 +11813,57 @@ app.put('/api/overtime/:id', async (req, res) => {
       compensation = Math.round(payHours * officialRate);
     } else if (reqMultiplier === 2.0) {
       finalRateMultiplier = 2.0;
-      if (isMatching && (isReliefDuty || finalHours > 1) && !descLower.includes('kelebihan')) {
+      if (isMatchingOrIchtiar && isDayOff) {
         const breakDed = finalHours > 1 ? 1 : 0;
         payHours = Math.max(0, finalHours - breakDed) * 2.0;
       } else {
         payHours = finalHours * 2.0;
       }
       compensation = Math.round(payHours * officialRate);
+    } else if (isMatchingOrIchtiar) {
+      // 1. MATCHING & ICHTIAR:
+      // • Hari OFF: Dipotong 1 jam istirahat jika > 1 jam, langsung pengali 2.0x
+      // • Hari Kerja: <= 6 jam (termasuk < 4 jam) TIDAK DIPOTONG ISTIRAHAT; > 6 jam dipotong 1 jam. Jam ke-1 1.5x, sisa 2.0x
+      if (isDayOff) {
+        finalRateMultiplier = 2.0;
+        const breakDed = finalHours > 1 ? 1 : 0;
+        payHours = Math.max(0, finalHours - breakDed) * 2.0;
+        compensation = Math.round(payHours * officialRate);
+      } else {
+        const breakDed = finalHours > 6 ? 1 : 0;
+        const eff = Math.max(0, finalHours - breakDed);
+        const h1 = Math.min(1, eff);
+        const h2 = Math.max(0, eff - 1);
+        payHours = (h1 * 1.5) + (h2 * 2.0);
+        finalRateMultiplier = finalHours === 1 ? 1.5 : 2.0;
+        compensation = Math.round(payHours * officialRate);
+      }
     } else if (isTimbanganOrSegel) {
-      // 1. Divisi Timbangan & Segel (Hari Kerja / OFF / Tanggal Merah):
-      // Tanpa potongan istirahat (0 jam) dan langsung pengali 2.0x (tanpa 1.5x)
-      finalRateMultiplier = 2.0;
-      payHours = finalHours * 2.0;
-      compensation = Math.round(payHours * officialRate);
-    } else if (isMatching) {
-      // 2. Divisi Matching:
-      // Jika kelebihan jam shift reguler (Shift 7-7): jam ke-1 1.5x, jam berikutnya 2.0x
-      if (descLower.includes('kelebihan') || descLower.includes('shift 7-7') || (!isReliefDuty && finalHours <= 3)) {
+      // 2. TIMBANGAN & SEGEL:
+      // • Hari OFF (ganti cuti/izin di hari off): TANPA POTONGAN ISTIRAHAT, langsung 2.0x
+      // • Hari Kerja (< 5 jam atau ganti cuti/izin): TANPA POTONGAN ISTIRAHAT, 1 jam pertama 1.5x, sisa 2.0x
+      if (isDayOff) {
+        finalRateMultiplier = 2.0;
+        payHours = finalHours * 2.0;
+        compensation = Math.round(payHours * officialRate);
+      } else {
         const h1 = Math.min(1, finalHours);
         const h2 = Math.max(0, finalHours - 1);
         payHours = (h1 * 1.5) + (h2 * 2.0);
         finalRateMultiplier = finalHours === 1 ? 1.5 : 2.0;
         compensation = Math.round(payHours * officialRate);
-      } else {
-        finalRateMultiplier = 2.0;
-        const breakDed = finalHours > 1 ? 1 : 0;
-        payHours = Math.max(0, finalHours - breakDed) * 2.0;
-        compensation = Math.round(payHours * officialRate);
       }
-    } else if (isReliefDuty) {
-      // 3. Divisi Shipment lainnya (Pengganti Shift / Hari Libur OFF): Langsung Pengali 2.0x
+    } else if (isDayOff) {
+      // 3. SHIPMENT UMUM LAINNYA:
       finalRateMultiplier = 2.0;
-      payHours = finalHours * 2.0;
+      const breakDed = finalHours > 1 ? 1 : 0;
+      payHours = Math.max(0, finalHours - breakDed) * 2.0;
       compensation = Math.round(payHours * officialRate);
     } else {
-      // 4. Divisi Shipment Secara Keseluruhan (Kelebihan Jam Reguler Hari Kerja, misal Shift 7-7):
-      // Jam ke-1 @ 1.5x, jam ke-2 & ke-3 @ 2.0x
-      const h1 = Math.min(1, finalHours);
-      const h2 = Math.max(0, finalHours - 1);
+      const breakDed = finalHours > 6 ? 1 : 0;
+      const eff = Math.max(0, finalHours - breakDed);
+      const h1 = Math.min(1, eff);
+      const h2 = Math.max(0, eff - 1);
       payHours = (h1 * 1.5) + (h2 * 2.0);
       finalRateMultiplier = finalHours === 1 ? 1.5 : 2.0;
       compensation = Math.round(payHours * officialRate);
