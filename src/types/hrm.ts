@@ -362,6 +362,11 @@ export const isExecutiveMobileSupportOfficer = (userOrNipOrEmail: any): boolean 
     name = (userOrNipOrEmail.fullName || userOrNipOrEmail.full_name || userOrNipOrEmail.name || '').toLowerCase().trim();
   }
 
+  // Guard eksklusif: Hasriani (FR07019 / FR.07.019) BUKAN Petugas Dukungan Khusus Direksi!
+  if (nip.includes('7019') || name.includes('hasriani')) {
+    return false;
+  }
+
   // 1. Cek UUID
   if (['4a28c8e5-ce1d-4663-815e-6e53888ef17a', 'd9ebc69e-64d1-4192-871e-f4f09a9c24ba'].includes(id)) {
     return true;
@@ -377,8 +382,10 @@ export const isExecutiveMobileSupportOfficer = (userOrNipOrEmail: any): boolean 
     return true;
   }
 
-  // 4. Cek Nama
-  if (name.includes('hasri') || name.includes('ita purnamasari')) {
+  // 4. Cek Nama Resmi (Hanya Hasri. S dan Ita Purnamasari, DILARANG mencocokkan Hasriani)
+  const isHasriS = (name.includes('hasri.') || name.includes('hasri s') || name === 'hasri') && !name.includes('hasriani');
+  const isIta = name.includes('ita purnamasari');
+  if (isHasriS || isIta) {
     return true;
   }
 

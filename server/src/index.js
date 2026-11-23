@@ -449,6 +449,11 @@ export function isExecutiveMobileSupportOfficer(user) {
 
   const cleanNip = rawNip.replace(/[\s.]/g, '');
 
+  // Guard eksklusif: Hasriani (FR07019 / FR.07.019) BUKAN Petugas Dukungan Khusus Direksi!
+  if (cleanNip.includes('7019') || name.includes('hasriani')) {
+    return false;
+  }
+
   // 1. UUID Resmi
   const exemptIds = [
     '4a28c8e5-ce1d-4663-815e-6e53888ef17a', // Hasri. S
@@ -468,8 +473,10 @@ export function isExecutiveMobileSupportOfficer(user) {
     return true;
   }
 
-  // 4. Nama Resmi
-  if (name.includes('hasri') || name.includes('ita purnamasari')) {
+  // 4. Nama Resmi (Hanya Hasri. S dan Ita Purnamasari, DILARANG mencocokkan Hasriani)
+  const isHasriS = (name.includes('hasri.') || name.includes('hasri s') || name === 'hasri') && !name.includes('hasriani');
+  const isIta = name.includes('ita purnamasari');
+  if (isHasriS || isIta) {
     return true;
   }
 
