@@ -2537,9 +2537,22 @@ app.post('/api/attendances/clock-in', async (req, res) => {
         if (shInfo.rows.length > 0) {
           const shRow = shInfo.rows[0];
           if (!resolvedShiftName) resolvedShiftName = shRow.name;
-          if (shRow.start_time) shiftStartTime = shRow.start_time.substring(0, 5);
-          if (shRow.end_time) shiftEndTime = shRow.end_time.substring(0, 5);
-          isCrossDay = Boolean(shRow.is_cross_day || ((Number(shiftStartTime.split(':')[0]) * 60 + Number(shiftStartTime.split(':')[1])) > (Number(shiftEndTime.split(':')[0]) * 60 + Number(shiftEndTime.split(':')[1]))));
+          const isSpecialLeadership = Boolean(
+            userProfile && (
+              userProfile.custom_start_time ||
+              isLeadershipSpecialFieldOfficer(userProfile) ||
+              isExemptFieldOfficer(userProfile)
+            )
+          );
+          if (isSpecialLeadership) {
+            shiftStartTime = (userProfile.custom_start_time || '08:00').substring(0, 5);
+            shiftEndTime = (userProfile.custom_end_time || '16:00').substring(0, 5);
+            isCrossDay = false;
+          } else {
+            if (shRow.start_time) shiftStartTime = shRow.start_time.substring(0, 5);
+            if (shRow.end_time) shiftEndTime = shRow.end_time.substring(0, 5);
+            isCrossDay = Boolean(shRow.is_cross_day || ((Number(shiftStartTime.split(':')[0]) * 60 + Number(shiftStartTime.split(':')[1])) > (Number(shiftEndTime.split(':')[0]) * 60 + Number(shiftEndTime.split(':')[1]))));
+          }
         }
       } catch (shErr) {
         console.warn('[ClockIn] Target shift time sync warn:', shErr.message);
@@ -2640,7 +2653,25 @@ app.post('/api/attendances/clock-in', async (req, res) => {
       } else {
         // Definitif: Pastikan shiftStartTime, shiftEndTime, dan isCrossDay akurat sesuai shift resmi karyawan
         const activeNameNorm = (resolvedShiftName || activeShiftName || '').toLowerCase();
-        if (activeNameNorm.includes('shift iii') || activeNameNorm.includes('shift 3') || activeNameNorm.includes('22:30')) {
+        const timeMatchActive = (resolvedShiftName || activeShiftName || '').match(/(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/);
+
+        if (userProfile && (userProfile.custom_start_time || isLeadershipSpecialFieldOfficer(userProfile) || isExemptFieldOfficer(userProfile))) {
+          shiftStartTime = (userProfile.custom_start_time || '08:00').substring(0, 5);
+          shiftEndTime = (userProfile.custom_end_time || '16:00').substring(0, 5);
+          isCrossDay = false;
+          effectiveLateTolerance = (userProfile.late_tolerance_minutes != null && Number.isFinite(Number(userProfile.late_tolerance_minutes)))
+            ? Number(userProfile.late_tolerance_minutes)
+            : 15;
+        } else if (activeNameNorm.includes('khusus pimpinan') || (activeNameNorm.includes('08:00') && activeNameNorm.includes('16:00'))) {
+          shiftStartTime = '08:00';
+          shiftEndTime = '16:00';
+          isCrossDay = false;
+          effectiveLateTolerance = 15;
+        } else if (timeMatchActive) {
+          shiftStartTime = timeMatchActive[1];
+          shiftEndTime = timeMatchActive[2];
+          isCrossDay = shiftStartTime > shiftEndTime;
+        } else if (activeNameNorm.includes('shift iii') || activeNameNorm.includes('shift 3') || activeNameNorm.includes('22:30')) {
           shiftStartTime = '22:30';
           shiftEndTime = '07:30';
           isCrossDay = true;

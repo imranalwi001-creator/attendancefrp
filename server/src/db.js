@@ -499,6 +499,14 @@ export async function initDb() {
           break_start_time = EXCLUDED.break_start_time, break_end_time = EXCLUDED.break_end_time,
           break_duration_minutes = EXCLUDED.break_duration_minutes;
 
+      -- Day Shift Khusus Pimpinan: 08:00 - 16:00 WITA (Toleransi 15 Menit sampai 08:15 WITA)
+      INSERT INTO hrm_shifts (name, code, start_time, end_time, break_start_time, break_end_time, break_duration_minutes, late_tolerance_minutes, is_default)
+      VALUES ('Day Shift Khusus Pimpinan (08:00 - 16:00 WITA)', 'DAY-PIM', '08:00:00', '16:00:00', '12:00:00', '13:00:00', 60, 15, false)
+      ON CONFLICT (name) DO UPDATE 
+      SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
+          break_start_time = EXCLUDED.break_start_time, break_end_time = EXCLUDED.break_end_time,
+          break_duration_minutes = EXCLUDED.break_duration_minutes, late_tolerance_minutes = EXCLUDED.late_tolerance_minutes;
+
       -- Shift Khusus: Shift Simulasi & Bebas Jadwal (24 Jam Penuh Tanpa Batasan)
       INSERT INTO hrm_shifts (name, start_time, end_time, break_start_time, break_end_time, break_duration_minutes, late_tolerance_minutes, is_default)
       VALUES ('Shift Simulasi & Bebas Jadwal (24 Jam)', '00:00:00', '23:59:59', '12:00:00', '13:00:00', 60, 1440, false)
