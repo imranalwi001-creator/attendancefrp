@@ -701,18 +701,6 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
             subAtt = undefined;
           }
         }
-      } else if (
-        dayAtts.length === 1 &&
-        (isRosterOff ||
-          isSubstituteAtt(dayAtts[0]) ||
-          (ot &&
-            (ot.source === 'shift_relief' || ot.source === 'emergency_override_clockin' || (ot as any).isEmergency) &&
-            getTimeDistanceMinutes(dayAtts[0].clockIn, ot.startTime || ot.start_time) <= 60))
-      ) {
-        // Karyawan bertugas lembur sebagai pengganti di hari libur (OFF) atau hanya hadir di jam sesi pengganti
-        // Shift lembur dialokasikan ke subAtt (kolom LEMBUR), sedangkan kolom ABSEN tetap mencerminkan jadwal resmi (OFF)
-        subAtt = dayAtts[0];
-        att = undefined;
       } else if (dayAtts.length === 1 && ot && sched && !sched.isOff) {
         // DETEKSI CERDAS: LEMBUR SEBELUM SHIFT ATAU LEMBUR SETELAH SHIFT
         // (Karyawan datang lebih awal di shift pengganti sebelum shift resminya dimulai, atau lanjut lembur pasca shift resmi)
@@ -804,7 +792,25 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
             clockOut: isOvertimeClockOut ? singleClockOut : (otEnd || (isToday && nowWita < (otEnd || '23:59') ? undefined : '-')),
             shiftName: 'Shift Pengganti (Lembur)',
           };
+        } else {
+          // Kasus 3: Jam lembur berada di dalam rentang shift atau tidak ada perbedaan jam mulai/selesai yang jelas
+          att = dayAtts[0];
+          subAtt = dayAtts[0];
         }
+      } else if (
+        dayAtts.length === 1 &&
+        (isRosterOff ||
+          !sched ||
+          sched.isOff ||
+          isSubstituteAtt(dayAtts[0]) ||
+          (ot &&
+            (ot.source === 'shift_relief' || ot.source === 'emergency_override_clockin' || (ot as any).isEmergency) &&
+            getTimeDistanceMinutes(dayAtts[0].clockIn, ot.startTime || ot.start_time) <= 60))
+      ) {
+        // Karyawan bertugas lembur sebagai pengganti di hari libur (OFF) atau hanya hadir di jam sesi pengganti
+        // Shift lembur dialokasikan ke subAtt (kolom LEMBUR), sedangkan kolom ABSEN tetap mencerminkan jadwal resmi (OFF)
+        subAtt = dayAtts[0];
+        att = undefined;
       }
 
       let absenMasuk = '-';

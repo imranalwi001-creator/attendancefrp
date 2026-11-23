@@ -205,12 +205,21 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
         clockOutDisplay = att.clockOut ? att.clockOut.slice(0, 5) : (att.clockIn ? 'Aktif' : '-');
         statusBadge = att.status ? (ot ? 'HADIR + LEMBUR' : att.status.toUpperCase()) : (ot ? 'HADIR + LEMBUR' : 'HADIR');
 
-        // Jika lembur sambung setelah shift dan ceklok pulang di akhir sesi lembur, kembalikan jam pulang reguler ke jam mulai lembur/akhir shift
+        // Jika lembur sambung (sebelum shift atau setelah shift) dan ceklok menyatu dalam 1 sesi,
+        // selaraskan jam masuk dan jam pulang reguler agar merefleksikan shift resmi
         if (ot && att.clockIn && att.clockOut) {
           const rawOtStart = ot.startTime ? ot.startTime.slice(0, 5) : '';
+          const rawOtEnd = ot.endTime ? ot.endTime.slice(0, 5) : '';
           const cIn = att.clockIn.slice(0, 5);
           const cOut = att.clockOut.slice(0, 5);
-          if (rawOtStart && cOut > rawOtStart && (cIn <= rawOtStart)) {
+
+          // Kasus 1: Lembur Sebelum Shift (ceklok masuk di jam awal lembur, selesai di akhir shift resmi)
+          if (rawOtStart && rawOtEnd && cIn <= rawOtStart && (cOut > rawOtEnd || cOut <= rawOtStart)) {
+            clockInDisplay = rawOtEnd;
+            clockOutDisplay = cOut;
+          }
+          // Kasus 2: Lembur Setelah Shift (ceklok masuk di awal shift resmi, selesai di akhir sesi lembur)
+          else if (rawOtStart && cOut > rawOtStart && (cIn <= rawOtStart)) {
             clockOutDisplay = rawOtStart;
           }
         }
