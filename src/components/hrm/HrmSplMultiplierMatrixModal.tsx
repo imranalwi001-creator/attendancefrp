@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
-import { UserProfile, AttendanceRecord, OvertimeRecord, LeaveRequest, getEmployeeCategoryGroup } from '@/types/hrm';
+import { UserProfile, AttendanceRecord, OvertimeRecord, LeaveRequest, getEmployeeCategoryGroup, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -281,8 +281,9 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         return sUserId === empIdStr || (empNipNorm && sNip && empNipNorm === sNip);
       });
 
-      // 4. Overtimes in Month (Sinkron Otomatis dari Input Manual & PWA)
-      const empOts = activeOvertimes.filter((o) => {
+      const isSpecialPermanent = isLeadershipSpecialFieldOfficer(emp) || getEmployeeCategoryGroup(emp) === 'KARYAWAN TETAP';
+      // 4. Overtimes in Month (Sinkron Otomatis dari Input Manual & PWA - 0 untuk 3 Karyawan Tetap Pimpinan)
+      const empOts = isSpecialPermanent ? [] : activeOvertimes.filter((o) => {
         const oNip = ((o as any).user_nip || (o as any).userNip || (o as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
         const oUserId = ((o as any).user_id || (o as any).userId || '').toString();
         const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);

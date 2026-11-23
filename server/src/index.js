@@ -2818,7 +2818,13 @@ app.post('/api/attendances/clock-in', async (req, res) => {
     const insertedAttendance = result.rows[0];
 
     // ─── PENANGANAN KHUSUS ABSEN TUGAS DARURAT MANDIRI (REKOMENDASI 3) ───
-    if (isEmergencyOverride && insertedAttendance?.id) {
+    const isSpecialPermanentUser = Boolean(
+      userProfile?.operational_group === 'KARYAWAN TETAP' ||
+      userProfile?.overtime_eligible === false ||
+      ['ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632'].includes(validUserId) ||
+      /aslam|samsi|takdir/i.test(userProfile?.full_name || '')
+    );
+    if (isEmergencyOverride && insertedAttendance?.id && !isSpecialPermanentUser) {
       await pool.query(
         `UPDATE hrm_attendances SET
            is_emergency_overtime = true,
@@ -8739,6 +8745,7 @@ async function assignReliefSubstituteHelper({
 
   const reliefRes = await pool.query(
     `SELECT p.id, p.full_name, p.nip, p.phone, p.division_id, d.name as division_name,
+            p.operational_group, p.overtime_eligible,
             COALESCE(sp.hourly_overtime_rate, 23381.79) as hourly_overtime_rate
      FROM hrm_profiles p
      LEFT JOIN hrm_divisions d ON p.division_id = d.id
@@ -9067,35 +9074,52 @@ async function assignReliefSubstituteHelper({
   }
 
   // 4. Catat di hrm_overtime_records (SPKL Pengganti Pos Resmi)
+  // ⚡ ATURAN BAKU PIMPINAN: Khusus 3 Karyawan Tetap (Muh Aslam Faisal, La Unga Samsi, Takdir)
+  // TIDAK DIBERLAKUKAN LEMBUR MAUPUN LEMBUR PENGGANTI (Gaji Pokok Tunggal).
   const postNamesStr = originalPosts.map(p => p.post_name).join(', ') || 'Pos Dinas';
+  const isSpecialPermanent = Boolean(
+    reliefUser.operational_group === 'KARYAWAN TETAP' ||
+    reliefUser.overtime_eligible === false ||
+    ['ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632'].includes(reliefUserId) ||
+    /aslam|samsi|takdir/i.test(reliefUser.full_name || '')
+  );
+
   let otInsertRes = null;
-  try {
-    otInsertRes = await pool.query(
-      `INSERT INTO hrm_overtime_records (
-        user_id, date, start_time, end_time, duration_hours, approved_hours, rate_applied, compensation_amount,
-        task_description, status, source, leave_request_id, approved_by, overtime_phase
-      ) VALUES (
-        $1, $2::date, $3, $4, $5, $5, $6, $7,
-        $8, 'approved', 'shift_relief', $9, $10, 'completed'
-      ) RETURNING *;`,
-      [
-        reliefUserId,
-        targetStart,
-        appliedStartTime,
-        appliedEndTime,
-        appliedDuration,
-        hourlyRate,
-        overtimeAmount,
-        `Tugas Pengganti Pos Resmi untuk ${originalUser.full_name} (${shiftName}) di ${postNamesStr}`,
-        leaveId || null,
-        adminId || null
-      ]
-    );
-  } catch (otErr) {
-    console.error('[assignReliefSubstituteHelper Overtime Insert Error]:', otErr.message);
+  if (!isSpecialPermanent) {
+    try {
+      otInsertRes = await pool.query(
+        `INSERT INTO hrm_overtime_records (
+          user_id, date, start_time, end_time, duration_hours, approved_hours, rate_applied, compensation_amount,
+          task_description, status, source, leave_request_id, approved_by, overtime_phase
+        ) VALUES (
+          $1, $2::date, $3, $4, $5, $5, $6, $7,
+          $8, 'approved', 'shift_relief', $9, $10, 'completed'
+        ) RETURNING *;`,
+        [
+          reliefUserId,
+          targetStart,
+          appliedStartTime,
+          appliedEndTime,
+          appliedDuration,
+          hourlyRate,
+          overtimeAmount,
+          `Tugas Pengganti Pos Resmi untuk ${originalUser.full_name} (${shiftName}) di ${postNamesStr}`,
+          leaveId || null,
+          adminId || null
+        ]
+      );
+    } catch (otErr) {
+      console.error('[assignReliefSubstituteHelper Overtime Insert Error]:', otErr.message);
+    }
+  } else {
+    console.log(`[assignReliefSubstituteHelper] Penugasan Pos Lapangan untuk Karyawan Tetap ${reliefUser.full_name} (${reliefUser.nip}) TANPA pembuatan SPKL lembur.`);
   }
 
   // 5. Kirim Notifikasi WhatsApp ke Karyawan Pengganti
+  const compensationLine = isSpecialPermanent
+    ? `📋 *Status Tugas:* Penugasan Pos Khusus Pimpinan (Gaji Pokok Tunggal - Tanpa Kompensasi Lembur)\n\n`
+    : `💰 *Kompensasi:* Lembur Resmi Pengganti Pos (SPKL 1 Shift Penuh - ${appliedDuration} Jam)\n\n`;
+
   const reliefWaMsg = `🛡️ *SURAT TUGAS PENGGANTI POS (ZERO VACANCY) TERBIT*\n\n` +
     `Halo Rekan *${reliefUser.full_name}* (NIP: ${reliefUser.nip}),\n` +
     `Anda telah resmi ditugaskan menggantikan rekan kerja Anda:\n` +
@@ -9106,7 +9130,7 @@ async function assignReliefSubstituteHelper({
     `⚡ *Shift yang Harus Diganti:* *${shiftName} (${appliedStartTime} - ${appliedEndTime} WITA)*\n` +
     `🗓️ *Jadwal Resmi Anda:* *${reliefShiftName}${!reliefIsOff ? ` (${reliefStart} - ${reliefEnd} WITA)` : ''}*\n` +
     `📋 *Kategori Penugasan:* ${reliefCategory}\n` +
-    `💰 *Kompensasi:* Lembur Resmi Pengganti Pos (SPKL 1 Shift Penuh - ${appliedDuration} Jam)\n\n` +
+    compensationLine +
     `✅ *Koordinat titik pos dinas telah diaktifkan otomatis di aplikasi PWA Anda.* Anda dapat langsung melakukan presensi masuk & pulang di pos tersebut tanpa alarm breach.\n\n` +
     `_Sistem Sentinel HRM PT Fawwaz Reski Perwira_`;
 

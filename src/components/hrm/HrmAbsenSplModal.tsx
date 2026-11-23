@@ -186,10 +186,12 @@ export const HrmAbsenSplModal: React.FC<HrmAbsenSplModalProps> = ({
         (a) => a.userId === selectedEmployee.id && a.attendanceDate === dateStr
       );
 
-      // Find overtime for this employee & date
-      const ot = overtimes.find(
+      const isSpecialTarget = isLeadershipSpecialFieldOfficer(selectedEmployee);
+      // Find overtime for this employee & date (Tidak berlaku untuk 3 Karyawan Tetap Pimpinan)
+      const rawOt = overtimes.find(
         (o) => o.userId === selectedEmployee.id && o.date === dateStr && o.status !== 'rejected'
       );
+      const ot = isSpecialTarget ? undefined : rawOt;
 
       // ─── Format Clock In & Out ───
       let clockInDisplay = '-';

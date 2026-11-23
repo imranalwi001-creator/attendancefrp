@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
-import { UserProfile, AttendanceRecord, OvertimeRecord, LeaveRequest, EmployeeCategoryGroup, getEmployeeCategoryGroup } from '@/types/hrm';
+import { UserProfile, AttendanceRecord, OvertimeRecord, LeaveRequest, EmployeeCategoryGroup, getEmployeeCategoryGroup, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -222,8 +222,9 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         return sUserId === empIdStr || (empNipNorm && sNip && empNipNorm === sNip);
       });
 
-      // 4. Approved overtimes
-      const empOts = activeOvertimes.filter((o) => {
+      const isSpecialPermanent = isLeadershipSpecialFieldOfficer(emp) || getEmployeeCategoryGroup(emp) === 'KARYAWAN TETAP';
+      // 4. Approved overtimes (0 untuk 3 Karyawan Tetap Pimpinan)
+      const empOts = isSpecialPermanent ? [] : activeOvertimes.filter((o) => {
         const oNipNorm = ((o as any).user_nip || (o as any).userNip || (o as any).nip || '').replace(/[\s.]/g, '').toUpperCase();
         const oUserId = ((o as any).user_id || (o as any).userId || '').toString();
         const oDateStr = ((o as any).date_str || (o as any).date || '').toString().slice(0, 10);

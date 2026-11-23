@@ -628,12 +628,15 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       });
 
       // 4. Cari lembur pada tanggal ini (sinkron PostgreSQL snake_case & camelCase)
-      const dayOts = combinedOvertimes.filter((o) => {
+      const rawDayOts = combinedOvertimes.filter((o) => {
         const oDate = String(o.date || o.overtimeDate || o.overtime_date || '').slice(0, 10);
         return oDate === dateStr;
       });
-      const ot = dayOts[0];
-      const totalDayOtHours = dayOts.reduce((sum, o) => {
+      // ⚡ ATURAN BAKU PIMPINAN: Khusus 3 Karyawan Tetap (Muh Aslam Faisal, La Unga Samsi, Takdir)
+      // TIDAK DIBERLAKUKAN LEMBUR ATAUPUN LEMBUR PENGGANTI (Gaji Pokok Tunggal).
+      const dayOts = isSpecialTarget ? [] : rawDayOts;
+      const ot = isSpecialTarget ? undefined : dayOts[0];
+      const totalDayOtHours = isSpecialTarget ? 0 : dayOts.reduce((sum, o) => {
         const h = Number(o.approvedHours || o.approved_hours || o.durationHours || o.duration_hours || 0);
         return sum + (Number.isFinite(h) ? h : 0);
       }, 0);
@@ -650,6 +653,7 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
       };
 
       const isSubstituteAtt = (a: any) => {
+        if (isSpecialTarget) return false;
         const sName = String(a?.shiftName || a?.shift_name || '').toLowerCase();
         const nText = String(a?.notes || '').toLowerCase();
         return sName.includes('pengganti') || nText.includes('pengganti') || nText.includes('lembur') || nText.includes('tugas darurat');
@@ -657,7 +661,10 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
 
       let att: any = dayAtts[0];
       let subAtt: any = undefined;
-      if (dayAtts.length > 1) {
+      if (isSpecialTarget) {
+        att = dayAtts[0];
+        subAtt = undefined;
+      } else if (dayAtts.length > 1) {
         const foundSub = dayAtts.find(isSubstituteAtt);
         if (foundSub) {
           subAtt = foundSub;
@@ -1071,6 +1078,23 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         }
       }
 
+      // ⚡ REINFORCED GUARD: Khusus 3 Karyawan Tetap Pimpinan (Muh Aslam Faisal, La Unga Samsi, Takdir)
+      // DILARANG KERAS berstatus LEMBUR, LEMBUR PENGGANTI, atau HADIR + LEMBUR.
+      // Kolom LEMBUR (Mulai, Selesai, Realisasi Jam) selalu '-' dan kompensasi lembur = Rp 0
+      if (isSpecialTarget) {
+        lemburMulai = '-';
+        lemburSelesai = '-';
+        realisasiJamLembur = '-';
+        if (ket.includes('LEMBUR')) {
+          ket = (hasClockIn || (att && (att.status === 'hadir' || att.status === 'terlambat')))
+            ? (att?.status === 'terlambat' ? 'TELAT' : 'HADIR')
+            : (isRosterOff ? 'OFF' : '-');
+        }
+        if (uraianPekerjaan && (uraianPekerjaan.toLowerCase().includes('tugas pengganti') || uraianPekerjaan.toLowerCase().includes('lembur'))) {
+          uraianPekerjaan = att?.notes || 'Pengawasan Lapangan Khusus Pimpinan';
+        }
+      }
+
       // Default KAUR / Pengesahan: Khusus Petugas Dukungan Direksi & Petugas Lapangan Khusus Pimpinan
       if (isExecutive) {
         memerintahkanKaur = ket === 'OFF' ? '-' : 'Direksi PT. FRP / Pimpinan';
@@ -1162,8 +1186,8 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         if (dayNetMins === 0 && r.attRecord?.workDurationMinutes) {
           dayNetMins = r.attRecord.workDurationMinutes;
         }
-        // Tambahkan durasi lembur riil ke jam kerja
-        const otHours = r.realisasiJamLembur !== '-' ? parseFloat(r.realisasiJamLembur) || 0 : 0;
+        // Tambahkan durasi lembur riil ke jam kerja (Khusus 80 Personil Sah Lembur)
+        const otHours = (!isSpecialTarget && r.realisasiJamLembur !== '-') ? parseFloat(r.realisasiJamLembur) || 0 : 0;
         totalJamKerjaBersih += (dayNetMins / 60) + otHours;
       }
       if (r.telatMnt !== '-') {

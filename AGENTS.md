@@ -123,3 +123,13 @@ Khusus penugasan di **Pelabuhan Maccini Baji** (Koordinat: `-4.773545, 119.48752
    - **Divisi Shipment Secara Keseluruhan (di luar ketentuan khusus di atas)**:
      - Hari kerja: Dipotong 1 jam istirahat jika durasi > 6 jam; jam ke-1 pengali 1,5x, jam berikutnya pengali 2,0x.
      - Hari OFF: Dipotong 1 jam istirahat jika durasi > 1 jam; seluruh sisa jam efektif pengali 2,0x.
+
+11. **Aturan Khusus 3 Karyawan Tetap (Muh Aslam Faisal, La Unga Samsi, Takdir) - DILARANG LEMBUR & LEMBUR PENGGANTI**:
+    - Khusus ketiga karyawan tetap / petugas khusus pimpinan: **Muh Aslam Faisal (FRP 07065)**, **LA UNGA SAMSI, S.K.M (FR.07.066)**, dan **TAKDIR (FRP.07.046)**, **TIDAK DIBERLAKUKAN LEMBUR MAUPUN LEMBUR PENGGANTI DALAM BENTUK APAPUN**.
+    - Mereka menerapkan kebijakan **Upah Pokok Tunggal** murni tanpa penambahan uang lembur (SPKL).
+    - Dilarang keras membuat rekaman SPKL lembur di `hrm_overtime_records` untuk ketiga karyawan ini, baik melalui input manual, pengajuan lembur, tugas darurat mandiri, maupun penetapan penugasan pengganti pos (`shift_relief`).
+    - Jika salah satu dari mereka menggantikan pos rekan kerja, penugasan tersebut murni merupakan koordinasi pengawasan pos tugas lapangan (`hrm_field_assigned_posts`) tanpa pencatatan kompensasi lembur.
+    - Pada seluruh lembar rekap presensi dan lembur (`HrmEmployeeRealtimeReportModal`, `HrmAbsenSplModal`, `HrmTimeSheetPdfModal`, `HrmSplMultiplierMatrixModal`):
+      - Kolom LEMBUR (`MULAI`, `SELESAI`, `REALISASI JAM LEMBUR`) untuk ketiga karyawan ini **WAJIB SELALU KOSONG (`-`)**.
+      - Status kehadiran HANYA mencatat status presensi reguler (`HADIR` / `TELAT` / `CUTI` / `SAKIT` / `IZIN` / `OFF`), **DILARANG KERAS** memunculkan status `HADIR + LEMBUR` ataupun `LEMBUR PENGGANTI`.
+      - Jam lembur bayar dan upah lembur selalu Rp 0.
