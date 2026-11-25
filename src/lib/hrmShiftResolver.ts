@@ -129,23 +129,9 @@ export function resolveEffectiveShift(
     };
   }
 
-  const isSpecialDuty = isSpecialDutyOfficer(user);
-  if (isSpecialDuty) {
-    const sStart = (user?.customStartTime || (user as any)?.custom_start_time || '08:00').substring(0, 5);
-    const sEnd = (user?.customEndTime || (user as any)?.custom_end_time || '16:00').substring(0, 5);
-    const tol = Number(user?.lateToleranceMinutes ?? (user as any)?.late_tolerance_minutes ?? 15);
-    return {
-      id: 'shift-field-special',
-      code: 'FIELD',
-      name: 'Petugas Lapangan Khusus Pimpinan (08:00 - 16:00)',
-      startTime: sStart,
-      endTime: sEnd,
-      lateToleranceMinutes: tol > 0 ? tol : 15,
-      earliestClockInMinutes: 120,
-      isCrossDay: false,
-      colorTag: '#10b981',
-    };
-  }
+  // Catatan Penting: Petugas Mobile Online Shipment (FR07042 M. Reza Angga, FR07044 Ichtiar, FR07046 Rusdi Aryanto)
+  // adalah karyawan SHIPMENT reguler yang WAJIB mengikuti Jadwal Roster Harian / Day Shift (07:30 - 16:30),
+  // BUKAN Petugas Lapangan Khusus Pimpinan (08:00 - 16:00).
 
   // 1. Jadwal Roster Harian: Jika jadwal hari ini adalah OFF (Libur / Hari Bebas Tugas)
   if (dailySchedule && (dailySchedule.isOff || dailySchedule.shiftCode === 'OFF' || dailySchedule.shiftName?.toLowerCase().includes('libur') || dailySchedule.shiftName?.toLowerCase().includes('off'))) {
@@ -298,7 +284,7 @@ export function resolveEffectiveShift(
   }
 
   // 5. Khusus Petugas Lapangan Khusus Pimpinan (Bpk Reski Faisal): Default Jam Tugas 08:00 - 16:00 WITA
-  if (isSpecialDuty) {
+  if (isSpecialLeadership) {
     return {
       id: 'shift-field-special',
       code: 'FIELD',

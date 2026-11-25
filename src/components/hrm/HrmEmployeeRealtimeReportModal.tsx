@@ -224,10 +224,11 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, currentEmployeeIndex, sortedEmployees]);
-  // 3 Petugas Lapangan Khusus Pimpinan (Muh Aslam Faisal, La Unga Samsi, Takdir)
+  // 3 Petugas Lapangan Khusus Pimpinan / Karyawan Tetap (Muh Aslam Faisal, La Unga Samsi, Takdir)
+  // HANYA 3 orang ini yang dilarang lembur (Aturan 11). Petugas mobile Shipment/Rumah Tangga (FR07042, FR07044, FR07046, FR07001, FR07016) TETAP BERHAK LEMBUR!
   const isSpecialTarget = useMemo(() => {
     if (!user) return false;
-    return isLeadershipSpecialFieldOfficer(user) || isSpecialDutyOfficer(user);
+    return isLeadershipSpecialFieldOfficer(user);
   }, [user]);
 
   const todayStr = getTodayDateStr(); // e.g. '2026-10-29'

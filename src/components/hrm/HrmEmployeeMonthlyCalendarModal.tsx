@@ -348,9 +348,8 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
   const computeLateness = React.useCallback(
     (clockInStr: string, dateStr: string) => {
       const isLeadership = isLeadershipSpecialFieldOfficer(user);
-      const isSpecial = isLeadership || isSpecialDutyOfficer(user);
       const targetShift = getShiftForDate(dateStr);
-      const shiftStartTime = isLeadership ? '08:00' : (targetShift?.startTime?.substring(0, 5) || (isSpecial ? '08:00' : '07:30'));
+      const shiftStartTime = isLeadership ? '08:00' : (targetShift?.startTime?.substring(0, 5) || '07:30');
       const lateTolerance = isLeadership ? 15 : (user?.lateToleranceMinutes ?? targetShift?.lateToleranceMinutes ?? 15);
       const isCrossDay = Boolean(targetShift?.isCrossDay);
 
@@ -364,7 +363,7 @@ export const HrmEmployeeMonthlyCalendarModal: React.FC<Props> = ({
       }
 
       const [sH, sM] = shiftStartTime.split(':').map(Number);
-      const startMins = (Number.isFinite(sH) ? sH : (isSpecial ? 8 : 7)) * 60 + (Number.isFinite(sM) ? sM : (isSpecial ? 0 : 30));
+      const startMins = (Number.isFinite(sH) ? sH : (isLeadership ? 8 : 7)) * 60 + (Number.isFinite(sM) ? sM : (isLeadership ? 0 : 30));
 
       const [cH, cM] = clockInStr.split(':').map(Number);
       const clockInMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);

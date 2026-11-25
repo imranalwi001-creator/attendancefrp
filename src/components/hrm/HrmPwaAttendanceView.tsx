@@ -1908,9 +1908,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return userShift;
   }, [isCurrentlyOnDuty, todayAttendance, todayDateStr, user, userShift]);
 
-  // SPKL Lembur Resmi Disetujui (Sinkron Same-Day & Cross-Day; diblokir untuk 3 Karyawan Tetap sesuai Aturan 11)
+  // SPKL Lembur Resmi Disetujui (Sinkron Same-Day & Cross-Day; diblokir HANYA untuk 3 Karyawan Tetap sesuai Aturan 11)
   const approvedOvertimeToday = useMemo(() => {
-    if (isFieldSpecial) return null;
+    if (isLeadershipSpecialFieldOfficer(user)) return null;
     const activeAttDate = isCurrentlyOnDuty && todayAttendance
       ? normalizeDateString(todayAttendance.attendanceDate || todayAttendance.date)
       : '';
@@ -1924,7 +1924,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     if (matching.length === 0) return null;
     // Prioritaskan SPKL pada tanggal aktif / hari ini dengan rentang waktu terjelas
     return matching.find((o) => o.startTime || (o as any).start_time) || matching[0];
-  }, [userOvertimeList, todayDateStr, isCurrentlyOnDuty, todayAttendance, isFieldSpecial]);
+  }, [userOvertimeList, todayDateStr, isCurrentlyOnDuty, todayAttendance, user]);
 
   // ⚡ STANDAR SINGLE CONTINUOUS SESSION (1x Ceklok Masuk -> 1x Ceklok Pulang)
   // Menggabungkan Shift Asli + SPKL Lembur (Sebelum Shift, Setelah Shift, maupun Hari OFF) untuk SEMUA karyawan!
@@ -4582,7 +4582,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <div className="space-y-0.5">
                   <span className="text-[10px] text-slate-400 font-medium">Divisi / Unit Kerja:</span>
                   <p className="font-bold text-emerald-300 truncate">{user?.divisionName || user?.division || 'Operasional'}</p>
-                  <p className="text-[10px] text-slate-400">Status: {isSpecialDutyOfficer(user) ? 'Petugas Lapangan Khusus' : 'Reguler'}</p>
+                  <p className="text-[10px] text-slate-400">Status: {isLeadershipSpecialFieldOfficer(user) ? 'Petugas Lapangan Khusus' : isExecutiveMobileSupportOfficer(user) ? 'Dukungan Direksi (Mobile)' : isMobileOnlineOfficer(user) ? 'Reguler (Mobile)' : 'Reguler'}</p>
                 </div>
 
                 <div className="space-y-0.5">
