@@ -168,8 +168,8 @@ export function resolveEffectiveShift(
 
   // 2. Cek langsung shiftStartTime & shiftEndTime yang terpasang pada userProfile (dari PostgreSQL p.shift_start_time / p.shift_end_time)
   if (user?.shiftStartTime && user?.shiftEndTime) {
-    const sStart = isSpecialDuty && user?.customStartTime ? user.customStartTime.substring(0, 5) : user.shiftStartTime.substring(0, 5);
-    const sEnd = isSpecialDuty && user?.customEndTime ? user.customEndTime.substring(0, 5) : user.shiftEndTime.substring(0, 5);
+    const sStart = isSpecialLeadership && user?.customStartTime ? user.customStartTime.substring(0, 5) : user.shiftStartTime.substring(0, 5);
+    const sEnd = isSpecialLeadership && user?.customEndTime ? user.customEndTime.substring(0, 5) : user.shiftEndTime.substring(0, 5);
     const [sH, sM] = sStart.split(':').map(Number);
     const [eH, eM] = sEnd.split(':').map(Number);
     const isCross = (eH * 60 + eM) < (sH * 60 + sM);
@@ -199,7 +199,7 @@ export function resolveEffectiveShift(
       isCrossDay: isCross,
     };
     // HANYA petugas khusus yang diizinkan menimpa shift resmi dengan jam custom pimpinan
-    if (isSpecialDuty) {
+    if (isSpecialLeadership) {
       if (user?.customStartTime) res.startTime = user.customStartTime.substring(0, 5);
       if (user?.customEndTime) res.endTime = user.customEndTime.substring(0, 5);
     }
@@ -211,8 +211,8 @@ export function resolveEffectiveShift(
   const userShiftName = user?.shiftName || '';
   const parsedFromName = extractTimesFromShiftName(userShiftName);
   if (parsedFromName) {
-    const sStart = isSpecialDuty && user?.customStartTime ? user.customStartTime.substring(0, 5) : parsedFromName.startTime!;
-    const sEnd = isSpecialDuty && user?.customEndTime ? user.customEndTime.substring(0, 5) : parsedFromName.endTime!;
+    const sStart = isSpecialLeadership && user?.customStartTime ? user.customStartTime.substring(0, 5) : parsedFromName.startTime!;
+    const sEnd = isSpecialLeadership && user?.customEndTime ? user.customEndTime.substring(0, 5) : parsedFromName.endTime!;
     const [sH, sM] = sStart.split(':').map(Number);
     const [eH, eM] = sEnd.split(':').map(Number);
     const isCross = (eH * 60 + eM) < (sH * 60 + sM);
