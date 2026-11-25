@@ -7907,6 +7907,28 @@ app.get('/api/leaves/balance', async (req, res) => {
       [validUserId, prevMonthStart]
     );
     const ot = otRes.rows[0];
+
+    // ⚡ Lembur Bulan Berjalan (misal: November 2026) secara realtime tersinkron
+    const curMonthDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    const curMonthStart = `${curMonthDate.getFullYear()}-${String(curMonthDate.getMonth() + 1).padStart(2, '0')}-01`;
+    const curOtRes = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'approved') as approved_count,
+         COALESCE(SUM(duration_hours) FILTER (WHERE status = 'approved'), 0) as approved_hours
+       FROM hrm_overtime_records
+       WHERE user_id = $1
+         AND DATE_TRUNC('month', date) = DATE_TRUNC('month', $2::date)`,
+      [validUserId, curMonthStart]
+    );
+    const curOt = curOtRes.rows[0];
+
+    // Karyawan Tetap (Aturan 11): DILARANG LEMBUR (SPKL = Rp 0, 0 Jam)
+    const isExemptLeader = frpGroup === 'KARYAWAN TETAP';
+    const approvedPrevHours = isExemptLeader ? 0 : parseFloat(ot?.approved_hours || 0);
+    const approvedPrevCount = isExemptLeader ? 0 : parseInt(ot?.approved_count || 0, 10);
+    const approvedCurHours = isExemptLeader ? 0 : parseFloat(curOt?.approved_hours || 0);
+    const approvedCurCount = isExemptLeader ? 0 : parseInt(curOt?.approved_count || 0, 10);
+
     const monthlyInfo = await getUserLeaveMonthlyBreakdown(pool, p);
 
     res.json({
@@ -7923,11 +7945,18 @@ app.get('/api/leaves/balance', async (req, res) => {
         monthlyBreakdown: monthlyInfo.monthlyBreakdown,
         // Lembur bulan mundur (approved) - Tanpa nominal rupiah untuk privasi karyawan
         overtimeThisMonth: {
-          approvedCount: parseInt(ot.approved_count || 0, 10),
-          approvedHours: parseFloat(ot.approved_hours || 0),
+          approvedCount: approvedPrevCount,
+          approvedHours: approvedPrevHours,
           approvedCompensation: 0, // Informasi nominal disembunyikan dari PWA karyawan
           month: `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`,
           cycle: 'bulan_mundur',
+        },
+        // Update lembur bulan berjalan (November 2026) secara realtime di PWA karyawan
+        overtimeCurrentMonth: {
+          approvedCount: approvedCurCount,
+          approvedHours: approvedCurHours,
+          month: `${curMonthDate.getFullYear()}-${String(curMonthDate.getMonth() + 1).padStart(2, '0')}`,
+          cycle: 'bulan_berjalan',
         },
       },
     });
@@ -8055,6 +8084,36 @@ const handleMonthlyLeaveRevision = async (req, res) => {
 };
 app.put('/api/leaves/monthly-revision', handleMonthlyLeaveRevision);
 app.post('/api/leaves/monthly-revision', handleMonthlyLeaveRevision);
+
+// POST /api/leaves/monthly-cell-save - Simpan nilai 1 sel cuti bulanan langsung dari form matriks input
+app.post('/api/leaves/monthly-cell-save', async (req, res) => {
+  try {
+    const { userId, monthKey, days, reason, operatorName } = req.body || {};
+    if (!userId || !monthKey) {
+      return res.status(400).json({ success: false, error: 'userId dan monthKey wajib diisi' });
+    }
+    const cleanDays = parseInt(days, 10);
+    if (isNaN(cleanDays) || cleanDays < 0 || cleanDays > 31) {
+      return res.status(400).json({ success: false, error: 'Jumlah hari harus berupa bilangan bulat 0..31' });
+    }
+    const result = await reviseUserMonthlyLeaves(pool, {
+      userId,
+      monthlyValues: { [monthKey]: cleanDays },
+      reason: reason || `Input langsung dari Form Matriks Cuti (${monthKey})`,
+      operatorName: operatorName || 'Super Administrator',
+    });
+    res.json({
+      success: true,
+      message: `Cuti bulan ${monthKey} untuk ${result.fullName} berhasil diperbarui (${cleanDays} hari).`,
+      data: result,
+    });
+  } catch (err) {
+    console.error('[MonthlyCellSave] Error:', err.message);
+    const msg = err?.message || 'Gagal menyimpan sel cuti';
+    const status = msg.includes('tidak ditemukan') ? 404 : (msg.includes('wajib') || msg.includes('valid') || msg.includes('harus') ? 400 : 500);
+    res.status(status).json({ success: false, error: msg });
+  }
+});
 
 // GET /api/leaves/executive-recap - Rekapan Cuti Resmi Pimpinan (Rumah Tangga 12h, Shipment 9h, Karyawan Tetap)
 app.get('/api/leaves/executive-recap', async (req, res) => {

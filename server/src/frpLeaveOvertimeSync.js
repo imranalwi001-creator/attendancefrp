@@ -94,36 +94,36 @@ function countWeekdaysInMonth(yearMonth) {
 }
 
 // Baseline resmi dari dokumen Excel Pimpinan:
-// 1. REKAP CUTI RUMAH TANGGA DAN WISMA TAHUN KE 2 (Mar 2026 - Sep 2026)
+// 1. REKAP CUTI RUMAH TANGGA DAN WISMA TAHUN KE 2 (Mar 2026 - Okt 2026)
 const RUMAH_TANGGA_BASELINE = {
-  FR07001: { '2026-04': 2, '2026-07': 1, '2026-09': 2 },
-  FR07002: {},
+  FR07001: { '2026-04': 2, '2026-07': 1, '2026-09': 2, '2026-10': 2 },
+  FR07002: { '2026-10': 2 },
   FR07003: { '2026-04': 2 },
   FR07004: { '2026-04': 1, '2026-07': 4 },
   FR07005: { '2026-06': 1, '2026-07': 1 },
   FR07006: { '2026-05': 2, '2026-08': 1 },
-  FR07007: { '2026-03': 2, '2026-04': 2, '2026-07': 1, '2026-09': 1 },
+  FR07007: { '2026-03': 2, '2026-04': 2, '2026-07': 1, '2026-09': 1, '2026-10': 1 },
   FR07008: { '2026-03': 4 },
   FR07009: {},
-  FR07010: { '2026-03': 2, '2026-09': 1 },
+  FR07010: { '2026-03': 2, '2026-09': 1, '2026-10': 2 },
   FR07011: {},
   FR07012: { '2026-04': 1, '2026-06': 1, '2026-08': 2 },
   FR07013: { '2026-04': 3, '2026-07': 1 },
   FR07014: { '2026-04': 1 },
-  FR07015: { '2026-04': 2, '2026-05': 1, '2026-08': 1 },
+  FR07015: { '2026-04': 2, '2026-05': 1, '2026-08': 1, '2026-10': 1 },
   FR07016: {},
   FR07017: { '2026-04': 1, '2026-09': 1 },
   FR07018: { '2026-06': 2 },
   FR07019: { '2026-05': 1, '2026-09': 1 },
-  FR07020: {},
+  FR07020: { '2026-10': 6 },
   FR07021: { '2026-07': 2 },
-  FR07022: { '2026-06': 1, '2026-07': 1 },
+  FR07022: { '2026-06': 1, '2026-07': 1, '2026-10': 1 },
   FR07023: { '2026-08': 4 },
   FR07024: {},
   FR07025: { '2026-03': 3, '2026-08': 5 },
   FR07026: { '2026-07': 1 },
   FR07027: {},
-  FR07028: { '2026-05': 1, '2026-06': 1, '2026-07': 1 },
+  FR07028: { '2026-05': 1, '2026-06': 1, '2026-07': 1, '2026-10': 1 },
   FR07029: { '2026-03': 2 },
   FR07030: { '2026-09': 1 },
   FR07031: { '2026-04': 2, '2026-07': 1, '2026-08': 1 },
@@ -461,6 +461,23 @@ async function buildExecutiveLeaveRecap(pool) {
     reqByUser[r.user_id].push(r);
   }
 
+  // ⚡ Ambil data lembur bulan November 2026 secara real-time dari PostgreSQL
+  const otNovRes = await pool.query(`
+    SELECT user_id,
+           COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_count,
+           COALESCE(SUM(duration_hours) FILTER (WHERE status = 'approved'), 0)::float AS approved_hours
+    FROM hrm_overtime_records
+    WHERE DATE_TRUNC('month', date) = '2026-11-01'::date
+    GROUP BY user_id
+  `);
+  const otNovByUser = {};
+  for (const ot of otNovRes.rows) {
+    otNovByUser[ot.user_id] = {
+      approvedCount: Number(ot.approved_count || 0),
+      approvedHours: Number(ot.approved_hours || 0),
+    };
+  }
+
   const buildRows = (groupName, monthKeys) => {
     const members = profRes.rows
       .filter((p) => classifyFrpGroup(p) === groupName)
@@ -475,6 +492,10 @@ async function buildExecutiveLeaveRecap(pool) {
       );
       const quota = Number(p.annual_leave_quota || (groupName === 'SHIPMENT' ? 9 : 12));
       const remaining = Math.max(0, quota - m.totalUsed);
+
+      const otNov = (groupName === 'KARYAWAN TETAP')
+        ? { approvedCount: 0, approvedHours: 0 } // Karyawan Tetap: DILARANG LEMBUR (SPKL = Rp 0, 0 Jam)
+        : (otNovByUser[p.id] || { approvedCount: 0, approvedHours: 0 });
 
       return {
         no: idx + 1,
@@ -494,6 +515,10 @@ async function buildExecutiveLeaveRecap(pool) {
         pendingDays: m.pendingPostOct,
         usedLeaveDays: m.totalUsed,
         remainingLeaveDays: remaining,
+        // Update lembur bulan November 2026 secara realtime & tersinkron
+        novemberOvertimeHours: otNov.approvedHours,
+        novemberOvertimeCount: otNov.approvedCount,
+        hasNovemberOvertime: otNov.approvedHours > 0,
       };
     });
   };
@@ -514,6 +539,8 @@ async function buildExecutiveLeaveRecap(pool) {
       totalPending: rows.reduce((s, r) => s + r.pendingDays, 0),
       totalRemaining: rows.reduce((s, r) => s + r.remainingLeaveDays, 0),
       exhaustedCount: rows.filter((r) => r.remainingLeaveDays === 0).length,
+      totalNovemberOvertimeHours: rows.reduce((s, r) => s + (r.novemberOvertimeHours || 0), 0),
+      totalEmployeesWithNovemberOvertime: rows.filter((r) => r.hasNovemberOvertime).length,
       monthlyTotals,
     };
   };

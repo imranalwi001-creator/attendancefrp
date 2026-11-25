@@ -104,6 +104,7 @@ import { HrmMonthlyFinancialRecapModal } from '@/components/hrm/HrmMonthlyFinanc
 import { HrmEmployeeQuickProfileModal } from '@/components/hrm/HrmEmployeeQuickProfileModal';
 import { HrmTimeSheetPdfModal } from '@/components/hrm/HrmTimeSheetPdfModal';
 import { HrmSplMultiplierMatrixModal } from '@/components/hrm/HrmSplMultiplierMatrixModal';
+import { HrmAnnualLeaveMatrixModal } from '@/components/hrm/HrmAnnualLeaveMatrixModal';
 
 export const HrmLiveMonitoringPage: React.FC = () => {
   const { user } = useHrmAuth();
@@ -258,6 +259,7 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const [financialRecapModalOpen, setFinancialRecapModalOpen] = useState<boolean>(false);
   const [timeSheetModalOpen, setTimeSheetModalOpen] = useState<boolean>(false);
   const [splMatrixModalOpen, setSplMatrixModalOpen] = useState<boolean>(false);
+  const [leaveMatrixModalOpen, setLeaveMatrixModalOpen] = useState<boolean>(false);
   const [payrollScopeGroup, setPayrollScopeGroup] = useState<'ALL' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP'>('ALL');
   const [nextPayrollArrears, setNextPayrollArrears] = useState<any>(null);
   const [quickProfileModalOpen, setQuickProfileModalOpen] = useState<boolean>(false);
@@ -2078,6 +2080,15 @@ export const HrmLiveMonitoringPage: React.FC = () => {
               >
                 <Sparkles size={14} />
                 <span>Matriks Input SPL</span>
+              </Button>
+              <Button
+                type="button"
+                onClick={() => setLeaveMatrixModalOpen(true)}
+                className="bg-teal-700 hover:bg-teal-800 text-white text-xs h-9 px-3 rounded-xl font-semibold gap-1.5 shadow-xs transition-all w-full sm:w-auto"
+                title="Buka Form Input Rekap Cuti Resmi & Update Lembur Nov (Sinkron PWA)"
+              >
+                <CalendarDays size={14} />
+                <span>Form Rekap Cuti</span>
               </Button>
               <Button
                 type="button"
@@ -5671,6 +5682,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         overtimes={overtimes}
         leaves={approvedLeaves}
         initialMonth={selectedMonth}
+        onDataChanged={loadData}
+      />
+
+      {/* Modal Form Rekap Cuti Bulanan & Update Lembur Nov (Sinkron Real-Time PWA) */}
+      <HrmAnnualLeaveMatrixModal
+        open={leaveMatrixModalOpen}
+        onClose={() => setLeaveMatrixModalOpen(false)}
+        initialGroup="rumahTangga"
         onDataChanged={loadData}
       />
     </div>

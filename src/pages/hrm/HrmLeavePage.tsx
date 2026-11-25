@@ -51,6 +51,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
 import { HrmManualLeaveModal } from '@/components/hrm/superadmin/HrmManualLeaveModal';
 import { HrmManualLemburModal } from '@/components/hrm/superadmin/HrmManualLemburModal';
+import { HrmAnnualLeaveMatrixModal } from '@/components/hrm/HrmAnnualLeaveMatrixModal';
 
 export const HrmLeavePage: React.FC = () => {
   const { user } = useHrmAuth();
@@ -176,6 +177,7 @@ export const HrmLeavePage: React.FC = () => {
   // Superadmin Manual Entry Modals
   const [manualLeaveModalOpen, setManualLeaveModalOpen] = useState(false);
   const [manualLemburModalOpen, setManualLemburModalOpen] = useState(false);
+  const [leaveMatrixModalOpen, setLeaveMatrixModalOpen] = useState(false);
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -645,13 +647,23 @@ export const HrmLeavePage: React.FC = () => {
           {activeTab === 'leaves' ? (
             <div className="flex items-center gap-2">
               {isSupervisorRole && (
-                <Button
-                  onClick={() => setManualLeaveModalOpen(true)}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl shadow-xs gap-1.5 text-xs"
-                >
-                  <Plus className="w-4 h-4" />
-                  Input Cuti/Izin Karyawan
-                </Button>
+                <>
+                  <Button
+                    onClick={() => setLeaveMatrixModalOpen(true)}
+                    className="bg-teal-700 hover:bg-teal-800 text-white font-medium rounded-xl shadow-xs gap-1.5 text-xs"
+                    title="Buka Form Input Rekap Cuti Resmi & Update Lembur Nov (Sinkron PWA)"
+                  >
+                    <CalendarDays className="w-4 h-4" />
+                    Form Rekap Cuti
+                  </Button>
+                  <Button
+                    onClick={() => setManualLeaveModalOpen(true)}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl shadow-xs gap-1.5 text-xs"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Input Cuti/Izin Karyawan
+                  </Button>
+                </>
               )}
               <Button
                 onClick={handleOpenModal}
@@ -2072,6 +2084,14 @@ export const HrmLeavePage: React.FC = () => {
         open={manualLemburModalOpen}
         onClose={() => setManualLemburModalOpen(false)}
         onSuccess={() => loadData()}
+      />
+
+      {/* Modal Form Rekap Cuti Bulanan & Update Lembur Nov (Sinkron Real-Time PWA) */}
+      <HrmAnnualLeaveMatrixModal
+        open={leaveMatrixModalOpen}
+        onClose={() => setLeaveMatrixModalOpen(false)}
+        initialGroup="rumahTangga"
+        onDataChanged={() => loadData()}
       />
     </div>
   );

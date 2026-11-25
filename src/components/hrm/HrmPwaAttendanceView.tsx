@@ -437,6 +437,12 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     months?: Record<string, number>;
     monthlyBreakdown?: Array<{ monthKey: string; label: string; days: number; pendingDays?: number }>;
     overtimeThisMonth?: any;
+    overtimeCurrentMonth?: {
+      approvedCount: number;
+      approvedHours: number;
+      month: string;
+      cycle?: string;
+    };
   } | null>(null);
   const [otDate, setOtDate] = useState(getTodayDateStr());
   const [otCategory, setOtCategory] = useState<'shift1' | 'shift2' | 'shift3' | 'dayshift' | 'darurat_wajib' | 'custom'>('shift1');
@@ -5754,6 +5760,37 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             {/* Riwayat Pengajuan Lembur (SPL) */}
             {aktivitasSubTab === 'lembur' && (
               <div className="space-y-2.5">
+                {/* ─── KARTU UPDATE LEMBUR REAL-TIME BULAN NOVEMBER ─── */}
+                {liveLeaveBalance?.overtimeCurrentMonth && liveLeaveBalance.overtimeCurrentMonth.approvedHours > 0 && (
+                  <div className="p-3 bg-gradient-to-r from-blue-500/10 via-indigo-500/10 to-teal-500/10 rounded-2xl border border-blue-500/25 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-blue-900 dark:text-blue-300 flex items-center gap-1.5">
+                        <Zap className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                        Akumulasi Lembur Real-Time (November 2026)
+                      </span>
+                      <span className="text-[9.5px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded-full border border-blue-200/60 dark:border-blue-800/60">
+                        ⚡ Realtime Sync
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-center">
+                      <div className="bg-white/90 dark:bg-slate-900/80 p-2 rounded-xl border border-blue-200/60 dark:border-blue-900/40">
+                        <p className="text-[9.5px] font-medium text-slate-500 dark:text-slate-400">Total Jam Lembur Disetujui</p>
+                        <p className="text-base font-extrabold text-blue-700 dark:text-blue-300 mt-0.5">
+                          {liveLeaveBalance.overtimeCurrentMonth.approvedHours} <span className="text-[9px] font-normal text-slate-400">Jam</span>
+                        </p>
+                      </div>
+                      <div className="bg-white/90 dark:bg-slate-900/80 p-2 rounded-xl border border-blue-200/60 dark:border-blue-900/40">
+                        <p className="text-[9.5px] font-medium text-slate-500 dark:text-slate-400">Jumlah Surat Perintah (SPKL)</p>
+                        <p className="text-base font-extrabold text-indigo-700 dark:text-indigo-300 mt-0.5">
+                          {liveLeaveBalance.overtimeCurrentMonth.approvedCount} <span className="text-[9px] font-normal text-slate-400">Sesi</span>
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-[9px] text-muted-foreground italic text-center">
+                      *Jam lembur terakumulasi otomatis dan dibayarkan pada payroll periode berikutnya (bulan mundur).
+                    </p>
+                  </div>
+                )}
                 {userOvertimeList.length === 0 ? (
                   <div className="p-6 text-center bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
                     Belum ada pengajuan surat perintah lembur (SPL).
