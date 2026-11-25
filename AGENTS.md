@@ -133,3 +133,10 @@ Khusus penugasan di **Pelabuhan Maccini Baji** (Koordinat: `-4.773545, 119.48752
       - Kolom LEMBUR (`MULAI`, `SELESAI`, `REALISASI JAM LEMBUR`) untuk ketiga karyawan ini **WAJIB SELALU KOSONG (`-`)**.
       - Status kehadiran HANYA mencatat status presensi reguler (`HADIR` / `TELAT` / `CUTI` / `SAKIT` / `IZIN` / `OFF`), **DILARANG KERAS** memunculkan status `HADIR + LEMBUR` ataupun `LEMBUR PENGGANTI`.
       - Jam lembur bayar dan upah lembur selalu Rp 0.
+
+12. **Aturan Anti-Duplikasi Lembur & Sinkronisasi Penugasan Pengganti Cuti (Anti-Duplicate Overtime Guard)**:
+    - **Larangan Keras SPL Ganda**: Satu karyawan DILARANG memiliki lebih dari 1 SPKL lembur pada tanggal dan jam/shift yang sama.
+    - **Prioritas Shift Relief Otomatis**: Saat Superadmin menyetujui pengajuan cuti/izin dan menetapkan karyawan pengganti (`shift_relief`), sistem secara otomatis menerbitkan SPKL pengganti pos resmi. Jika karyawan tersebut sebelumnya sudah mengajukan SPL manual di aplikasi (PWA), sistem WAJIB melakukan rekonsiliasi (update) ke tiket yang sama dan DILARANG membuat rekaman baru (mencegah jam lembur terhitung 2x lipat, misal 8 jam menjadi 16 jam).
+    - **Blokir Pengajuan Manual Jika Sudah Disetujui**: Jika karyawan sudah memiliki SPKL yang disetujui (baik dari `shift_relief` maupun penugasan resmi) pada tanggal tersebut, pengajuan SPL manual baru untuk shift yang sama WAJIB ditolak oleh sistem (HTTP 409 Conflict).
+    - **Kunci Persetujuan Atasan (Approval Lock)**: Atasan/Korlap/Superadmin DILARANG menyetujui pengajuan lembur manual jika karyawan yang bersangkutan sudah memiliki lembur berstatus `approved` pada tanggal dan shift yang beririsan.
+    - **Deduplikasi Cerdas Laporan**: Seluruh laporan dan lembar rekap (HrmEmployeeRealtimeReportModal, Timesheet, Multiplier Matrix) wajib menerapkan deduplikasi cerdas berdasarkan tanggal dan rentang jam, sehingga tidak ada jam lembur yang terhitung ganda dalam penghitungan total jam maupun upah lembur.

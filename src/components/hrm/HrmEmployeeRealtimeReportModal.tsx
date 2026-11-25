@@ -632,9 +632,36 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         const oDate = String(o.date || o.overtimeDate || o.overtime_date || '').slice(0, 10);
         return oDate === dateStr;
       });
+
+      // 🛡️ SMART DEDUPLICATION: Jika terdapat rekaman duplikat pada shift/waktu yang sama (misal shift_relief + SPL manual yang sama-sama diapprove),
+      // prioritaskan rekaman shift_relief resmi dan abaikan duplikat manual agar jam kerja tidak terhitung ganda!
+      const deduplicatedOts: typeof rawDayOts = [];
+      rawDayOts.forEach((otCandidate) => {
+        const cStart = String(otCandidate.startTime || otCandidate.start_time || '').slice(0, 5);
+        const cEnd = String(otCandidate.endTime || otCandidate.end_time || '').slice(0, 5);
+        const cDesc = String(otCandidate.taskDescription || otCandidate.task_description || '').toLowerCase();
+
+        const dupIdx = deduplicatedOts.findIndex((existing) => {
+          const eStart = String(existing.startTime || existing.start_time || '').slice(0, 5);
+          const eEnd = String(existing.endTime || existing.end_time || '').slice(0, 5);
+          const isSameTime = Boolean(cStart && eStart && cStart === eStart && cEnd === eEnd);
+          const isReliefOverlap = (otCandidate.source === 'shift_relief' || existing.source === 'shift_relief') &&
+            (cDesc.includes('pengganti') || cDesc.includes('mengganti') || cDesc.includes('cuti'));
+          return isSameTime || isReliefOverlap;
+        });
+
+        if (dupIdx >= 0) {
+          if (otCandidate.source === 'shift_relief' && deduplicatedOts[dupIdx].source !== 'shift_relief') {
+            deduplicatedOts[dupIdx] = otCandidate;
+          }
+        } else {
+          deduplicatedOts.push(otCandidate);
+        }
+      });
+
       // ⚡ ATURAN BAKU PIMPINAN: Khusus 3 Karyawan Tetap (Muh Aslam Faisal, La Unga Samsi, Takdir)
       // TIDAK DIBERLAKUKAN LEMBUR ATAUPUN LEMBUR PENGGANTI (Gaji Pokok Tunggal).
-      const dayOts = isSpecialTarget ? [] : rawDayOts;
+      const dayOts = isSpecialTarget ? [] : deduplicatedOts;
       const ot = isSpecialTarget ? undefined : dayOts[0];
       const totalDayOtHours = isSpecialTarget ? 0 : dayOts.reduce((sum, o) => {
         const h = Number(o.approvedHours || o.approved_hours || o.durationHours || o.duration_hours || 0);

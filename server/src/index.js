@@ -9087,17 +9087,51 @@ async function assignReliefSubstituteHelper({
   let otInsertRes = null;
   if (!isSpecialPermanent) {
     try {
-      otInsertRes = await pool.query(
-        `INSERT INTO hrm_overtime_records (
-          user_id, date, start_time, end_time, duration_hours, approved_hours, rate_applied, compensation_amount,
-          task_description, status, source, leave_request_id, approved_by, overtime_phase
-        ) VALUES (
-          $1, $2::date, $3, $4, $5, $5, $6, $7,
-          $8, 'approved', 'shift_relief', $9, $10, 'completed'
-        ) RETURNING *;`,
-        [
-          reliefUserId,
-          targetStart,
+      // 🛡️ ANTI-DUPLICATE GUARD: Cek apakah karyawan pengganti sudah memiliki rekaman lembur pada tanggal ini
+      // (misal dia sudah mengajukan manual SPL lebih awal di aplikasi, atau sudah terdaftar tiket pending/approved)
+      const existingOtCheck = await pool.query(`
+        SELECT id, status, source, duration_hours, approved_hours, task_description
+        FROM hrm_overtime_records
+        WHERE user_id = $1 AND date = $2::date
+          AND status IN ('pending', 'approved')
+          AND (
+            leave_request_id = $3
+            OR (start_time = $4 AND end_time = $5)
+            OR LOWER(task_description) LIKE '%' || LOWER($6) || '%'
+            OR LOWER(task_description) LIKE '%pengganti%'
+          )
+        ORDER BY (CASE WHEN status = 'approved' THEN 1 ELSE 2 END), created_at DESC
+        LIMIT 1;
+      `, [
+        reliefUserId,
+        targetStart,
+        leaveId || null,
+        appliedStartTime,
+        appliedEndTime,
+        originalUser.full_name || ''
+      ]);
+
+      if (existingOtCheck.rows.length > 0) {
+        // Rekonsiliasi & cegah duplikasi: Perbarui tiket lembur yang sudah ada agar terhubung resmi ke cuti rekan kerja
+        const existingOtId = existingOtCheck.rows[0].id;
+        otInsertRes = await pool.query(`
+          UPDATE hrm_overtime_records SET
+            start_time = $1,
+            end_time = $2,
+            duration_hours = $3,
+            approved_hours = $3,
+            rate_applied = $4,
+            compensation_amount = $5,
+            task_description = $6,
+            status = 'approved',
+            source = 'shift_relief',
+            leave_request_id = $7,
+            approved_by = $8,
+            overtime_phase = 'completed',
+            updated_at = NOW()
+          WHERE id = $9
+          RETURNING *;
+        `, [
           appliedStartTime,
           appliedEndTime,
           appliedDuration,
@@ -9105,9 +9139,34 @@ async function assignReliefSubstituteHelper({
           overtimeAmount,
           `Tugas Pengganti Pos Resmi untuk ${originalUser.full_name} (${shiftName}) di ${postNamesStr}`,
           leaveId || null,
-          adminId || null
-        ]
-      );
+          adminId || null,
+          existingOtId
+        ]);
+        console.log(`[assignReliefSubstituteHelper] Berhasil rekonsiliasi SPKL lembur pengganti pos tanpa duplikasi untuk ${reliefUser.full_name} (ID: ${existingOtId})`);
+      } else {
+        // Belum ada -> Lakukan INSERT baru
+        otInsertRes = await pool.query(
+          `INSERT INTO hrm_overtime_records (
+            user_id, date, start_time, end_time, duration_hours, approved_hours, rate_applied, compensation_amount,
+            task_description, status, source, leave_request_id, approved_by, overtime_phase
+          ) VALUES (
+            $1, $2::date, $3, $4, $5, $5, $6, $7,
+            $8, 'approved', 'shift_relief', $9, $10, 'completed'
+          ) RETURNING *;`,
+          [
+            reliefUserId,
+            targetStart,
+            appliedStartTime,
+            appliedEndTime,
+            appliedDuration,
+            hourlyRate,
+            overtimeAmount,
+            `Tugas Pengganti Pos Resmi untuk ${originalUser.full_name} (${shiftName}) di ${postNamesStr}`,
+            leaveId || null,
+            adminId || null
+          ]
+        );
+      }
     } catch (otErr) {
       console.error('[assignReliefSubstituteHelper Overtime Insert Error]:', otErr.message);
     }
@@ -11497,23 +11556,38 @@ app.post('/api/overtime', async (req, res) => {
     const finalApprovalNotes = targetStatus === 'approved' ? (approvalNotes || 'Ditugaskan dan disahkan langsung oleh Super Administrator') : null;
     const finalPhase = targetStatus === 'approved' ? 'completed' : 'requested';
 
-    // Anti-duplikasi SPKL: Cegah double click atau pengajuan ganda pending pada tanggal & jam yang sama
-    if (!isAdminDirect) {
-      const dupCheck = await pool.query(`
-        SELECT * FROM hrm_overtime_records
-        WHERE user_id = $1 AND date = $2 AND status = 'pending'
-          AND (
-            (start_time = $3 AND end_time = $4)
-            OR created_at >= NOW() - INTERVAL '30 seconds'
-          )
-        ORDER BY created_at DESC LIMIT 1
-      `, [validUserId, date, startTime, endTime]);
+    // 🛡️ ANTI-DUPLICATE GUARD LEVEL 1:
+    // Cegah pengajuan lembur jika sudah ada SPKL aktif/disetujui pada tanggal dan jam/shift yang sama
+    const dupCheck = await pool.query(`
+      SELECT id, status, source, start_time, end_time, duration_hours, task_description, approved_by_name
+      FROM hrm_overtime_records
+      WHERE user_id = $1 AND date = $2::date
+        AND status IN ('pending', 'approved')
+        AND (
+          (start_time = $3 AND end_time = $4)
+          OR source = 'shift_relief'
+          OR (start_time < $4 AND end_time > $3)
+          OR created_at >= NOW() - INTERVAL '30 seconds'
+        )
+      ORDER BY (CASE WHEN status = 'approved' THEN 1 ELSE 2 END), created_at DESC
+      LIMIT 1;
+    `, [validUserId, date, startTime, endTime]);
 
-      if (dupCheck.rows.length > 0) {
+    if (dupCheck.rows.length > 0) {
+      const ex = dupCheck.rows[0];
+      if (ex.status === 'approved') {
+        const reliefDesc = ex.source === 'shift_relief' ? ' (Penugasan Pengganti Pos Resmi / Shift Relief)' : '';
+        return res.status(409).json({
+          success: false,
+          error: `Pengajuan Ditolak: Anda sudah memiliki Surat Perintah Lembur (SPKL) yang telah DISETUJUI pada tanggal ${date} (${ex.start_time?.slice(0, 5)} - ${ex.end_time?.slice(0, 5)} WITA)${reliefDesc}. Dilarang mengajukan lembur ganda untuk jadwal shift yang sama.`,
+          isDuplicateApproved: true,
+          existingRecord: ex,
+        });
+      } else if (!isAdminDirect) {
         return res.json({
           success: true,
-          data: dupCheck.rows[0],
-          message: 'Pengajuan lembur Anda sudah tercatat dan sedang menunggu verifikasi.',
+          data: ex,
+          message: 'Pengajuan lembur Anda sudah tercatat sebelumnya dan sedang menunggu verifikasi.',
           isDuplicateSuppressed: true,
         });
       }
@@ -11718,6 +11792,33 @@ app.put('/api/overtime/:id/status', async (req, res) => {
 
     // Verifikasi Guardrail Anti-Overbudget Lembur PT FRP
     if (status === 'approved') {
+      // 🛡️ ANTI-DUPLICATE GUARD LEVEL 2 (APPROVAL LOCK):
+      // Cegah approval jika karyawan sudah memiliki rekaman lembur lain yang sudah disetujui pada tanggal & jam yang beririsan
+      const activeDuplicate = await pool.query(`
+        SELECT id, source, task_description, start_time, end_time, duration_hours, approved_by_name
+        FROM hrm_overtime_records
+        WHERE user_id = $1 AND date = $2::date
+          AND id != $3::uuid
+          AND status = 'approved'
+          AND (
+            (start_time = $4 AND end_time = $5)
+            OR (source = 'shift_relief' AND leave_request_id IS NOT NULL)
+            OR (start_time < $5 AND end_time > $4)
+          )
+        ORDER BY created_at DESC LIMIT 1;
+      `, [ot.user_id, ot.date, ot.id, ot.start_time, ot.end_time]);
+
+      if (activeDuplicate.rows.length > 0) {
+        const dup = activeDuplicate.rows[0];
+        const dupSource = dup.source === 'shift_relief' ? 'Penugasan Pengganti Cuti (Shift Relief)' : 'SPKL resmi yang telah disahkan';
+        return res.status(409).json({
+          success: false,
+          error: `Persetujuan Ditolak: Karyawan ini SUDAH memiliki lembur yang disetujui pada tanggal ${ot.date} melalui ${dupSource} (${dup.start_time?.slice(0, 5)} - ${dup.end_time?.slice(0, 5)} WITA, disetujui oleh: ${dup.approved_by_name || 'Admin'}). Tidak boleh menyetujui lembur ganda untuk sesi yang sama.`,
+          isDuplicateApprovalBlocked: true,
+          duplicateId: dup.id,
+        });
+      }
+
       const budgetGuard = await verifyOvertimeBudgetGuardrail(pool, ot.user_id, ot.date, compensation, ot.id, {
         forceBudgetOverride: Boolean(req.body?.forceBudgetOverride),
         approverRole: String(req.body?.approverRole || approverName || ''),
