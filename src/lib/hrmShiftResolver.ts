@@ -407,7 +407,8 @@ export function checkShiftClockInWindow(shift: Shift | null, currentTime: Date =
 export function checkShiftClockOutWindow(
   shift: Shift | null,
   clockInTimeStr?: string | null,
-  currentTime: Date = new Date()
+  currentTime: Date = new Date(),
+  attendanceDateStr?: string | null
 ): {
   isAllowed: boolean;
   reason?: string;
@@ -425,26 +426,30 @@ export function checkShiftClockOutWindow(
   const startMins = (sH || 0) * 60 + (sM || 0);
   const isCrossDay = Boolean(shift.isCrossDay || endMins < startMins);
 
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  const todayStr = `${currentTime.getFullYear()}-${pad2(currentTime.getMonth() + 1)}-${pad2(currentTime.getDate())}`;
+  const isPastDateSession = Boolean(attendanceDateStr && attendanceDateStr.substring(0, 10) < todayStr);
+
   let isBeforeEndTime = false;
 
   if (isCrossDay) {
-    // Cross day (e.g. 22:30 - 07:30):
-    // Jam 22:30 s/d 23:59 -> belum boleh pulang (isBeforeEndTime = true)
-    // Jam 00:00 s/d 07:29 -> belum boleh pulang (isBeforeEndTime = true)
-    // Jam 07:30 ke atas -> boleh pulang!
+    // Cross day (e.g. 22:30 - 07:30, 15:30 - 07:30, atau 22:30 - 15:30):
+    // Jam startMins s/d 23:59 -> belum boleh pulang
+    // Jam 00:00 s/d endMins-1 -> belum boleh pulang
+    // Jam endMins s/d startMins-1 -> boleh pulang!
     if (nowMins >= startMins || nowMins < endMins) {
       isBeforeEndTime = true;
     }
   } else {
-    // Regular shift (e.g. 07:30 - 16:30):
-    // Jam 00:00 s/d 16:29 -> belum jam pulang
-    if (nowMins < endMins) {
+    // Regular / Same-day continuous shift (e.g. 07:30 - 16:30 atau 07:30 - 22:30):
+    // Jika sesi sudah dari hari kemarin (lupa pulang lewat tengah malam), langsung izinkan pulang!
+    if (!isPastDateSession && nowMins < endMins) {
       isBeforeEndTime = true;
     }
   }
 
   // Minimum working time guard: setidaknya 30 menit setelah clock-in
-  if (clockInTimeStr) {
+  if (clockInTimeStr && !isPastDateSession) {
     const [ciH, ciM] = clockInTimeStr.split(':').map(Number);
     if (!isNaN(ciH) && !isNaN(ciM)) {
       const ciTotal = ciH * 60 + ciM;
@@ -463,7 +468,7 @@ export function checkShiftClockOutWindow(
     return {
       isAllowed: false,
       isBeforeEndTime: true,
-      reason: `Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${shift.endTime.substring(0, 5)} WITA.`,
+      reason: `Absen Pulang belum aktif! Jadwal pulang Anda pk ${shift.endTime.substring(0, 5)} WITA.`,
     };
   }
 
@@ -690,5 +695,218 @@ export function calculateAttendanceLateness(params: {
     clockInMinutes: clockInMins,
   };
 }
+
+export type ContinuousDutyMode = 'regular' | 'after_shift' | 'before_shift' | 'off_day_overtime';
+export type ContinuousDutyPhase = 'before_duty' | 'overtime_phase' | 'regular_shift_phase' | 'ready_to_clock_out';
+
+export interface ContinuousDutyInfo {
+  effectiveShift: Shift | null;
+  dutyMode: ContinuousDutyMode;
+  hasContinuousOvertime: boolean;
+  otStart: string;
+  otEnd: string;
+  otHours: number;
+  otDescription: string;
+  baseStart: string;
+  baseEnd: string;
+  effectiveStart: string;
+  effectiveEnd: string;
+  effectiveIsCrossDay: boolean;
+  currentPhase: ContinuousDutyPhase;
+  phaseBadgeLabel: string;
+  reassuranceText: string;
+}
+
+function parseTimeToMins(timeStr?: string | null): number | null {
+  if (!timeStr) return null;
+  const clean = String(timeStr).trim().substring(0, 5);
+  const [h, m] = clean.split(':').map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h * 60 + m;
+}
+
+function isNowInWindow(nowMins: number, startMins: number, endMins: number): boolean {
+  if (endMins >= startMins) {
+    return nowMins >= startMins && nowMins < endMins;
+  }
+  // Cross-day window (misal 22:30 - 07:30)
+  return nowMins >= startMins || nowMins < endMins;
+}
+
+/**
+ * Standar PT FRP: Single Continuous Session (1x Ceklok Masuk -> 1x Ceklok Pulang)
+ * Menggabungkan Shift Asli + SPKL Lembur 'approved' menjadi 1 rentang dinas kontinu
+ * untuk SEMUA karyawan (baik Lembur Sebelum Shift, Lembur Setelah Shift, maupun Lembur Hari OFF).
+ */
+export function resolveContinuousDutyShift(
+  baseShift: Shift | null,
+  approvedOvertime: any | null | undefined,
+  currentTime: Date = new Date(),
+  isOffDay: boolean = false
+): ContinuousDutyInfo {
+  const baseStart = (baseShift?.startTime || '').substring(0, 5);
+  const baseEnd = (baseShift?.endTime || '').substring(0, 5);
+  const baseStartMins = parseTimeToMins(baseStart);
+  const baseEndMins = parseTimeToMins(baseEnd);
+  const baseIsCross = Boolean(
+    baseShift?.isCrossDay ||
+    (baseStartMins != null && baseEndMins != null && baseEndMins < baseStartMins)
+  );
+
+  const rawOtStart = approvedOvertime?.startTime || approvedOvertime?.start_time || '';
+  const rawOtEnd = approvedOvertime?.endTime || approvedOvertime?.end_time || '';
+  const otStart = String(rawOtStart).substring(0, 5);
+  const otEnd = String(rawOtEnd).substring(0, 5);
+  const otStartMins = parseTimeToMins(otStart);
+  const otEndMins = parseTimeToMins(otEnd);
+  const otHours = Number(approvedOvertime?.approvedHours || approvedOvertime?.approved_hours || approvedOvertime?.durationHours || approvedOvertime?.duration_hours || 0);
+  const otDescription = String(approvedOvertime?.taskDescription || approvedOvertime?.task_description || 'Penugasan lembur resmi disahkan.');
+
+  // Tidak ada SPKL lembur yang valid (atau jam tidak lengkap)
+  if (!approvedOvertime || otStartMins == null || otEndMins == null) {
+    return {
+      effectiveShift: baseShift,
+      dutyMode: 'regular',
+      hasContinuousOvertime: false,
+      otStart: '',
+      otEnd: '',
+      otHours: 0,
+      otDescription: '',
+      baseStart,
+      baseEnd,
+      effectiveStart: baseStart,
+      effectiveEnd: baseEnd,
+      effectiveIsCrossDay: baseIsCross,
+      currentPhase: 'regular_shift_phase',
+      phaseBadgeLabel: baseShift?.name || 'Shift Operasional',
+      reassuranceText: '',
+    };
+  }
+
+  const nowMins = currentTime.getHours() * 60 + currentTime.getMinutes();
+  const otIsCross = otEndMins < otStartMins;
+  const hasBaseShift = !isOffDay && Boolean(baseShift) && baseShift?.id !== 'unassigned' && !isShiftOffDay(baseShift) && baseStartMins != null && baseEndMins != null;
+
+  let dutyMode: ContinuousDutyMode = 'after_shift';
+  let effectiveStart = baseStart || otStart;
+  let effectiveEnd = otEnd;
+  let effectiveIsCrossDay = false;
+
+  if (!hasBaseShift) {
+    // Kasus 3: Lembur di Hari OFF / Libur Roster
+    dutyMode = 'off_day_overtime';
+    effectiveStart = otStart;
+    effectiveEnd = otEnd;
+    effectiveIsCrossDay = otIsCross;
+  } else {
+    // Deteksi presisi apakah Lembur SEBELUM Shift atau Lembur SETELAH Shift:
+    // - Shift III lintas hari (22:30 - 07:30) + Lembur Shift I (07:30 - 15:30):
+    //   otStart (07:30) dekat dengan baseEnd (07:30) -> SETELAH SHIFT!
+    // - Lembur Shift II (15:30 - 22:30) + Shift III (22:30 - 07:30):
+    //   otEnd (22:30) dekat dengan baseStart (22:30) dan otStart < baseStart -> SEBELUM SHIFT!
+    // - Lembur Shift I (07:30 - 15:30) + Shift II (15:30 - 22:30):
+    //   otEnd (15:30) <= baseStart (15:30) + 60 dan otStart < baseStart -> SEBELUM SHIFT!
+    const isAfterCrossDayShift = baseIsCross && Math.abs(otStartMins - baseEndMins!) <= 90;
+    const isBeforeShift = !isAfterCrossDayShift && otStartMins < baseStartMins! && otEndMins <= baseStartMins! + 60;
+
+    if (isBeforeShift) {
+      dutyMode = 'before_shift';
+      effectiveStart = otStart;
+      effectiveEnd = baseEnd;
+      effectiveIsCrossDay = baseIsCross || baseEndMins! < otStartMins;
+    } else {
+      dutyMode = 'after_shift';
+      effectiveStart = baseStart;
+      effectiveEnd = otEnd;
+      effectiveIsCrossDay = baseIsCross || otIsCross || otEndMins < baseStartMins!;
+    }
+  }
+
+  const effStartMins = parseTimeToMins(effectiveStart) ?? 0;
+  const effEndMins = parseTimeToMins(effectiveEnd) ?? 0;
+
+  let currentPhase: ContinuousDutyPhase = 'regular_shift_phase';
+  if (isNowInWindow(nowMins, otStartMins, otEndMins)) {
+    currentPhase = 'overtime_phase';
+  } else if (hasBaseShift && isNowInWindow(nowMins, baseStartMins!, baseEndMins!)) {
+    currentPhase = 'regular_shift_phase';
+  } else if (!isNowInWindow(nowMins, effStartMins, effEndMins)) {
+    // Di luar rentang aktif: cek apakah sudah lewat jam pulang final atau belum jam mulai
+    const isPassedEnd = effectiveIsCrossDay
+      ? (nowMins >= effEndMins && nowMins < effStartMins)
+      : (nowMins >= effEndMins);
+    currentPhase = isPassedEnd ? 'ready_to_clock_out' : 'before_duty';
+  }
+
+  let phaseBadgeLabel = `Lembur (${otStart} - ${otEnd})`;
+  let reassuranceText = '';
+
+  if (dutyMode === 'after_shift') {
+    if (currentPhase === 'overtime_phase') {
+      phaseBadgeLabel = `⚡ Lembur Aktif (${otStart} - ${otEnd} WITA)`;
+      reassuranceText = `Data lembur Anda TERCATAT AKTIF (${otStart}–${otEnd} WITA). Tidak perlu ceklok ulang — cukup 1× ceklok pulang saat lembur selesai pk ${effectiveEnd} WITA.`;
+    } else if (currentPhase === 'ready_to_clock_out') {
+      phaseBadgeLabel = `✅ Lembur Usai • Siap Pulang (${effectiveEnd} WITA)`;
+      reassuranceText = `Shift asli (${baseStart}–${baseEnd}) & Lembur (${otStart}–${otEnd}) tuntas. Silakan lakukan 1× ceklok pulang sekarang.`;
+    } else {
+      phaseBadgeLabel = `Shift + Lembur (${effectiveStart} - ${effectiveEnd} WITA)`;
+      reassuranceText = `Anda terjadwal lanjut lembur (${otStart}–${otEnd} WITA) setelah shift asli. Cukup 1× ceklok masuk & 1× ceklok pulang akhir pk ${effectiveEnd} WITA.`;
+    }
+  } else if (dutyMode === 'before_shift') {
+    if (currentPhase === 'overtime_phase') {
+      phaseBadgeLabel = `⚡ Lembur Pra-Shift (${otStart} - ${otEnd} WITA)`;
+      reassuranceText = `Data lembur pra-shift Anda TERCATAT AKTIF (${otStart}–${otEnd} WITA). Lanjut Shift Asli (${baseStart}–${baseEnd}) tanpa ceklok ulang — cukup 1× ceklok pulang akhir pk ${effectiveEnd} WITA.`;
+    } else if (currentPhase === 'regular_shift_phase') {
+      phaseBadgeLabel = `Shift Asli + Lembur Tercatat (${effectiveStart} - ${effectiveEnd})`;
+      reassuranceText = `Lembur pra-shift (${otStart}–${otEnd} WITA) sudah TERCATAT AMAN. Lanjutkan Shift Asli hingga ceklok pulang 1× pk ${effectiveEnd} WITA.`;
+    } else if (currentPhase === 'ready_to_clock_out') {
+      phaseBadgeLabel = `✅ Dinas & Lembur Usai • Siap Pulang`;
+      reassuranceText = `Lembur pra-shift (${otStart}–${otEnd}) & Shift Asli (${baseStart}–${baseEnd}) tuntas. Silakan lakukan 1× ceklok pulang sekarang.`;
+    } else {
+      phaseBadgeLabel = `Lembur + Shift (${effectiveStart} - ${effectiveEnd} WITA)`;
+      reassuranceText = `Anda terjadwal lembur sebelum shift (${otStart}–${otEnd}) dilanjut shift asli (${baseStart}–${baseEnd}). Cukup 1× ceklok masuk pk ${effectiveStart} & 1× ceklok pulang pk ${effectiveEnd} WITA.`;
+    }
+  } else {
+    // off_day_overtime
+    phaseBadgeLabel = `⚡ Lembur Hari OFF (${otStart} - ${otEnd} WITA)`;
+    reassuranceText = `Penugasan lembur hari OFF Anda TERCATAT AKTIF (${otStart}–${otEnd} WITA). Cukup 1× ceklok masuk & 1× ceklok pulang pk ${effectiveEnd} WITA.`;
+  }
+
+  const effectiveShift: Shift = {
+    ...(baseShift || {
+      id: 'shift-overtime-continuous',
+      code: 'OT',
+      name: `Lembur (${otStart} - ${otEnd} WITA)`,
+      lateToleranceMinutes: 15,
+      earliestClockInMinutes: 120,
+      colorTag: '#10b981',
+    }),
+    startTime: effectiveStart,
+    endTime: effectiveEnd,
+    isCrossDay: effectiveIsCrossDay,
+    name: hasBaseShift
+      ? `${baseShift?.name || 'Shift'} + Lembur (${effectiveStart} - ${effectiveEnd})`
+      : `Lembur Hari OFF (${otStart} - ${otEnd} WITA)`,
+  };
+
+  return {
+    effectiveShift,
+    dutyMode,
+    hasContinuousOvertime: true,
+    otStart,
+    otEnd,
+    otHours,
+    otDescription,
+    baseStart,
+    baseEnd,
+    effectiveStart,
+    effectiveEnd,
+    effectiveIsCrossDay,
+    currentPhase,
+    phaseBadgeLabel,
+    reassuranceText,
+  };
+}
+
 
 

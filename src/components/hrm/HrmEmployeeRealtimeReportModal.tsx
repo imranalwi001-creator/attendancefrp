@@ -753,7 +753,15 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
         ).substring(0, 5);
 
         // Kasus 1: Lembur Sebelum Shift (misal: lembur 15:30 - 22:30, shift resmi 22:30 - 07:30, atau lembur 07:30 - 15:30, shift resmi 15:30 - 22:30)
-        if (otStart && schedStart && otStart < schedStart) {
+        // Guard Cross-Day: Untuk Shift III (22:30 - 07:30), lembur Shift I (07:30 - 15:30) adalah SETELAH shift, BUKAN sebelum shift!
+        const isSchedCrossDay = Boolean(schedStart && schedEnd && schedEnd < schedStart);
+        const isAfterCrossDayShift = Boolean(
+          isSchedCrossDay && otStart && schedEnd && getTimeDistanceMinutes(otStart, schedEnd) <= 90
+        );
+        const isBeforeShiftOvertime = Boolean(
+          !isAfterCrossDayShift && otStart && schedStart && otStart < schedStart && (!otEnd || otEnd <= schedStart || getTimeDistanceMinutes(otEnd, schedStart) <= 60)
+        );
+        if (isBeforeShiftOvertime) {
           // singleClockIn dianggap sebagai clock-in lembur awal jika mendekati otStart (<=45 mnt) atau terjadi jauh sebelum shift resmi (>=60 mnt)
           const isOvertimeClockIn = Boolean(
             singleClockIn && (

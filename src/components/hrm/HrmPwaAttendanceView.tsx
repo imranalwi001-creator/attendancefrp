@@ -80,7 +80,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import defaultAvatar from '@/assets/logo.png';
-import { resolveEffectiveShift, checkShiftClockInWindow, checkShiftClockOutWindow, determineNextContinuousShift, NextContinuousShiftInfo, calculateAttendanceLateness, isShiftOffDay, formatShiftLabel, formatShiftHours } from '@/lib/hrmShiftResolver';
+import { resolveEffectiveShift, checkShiftClockInWindow, checkShiftClockOutWindow, determineNextContinuousShift, NextContinuousShiftInfo, calculateAttendanceLateness, isShiftOffDay, formatShiftLabel, formatShiftHours, resolveContinuousDutyShift } from '@/lib/hrmShiftResolver';
 import { compressImageFile } from '@/lib/imageCompressor';
 import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
@@ -1908,11 +1908,51 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     return userShift;
   }, [isCurrentlyOnDuty, todayAttendance, todayDateStr, user, userShift]);
 
+  // SPKL Lembur Resmi Disetujui (Sinkron Same-Day & Cross-Day; diblokir untuk 3 Karyawan Tetap sesuai Aturan 11)
+  const approvedOvertimeToday = useMemo(() => {
+    if (isFieldSpecial) return null;
+    const activeAttDate = isCurrentlyOnDuty && todayAttendance
+      ? normalizeDateString(todayAttendance.attendanceDate || todayAttendance.date)
+      : '';
+    const matching = userOvertimeList.filter((o) => {
+      if (String(o.status || '').toLowerCase() !== 'approved') return false;
+      const otDate = normalizeDateString(o.date || (o as any).overtime_date || (o as any).overtimeDate);
+      if (otDate === todayDateStr) return true;
+      if (activeAttDate && otDate === activeAttDate) return true;
+      return false;
+    });
+    if (matching.length === 0) return null;
+    // Prioritaskan SPKL pada tanggal aktif / hari ini dengan rentang waktu terjelas
+    return matching.find((o) => o.startTime || (o as any).start_time) || matching[0];
+  }, [userOvertimeList, todayDateStr, isCurrentlyOnDuty, todayAttendance, isFieldSpecial]);
+
+  // ⚡ STANDAR SINGLE CONTINUOUS SESSION (1x Ceklok Masuk -> 1x Ceklok Pulang)
+  // Menggabungkan Shift Asli + SPKL Lembur (Sebelum Shift, Setelah Shift, maupun Hari OFF) untuk SEMUA karyawan!
+  const continuousDutyInfo = useMemo(() => {
+    const baseIsOff = Boolean(effectiveDisplayShift && isShiftOffDay(effectiveDisplayShift));
+    return resolveContinuousDutyShift(effectiveDisplayShift || userShift, approvedOvertimeToday, currentTime, baseIsOff);
+  }, [effectiveDisplayShift, userShift, approvedOvertimeToday, currentTime]);
+
+  const effectiveDutyEndTime =
+    continuousDutyInfo.effectiveEnd ||
+    effectiveDisplayShift?.endTime?.substring(0, 5) ||
+    userShift?.endTime?.substring(0, 5) ||
+    '16:30';
+
   // Absen Pulang (Clock-Out) Guard:
-  // Harus tidak aktif sebelum shift endTime, kecuali ada izin darurat yang disetujui!
+  // Harus mengacu ke jam pulang final (continuousDutyInfo.effectiveShift),
+  // sehingga karyawan yang lanjut lembur tidak terpencet pulang lebih awal & tidak terkunci di tengah lembur!
   const clockOutWindow = useMemo(() => {
-    return checkShiftClockOutWindow(effectiveDisplayShift || userShift, todayAttendance?.clockIn, currentTime);
-  }, [effectiveDisplayShift, userShift, todayAttendance?.clockIn, currentTime]);
+    const activeAttDate = todayAttendance
+      ? normalizeDateString(todayAttendance.attendanceDate || todayAttendance.date)
+      : todayDateStr;
+    return checkShiftClockOutWindow(
+      continuousDutyInfo.effectiveShift || effectiveDisplayShift || userShift,
+      todayAttendance?.clockIn || todayAttendance?.clock_in,
+      currentTime,
+      activeAttDate
+    );
+  }, [continuousDutyInfo.effectiveShift, effectiveDisplayShift, userShift, todayAttendance, todayDateStr, currentTime]);
 
   const isBeforeShiftEndTime = clockOutWindow.isBeforeEndTime;
 
@@ -2302,7 +2342,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       if (type === 'clock_out') {
         if (!isClockOutAllowed) {
           if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
-            toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
+            toast.error(`Absen Pulang belum aktif! Jadwal pulang Anda${continuousDutyInfo.hasContinuousOvertime ? ' (termasuk lembur SPKL)' : ''} pk ${effectiveDutyEndTime} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
           } else {
             toast.error(clockOutDisabledReason || 'Presensi Pulang belum dapat dilakukan.');
           }
@@ -3395,23 +3435,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   const allMasterShifts = useMemo(() => hrmService.getShifts(), []);
   const nextShiftInfo = useMemo(() => {
     if (!isCurrentSessionClosed) return null;
-    if (isMacciniBajiOfficer(user) && macciniVesselStatus?.status === 'idle') {
+    if (isMacciniBajiOfficer(user) && macciniVesselStatus?.status === 'idle' && !approvedOvertimeToday) {
       return null;
     }
     return determineNextContinuousShift(userShift, todayAttendance, currentTime, allMasterShifts);
-  }, [isCurrentSessionClosed, user, macciniVesselStatus?.status, userShift, todayAttendance, currentTime, allMasterShifts]);
+  }, [isCurrentSessionClosed, user, macciniVesselStatus?.status, approvedOvertimeToday, userShift, todayAttendance, currentTime, allMasterShifts]);
 
-  // Kesesuaian Jam Shift Karyawan (Pagi, Siang, Malam & Lintas Hari)
+  // Kesesuaian Jam Shift Karyawan (memperhitungkan Lembur Sebelum Shift / Setelah Shift / Lintas Hari)
   const isShiftWindowActive = useMemo(() => {
-    return checkShiftClockInWindow(userShift, currentTime).isOpen;
-  }, [currentTime, userShift]);
+    return checkShiftClockInWindow(continuousDutyInfo.effectiveShift || userShift, currentTime).isOpen;
+  }, [currentTime, continuousDutyInfo.effectiveShift, userShift]);
 
-  // 3. Pengecualian Aktif Di Luar Shift (Lembur / Pengganti):
-  const approvedOvertimeToday = useMemo(() => {
-    return userOvertimeList.find(
-      (o) => o.status === 'approved' && (o.date === todayDateStr || (o.createdAt && o.createdAt.startsWith(todayDateStr)))
-    );
-  }, [userOvertimeList, todayDateStr]);
+  // 3. Pengecualian Aktif Di Luar Shift (Pengganti Resmi; approvedOvertimeToday sudah dihitung di atas untuk Continuous Duty):
 
   const approvedSubstituteToday = useMemo(() => {
     const swap = userSubstitutions.find(
@@ -3560,7 +3595,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
     if (isCurrentlyOnDuty) {
       if (!isClockOutAllowed) {
         if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
-          toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${effectiveDisplayShift?.endTime?.substring(0, 5) || '07:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
+          toast.error(`Absen Pulang belum aktif! Jadwal pulang Anda${continuousDutyInfo.hasContinuousOvertime ? ' (termasuk lembur SPKL)' : ''} pk ${effectiveDutyEndTime} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
         } else {
           toast.error(clockOutDisabledReason || 'Belum memenuhi syarat untuk absen pulang.');
         }
@@ -4278,25 +4313,45 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
             )}
 
-            {/* Banner Penugasan Lembur Resmi (SPKL Sambung Shift / Tugas Pengganti) */}
+            {/* Banner Penugasan Lembur Resmi (SPKL Sambung Shift / Lembur Sebelum atau Setelah Shift) */}
             {approvedOvertimeToday && (
-              <div className="p-3 bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-transparent border border-emerald-500/30 rounded-2xl flex items-center gap-2.5 text-xs shadow-xs">
-                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
-                  <Zap className="w-4 h-4 text-emerald-600 fill-emerald-600" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between">
-                    <p className="font-extrabold text-emerald-950 dark:text-emerald-200 flex items-center gap-1.5">
-                      <span>⚡ SPKL Lembur Resmi ({approvedOvertimeToday.startTime?.substring(0, 5)} - {approvedOvertimeToday.endTime?.substring(0, 5)} WITA)</span>
-                    </p>
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200">
-                      {approvedOvertimeToday.durationHours || (approvedOvertimeToday as any).duration_hours || 0} Jam
-                    </span>
+              <div className={`p-3 rounded-2xl border shadow-xs space-y-1.5 text-xs ${
+                isCurrentlyOnDuty && continuousDutyInfo.currentPhase === 'overtime_phase'
+                  ? 'bg-gradient-to-r from-amber-500/20 via-emerald-500/15 to-teal-500/10 border-amber-400/60 dark:border-amber-500/50'
+                  : 'bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-transparent border-emerald-500/30'
+              }`}>
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                    isCurrentlyOnDuty && continuousDutyInfo.currentPhase === 'overtime_phase'
+                      ? 'bg-amber-500/25 text-amber-600 dark:text-amber-300 animate-pulse'
+                      : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                  }`}>
+                    <Zap className="w-4 h-4 fill-current" />
                   </div>
-                  <p className="text-[10px] text-emerald-900/80 dark:text-emerald-300/80 mt-0.5 line-clamp-2">
-                    {approvedOvertimeToday.taskDescription || (approvedOvertimeToday as any).task_description || 'Penugasan lembur resmi disahkan. Akses presensi dinas aktif.'}
-                  </p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-1.5">
+                      <p className="font-extrabold text-emerald-950 dark:text-emerald-200 flex items-center gap-1.5 truncate">
+                        <span>
+                          ⚡ SPKL Lembur Resmi ({continuousDutyInfo.otStart || (approvedOvertimeToday.startTime || (approvedOvertimeToday as any).start_time || '').substring(0, 5)} – {continuousDutyInfo.otEnd || (approvedOvertimeToday.endTime || (approvedOvertimeToday as any).end_time || '').substring(0, 5)} WITA)
+                        </span>
+                      </p>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 shrink-0">
+                        {continuousDutyInfo.otHours || approvedOvertimeToday.durationHours || (approvedOvertimeToday as any).duration_hours || 0} Jam
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-emerald-900/80 dark:text-emerald-300/80 mt-0.5 line-clamp-2">
+                      {continuousDutyInfo.otDescription || approvedOvertimeToday.taskDescription || (approvedOvertimeToday as any).task_description || 'Penugasan lembur resmi disahkan. Akses presensi dinas aktif.'}
+                    </p>
+                  </div>
                 </div>
+                {continuousDutyInfo.reassuranceText && (
+                  <div className="pt-1.5 border-t border-emerald-500/20 flex items-start gap-1.5 text-[10px] font-semibold text-emerald-900 dark:text-emerald-200">
+                    <span className={`mt-0.5 w-2 h-2 rounded-full shrink-0 ${
+                      isCurrentlyOnDuty ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'
+                    }`} />
+                    <span className="leading-snug">{continuousDutyInfo.reassuranceText}</span>
+                  </div>
+                )}
               </div>
             )}
 
@@ -4324,7 +4379,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   if (hasClockedIn && !hasClockedOut) {
                     if (!isClockOutAllowed) {
                       if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
-                        toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${effectiveDisplayShift?.endTime?.substring(0, 5) || '07:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
+                        toast.error(`Absen Pulang belum aktif! Jadwal pulang Anda${continuousDutyInfo.hasContinuousOvertime ? ' (termasuk lembur SPKL)' : ''} pk ${effectiveDutyEndTime} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat.`);
                         return;
                       }
                       toast.error(clockOutDisabledReason || 'Presensi pulang belum dibuka.');
@@ -4349,7 +4404,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 style={{ width: '210px', height: '210px', minWidth: '210px', minHeight: '210px', maxWidth: '210px', maxHeight: '210px' }}
                 title={
                   isCurrentlyOnDuty
-                    ? "Ketuk untuk Presensi Pulang"
+                    ? (continuousDutyInfo.hasContinuousOvertime && isBeforeShiftEndTime
+                        ? `Sedang Bertugas (${continuousDutyInfo.phaseBadgeLabel}) • Pulang pk ${effectiveDutyEndTime} WITA`
+                        : "Ketuk untuk Presensi Pulang")
                     : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
                     ? "Hari Ini Libur / Bebas Tugas"
                     : isCurrentSessionClosed && nextShiftInfo?.isNextShiftAvailable
@@ -4359,7 +4416,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               >
                 {/* Outer Ring Border */}
                 <div className={`absolute inset-0 rounded-full border-2 transition-colors pointer-events-none ${
-                  isCurrentlyOnDuty
+                  isCurrentlyOnDuty && continuousDutyInfo.currentPhase === 'overtime_phase'
+                    ? 'border-amber-400/80 group-hover:border-amber-400'
+                    : isCurrentlyOnDuty
                     ? 'border-rose-500/50 group-hover:border-rose-500/80'
                     : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
                     ? 'border-indigo-400/30'
@@ -4372,7 +4431,11 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <text className="text-[9.5px] font-bold tracking-[0.15em] fill-slate-700 dark:fill-slate-300 uppercase">
                     <textPath href="#circlePath" startOffset="50%" textAnchor="middle">
                       {hasClockedIn && !hasClockedOut
-                        ? 'KETUK UNTUK ABSEN PULANG'
+                        ? (continuousDutyInfo.hasContinuousOvertime && continuousDutyInfo.currentPhase === 'overtime_phase' && isBeforeShiftEndTime
+                            ? `LEMBUR AKTIF • PULANG ${effectiveDutyEndTime}`
+                            : continuousDutyInfo.hasContinuousOvertime && isBeforeShiftEndTime
+                            ? `BERTUGAS + LEMBUR S/D ${effectiveDutyEndTime}`
+                            : 'KETUK UNTUK ABSEN PULANG')
                         : hasClockedOut && nextShiftInfo?.isNextShiftAvailable
                         ? `KETUK UNTUK MASUK ${nextShiftInfo.nextShiftCode.replace('SHF-', 'SHIFT ')}`
                         : hasClockedOut
@@ -4415,9 +4478,23 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
                   {/* Status Overlay jika sudah absen */}
                   {hasClockedIn && (
-                    <div className="absolute bottom-2 bg-emerald-600 text-white text-[9.5px] font-bold px-2.5 py-0.5 rounded-full shadow-md flex items-center gap-1">
-                      <Check className="w-3 h-3" />
-                      <span>{hasClockedOut ? `Pulang: ${todayAttendance?.clockOut?.substring(0, 5)}` : `Masuk: ${todayAttendance?.clockIn?.substring(0, 5)}`}</span>
+                    <div className={`absolute bottom-2 text-white text-[9.5px] font-bold px-2.5 py-0.5 rounded-full shadow-md flex items-center gap-1 ${
+                      !hasClockedOut && continuousDutyInfo.hasContinuousOvertime && continuousDutyInfo.currentPhase === 'overtime_phase'
+                        ? 'bg-amber-600'
+                        : 'bg-emerald-600'
+                    }`}>
+                      {!hasClockedOut && continuousDutyInfo.hasContinuousOvertime && continuousDutyInfo.currentPhase === 'overtime_phase' ? (
+                        <Zap className="w-3 h-3 fill-white" />
+                      ) : (
+                        <Check className="w-3 h-3" />
+                      )}
+                      <span>
+                        {hasClockedOut
+                          ? `Pulang: ${(todayAttendance?.clockOut || todayAttendance?.clock_out)?.substring(0, 5)}`
+                          : continuousDutyInfo.hasContinuousOvertime && continuousDutyInfo.currentPhase === 'overtime_phase'
+                          ? `Lembur Aktif (${(todayAttendance?.clockIn || todayAttendance?.clock_in)?.substring(0, 5)})`
+                          : `Masuk: ${(todayAttendance?.clockIn || todayAttendance?.clock_in)?.substring(0, 5)}`}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -4468,7 +4545,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
 
                 <Badge className={
-                  isCurrentlyOnDuty
+                  isCurrentlyOnDuty && continuousDutyInfo.hasContinuousOvertime && continuousDutyInfo.currentPhase === 'overtime_phase'
+                    ? "bg-amber-500/25 text-amber-300 border border-amber-400/60 text-[10px] font-bold py-0.5 px-2"
+                    : isCurrentlyOnDuty
                     ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold py-0.5 px-2"
                     : !effectiveDisplayShift
                     ? "bg-slate-500/20 text-slate-300 border border-slate-500/40 text-[10px] font-bold py-0.5 px-2"
@@ -4478,12 +4557,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold py-0.5 px-2"
                     : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold py-0.5 px-2"
                 }>
-                  {isCurrentlyOnDuty
+                  {isCurrentlyOnDuty && continuousDutyInfo.hasContinuousOvertime
+                    ? continuousDutyInfo.phaseBadgeLabel
+                    : isCurrentlyOnDuty
                     ? (effectiveDisplayShift?.name || 'Shift III (22:30 - 07:30 WITA)')
                     : !effectiveDisplayShift
                     ? 'Memuat Shift...'
                     : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday)
-                    ? 'Libur / Off'
+                    ? (continuousDutyInfo.hasContinuousOvertime ? continuousDutyInfo.phaseBadgeLabel : 'Libur / Off')
                     : effectiveDisplayShift?.id === 'unassigned' || !effectiveDisplayShift?.startTime
                     ? 'Belum Ada Shift'
                     : (effectiveDisplayShift?.name || 'Shift Operasional')}
@@ -4509,21 +4590,35 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   {isCurrentlyOnDuty ? (
                     <div className="space-y-0.5">
                       <p className="font-bold text-emerald-300 font-mono text-[11px] flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>{effectiveDisplayShift?.startTime || '22:30'} - {effectiveDisplayShift?.endTime || '07:30'} WITA</span>
+                        {continuousDutyInfo.hasContinuousOvertime ? (
+                          <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400 shrink-0" />
+                        ) : (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        )}
+                        <span>
+                          {continuousDutyInfo.hasContinuousOvertime
+                            ? `${continuousDutyInfo.effectiveStart} - ${continuousDutyInfo.effectiveEnd} WITA`
+                            : `${effectiveDisplayShift?.startTime || '22:30'} - ${effectiveDisplayShift?.endTime || '07:30'} WITA`}
+                        </span>
                       </p>
-                      <p className="text-[10px] text-emerald-400 font-medium">
-                        Sedang Berdinas Aktif (Sesi Berjalan)
+                      <p className={`text-[10px] font-medium ${continuousDutyInfo.hasContinuousOvertime ? 'text-amber-300' : 'text-emerald-400'}`}>
+                        {continuousDutyInfo.hasContinuousOvertime
+                          ? (continuousDutyInfo.currentPhase === 'overtime_phase'
+                              ? `⚡ Lembur Aktif (${continuousDutyInfo.otStart}–${continuousDutyInfo.otEnd}) • 1× Pulang ${continuousDutyInfo.effectiveEnd}`
+                              : `Shift + Lembur (${continuousDutyInfo.otStart}–${continuousDutyInfo.otEnd}) • 1× Pulang ${continuousDutyInfo.effectiveEnd}`)
+                          : 'Sedang Berdinas Aktif (Sesi Berjalan)'}
                       </p>
                     </div>
                   ) : approvedOvertimeToday ? (
                     <div className="space-y-0.5">
                       <p className="font-bold text-amber-300 font-mono text-[11px] flex items-center gap-1">
-                        <Zap className="w-3 h-3 fill-amber-300" />
-                        <span>Lembur: {approvedOvertimeToday.startTime?.substring(0, 5)} - {approvedOvertimeToday.endTime?.substring(0, 5)} WITA</span>
+                        <Zap className="w-3 h-3 fill-amber-300 shrink-0" />
+                        <span>Lembur: {continuousDutyInfo.otStart} - {continuousDutyInfo.otEnd} WITA</span>
                       </p>
                       <p className="font-bold text-white font-mono text-[10.5px]">
-                        {(isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) ? 'Hari Libur (Penugasan Lembur)' : `Lanjut Shift: ${effectiveDisplayShift?.startTime} - ${effectiveDisplayShift?.endTime} WITA`}
+                        {continuousDutyInfo.dutyMode === 'off_day_overtime'
+                          ? 'Hari Libur (Penugasan Lembur)'
+                          : `Total Dinas (1× Ceklok): ${continuousDutyInfo.effectiveStart} - ${continuousDutyInfo.effectiveEnd} WITA`}
                       </p>
                     </div>
                   ) : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) ? (
@@ -4613,7 +4708,17 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                           <span className="text-slate-800 dark:text-slate-200">Presensi Selesai (Sudah Pulang)</span>
                         )
                       ) : isCurrentlyOnDuty ? (
-                        <span className="text-emerald-700 dark:text-emerald-400 font-extrabold">Aktif Bertugas (Sudah Absen Masuk)</span>
+                        continuousDutyInfo.hasContinuousOvertime && continuousDutyInfo.currentPhase === 'overtime_phase' ? (
+                          <span className="text-amber-700 dark:text-amber-300 font-extrabold">
+                            ⚡ Sedang Bertugas Lembur (Tercatat Resmi s/d {effectiveDutyEndTime})
+                          </span>
+                        ) : continuousDutyInfo.hasContinuousOvertime ? (
+                          <span className="text-emerald-700 dark:text-emerald-400 font-extrabold">
+                            Aktif Bertugas + Lembur Tercatat (Pulang {effectiveDutyEndTime})
+                          </span>
+                        ) : (
+                          <span className="text-emerald-700 dark:text-emerald-400 font-extrabold">Aktif Bertugas (Sudah Absen Masuk)</span>
+                        )
                       ) : hasActiveLeaveToday ? (
                         <span className="text-amber-600 dark:text-amber-400 font-bold">Sedang Cuti / Izin</span>
                       ) : approvedSubstituteToday ? (
@@ -5002,7 +5107,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   }
                   if (!isClockOutAllowed) {
                     if (isBeforeShiftEndTime && !hasApprovedEmergencyLeave) {
-                      toast.error(`Absen Pulang belum aktif! Jadwal pulang shift Anda pk ${userShift?.endTime?.substring(0, 5) || '16:30'} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat atau Lapor Keluar Area.`);
+                      toast.error(`Absen Pulang belum aktif! Jadwal pulang Anda${continuousDutyInfo.hasContinuousOvertime ? ' (termasuk lembur SPKL)' : ''} pk ${effectiveDutyEndTime} WITA. Jika ada kondisi mendesak, silakan ajukan Izin Darurat atau Lapor Keluar Area.`);
                     }
                     return;
                   }
@@ -5033,7 +5138,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     : !isInsideCoordinates
                     ? 'LAPOR KELUAR POS'
                     : isBeforeShiftEndTime && !hasApprovedEmergencyLeave
-                    ? `TERKUNCI (${userShift?.endTime?.substring(0, 5) || '16:30'})`
+                    ? `TERKUNCI (${effectiveDutyEndTime})`
                     : hasApprovedEmergencyLeave
                     ? 'PULANG (IZIN DARURAT)'
                     : 'ABSEN PULANG'}
@@ -5121,7 +5226,8 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <div className="flex items-center gap-2 min-w-0">
                   <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                   <span className="truncate">
-                    Absen Pulang terkunci s/d pk <b>{userShift?.endTime?.substring(0, 5) || '16:30'} WITA</b>
+                    Absen Pulang terkunci s/d pk <b>{effectiveDutyEndTime} WITA</b>
+                    {continuousDutyInfo.hasContinuousOvertime ? ' (1× Ceklok Akhir Shift + Lembur)' : ''}
                   </span>
                 </div>
                 {!isMacciniBajiOfficer(user) ? (
