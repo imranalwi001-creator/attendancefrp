@@ -3932,14 +3932,18 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
       {/* Mobile App Frame (Centered 440px on Tablet/Desktop, Native Full-Bleed on Phone) */}
       <div className="max-w-[440px] mx-auto min-h-screen bg-[#EEF6F2] dark:bg-[#081310] sm:border-x sm:border-emerald-900/[0.08] dark:sm:border-emerald-400/[0.08] sm:shadow-[0_0_48px_rgba(6,78,59,0.08)] flex flex-col justify-between relative">
-        {/* Seamless Whisper-Emerald Top Atmospheric Wash (Zero Boxy Edge) */}
+        {/* Seamless Whisper-Emerald Paired Diagonal Atmospheric Glow (Top-Right ↔ Bottom-Left) */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 h-[360px] z-0 bg-[radial-gradient(120%_100%_at_85%_0%,rgba(16,185,129,0.24)_0%,rgba(13,122,95,0.08)_48%,transparent_100%)] dark:bg-[radial-gradient(120%_100%_at_85%_0%,rgba(16,185,129,0.20)_0%,rgba(13,122,95,0.07)_50%,transparent_100%)]"
+          className="pointer-events-none absolute inset-x-0 top-0 h-[360px] z-0 bg-[radial-gradient(120%_100%_at_85%_0%,rgba(16,185,129,0.22)_0%,rgba(13,122,95,0.07)_48%,transparent_100%)] dark:bg-[radial-gradient(120%_100%_at_85%_0%,rgba(16,185,129,0.19)_0%,rgba(13,122,95,0.06)_50%,transparent_100%)]"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[440px] h-[340px] z-0 bg-[radial-gradient(115%_95%_at_12%_100%,rgba(16,185,129,0.22)_0%,rgba(13,122,95,0.07)_48%,transparent_100%)] dark:bg-[radial-gradient(115%_95%_at_12%_100%,rgba(16,185,129,0.19)_0%,rgba(13,122,95,0.06)_50%,transparent_100%)]"
         />
 
         {/* ─── CLEAN TRANSPARENT STICKY HEADER (SEAMLESS WHISPER-EMERALD + WHITE LOGO BADGE) ─── */}
-        <header className="sticky top-0 z-30 bg-[#EEF6F2]/82 dark:bg-[#081310]/82 bg-gradient-to-b from-emerald-600/[0.20] via-emerald-500/[0.09] to-transparent dark:from-emerald-400/[0.18] dark:via-emerald-500/[0.07] dark:to-transparent backdrop-blur-xl pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 px-3.5 shadow-[inset_0_-1px_0_0_rgba(16,185,129,0.10)]">
+        <header className="sticky top-0 z-30 bg-[#EEF6F2]/82 dark:bg-[#081310]/82 bg-gradient-to-b from-emerald-600/[0.18] via-emerald-500/[0.08] to-transparent dark:from-emerald-400/[0.16] dark:via-emerald-500/[0.06] dark:to-transparent backdrop-blur-xl pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 px-3.5 shadow-[inset_0_-1px_0_0_rgba(16,185,129,0.10)]">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <div className="w-9 h-9 rounded-xl bg-white p-1 border border-emerald-900/10 dark:border-white/15 shadow-[0_4px_14px_-4px_rgba(13,122,95,0.45)] ring-2 ring-emerald-500/20 flex items-center justify-center shrink-0">
@@ -3951,35 +3955,35 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
 
               <div className="min-w-0">
-                <h1 className="text-[12.5px] sm:text-[14px] font-extrabold tracking-[-0.02em] bg-gradient-to-r from-[#064E3B] via-[#0D7A5F] to-emerald-500 dark:from-emerald-300 dark:via-emerald-400 dark:to-emerald-500 bg-clip-text text-transparent uppercase whitespace-nowrap leading-tight">
+                <h1 className="text-[12.5px] sm:text-[14px] font-extrabold tracking-[-0.02em] bg-gradient-to-r from-[#043927] via-[#0A5E49] to-[#0D7A5F] dark:from-emerald-200 dark:via-emerald-300 dark:to-emerald-400 bg-clip-text text-transparent uppercase whitespace-nowrap leading-tight">
                   PT. FAWWAZ RESKI PERWIRA
                 </h1>
-                <p className="text-[10.5px] font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap leading-tight mt-0.5">
+                <p className="text-[10.5px] font-medium text-slate-600 dark:text-slate-400 whitespace-nowrap leading-tight mt-0.5">
                   Presensi & Operasional SDM
                 </p>
               </div>
             </div>
 
-            {/* Minimalist Control Pill: Dark/Light + Notifications + Refresh */}
-            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/90 dark:bg-[#101C18]/90 border border-emerald-900/[0.08] dark:border-emerald-400/[0.12] shadow-2xs shrink-0">
+            {/* Seamless Blended Header Controls (Menyatu Halus dengan Gradasi Kanan Atas) */}
+            <div className="flex items-center gap-0.5 shrink-0">
               <button
                 type="button"
                 onClick={toggleThemeMode}
-                className="w-7 h-7 rounded-full hover:bg-slate-100 dark:hover:bg-white/10 flex items-center justify-center text-slate-600 dark:text-amber-300 transition-transform active:scale-90"
+                className="w-8 h-8 rounded-full hover:bg-emerald-900/[0.08] dark:hover:bg-emerald-400/15 flex items-center justify-center text-[#0B5949] dark:text-amber-300 transition-all active:scale-90"
                 title={isDarkMode ? 'Beralih ke Mode Terang' : 'Beralih ke Mode Gelap'}
               >
-                {isDarkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+                {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
               </button>
 
               <button
                 type="button"
                 onClick={() => setNotificationsDrawerOpen(true)}
-                className="relative w-7 h-7 rounded-full hover:bg-slate-100 dark:hover:bg-white/10 flex items-center justify-center text-slate-600 dark:text-slate-300 transition-transform active:scale-90"
+                className="relative w-8 h-8 rounded-full hover:bg-emerald-900/[0.08] dark:hover:bg-emerald-400/15 flex items-center justify-center text-[#0B5949] dark:text-emerald-200 transition-all active:scale-90"
                 title="Notifikasi"
               >
-                <Bell className="w-3.5 h-3.5" />
+                <Bell className="w-4 h-4" />
                 {unreadNotificationsCount > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 bg-rose-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center ring-2 ring-[#EEF6F2] dark:ring-[#081310]">
+                  <span className="absolute top-0.5 right-0.5 min-w-[15px] h-[15px] px-1 bg-rose-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center ring-2 ring-[#EEF6F2] dark:ring-[#081310]">
                     {unreadNotificationsCount}
                   </span>
                 )}
@@ -4003,10 +4007,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   }
                   window.location.reload();
                 }}
-                className="w-7 h-7 rounded-full hover:bg-slate-100 dark:hover:bg-white/10 flex items-center justify-center text-slate-600 dark:text-slate-300 transition-transform active:scale-90"
+                className="w-8 h-8 rounded-full hover:bg-emerald-900/[0.08] dark:hover:bg-emerald-400/15 flex items-center justify-center text-[#0B5949] dark:text-emerald-200 transition-all active:scale-90"
                 title="Muat Ulang Aplikasi"
               >
-                <RotateCw className="w-3.5 h-3.5" />
+                <RotateCw className="w-4 h-4" />
               </button>
             </div>
           </div>
