@@ -3935,14 +3935,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         {/* Seamless Whisper-Emerald Top Atmospheric Wash (Zero Boxy Edge) */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 h-[360px] z-0 bg-[radial-gradient(125%_100%_at_50%_0%,rgba(16,185,129,0.14)_0%,rgba(13,122,95,0.05)_52%,transparent_100%)] dark:bg-[radial-gradient(125%_100%_at_50%_0%,rgba(16,185,129,0.13)_0%,rgba(13,122,95,0.04)_55%,transparent_100%)]"
+          className="pointer-events-none absolute inset-x-0 top-0 h-[360px] z-0 bg-[radial-gradient(120%_100%_at_85%_0%,rgba(16,185,129,0.24)_0%,rgba(13,122,95,0.08)_48%,transparent_100%)] dark:bg-[radial-gradient(120%_100%_at_85%_0%,rgba(16,185,129,0.20)_0%,rgba(13,122,95,0.07)_50%,transparent_100%)]"
         />
 
         {/* ─── CLEAN TRANSPARENT STICKY HEADER (SEAMLESS WHISPER-EMERALD + WHITE LOGO BADGE) ─── */}
-        <header className="sticky top-0 z-30 bg-[#EEF6F2]/82 dark:bg-[#081310]/82 backdrop-blur-xl pt-[max(0.875rem,env(safe-area-inset-top))] pb-2.5 px-3.5">
+        <header className="sticky top-0 z-30 bg-[#EEF6F2]/82 dark:bg-[#081310]/82 bg-gradient-to-b from-emerald-600/[0.20] via-emerald-500/[0.09] to-transparent dark:from-emerald-400/[0.18] dark:via-emerald-500/[0.07] dark:to-transparent backdrop-blur-xl pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 px-3.5 shadow-[inset_0_-1px_0_0_rgba(16,185,129,0.10)]">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-white p-1 border border-emerald-900/10 dark:border-white/15 shadow-xs flex items-center justify-center shrink-0">
+              <div className="w-9 h-9 rounded-xl bg-white p-1 border border-emerald-900/10 dark:border-white/15 shadow-[0_4px_14px_-4px_rgba(13,122,95,0.45)] ring-2 ring-emerald-500/20 flex items-center justify-center shrink-0">
                 <img
                   src={defaultAvatar}
                   alt="Logo PT. FAWWAZ RESKI PERWIRA"
@@ -3951,10 +3951,10 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
 
               <div className="min-w-0">
-                <h1 className="text-[11.5px] sm:text-[13px] font-extrabold tracking-[-0.015em] text-slate-900 dark:text-white uppercase whitespace-nowrap leading-tight">
+                <h1 className="text-[12.5px] sm:text-[14px] font-extrabold tracking-[-0.02em] bg-gradient-to-r from-[#064E3B] via-[#0D7A5F] to-emerald-500 dark:from-emerald-300 dark:via-emerald-400 dark:to-emerald-500 bg-clip-text text-transparent uppercase whitespace-nowrap leading-tight">
                   PT. FAWWAZ RESKI PERWIRA
                 </h1>
-                <p className="text-[10px] font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap leading-tight mt-0.5">
+                <p className="text-[10.5px] font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap leading-tight mt-0.5">
                   Presensi & Operasional SDM
                 </p>
               </div>
@@ -4045,7 +4045,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     {user?.fullName || 'Karyawan'}
                   </h2>
 
-                  <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 dark:bg-emerald-500/12 border border-emerald-500/20 text-[11.5px] max-w-full">
+                  <div className="mt-1.5 flex items-center gap-1.5 text-[12px] max-w-full">
                     <span className="font-mono font-bold text-[#0D7A5F] dark:text-emerald-400 shrink-0">
                       {user?.nip || 'PT FRP'}
                     </span>
