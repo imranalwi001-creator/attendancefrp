@@ -4045,9 +4045,48 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     )}
                   </div>
 
-                  <h2 className="text-[22px] sm:text-[24px] font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.18] mt-0.5 truncate">
-                    {user?.fullName || 'Karyawan'}
-                  </h2>
+                  <div className="mt-0.5 flex items-center gap-1.5 min-w-0 max-w-full">
+                    <h2 className="text-[22px] sm:text-[24px] font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.18] truncate">
+                      {user?.fullName || 'Karyawan'}
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        toast.success(
+                          masterDescriptor
+                            ? 'Akun Resmi PT. FAWWAZ RESKI PERWIRA • Biometrik Wajah Terverifikasi'
+                            : 'Akun Resmi Terdaftar PT. FAWWAZ RESKI PERWIRA',
+                          { duration: 2800 }
+                        )
+                      }
+                      className="shrink-0 inline-flex items-center justify-center rounded-full active:scale-90 transition-transform focus:outline-none"
+                      title={masterDescriptor ? 'Akun Resmi • Biometrik Wajah Terverifikasi' : 'Akun Resmi Terdaftar PT FRP'}
+                      aria-label="Karyawan Terverifikasi"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        className="w-[19px] h-[19px] sm:w-[20px] sm:h-[20px] drop-shadow-[0_1.5px_3px_rgba(14,165,233,0.38)]"
+                        aria-hidden="true"
+                      >
+                        <defs>
+                          <linearGradient id="frpVerifiedGradHero" x1="12%" y1="8%" x2="88%" y2="92%">
+                            <stop offset="0%" stopColor="#29D8F6" />
+                            <stop offset="52%" stopColor="#0EA5E9" />
+                            <stop offset="100%" stopColor="#0284C7" />
+                          </linearGradient>
+                        </defs>
+                        <circle cx="12" cy="12" r="11" fill="url(#frpVerifiedGradHero)" stroke="rgba(255,255,255,0.28)" strokeWidth="0.7" />
+                        <path
+                          d="M7.6 12.35L10.65 15.4L16.55 9.1"
+                          fill="none"
+                          stroke="#FFFFFF"
+                          strokeWidth="2.6"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  </div>
 
                   <div className="mt-1.5 flex items-center gap-1.5 text-[12px] max-w-full">
                     <span className="font-mono font-bold text-[#0D7A5F] dark:text-emerald-400 shrink-0">
@@ -5356,7 +5395,46 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   className="w-14 h-14 rounded-full object-cover ring-1 ring-slate-200 dark:ring-white/15 bg-slate-100 shrink-0"
                 />
                 <div className="min-w-0 flex-1">
-                  <h2 className="text-sm font-bold text-slate-900 dark:text-white truncate">{user?.fullName}</h2>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <h2 className="text-sm font-bold text-slate-900 dark:text-white truncate">{user?.fullName}</h2>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        toast.success(
+                          masterDescriptor
+                            ? 'Akun Resmi PT. FAWWAZ RESKI PERWIRA • Biometrik Wajah Terverifikasi'
+                            : 'Akun Resmi Terdaftar PT. FAWWAZ RESKI PERWIRA',
+                          { duration: 2800 }
+                        )
+                      }
+                      className="shrink-0 inline-flex items-center justify-center rounded-full active:scale-90 transition-transform focus:outline-none"
+                      title={masterDescriptor ? 'Akun Resmi • Biometrik Wajah Terverifikasi' : 'Akun Resmi Terdaftar PT FRP'}
+                      aria-label="Karyawan Terverifikasi"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        className="w-[15px] h-[15px] drop-shadow-[0_1px_2px_rgba(14,165,233,0.35)]"
+                        aria-hidden="true"
+                      >
+                        <defs>
+                          <linearGradient id="frpVerifiedGradAccount" x1="12%" y1="8%" x2="88%" y2="92%">
+                            <stop offset="0%" stopColor="#29D8F6" />
+                            <stop offset="52%" stopColor="#0EA5E9" />
+                            <stop offset="100%" stopColor="#0284C7" />
+                          </linearGradient>
+                        </defs>
+                        <circle cx="12" cy="12" r="11" fill="url(#frpVerifiedGradAccount)" stroke="rgba(255,255,255,0.28)" strokeWidth="0.7" />
+                        <path
+                          d="M7.6 12.35L10.65 15.4L16.55 9.1"
+                          fill="none"
+                          stroke="#FFFFFF"
+                          strokeWidth="2.6"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  </div>
                   <p className="text-xs font-mono text-slate-500 dark:text-slate-400">{user?.nip || user?.id}</p>
                   <p className="text-[11px] text-[#0D7A5F] dark:text-emerald-400 font-medium mt-0.5 truncate">
                     {user?.divisionName || 'Operasional'} • {user?.roleName || user?.role || 'Karyawan'}
