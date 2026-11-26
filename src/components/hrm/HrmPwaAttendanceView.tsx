@@ -3925,19 +3925,24 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   })();
 
   return (
-    <div className="min-h-screen bg-[#F2F5F4] dark:bg-[#090D0E] text-slate-900 dark:text-slate-100 selection:bg-emerald-600 selection:text-white">
+    <div className="min-h-screen bg-[#E7F2ED] dark:bg-[#060E0C] text-slate-900 dark:text-slate-100 selection:bg-emerald-600 selection:text-white">
       {/* Superadmin Ghost Mode Banner & Initial Splash */}
       <HrmGhostBanner />
       <HrmPwaSplashScreen forceShow={showSplashPreview} onFinish={() => setShowSplashPreview(false)} />
 
       {/* Mobile App Frame (Centered 440px on Tablet/Desktop, Native Full-Bleed on Phone) */}
-      <div className="max-w-[440px] mx-auto min-h-screen bg-[#F7F9F8] dark:bg-[#0D1214] sm:border-x sm:border-slate-200/80 dark:sm:border-white/[0.06] sm:shadow-[0_0_48px_rgba(15,23,42,0.06)] flex flex-col justify-between relative">
+      <div className="max-w-[440px] mx-auto min-h-screen bg-[#EEF6F2] dark:bg-[#081310] sm:border-x sm:border-emerald-900/[0.08] dark:sm:border-emerald-400/[0.08] sm:shadow-[0_0_48px_rgba(6,78,59,0.08)] flex flex-col justify-between relative">
+        {/* Seamless Whisper-Emerald Top Atmospheric Wash (Zero Boxy Edge) */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 h-[360px] z-0 bg-[radial-gradient(125%_100%_at_50%_0%,rgba(16,185,129,0.14)_0%,rgba(13,122,95,0.05)_52%,transparent_100%)] dark:bg-[radial-gradient(125%_100%_at_50%_0%,rgba(16,185,129,0.13)_0%,rgba(13,122,95,0.04)_55%,transparent_100%)]"
+        />
 
-        {/* ─── CLEAN TRANSPARENT STICKY HEADER (NO GREEN BACKDROP + FULL BRAND NAME) ─── */}
-        <header className="sticky top-0 z-30 bg-[#F7F9F8]/90 dark:bg-[#0D1214]/90 backdrop-blur-xl pt-[max(0.875rem,env(safe-area-inset-top))] pb-2.5 px-3.5">
+        {/* ─── CLEAN TRANSPARENT STICKY HEADER (SEAMLESS WHISPER-EMERALD + WHITE LOGO BADGE) ─── */}
+        <header className="sticky top-0 z-30 bg-[#EEF6F2]/82 dark:bg-[#081310]/82 backdrop-blur-xl pt-[max(0.875rem,env(safe-area-inset-top))] pb-2.5 px-3.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-white dark:bg-[#151D20] p-1 border border-slate-200/80 dark:border-white/10 shadow-2xs flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-white p-1 border border-emerald-900/10 dark:border-white/15 shadow-xs flex items-center justify-center shrink-0">
                 <img
                   src={defaultAvatar}
                   alt="Logo PT. FAWWAZ RESKI PERWIRA"
@@ -3956,7 +3961,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             </div>
 
             {/* Minimalist Control Pill: Dark/Light + Notifications + Refresh */}
-            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white dark:bg-[#131A1D] border border-slate-200/80 dark:border-white/[0.08] shadow-2xs shrink-0">
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/90 dark:bg-[#101C18]/90 border border-emerald-900/[0.08] dark:border-emerald-400/[0.12] shadow-2xs shrink-0">
               <button
                 type="button"
                 onClick={toggleThemeMode}
@@ -3974,7 +3979,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               >
                 <Bell className="w-3.5 h-3.5" />
                 {unreadNotificationsCount > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 bg-rose-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center ring-2 ring-[#F7F9F8] dark:ring-[#0D1214]">
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 bg-rose-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center ring-2 ring-[#EEF6F2] dark:ring-[#081310]">
                     {unreadNotificationsCount}
                   </span>
                 )}
@@ -4060,7 +4065,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   <img
                     src={userAvatarSrc}
                     alt={user?.fullName}
-                    className="w-full h-full rounded-full object-cover border-2 border-[#F7F9F8] dark:border-[#0D1214] bg-slate-100 dark:bg-slate-800"
+                    className="w-full h-full rounded-full object-cover border-2 border-[#EEF6F2] dark:border-[#081310] bg-slate-100 dark:bg-slate-800"
                     onError={(e) => {
                       const el = e.target as HTMLImageElement;
                       const avatarApi = user?.id ? `/api/users/${user.id}/avatar` : '';
@@ -4074,7 +4079,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                     }}
                   />
                   <span
-                    className={`absolute bottom-0.5 right-0.5 w-3.5 h-3.5 rounded-full ring-2 ring-[#F7F9F8] dark:ring-[#0D1214] ${
+                    className={`absolute bottom-0.5 right-0.5 w-3.5 h-3.5 rounded-full ring-2 ring-[#EEF6F2] dark:ring-[#081310] ${
                       locationStatus === 'inside' ? 'bg-emerald-500' : 'bg-amber-500'
                     }`}
                   />
@@ -4091,7 +4096,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
                 if (isDirutOrPimpinan) {
                   return (
-                    <div className="p-3 bg-white dark:bg-[#131A1D] border border-slate-200/80 dark:border-white/[0.08] rounded-2xl flex items-center justify-between gap-2.5 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.04)]">
+                    <div className="p-3 bg-white dark:bg-[#101C18] border border-emerald-900/[0.08] dark:border-emerald-400/[0.12] rounded-2xl flex items-center justify-between gap-2.5 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.04)]">
                       <div className="flex items-center gap-2.5 min-w-0">
                         <div className="w-8 h-8 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center shrink-0">
                           <Briefcase className="w-4 h-4" />
@@ -4120,7 +4125,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 if (isKorlapRole || isK3Role || isAdminRole) {
                   const roleLabel = isKorlapRole ? 'Otoritas Korlap' : isK3Role ? 'Pengawas K3 & HSE' : 'Admin Operasional';
                   return (
-                    <div className="p-3 bg-white dark:bg-[#131A1D] border border-slate-200/80 dark:border-white/[0.08] rounded-2xl flex items-center justify-between gap-2.5 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.04)]">
+                    <div className="p-3 bg-white dark:bg-[#101C18] border border-emerald-900/[0.08] dark:border-emerald-400/[0.12] rounded-2xl flex items-center justify-between gap-2.5 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.04)]">
                       <div className="flex items-center gap-2.5 min-w-0">
                         <div className="w-8 h-8 rounded-xl bg-emerald-500/10 text-[#0D7A5F] dark:text-emerald-400 flex items-center justify-center shrink-0">
                           <ShieldCheck className="w-4 h-4" />
@@ -4229,7 +4234,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               )}
 
               {/* ─── HERO ATTENDANCE HUB CARD (CENTERED AXIAL SYMMETRY) ─── */}
-              <section className="bg-white dark:bg-[#131A1D] rounded-[28px] p-5 border border-slate-200/80 dark:border-white/[0.07] shadow-[0_8px_30px_-12px_rgba(15,23,42,0.08)] space-y-5">
+              <section className="bg-white dark:bg-[#101C18] rounded-[28px] p-5 border border-emerald-900/[0.08] dark:border-emerald-400/[0.12] shadow-[0_8px_30px_-12px_rgba(6,78,59,0.09)] space-y-5">
 
                 {/* Centered Date, Live Digital Clock & Single Unified Shift Pill */}
                 <div className="flex flex-col items-center text-center">
@@ -4333,9 +4338,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       hasClockedOut && !nextShiftInfo?.isNextShiftAvailable
                         ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 border-transparent'
                         : isCurrentlyOnDuty && continuousDutyInfo.currentPhase === 'overtime_phase'
-                        ? 'bg-amber-500 text-white border-white dark:border-[#131A1D]'
+                        ? 'bg-amber-500 text-white border-white dark:border-[#101C18]'
                         : isCurrentlyOnDuty
-                        ? 'bg-[#0D7A5F] text-white border-white dark:border-[#131A1D]'
+                        ? 'bg-[#0D7A5F] text-white border-white dark:border-[#101C18]'
                         : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
                         ? 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10'
                         : 'bg-white dark:bg-slate-900 text-[#0D7A5F] dark:text-emerald-400 border-emerald-500/35'
@@ -4380,7 +4385,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 </div>
 
                 {/* Unified Centered Check-In & Check-Out Strip */}
-                <div className="grid grid-cols-2 rounded-2xl bg-[#F7F9F8] dark:bg-white/[0.03] border border-slate-200/70 dark:border-white/[0.06] divide-x divide-slate-200/70 dark:divide-white/[0.06]">
+                <div className="grid grid-cols-2 rounded-2xl bg-[#F3F9F6] dark:bg-emerald-950/25 border border-emerald-900/[0.07] dark:border-emerald-400/[0.10] divide-x divide-emerald-900/[0.07] dark:divide-emerald-400/[0.10]">
                   <div className="py-3 px-3 flex flex-col items-center justify-center text-center">
                     <div className="flex items-center gap-1.5">
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Masuk</span>
@@ -4630,7 +4635,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               )}
 
               {/* ─── CLEAN LOCATION & GEOFENCE CARD ─── */}
-              <div className="bg-white dark:bg-[#131A1D] border border-slate-200/80 dark:border-white/[0.07] rounded-2xl p-3.5 flex items-center gap-3 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.04)]">
+              <div className="bg-white dark:bg-[#101C18] border border-emerald-900/[0.08] dark:border-emerald-400/[0.12] rounded-2xl p-3.5 flex items-center gap-3 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.04)]">
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
                   locationStatus === 'inside'
                     ? 'bg-emerald-500/10 text-[#0D7A5F] dark:text-emerald-400'
@@ -5497,7 +5502,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
         </main>
 
         {/* ─── CLEAN FROSTED BOTTOM NAVIGATION BAR ─── */}
-        <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[440px] z-40 bg-white/90 dark:bg-[#11171A]/90 backdrop-blur-xl border-t border-slate-200/70 dark:border-white/[0.07] px-2 pt-1.5 pb-[max(0.55rem,env(safe-area-inset-bottom))] flex items-center justify-between">
+        <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[440px] z-40 bg-white/92 dark:bg-[#0B1714]/92 backdrop-blur-xl border-t border-emerald-900/[0.08] dark:border-emerald-400/[0.10] px-2 pt-1.5 pb-[max(0.55rem,env(safe-area-inset-bottom))] flex items-center justify-between">
           <button
             type="button"
             onClick={() => setActiveTab('beranda')}
@@ -5525,7 +5530,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             <button
               type="button"
               onClick={handleCenterAttendanceClick}
-              className={`w-[52px] h-[52px] rounded-full flex items-center justify-center text-white shadow-lg transition-transform duration-150 active:scale-92 ring-4 ring-white dark:ring-[#11171A] ${
+              className={`w-[52px] h-[52px] rounded-full flex items-center justify-center text-white shadow-lg transition-transform duration-150 active:scale-92 ring-4 ring-white dark:ring-[#0B1714] ${
                 isCurrentlyOnDuty
                   ? 'bg-slate-900 dark:bg-white dark:text-slate-900'
                   : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
