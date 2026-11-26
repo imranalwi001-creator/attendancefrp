@@ -439,16 +439,15 @@ export const HrmSuperadminDashboard: React.FC = () => {
     return list.filter((d) => d.value > 0);
   }, [overview, groupTableScope]);
 
-  // Data bar chart perbandingan Shift Aktif + OFF Roster (100% murni kehadiran tanpa lembur)
+  // Data bar chart perbandingan 4 Shift Kerja Aktif (OFF Roster tampil di strip tersendiri agar tidak membingungkan)
   const shiftChartData = useMemo(() => {
     if (!overview) return [];
     const shiftsObj = shiftScope === 'today' ? overview.today.shifts : overview.month.shifts;
-    return (['SHIFT_I', 'SHIFT_II', 'SHIFT_III', 'DAY_SHIFT', 'OFF_ROSTER'] as ShiftKey[])
+    return (['SHIFT_I', 'SHIFT_II', 'SHIFT_III', 'DAY_SHIFT'] as ActiveShiftKey[])
       .filter((k) => Boolean(shiftsObj[k]))
       .map((k) => ({
         name: shiftsObj[k].label,
         Hadir: shiftsObj[k].hadir,
-        OFF: shiftsObj[k].off,
         'Cuti/Izin': shiftsObj[k].cuti + shiftsObj[k].izin,
         Mangkir: shiftsObj[k].mangkir,
         'Blm Daftar': shiftsObj[k].belumTerdaftar || 0,
@@ -594,18 +593,6 @@ export const HrmSuperadminDashboard: React.FC = () => {
                 className="bg-transparent text-xs font-mono font-bold text-foreground focus:outline-none"
               />
             </div>
-            <div className="flex items-center gap-1.5 bg-muted/40 border border-border rounded-xl px-2.5 py-1">
-              <Clock className="w-3.5 h-3.5 text-muted-foreground" />
-              <span className="text-[11px] font-semibold text-muted-foreground">Tanggal Live:</span>
-              <input
-                type="date"
-                value={selectedDate}
-                min={`${selectedMonth}-01`}
-                max={`${selectedMonth}-${String(month?.totalDaysInMonth || 30).padStart(2, '0')}`}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-transparent text-xs font-mono font-bold text-foreground focus:outline-none"
-              />
-            </div>
             {!isViewingToday && overview && (
               <Button
                 variant="ghost"
@@ -621,6 +608,59 @@ export const HrmSuperadminDashboard: React.FC = () => {
             )}
           </div>
         </div>
+
+        {/* Urutan Tanggal Bulan Berjalan (1 s/d 30/31) — 1-Klik Ganti Hari */}
+        {(() => {
+          const [yNum, mNum] = selectedMonth.split('-').map(Number);
+          const totalDays = month?.totalDaysInMonth || new Date(yNum || 2026, mNum || 11, 0).getDate();
+          const todayStr = overview?.meta.todayWita || initialToday;
+          return (
+            <div className="pt-2.5 border-t border-border/50 space-y-1.5">
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-semibold text-muted-foreground flex items-center gap-1.5">
+                  <CalendarDays className="w-3.5 h-3.5 text-emerald-600" />
+                  Pilih Tanggal ({formatMonthId(selectedMonth)}):
+                  <strong className="text-foreground font-mono">{formatDateId(selectedDate)}</strong>
+                </span>
+                <span className="text-[10.5px] text-muted-foreground hidden sm:inline">
+                  Klik angka tanggal untuk melihat rekap hari tersebut
+                </span>
+              </div>
+              <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-thin">
+                {Array.from({ length: totalDays }, (_, idx) => {
+                  const dayNum = idx + 1;
+                  const dStr = `${selectedMonth}-${String(dayNum).padStart(2, '0')}`;
+                  const isSelected = dStr === selectedDate;
+                  const isTodayBtn = dStr === todayStr;
+                  const isFutureBtn = dStr > todayStr;
+                  return (
+                    <button
+                      key={dStr}
+                      type="button"
+                      disabled={isFutureBtn}
+                      onClick={() => setSelectedDate(dStr)}
+                      title={formatDateId(dStr)}
+                      className={`relative min-w-[30px] h-8 px-1.5 rounded-lg font-mono text-xs font-bold transition-all shrink-0 flex items-center justify-center ${
+                        isSelected
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : isFutureBtn
+                          ? 'bg-muted/30 text-muted-foreground/40 cursor-not-allowed'
+                          : isTodayBtn
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/50 hover:bg-emerald-500/25'
+                          : 'bg-muted/50 text-foreground/80 hover:bg-emerald-500/10 hover:text-emerald-700 dark:hover:text-emerald-300 border border-transparent hover:border-emerald-500/30'
+                      }`}
+                    >
+                      {dayNum}
+                      {isTodayBtn && !isSelected && (
+                        <span className="absolute bottom-0.5 w-1 h-1 rounded-full bg-emerald-600" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Loading Skeleton */}
@@ -1164,11 +1204,11 @@ export const HrmSuperadminDashboard: React.FC = () => {
                 </button>
               )}
 
-              {/* Mini Horizontal Comparison Bar Chart Across Shifts (100% Murni Kehadiran) */}
+              {/* Mini Horizontal Comparison Bar Chart Across 4 Active Work Shifts */}
               <div className="pt-2 border-t border-border/60">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold text-muted-foreground">
-                    Perbandingan Komposisi Kehadiran Antar Shift & OFF Roster ({shiftScope === 'today' ? 'Live Hari Ini' : formatMonthId(overview.meta.month)})
+                    Perbandingan Komposisi 4 Shift Kerja Aktif ({shiftScope === 'today' ? formatDateId(overview.meta.date) : formatMonthId(overview.meta.month)})
                   </span>
                 </div>
                 <div className="h-[220px] w-full">
@@ -1186,11 +1226,10 @@ export const HrmSuperadminDashboard: React.FC = () => {
                         }}
                       />
                       <Legend wrapperStyle={{ fontSize: '11px' }} />
-                      <Bar dataKey="Hadir" fill={STATUS_COLORS.hadir} radius={[5, 5, 0, 0]} maxBarSize={30} />
-                      <Bar dataKey="OFF" fill={STATUS_COLORS.off} radius={[5, 5, 0, 0]} maxBarSize={30} />
-                      <Bar dataKey="Cuti/Izin" fill={STATUS_COLORS.cuti} radius={[5, 5, 0, 0]} maxBarSize={30} />
-                      <Bar dataKey="Mangkir" fill={STATUS_COLORS.mangkir} radius={[5, 5, 0, 0]} maxBarSize={30} />
-                      <Bar dataKey="Blm Daftar" fill={STATUS_COLORS.belumTerdaftar} radius={[5, 5, 0, 0]} maxBarSize={30} />
+                      <Bar dataKey="Hadir" fill={STATUS_COLORS.hadir} radius={[5, 5, 0, 0]} maxBarSize={32} />
+                      <Bar dataKey="Cuti/Izin" fill={STATUS_COLORS.cuti} radius={[5, 5, 0, 0]} maxBarSize={32} />
+                      <Bar dataKey="Mangkir" fill={STATUS_COLORS.mangkir} radius={[5, 5, 0, 0]} maxBarSize={32} />
+                      <Bar dataKey="Blm Daftar" fill={STATUS_COLORS.belumTerdaftar} radius={[5, 5, 0, 0]} maxBarSize={32} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
