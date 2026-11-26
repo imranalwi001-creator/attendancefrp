@@ -232,7 +232,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const pastMonthStr = React.useMemo(() => getPreviousYearMonth(currentMonthStr), [currentMonthStr]);
   const futureMonthStr = React.useMemo(() => getNextYearMonth(currentMonthStr), [currentMonthStr]);
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
-  const [lampiran2ViewMode, setLampiran2ViewMode] = useState<'monthly' | 'daily'>('monthly');
+  const [lampiran2ViewMode, setLampiran2ViewMode] = useState<'monthly' | 'daily'>('daily');
+  const [showBudgetDetail, setShowBudgetDetail] = useState<boolean>(false);
 
   const currentMonthLabel = React.useMemo(() => {
     const [y, m] = currentMonthStr.split('-').map(Number);
@@ -1834,6 +1835,10 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   const lateCount = scopedMonitoredList.filter((i) => i.status === 'late').length;
   const mangkirCount = scopedMonitoredList.filter((i) => i.status === 'mangkir' || (i as any).absentSubtype === 'mangkir').length;
   const absentCount = scopedMonitoredList.filter((i) => i.status === 'absent' && (i as any).absentSubtype !== 'mangkir').length;
+  const leaveCount = scopedMonitoredList.filter((i) => ['cuti', 'sakit', 'izin'].includes((i as any).absentSubtype)).length;
+  const offRosterCount = scopedMonitoredList.filter((i) => (i as any).absentSubtype === 'off').length;
+  const unregisteredCount = scopedMonitoredList.filter((i) => (i as any).absentSubtype === 'unregistered').length;
+  const pendingShiftCount = scopedMonitoredList.filter((i) => ['pending_shift', 'in_progress'].includes((i as any).absentSubtype) && i.status === 'absent').length;
   const activeBreaches = perimeterViolations.filter((v) => {
     if (v.status !== 'active') return false;
     const u = users.find((usr) => usr.id === v.userId || usr.nip === v.userNip);
@@ -1877,498 +1882,538 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs font-semibold text-emerald-600 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
-              Sistem Pengawasan Kehadiran
-            </span>
-            {radarSummary.items.length > 0 && (
-              <span className="text-xs font-semibold text-rose-700 bg-rose-50 dark:bg-rose-950/40 px-2.5 py-0.5 rounded-full border border-rose-200 dark:border-rose-900 flex items-center gap-1">
-                <ShieldAlert size={12} /> {radarSummary.items.length} Anomali Terdeteksi
+    <div className="space-y-4">
+      {/* ═══ LAPIS 1: UNIFIED EXECUTIVE HEADER + MENU DOKUMEN TERPADU ═══ */}
+      <div className="bg-card border border-border rounded-2xl p-4 sm:p-5 shadow-xs space-y-3.5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                LIVE MONITORING WITA
               </span>
-            )}
+              {activeBreaches.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('breaches')}
+                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300 text-[11px] font-bold hover:bg-rose-500/20 transition-colors"
+                >
+                  <Lock size={11} /> {activeBreaches.length} Pelanggaran Perimeter
+                </button>
+              )}
+              {radarSummary.items.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('anomalies')}
+                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[11px] font-bold hover:bg-amber-500/20 transition-colors"
+                >
+                  <ShieldAlert size={11} /> {radarSummary.items.length} Anomali
+                </button>
+              )}
+            </div>
+            <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
+              Monitoring Presensi &amp; Radar Lapangan
+            </h1>
+            <p className="text-xs text-muted-foreground">
+              Pengawasan kedatangan real-time, validasi biometrik &amp; GPS, serta radar petugas lapangan PT. FAWWAZ RESKI PERWIRA.
+            </p>
           </div>
-          <h1 className="text-2xl font-bold text-foreground tracking-tight flex items-center gap-2">
-            <UserCheck className="w-6 h-6 text-primary" />
-            Live Monitoring Presensi &amp; Anti-Fraud
-          </h1>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            Pantau status kedatangan staf secara *real-time* disertai validasi perangkat, lokasi GPS, audit anomali, dan sertifikat biometrik.
-          </p>
+
+          {/* Primary Clean Actions (Tanpa Deretan Tombol Warna-Warni) */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Popover Dokumen, Rekap & Export Terpadu */}
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-9 px-3.5 rounded-xl text-xs font-bold gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                >
+                  <FileSpreadsheet size={14} />
+                  <span>Dokumen &amp; Export</span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-72 p-2.5 rounded-2xl shadow-xl border border-border bg-card z-50 space-y-1">
+                <p className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Formulir &amp; Matriks Resmi PT FRP
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setTimeSheetModalOpen(true)}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl hover:bg-muted/70 text-left text-xs font-semibold text-foreground transition-colors"
+                >
+                  <FileSpreadsheet size={14} className="text-indigo-600 shrink-0" />
+                  <div>
+                    <p className="leading-tight">Time Sheet 41-Kolom</p>
+                    <p className="text-[10px] text-muted-foreground font-normal">PDF / Excel Tenaga Alih Daya</p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSplMatrixModalOpen(true)}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl hover:bg-muted/70 text-left text-xs font-semibold text-foreground transition-colors"
+                >
+                  <Sparkles size={14} className="text-amber-600 shrink-0" />
+                  <div>
+                    <p className="leading-tight">Matriks Input SPL (7-Baris)</p>
+                    <p className="text-[10px] text-muted-foreground font-normal">Sinkron DB, PWA &amp; Pengali Lembur</p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLeaveMatrixModalOpen(true)}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl hover:bg-muted/70 text-left text-xs font-semibold text-foreground transition-colors"
+                >
+                  <CalendarDays size={14} className="text-teal-600 shrink-0" />
+                  <div>
+                    <p className="leading-tight">Form Rekap Cuti Tahunan</p>
+                    <p className="text-[10px] text-muted-foreground font-normal">Kuota cuti &amp; sinkronisasi PWA</p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFinancialRecapModalOpen(true)}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl hover:bg-muted/70 text-left text-xs font-semibold text-foreground transition-colors"
+                >
+                  <Coins size={14} className="text-emerald-600 shrink-0" />
+                  <div>
+                    <p className="leading-tight">Rekap Gaji &amp; Lembur Bulanan</p>
+                    <p className="text-[10px] text-muted-foreground font-normal">Plafon anggaran &amp; estimasi payroll</p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/admin/lembur?tab=arrears&payrollMonth=${encodeURIComponent(financialStats.nextPayrollMonth)}`)}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl hover:bg-muted/70 text-left text-xs font-semibold text-foreground transition-colors"
+                >
+                  <ExternalLink size={14} className="text-emerald-600 shrink-0" />
+                  <div>
+                    <p className="leading-tight">Proses Lembur → Payroll {financialStats.nextPayrollMonthShort}</p>
+                    <p className="text-[10px] text-muted-foreground font-normal">Buka halaman manajemen SPKL</p>
+                  </div>
+                </button>
+
+                <div className="my-1.5 border-t border-border/70" />
+                <p className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Unduh Data Tabel Aktif ({filtered.length} Org)
+                </p>
+                <div className="grid grid-cols-2 gap-1.5 px-1 pb-0.5">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={handleExportAllRealtimeExcel}
+                    className="h-8 text-xs rounded-xl gap-1.5 border-emerald-500/40 text-emerald-700 dark:text-emerald-300"
+                  >
+                    <Download size={12} /> Excel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={handleExportAllRealtimePdf}
+                    className="h-8 text-xs rounded-xl gap-1.5 border-rose-500/40 text-rose-700 dark:text-rose-300"
+                  >
+                    <FileText size={12} /> PDF
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setQrModalOpen(true)}
+              className="h-9 px-3 rounded-xl text-xs font-semibold gap-1.5"
+            >
+              <QrCode size={14} /> QR Dinamis
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={loadData}
+              className="h-9 px-3 rounded-xl text-xs font-semibold gap-1.5"
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${isFetchingMonth ? 'animate-spin' : ''}`} /> Sync
+            </Button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Period Scope Toggle */}
-          <div className="flex items-center gap-1 bg-muted/80 p-1 rounded-xl border border-border">
-            <Button
+        {/* Strip Ringkas 1-Baris Plafon Lembur & Estimasi Payroll (Dapat Dibuka Kapan Saja) */}
+        <div className="pt-3 border-t border-border/70">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <Coins size={14} className="text-amber-600 shrink-0" />
+                <span className="text-muted-foreground">Lembur {financialStats.curMonthShort}:</span>
+                <strong className="font-mono text-foreground">
+                  Rp {financialStats.totalOvertimeSpent.toLocaleString('id-ID')}
+                </strong>
+                <span className="text-muted-foreground font-mono">/ Rp 69 Jt ({financialStats.budgetPercent}%)</span>
+                <Badge
+                  variant="outline"
+                  className={`text-[10px] font-bold px-2 py-0 ${
+                    financialStats.isExceeded
+                      ? 'border-rose-500/50 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                      : financialStats.isNearLimit
+                      ? 'border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                      : 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                  }`}
+                >
+                  {financialStats.isExceeded ? 'Habis' : financialStats.isNearLimit ? 'Siaga' : 'Aman'}
+                </Badge>
+              </div>
+              <div className="hidden sm:block h-3.5 w-px bg-border" />
+              <div className="flex items-center gap-1.5">
+                <span className="text-muted-foreground">Est. Payroll ({financialStats.curMonthShort}):</span>
+                <strong className="font-mono text-foreground">
+                  Rp {financialStats.byGroup.all.totalNetSalary.toLocaleString('id-ID')}
+                </strong>
+              </div>
+            </div>
+
+            <button
               type="button"
-              variant={periodScope === 'today' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setPeriodScope('today')}
-              className="text-xs h-7 px-2.5 rounded-lg font-medium"
+              onClick={() => setShowBudgetDetail((v) => !v)}
+              className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 hover:underline self-start md:self-auto shrink-0"
             >
-              Hari Ini (Live)
-            </Button>
-            <Button
-              type="button"
-              variant={periodScope === 'month' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setPeriodScope('month')}
-              className="text-xs h-7 px-2.5 rounded-lg font-medium gap-1.5"
-            >
-              <CalendarDays size={12} />
-              Kalender Bulanan
-            </Button>
-            <Button
-              type="button"
-              variant={periodScope === 'year' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setPeriodScope('year')}
-              className="text-xs h-7 px-2.5 rounded-lg font-medium"
-            >
-              Tahun {currentYear}
-            </Button>
+              {showBudgetDetail ? 'Tutup Rincian Plafon & Payroll ▲' : 'Lihat Rincian Plafon & Payroll ▾'}
+            </button>
           </div>
 
-          <Button
-            onClick={() => setQrModalOpen(true)}
-            className="gap-2 rounded-xl text-xs h-8 font-semibold shadow-xs"
-          >
-            <QrCode size={14} /> Terminal QR Dinamis
-          </Button>
-          <Button variant="outline" size="sm" onClick={loadData} className="text-xs gap-1.5 border-border rounded-xl h-8">
-            <RotateCw className="w-3.5 h-3.5 text-primary" /> Refresh
-          </Button>
+          {showBudgetDetail && (
+            <div className="mt-3 pt-3 border-t border-border/60 space-y-3 animate-in fade-in duration-150">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                {/* 1. Shipment */}
+                <div className="p-3 bg-muted/35 rounded-xl border border-border/80 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <span className="text-[11px] font-bold text-foreground flex items-center gap-1.5">
+                        <Ship size={13} className="text-blue-600" /> Shipment (47 Org)
+                      </span>
+                      <span className="text-[10px] font-mono text-muted-foreground">Plafon 65 Jt</span>
+                    </div>
+                    <p className="text-sm font-extrabold font-mono text-foreground">
+                      Rp {financialStats.shipmentSpent.toLocaleString('id-ID')}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {financialStats.shipmentEmployeesCount} Org • {financialStats.shipmentHours}j real / {financialStats.shipmentPaidHours}j bayar ({financialStats.shipmentPercent}%)
+                    </p>
+                    <div className="w-full bg-muted rounded-full h-1.5 mt-2 overflow-hidden">
+                      <div
+                        className={`h-1.5 rounded-full ${financialStats.isShipmentExceeded ? 'bg-rose-600' : financialStats.isShipmentNearLimit ? 'bg-amber-500' : 'bg-blue-600'}`}
+                        style={{ width: `${Math.min(100, financialStats.shipmentPercent)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 mt-2">
+                    Sisa: Rp {financialStats.shipmentRemaining.toLocaleString('id-ID')} ({financialStats.shipmentRemainingPercent}%)
+                  </p>
+                </div>
+
+                {/* 2. Rumah Tangga */}
+                <div className="p-3 bg-muted/35 rounded-xl border border-border/80 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <span className="text-[11px] font-bold text-foreground flex items-center gap-1.5">
+                        <Home size={13} className="text-amber-600" /> Rumah Tangga (33 Org)
+                      </span>
+                      <span className="text-[10px] font-mono text-muted-foreground">Plafon 4 Jt</span>
+                    </div>
+                    <p className="text-sm font-extrabold font-mono text-foreground">
+                      Rp {financialStats.wismaSpent.toLocaleString('id-ID')}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {financialStats.wismaEmployeesCount} Org • {financialStats.wismaHours}j real / {financialStats.wismaPaidHours}j bayar ({financialStats.wismaPercent}%)
+                    </p>
+                    <div className="w-full bg-muted rounded-full h-1.5 mt-2 overflow-hidden">
+                      <div
+                        className={`h-1.5 rounded-full ${financialStats.isWismaExceeded ? 'bg-rose-600' : financialStats.isWismaNearLimit ? 'bg-amber-500' : 'bg-amber-600'}`}
+                        style={{ width: `${Math.min(100, financialStats.wismaPercent)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 mt-2">
+                    Sisa: Rp {financialStats.wismaRemaining.toLocaleString('id-ID')} ({financialStats.wismaRemainingPercent}%)
+                  </p>
+                </div>
+
+                {/* 3. Total Konsolidasi */}
+                <div className="p-3 bg-muted/35 rounded-xl border border-border/80 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <span className="text-[11px] font-bold text-foreground flex items-center gap-1.5">
+                        <Coins size={13} className="text-emerald-600" /> Total Lembur (80 Org)
+                      </span>
+                      <span className="text-[10px] font-mono text-muted-foreground">Plafon 69 Jt</span>
+                    </div>
+                    <p className="text-sm font-extrabold font-mono text-amber-600 dark:text-amber-400">
+                      Rp {financialStats.totalOvertimeSpent.toLocaleString('id-ID')}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {financialStats.nextOvertimeEmployeesCount} Org • {financialStats.totalOvertimeHours}j real / {financialStats.totalOvertimePaidHours}j bayar ({financialStats.budgetPercent}%)
+                    </p>
+                    <div className="w-full bg-muted rounded-full h-1.5 mt-2 overflow-hidden">
+                      <div
+                        className={`h-1.5 rounded-full ${financialStats.isExceeded ? 'bg-rose-600' : financialStats.isNearLimit ? 'bg-amber-500' : 'bg-emerald-600'}`}
+                        style={{ width: `${Math.min(100, financialStats.budgetPercent)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 mt-2">
+                    Sisa: Rp {financialStats.remainingBudget.toLocaleString('id-ID')} ({financialStats.totalRemainingPercent}%)
+                  </p>
+                </div>
+
+                {/* 4. Estimasi Payroll */}
+                <div className="p-3 bg-muted/35 rounded-xl border border-border/80 flex flex-col justify-between">
+                  {(() => {
+                    const activeBucket =
+                      payrollScopeGroup === 'SHIPMENT'
+                        ? financialStats.byGroup.shipment
+                        : payrollScopeGroup === 'RUMAH TANGGA'
+                        ? financialStats.byGroup.rumahTangga
+                        : payrollScopeGroup === 'KARYAWAN TETAP'
+                        ? financialStats.byGroup.karyawanTetap
+                        : financialStats.byGroup.all;
+                    return (
+                      <>
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="text-[11px] font-bold text-foreground">Est. Payroll ({financialStats.curMonthShort})</span>
+                          <span className="text-[10px] font-semibold text-emerald-600">{payrollScopeGroup}</span>
+                        </div>
+                        <p className="text-sm font-extrabold font-mono text-foreground">
+                          Rp {activeBucket.totalNetSalary.toLocaleString('id-ID')}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+                          {payrollScopeGroup === 'KARYAWAN TETAP'
+                            ? `${financialStats.workdaysInMonth} Hr × Rp 140rb • Non-Lembur • BPJS Rp 0`
+                            : `Pokok ${(activeBucket.totalBaseSalary / 1e6).toFixed(1)} Jt • OT ${financialStats.arrearsMonthShort}: +${(activeBucket.totalOvertimePay / 1e6).toFixed(1)} Jt • BPJS -${(activeBucket.totalBpjs / 1e6).toFixed(1)} Jt`}
+                        </p>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { key: 'ALL' as const, label: `Semua (${financialStats.byGroup.all.employeeCount})`, amount: financialStats.byGroup.all.totalNetSalary },
+                    { key: 'SHIPMENT' as const, label: `Shipment (${financialStats.byGroup.shipment.employeeCount})`, amount: financialStats.byGroup.shipment.totalNetSalary },
+                    { key: 'RUMAH TANGGA' as const, label: `R. Tangga (${financialStats.byGroup.rumahTangga.employeeCount})`, amount: financialStats.byGroup.rumahTangga.totalNetSalary },
+                    { key: 'KARYAWAN TETAP' as const, label: `Tetap (${financialStats.byGroup.karyawanTetap.employeeCount})`, amount: financialStats.byGroup.karyawanTetap.totalNetSalary },
+                  ].map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setPayrollScopeGroup(opt.key)}
+                      className={`px-2.5 py-1 rounded-lg border font-semibold transition-all ${
+                        payrollScopeGroup === opt.key
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-background text-foreground border-border hover:bg-muted'
+                      }`}
+                    >
+                      {opt.label}: <span className="font-mono">Rp {opt.amount.toLocaleString('id-ID')}</span>
+                    </button>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setFinancialRecapModalOpen(true)}
+                  className="h-7 text-[11px] rounded-lg font-semibold"
+                >
+                  Buka Rincian Lengkap →
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-
-
-      {/* ── REALTIME OVERTIME BUDGET GUARDRAIL & MONTHLY FINANCIAL RECAP BANNER ── */}
-      <Card className="border-border/80 bg-gradient-to-br from-card via-card to-amber-500/5 rounded-2xl shadow-xs overflow-hidden">
-        <CardContent className="p-4 sm:p-5">
-          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400 font-mono text-xs font-semibold px-2.5 py-0.5">
-                  <Coins size={12} className="mr-1 inline" /> PLAFON ANGGARAN LEMBUR RESMI PT FRP
-                </Badge>
-                <Badge className={financialStats.isExceeded ? 'bg-rose-600 text-white font-mono text-[11px]' : financialStats.isNearLimit ? 'bg-amber-600 text-white font-mono text-[11px]' : 'bg-emerald-600 text-white font-mono text-[11px]'}>
-                  {financialStats.isExceeded ? 'KUOTA HABIS / KUNCI AKTIF' : financialStats.isNearLimit ? 'SIAGA ANGGARAN' : 'ANGGARAN AMAN'}
-                </Badge>
-                {selectedMonth === currentMonthStr && (
-                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-300 font-semibold text-[10px]">
-                    ● Bulan Berjalan ({financialStats.curMonthShort})
-                  </Badge>
-                )}
-                {selectedMonth === pastMonthStr && (
-                  <Badge variant="outline" className="bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-300 font-semibold text-[10px]">
-                    ⏪ Bulan Lalu ({financialStats.curMonthShort})
-                  </Badge>
-                )}
-                {selectedMonth === futureMonthStr && (
-                  <Badge variant="outline" className="bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-300 font-semibold text-[10px]">
-                    ⏩ Bulan Depan ({financialStats.curMonthShort})
-                  </Badge>
-                )}
-                {selectedMonth !== currentMonthStr && selectedMonth !== pastMonthStr && selectedMonth !== futureMonthStr && (
-                  <Badge variant="outline" className="bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-300 font-semibold text-[10px]">
-                    📅 Periode: {financialStats.curMonthShort}
-                  </Badge>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Monitoring kuota lembur (80 Personil) &amp; estimasi payroll bulan <strong>{financialStats.curMonthLabel}</strong> (Lembur Kerja: <strong>{financialStats.curMonthLabel}</strong> → Payroll <strong>{financialStats.nextPayrollMonthLabel}</strong>).
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 self-stretch lg:self-auto">
-              {/* Quick Period Selector (Bulan Lalu / Berjalan / Depan) */}
-              <div className="flex items-center gap-1 p-1 bg-muted/60 dark:bg-muted/30 rounded-xl border border-border/60 text-xs">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={selectedMonth === pastMonthStr ? 'default' : 'ghost'}
-                  onClick={() => { setSelectedMonth(pastMonthStr); setSelectedDayDate(''); }}
-                  className={`h-7 px-2.5 text-[11px] rounded-lg font-medium transition-all ${
-                    selectedMonth === pastMonthStr ? 'shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                  title={`Lihat Lembur Bulan Lalu (${formatYearMonthId(pastMonthStr)})`}
-                >
-                  ⏪ Bulan Lalu
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={selectedMonth === currentMonthStr ? 'default' : 'ghost'}
-                  onClick={() => { setSelectedMonth(currentMonthStr); setSelectedDayDate(''); }}
-                  className={`h-7 px-2.5 text-[11px] rounded-lg font-medium transition-all ${
-                    selectedMonth === currentMonthStr ? 'shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                  title={`Lihat Lembur Bulan Berjalan (${formatYearMonthId(currentMonthStr)})`}
-                >
-                  📍 Bulan Berjalan
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={selectedMonth === futureMonthStr ? 'default' : 'ghost'}
-                  onClick={() => { setSelectedMonth(futureMonthStr); setSelectedDayDate(''); }}
-                  className={`h-7 px-2.5 text-[11px] rounded-lg font-medium transition-all ${
-                    selectedMonth === futureMonthStr ? 'shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                  title={`Lihat Lembur Bulan Depan (${formatYearMonthId(futureMonthStr)})`}
-                >
-                  ⏩ Bulan Depan
-                </Button>
-
-                <div className="h-4 w-px bg-border/60 mx-0.5" />
-
-                <div className="flex items-center">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={handlePrevMonth}
-                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
-                    title="Mundur 1 Bulan"
-                  >
-                    <ChevronLeft size={14} />
-                  </Button>
-                  <span className="text-[11px] font-bold text-foreground px-1 font-mono min-w-[70px] text-center">
-                    {financialStats.curMonthShort}
-                  </span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleNextMonth}
-                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
-                    title="Maju 1 Bulan"
-                  >
-                    <ChevronRight size={14} />
-                  </Button>
-                </div>
-              </div>
-
-              <Button
+      {/* ═══ LAPIS 2: NAVIGASI TUNGGAL (KELOMPOK + PERIODE + PITA TANGGAL 1–30 TANPA DUPLIKASI) ═══ */}
+      <div className="bg-card border border-border rounded-2xl p-4 shadow-xs space-y-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          {/* Single Group Selector */}
+          <div className="flex flex-wrap items-center gap-1 p-1 bg-muted/60 rounded-xl border border-border/60 w-fit">
+            {[
+              { id: 'all' as const, label: `Semua (${categoryMonitoringStats.all.total})` },
+              { id: 'SHIPMENT' as const, label: `Shipment (${categoryMonitoringStats.shipment.total})` },
+              { id: 'RUMAH TANGGA' as const, label: `Rumah Tangga (${categoryMonitoringStats.rumahTangga.total})` },
+              { id: 'KARYAWAN TETAP' as const, label: `Tetap (${categoryMonitoringStats.karyawanTetap.total})` },
+            ].map((tab) => (
+              <button
+                key={tab.id}
                 type="button"
-                variant="outline"
-                onClick={() => navigate(`/admin/lembur?tab=arrears&payrollMonth=${encodeURIComponent(financialStats.nextPayrollMonth)}`)}
-                className="border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs h-9 px-3 rounded-xl font-semibold gap-1.5 transition-all w-full sm:w-auto"
+                onClick={() => setFilterCategory(tab.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  filterCategory === tab.id
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-background/70'
+                }`}
               >
-                <Coins size={14} />
-                <span>Proses Lembur → Payroll {financialStats.nextPayrollMonthShort}</span>
-              </Button>
-              <Button
-                type="button"
-                onClick={() => setTimeSheetModalOpen(true)}
-                className="bg-indigo-700 hover:bg-indigo-800 text-white text-xs h-9 px-3 rounded-xl font-semibold gap-1.5 shadow-xs transition-all w-full sm:w-auto"
-                title="Buka Time Sheet Resmi Tenaga Alih Daya PT FRP (41 Kolom PDF/Excel)"
-              >
-                <FileSpreadsheet size={14} />
-                <span>Time Sheet 41-Kolom</span>
-              </Button>
-              <Button
-                type="button"
-                onClick={() => setSplMatrixModalOpen(true)}
-                className="bg-amber-600 hover:bg-amber-700 text-white text-xs h-9 px-3 rounded-xl font-semibold gap-1.5 shadow-xs transition-all w-full sm:w-auto"
-                title="Buka Matriks Input SPL 7-Row (Sinkron Database, PWA & Lembur)"
-              >
-                <Sparkles size={14} />
-                <span>Matriks Input SPL</span>
-              </Button>
-              <Button
-                type="button"
-                onClick={() => setLeaveMatrixModalOpen(true)}
-                className="bg-teal-700 hover:bg-teal-800 text-white text-xs h-9 px-3 rounded-xl font-semibold gap-1.5 shadow-xs transition-all w-full sm:w-auto"
-                title="Buka Form Input Rekap Cuti Resmi & Update Lembur Nov (Sinkron PWA)"
-              >
-                <CalendarDays size={14} />
-                <span>Form Rekap Cuti</span>
-              </Button>
-              <Button
-                type="button"
-                onClick={() => setFinancialRecapModalOpen(true)}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9 px-3.5 rounded-xl font-semibold gap-2 shadow-xs transition-all w-full sm:w-auto"
-              >
-                <Coins size={14} />
-                <span>Rekap Gaji &amp; Lembur</span>
-              </Button>
-            </div>
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          {/* Card Pemisahan Kuota Lembur: Shipment 65 Jt, Rumah Tangga 4 Jt, Total 69 Jt, dan Estimasi Payroll */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4 pt-4 border-t border-border/60 text-xs">
-            {/* 1. SHIPMENT (Plafon Rp 65 Jt - 47 Personil) */}
-            <div className="p-3.5 bg-muted/40 hover:bg-muted/60 rounded-xl border border-blue-500/30 shadow-xs flex flex-col justify-between transition-all">
-              <div>
-                <div className="flex items-center justify-between gap-1 mb-1.5">
-                  <span className="text-[11px] font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
-                    <Ship size={14} className="text-blue-600 shrink-0" />
-                    <span>Lembur Shipment (47 Org)</span>
-                  </span>
-                  <Badge variant="outline" className="text-[10px] font-mono font-semibold bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-300/40">
-                    Plafon Rp 65 Jt
-                  </Badge>
-                </div>
-
-                <div className="mt-1">
-                  <span className="text-[10px] text-muted-foreground block font-medium">Terpakai ({financialStats.curMonthShort}):</span>
-                  <span className="text-base font-bold text-foreground font-mono block mt-0.5">
-                    Rp {financialStats.shipmentSpent.toLocaleString('id-ID')}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground block mt-0.5">
-                    {financialStats.shipmentEmployeesCount} Org • {financialStats.shipmentHours}j real / {financialStats.shipmentPaidHours}j bayar ({financialStats.shipmentPercent}%)
-                  </span>
-                </div>
-
-                {/* Progress Bar Visual */}
-                <div className="w-full bg-muted rounded-full h-1.5 mt-2.5 overflow-hidden">
-                  <div
-                    className={`h-1.5 rounded-full transition-all ${
-                      financialStats.isShipmentExceeded
-                        ? 'bg-rose-600'
-                        : financialStats.isShipmentNearLimit
-                        ? 'bg-amber-500'
-                        : 'bg-blue-600'
-                    }`}
-                    style={{ width: `${Math.min(100, financialStats.shipmentPercent)}%` }}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-3 pt-2.5 border-t border-border/50 flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] text-muted-foreground block">Sisa Anggaran:</span>
-                  <span className={`text-xs font-bold font-mono ${financialStats.shipmentRemaining === 0 ? 'text-rose-600' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                    Rp {financialStats.shipmentRemaining.toLocaleString('id-ID')}
-                  </span>
-                </div>
-                <Badge
-                  variant="outline"
-                  className={`text-[9px] font-medium ${
-                    financialStats.isShipmentExceeded
-                      ? 'bg-rose-500/10 text-rose-600 border-rose-300'
-                      : financialStats.isShipmentNearLimit
-                      ? 'bg-amber-500/10 text-amber-600 border-amber-300'
-                      : 'bg-emerald-500/10 text-emerald-600 border-emerald-300'
-                  }`}
-                >
-                  {financialStats.isShipmentExceeded ? 'Habis' : `Sisa ${financialStats.shipmentRemainingPercent}%`}
-                </Badge>
-              </div>
+          {/* Single Period Scope + Single Month Stepper */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-0.5 p-1 bg-muted/60 rounded-xl border border-border/60">
+              <button
+                type="button"
+                onClick={() => { setPeriodScope('today'); setLampiran2ViewMode('daily'); }}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                  periodScope === 'today' ? 'bg-foreground text-background shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Harian
+              </button>
+              <button
+                type="button"
+                onClick={() => { setPeriodScope('month'); setSelectedDayDate(''); setLampiran2ViewMode('monthly'); }}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                  periodScope === 'month' ? 'bg-foreground text-background shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Bulanan
+              </button>
+              <button
+                type="button"
+                onClick={() => { setPeriodScope('year'); setSelectedDayDate(''); setLampiran2ViewMode('monthly'); }}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                  periodScope === 'year' ? 'bg-foreground text-background shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {currentYear}
+              </button>
             </div>
 
-            {/* 2. RUMAH TANGGA / WISMA (Plafon Rp 4 Jt - 33 Personil) */}
-            <div className="p-3.5 bg-muted/40 hover:bg-muted/60 rounded-xl border border-amber-500/30 shadow-xs flex flex-col justify-between transition-all">
-              <div>
-                <div className="flex items-center justify-between gap-1 mb-1.5">
-                  <span className="text-[11px] font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
-                    <Home size={14} className="text-amber-600 shrink-0" />
-                    <span>Rumah Tangga (33 Org)</span>
-                  </span>
-                  <Badge variant="outline" className="text-[10px] font-mono font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300/40">
-                    Plafon Rp 4 Jt
-                  </Badge>
-                </div>
-
-                <div className="mt-1">
-                  <span className="text-[10px] text-muted-foreground block font-medium">Terpakai ({financialStats.curMonthShort}):</span>
-                  <span className="text-base font-bold text-foreground font-mono block mt-0.5">
-                    Rp {financialStats.wismaSpent.toLocaleString('id-ID')}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground block mt-0.5">
-                    {financialStats.wismaEmployeesCount} Org • {financialStats.wismaHours}j real / {financialStats.wismaPaidHours}j bayar ({financialStats.wismaPercent}%)
-                  </span>
-                </div>
-
-                {/* Progress Bar Visual */}
-                <div className="w-full bg-muted rounded-full h-1.5 mt-2.5 overflow-hidden">
-                  <div
-                    className={`h-1.5 rounded-full transition-all ${
-                      financialStats.isWismaExceeded
-                        ? 'bg-rose-600'
-                        : financialStats.isWismaNearLimit
-                        ? 'bg-amber-500'
-                        : 'bg-amber-600'
-                    }`}
-                    style={{ width: `${Math.min(100, financialStats.wismaPercent)}%` }}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-3 pt-2.5 border-t border-border/50 flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] text-muted-foreground block">Sisa Anggaran:</span>
-                  <span className={`text-xs font-bold font-mono ${financialStats.wismaRemaining === 0 ? 'text-rose-600' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                    Rp {financialStats.wismaRemaining.toLocaleString('id-ID')}
-                  </span>
-                </div>
-                <Badge
-                  variant="outline"
-                  className={`text-[9px] font-medium ${
-                    financialStats.isWismaExceeded
-                      ? 'bg-rose-500/10 text-rose-600 border-rose-300'
-                      : financialStats.isWismaNearLimit
-                      ? 'bg-amber-500/10 text-amber-600 border-amber-300'
-                      : 'bg-emerald-500/10 text-emerald-600 border-emerald-300'
-                  }`}
-                >
-                  {financialStats.isWismaExceeded ? 'Habis' : `Sisa ${financialStats.wismaRemainingPercent}%`}
-                </Badge>
-              </div>
+            <div className="flex items-center gap-0.5 p-1 bg-muted/60 rounded-xl border border-border/60">
+              <button
+                type="button"
+                onClick={handlePrevMonth}
+                className="w-7 h-7 rounded-lg hover:bg-background flex items-center justify-center text-muted-foreground hover:text-foreground"
+                title="Bulan Sebelumnya"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span className="text-xs font-bold font-mono text-foreground px-2 min-w-[100px] text-center">
+                {selectedMonthLabel}
+              </span>
+              <button
+                type="button"
+                onClick={handleNextMonth}
+                className="w-7 h-7 rounded-lg hover:bg-background flex items-center justify-center text-muted-foreground hover:text-foreground"
+                title="Bulan Berikutnya"
+              >
+                <ChevronRight size={14} />
+              </button>
             </div>
 
-            {/* 3. TOTAL KONSOLIDASI RESMI PT FRP (Plafon Rp 69 Jt - 80 Personil) */}
-            <div className="p-3.5 bg-muted/40 hover:bg-muted/60 rounded-xl border border-emerald-500/30 shadow-xs flex flex-col justify-between transition-all">
-              <div>
-                <div className="flex items-center justify-between gap-1 mb-1.5">
-                  <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5">
-                    <Coins size={14} className="text-emerald-600 shrink-0" />
-                    <span>Total Lembur (80 Org)</span>
-                  </span>
-                  <Badge variant="outline" className="text-[10px] font-mono font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-300/40">
-                    Plafon Rp 69 Jt
-                  </Badge>
-                </div>
-
-                <div className="mt-1">
-                  <span className="text-[10px] text-muted-foreground block font-medium">Total Terpakai ({financialStats.curMonthShort}):</span>
-                  <span className="text-base font-bold text-amber-600 dark:text-amber-400 font-mono block mt-0.5">
-                    Rp {financialStats.totalOvertimeSpent.toLocaleString('id-ID')}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground block mt-0.5">
-                    {financialStats.nextOvertimeEmployeesCount} Org • {financialStats.totalOvertimeHours}j real / {financialStats.totalOvertimePaidHours}j bayar ({financialStats.budgetPercent}%)
-                  </span>
-                </div>
-
-                {/* Progress Bar Visual */}
-                <div className="w-full bg-muted rounded-full h-1.5 mt-2.5 overflow-hidden">
-                  <div
-                    className={`h-1.5 rounded-full transition-all ${
-                      financialStats.isExceeded
-                        ? 'bg-rose-600'
-                        : financialStats.isNearLimit
-                        ? 'bg-amber-500'
-                        : 'bg-emerald-600'
-                    }`}
-                    style={{ width: `${Math.min(100, financialStats.budgetPercent)}%` }}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-3 pt-2.5 border-t border-border/50 flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] text-muted-foreground block">Total Sisa Anggaran:</span>
-                  <span className={`text-xs font-bold font-mono ${financialStats.remainingBudget === 0 ? 'text-rose-600' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                    Rp {financialStats.remainingBudget.toLocaleString('id-ID')}
-                  </span>
-                </div>
-                <Badge
-                  variant="outline"
-                  className={`text-[9px] font-medium ${
-                    financialStats.remainingBudget === 0
-                      ? 'bg-rose-500/10 text-rose-600 border-rose-300'
-                      : 'bg-emerald-500/10 text-emerald-600 border-emerald-300'
-                  }`}
-                >
-                  {financialStats.remainingBudget === 0 ? 'Penuh' : `Sisa ${financialStats.totalRemainingPercent}%`}
-                </Badge>
-              </div>
-            </div>
-
-            {/* 4. ESTIMASI PAYROLL BULAN AKTIF */}
-            <div className="p-3.5 bg-muted/40 hover:bg-muted/60 rounded-xl border border-border/50 flex flex-col justify-between transition-all">
-              {(() => {
-                const activeBucket =
-                  payrollScopeGroup === 'SHIPMENT'
-                    ? financialStats.byGroup.shipment
-                    : payrollScopeGroup === 'RUMAH TANGGA'
-                    ? financialStats.byGroup.rumahTangga
-                    : payrollScopeGroup === 'KARYAWAN TETAP'
-                    ? financialStats.byGroup.karyawanTetap
-                    : financialStats.byGroup.all;
-                const scopeLabel =
-                  payrollScopeGroup === 'SHIPMENT'
-                    ? 'Shipment (47)'
-                    : payrollScopeGroup === 'RUMAH TANGGA'
-                    ? 'Rumah Tangga (33)'
-                    : payrollScopeGroup === 'KARYAWAN TETAP'
-                    ? 'Karyawan Tetap (3)'
-                    : `Semua (${financialStats.byGroup.all.employeeCount})`;
-                return (
-                  <>
-                    <span className="text-[11px] text-muted-foreground flex items-center justify-between gap-1">
-                      <span>Estimasi Payroll ({financialStats.curMonthShort})</span>
-                      <span className="font-semibold text-primary text-[10px]">{scopeLabel}</span>
-                    </span>
-                    <span className="text-base font-bold text-foreground font-mono block mt-0.5">
-                      Rp {activeBucket.totalNetSalary.toLocaleString('id-ID')}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground block mt-0.5">
-                      {payrollScopeGroup === 'KARYAWAN TETAP'
-                        ? `${financialStats.workdaysInMonth} Hari Kerja × Rp 140rb • Non-Lembur • BPJS Rp 0`
-                        : `Pokok: Rp ${(activeBucket.totalBaseSalary / 1e6).toFixed(1)} Jt • Lembur ${financialStats.arrearsMonthShort}: +Rp ${activeBucket.totalOvertimePay.toLocaleString('id-ID')} • BPJS: -Rp ${(activeBucket.totalBpjs / 1e6).toFixed(1)} Jt${activeBucket.totalAlpaDeduction > 0 ? ` • Alpa: -Rp ${activeBucket.totalAlpaDeduction.toLocaleString('id-ID')}` : ''}`}
-                    </span>
-                  </>
-                );
-              })()}
-            </div>
+            {targetDayDate !== getTodayDateStr() && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleResetToToday}
+                className="h-8 text-[11px] font-bold text-emerald-700 dark:text-emerald-400"
+              >
+                Hari Ini
+              </Button>
+            )}
           </div>
+        </div>
 
-          {/* Pilihan & Rekonsiliasi Total Nominal Gaji per Kelompok (Shipment + Rumah Tangga + Karyawan Tetap = Total) */}
-          <div className="mt-3 pt-3 border-t border-border/60 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 text-xs">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {[
-                {
-                  key: 'ALL' as const,
-                  label: `Semua (${financialStats.byGroup.all.employeeCount})`,
-                  amount: financialStats.byGroup.all.totalNetSalary,
-                },
-                {
-                  key: 'SHIPMENT' as const,
-                  label: `🚢 Shipment (${financialStats.byGroup.shipment.employeeCount})`,
-                  amount: financialStats.byGroup.shipment.totalNetSalary,
-                },
-                {
-                  key: 'RUMAH TANGGA' as const,
-                  label: `🏠 Rumah Tangga (${financialStats.byGroup.rumahTangga.employeeCount})`,
-                  amount: financialStats.byGroup.rumahTangga.totalNetSalary,
-                },
-                {
-                  key: 'KARYAWAN TETAP' as const,
-                  label: `⭐ Tetap (${financialStats.byGroup.karyawanTetap.employeeCount} • Rp 140rb/hr)`,
-                  amount: financialStats.byGroup.karyawanTetap.totalNetSalary,
-                },
-              ].map((opt) => (
+        {/* Sequential Date Strip (1..30/31) — 1-Klik Ganti Tanggal */}
+        {isDailyView && (
+          <div className="pt-2.5 border-t border-border/60 space-y-2">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <CalendarIcon size={14} className="text-emerald-600 shrink-0" />
+                <span className="font-bold text-foreground">
+                  {new Date(targetDayDate).toLocaleDateString('id-ID', {
+                    weekday: 'long',
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric',
+                  })}
+                </span>
+                {targetDayDate === getTodayDateStr() && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                    Hari Ini
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
                 <button
-                  key={opt.key}
                   type="button"
-                  onClick={() => setPayrollScopeGroup(opt.key)}
-                  className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all flex items-center gap-1.5 ${
-                    payrollScopeGroup === opt.key
-                      ? 'bg-primary text-primary-foreground border-primary shadow-2xs'
-                      : 'bg-muted/40 text-foreground border-border/70 hover:bg-muted'
-                  }`}
+                  onClick={handlePrevDay}
+                  className="px-2 py-1 rounded-lg bg-muted/60 hover:bg-muted text-[11px] font-semibold text-muted-foreground hover:text-foreground"
                 >
-                  <span>{opt.label}:</span>
-                  <span className="font-mono font-bold">Rp {opt.amount.toLocaleString('id-ID')}</span>
+                  ← H-1
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={handleNextDay}
+                  className="px-2 py-1 rounded-lg bg-muted/60 hover:bg-muted text-[11px] font-semibold text-muted-foreground hover:text-foreground"
+                >
+                  H+1 →
+                </button>
+              </div>
             </div>
-            <span className="text-[10.5px] font-mono text-muted-foreground">
-              Rekonsiliasi: Rp {financialStats.byGroup.shipment.totalNetSalary.toLocaleString('id-ID')} + Rp {financialStats.byGroup.rumahTangga.totalNetSalary.toLocaleString('id-ID')} + Rp {financialStats.byGroup.karyawanTetap.totalNetSalary.toLocaleString('id-ID')} ={' '}
-              <strong className="text-foreground">Rp {financialStats.byGroup.all.totalNetSalary.toLocaleString('id-ID')}</strong>
-            </span>
-          </div>
-        </CardContent>
-      </Card>
 
-      {/* ─── KONTROL & INDIKATOR OPERASIONAL PELABUHAN MACCINI BAJI (Hanya tampil saat filter divisi Pelabuhan Maccini Baji aktif) ─── */}
+            <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-thin">
+              {daysInSelectedMonth.map((d) => {
+                const isSelected = targetDayDate === d.dateStr;
+                const isTodayBtn = d.dateStr === getTodayDateStr();
+                const isFutureBtn = d.dateStr > getTodayDateStr();
+                const dayOtCount = overtimes.filter((o) => {
+                  const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || '').slice(0, 10);
+                  const isApproved = o.status === 'approved' || (o as any).status === 'completed';
+                  return oDate === d.dateStr && isApproved && isOfficialFrEmployee(o);
+                }).length;
+
+                return (
+                  <button
+                    key={d.dateStr}
+                    type="button"
+                    onClick={() => handleSelectDayDate(d.dateStr)}
+                    title={`${d.dayName}, ${d.dateStr}${dayOtCount > 0 ? ` • ${dayOtCount} lembur SPKL` : ''}`}
+                    className={`relative min-w-[34px] h-10 px-1.5 rounded-xl font-mono text-xs font-bold transition-all shrink-0 flex flex-col items-center justify-center ${
+                      isSelected
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : isTodayBtn
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/50 hover:bg-emerald-500/25'
+                        : isFutureBtn
+                        ? 'bg-muted/25 text-muted-foreground/50 hover:bg-muted/50'
+                        : 'bg-muted/50 text-foreground/85 hover:bg-emerald-500/10 hover:text-emerald-700 dark:hover:text-emerald-300'
+                    }`}
+                  >
+                    <span className="text-[8.5px] font-sans uppercase leading-none opacity-75">{d.dayName.slice(0, 2)}</span>
+                    <span className="leading-tight mt-0.5">{d.dayNum}</span>
+                    {dayOtCount > 0 && (
+                      <span
+                        className={`absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full text-[8px] font-extrabold flex items-center justify-center ${
+                          isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-500 text-white'
+                        }`}
+                      >
+                        {dayOtCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ─── KONTROL OPERASIONAL PELABUHAN MACCINI BAJI (Tampil saat filter divisi Maccini Baji aktif) ─── */}
       {(() => {
         if (filterDivision === 'all') return null;
         const selectedDivObj = divisions.find((d) => d.id === filterDivision);
@@ -2441,1308 +2486,421 @@ export const HrmLiveMonitoringPage: React.FC = () => {
         );
       })()}
 
-      {/* Panel Monitoring Khusus Kelompok Operasional PT. FRP */}
-      <div className="space-y-2.5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Users size={15} className="text-primary" />
-            <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              Monitoring Khusus Kelompok Operasional
-            </h2>
-          </div>
-          {filterCategory !== 'all' && (
+      {/* ═══ LAPIS 3: TAB MODUL UTAMA (SELALU TERLIHAT 1-KLIK) + 6 KPI BERSIH + FILTER SHIFT ═══ */}
+      <div className="flex flex-wrap items-center gap-2">
+        {[
+          {
+            id: 'all' as const,
+            isActive: !['field_radar', 'breaches', 'anomalies'].includes(activeTab),
+            label: 'Presensi Karyawan',
+            count: scopedMonitoredList.length,
+            icon: Users,
+            badgeCls: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+          },
+          {
+            id: 'field_radar' as const,
+            isActive: activeTab === 'field_radar',
+            label: 'Radar Petugas Lapangan',
+            count: fieldAgents.length > 0 ? fieldAgents.length : 3,
+            icon: Radio,
+            badgeCls: 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300',
+          },
+          {
+            id: 'breaches' as const,
+            isActive: activeTab === 'breaches',
+            label: 'Pelanggaran Perimeter',
+            count: activeBreaches.length,
+            icon: Lock,
+            badgeCls: activeBreaches.length > 0 ? 'bg-rose-500 text-white' : 'bg-muted text-muted-foreground',
+          },
+          {
+            id: 'anomalies' as const,
+            isActive: activeTab === 'anomalies',
+            label: 'Audit Anomali',
+            count: radarSummary.items.length,
+            icon: ShieldAlert,
+            badgeCls: radarSummary.items.length > 0 ? 'bg-amber-500 text-white' : 'bg-muted text-muted-foreground',
+          },
+        ].map((mod) => {
+          const ModIcon = mod.icon;
+          return (
             <button
+              key={mod.id}
               type="button"
-              onClick={() => setFilterCategory('all')}
-              className="text-[11px] font-semibold text-primary hover:underline self-start sm:self-auto"
+              onClick={() => setActiveTab(mod.id)}
+              className={`px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all ${
+                mod.isActive
+                  ? 'bg-card border-emerald-500 text-foreground shadow-xs ring-1 ring-emerald-500/30'
+                  : 'bg-muted/40 border-border/70 text-muted-foreground hover:text-foreground hover:bg-card'
+              }`}
             >
-              Tampilkan Semua Kelompok ({categoryMonitoringStats.all.total})
+              <ModIcon size={14} className={mod.isActive ? 'text-emerald-600' : ''} />
+              <span>{mod.label}</span>
+              <span className={`px-1.5 py-0.2 rounded-full font-mono text-[10.5px] font-extrabold ${mod.badgeCls}`}>
+                {mod.count}
+              </span>
             </button>
-          )}
-        </div>
+          );
+        })}
+      </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
-          {[
-            {
-              key: 'all' as const,
-              title: 'Semua Kelompok',
-              subtitle: 'Seluruh Personil Aktif PT. FRP',
-              stats: categoryMonitoringStats.all,
-              activeCls: 'border-primary bg-primary/10 ring-1 ring-primary/25',
-              accentText: 'text-primary',
-            },
-            {
-              key: 'RUMAH TANGGA' as const,
-              title: '🏠 Rumah Tangga',
-              subtitle: 'NIP FR07001 – FR07033 • Wisma Biring Ere',
-              stats: categoryMonitoringStats.rumahTangga,
-              activeCls: 'border-teal-500 bg-teal-50/70 dark:bg-teal-950/30 ring-1 ring-teal-500/30',
-              accentText: 'text-teal-700 dark:text-teal-300',
-            },
-            {
-              key: 'SHIPMENT' as const,
-              title: '🚢 Shipment',
-              subtitle: 'NIP FR07034 – FR07080 • Shiftman Lapangan',
-              stats: categoryMonitoringStats.shipment,
-              activeCls: 'border-indigo-500 bg-indigo-50/70 dark:bg-indigo-950/30 ring-1 ring-indigo-500/30',
-              accentText: 'text-indigo-700 dark:text-indigo-300',
-            },
-            {
-              key: 'KARYAWAN TETAP' as const,
-              title: '⭐ Karyawan Tetap',
-              subtitle: 'Takdir, Muh Aslam Faisal, La Unga Samsi',
-              stats: categoryMonitoringStats.karyawanTetap,
-              activeCls: 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/30 ring-1 ring-amber-500/30',
-              accentText: 'text-amber-700 dark:text-amber-300',
-            },
-          ].map((cat) => {
-            const isSelected = filterCategory === cat.key;
-            return (
-              <div
-                key={cat.key}
-                onClick={() => setFilterCategory(isSelected && cat.key !== 'all' ? 'all' : cat.key)}
-                className={`p-3.5 rounded-2xl border cursor-pointer transition-all shadow-2xs ${
-                  isSelected ? `${cat.activeCls} shadow-xs` : 'border-border bg-card hover:bg-muted/40'
+      {/* 6 KPI Status Kehadiran Bersih (Hanya saat berada di modul Presensi Karyawan) */}
+      {!['field_radar', 'breaches', 'anomalies'].includes(activeTab) && (
+        <div className="space-y-3">
+          {isDailyView ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2.5">
+              <button
+                type="button"
+                onClick={() => { setActiveTab(activeTab === 'present' ? 'all' : 'present'); setFilterStatusCol('all'); }}
+                className={`p-3.5 rounded-2xl border text-left transition-all ${
+                  activeTab === 'present' ? 'border-emerald-500 bg-emerald-500/10 ring-1 ring-emerald-500/30' : 'border-border bg-card hover:border-emerald-500/50'
                 }`}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className={`text-sm font-bold ${isSelected ? cat.accentText : 'text-foreground'}`}>
-                      {cat.title}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">
-                      {cat.subtitle}
-                    </p>
-                  </div>
-                  <span className="text-xl font-bold font-mono text-foreground shrink-0">
-                    {cat.stats.total}
-                  </span>
+                <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                  <span>Hadir Tepat</span>
+                  <CheckCircle2 size={14} className="text-emerald-600" />
                 </div>
-                <div className="flex flex-wrap items-center gap-1.5 mt-3 pt-2.5 border-t border-border/60 text-[10px] font-medium">
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
-                    Hadir {cat.stats.present}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">
-                    Telat {cat.stats.late}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800">
-                    Mangkir {cat.stats.mangkir}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
-                    Lainnya {cat.stats.absent}
-                  </span>
+                <p className="text-2xl font-mono font-black text-emerald-600 dark:text-emerald-400 mt-1">
+                  {presentCount} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Org</span>
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setActiveTab(activeTab === 'late' ? 'all' : 'late'); setFilterStatusCol('all'); }}
+                className={`p-3.5 rounded-2xl border text-left transition-all ${
+                  activeTab === 'late' ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/30' : 'border-border bg-card hover:border-amber-500/50'
+                }`}
+              >
+                <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                  <span>Terlambat</span>
+                  <Clock size={14} className="text-amber-600" />
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+                <p className="text-2xl font-mono font-black text-amber-600 dark:text-amber-400 mt-1">
+                  {lateCount} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Org</span>
+                </p>
+              </button>
 
-      {/* ── LAMPIRAN II: REKAPITULASI STATUS & AKUMULASI OPERASIONAL ── */}
-      <div className="space-y-2.5">
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2.5 p-3 rounded-2xl border border-border/80 bg-gradient-to-r from-card via-card to-primary/5 shadow-2xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge className="bg-primary hover:bg-primary text-primary-foreground font-mono text-[10px] uppercase font-extrabold px-2.5 py-0.5 shadow-2xs">
-              Lampiran II
-            </Badge>
-            <h2 className="text-xs sm:text-sm font-bold text-foreground flex items-center gap-1.5">
-              <span>Rekapitulasi Kehadiran &amp; Lembur</span>
-            </h2>
-            <span className="text-xs text-muted-foreground font-medium hidden sm:inline">
-              • Periode: <strong className="text-foreground font-semibold">{selectedMonthLabel}</strong>
-            </span>
-          </div>
+              <button
+                type="button"
+                onClick={() => { setActiveTab('all'); setFilterStatusCol(filterStatusCol === 'cuti' ? 'all' : 'cuti'); }}
+                className={`p-3.5 rounded-2xl border text-left transition-all ${
+                  filterStatusCol === 'cuti' || filterStatusCol === 'izin' ? 'border-sky-500 bg-sky-500/10 ring-1 ring-sky-500/30' : 'border-border bg-card hover:border-sky-500/50'
+                }`}
+              >
+                <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                  <span>Cuti / Izin</span>
+                  <CalendarCheck size={14} className="text-sky-600" />
+                </div>
+                <p className="text-2xl font-mono font-black text-sky-600 dark:text-sky-400 mt-1">
+                  {leaveCount} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Org</span>
+                </p>
+              </button>
 
-          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-between md:justify-end">
-            {/* Quick Switch Bulan Berjalan vs Bulan Lalu */}
-            <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border">
-              <Button
-                size="sm"
-                variant={selectedMonth === currentMonthStr ? 'default' : 'ghost'}
+              <button
+                type="button"
+                onClick={() => { setActiveTab('all'); setFilterStatusCol(filterStatusCol === 'off' ? 'all' : 'off'); }}
+                className={`p-3.5 rounded-2xl border text-left transition-all ${
+                  filterStatusCol === 'off' ? 'border-slate-500 bg-slate-500/10 ring-1 ring-slate-400/40' : 'border-border bg-card hover:border-slate-400'
+                }`}
+              >
+                <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                  <span>OFF Roster</span>
+                  <Coffee size={14} className="text-slate-500" />
+                </div>
+                <p className="text-2xl font-mono font-black text-slate-700 dark:text-slate-200 mt-1">
+                  {offRosterCount} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Org</span>
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setActiveTab(activeTab === 'mangkir' ? 'all' : 'mangkir'); setFilterStatusCol('all'); }}
+                className={`p-3.5 rounded-2xl border text-left transition-all ${
+                  activeTab === 'mangkir'
+                    ? 'border-rose-600 bg-rose-500/15 ring-1 ring-rose-500/40'
+                    : mangkirCount > 0
+                    ? 'border-rose-300 dark:border-rose-800 bg-rose-50/50 dark:bg-rose-950/20 hover:border-rose-500'
+                    : 'border-border bg-card hover:border-rose-400'
+                }`}
+              >
+                <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                  <span>Mangkir</span>
+                  <UserX size={14} className="text-rose-600" />
+                </div>
+                <p className="text-2xl font-mono font-black text-rose-600 dark:text-rose-400 mt-1">
+                  {mangkirCount} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Org</span>
+                </p>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => {
-                  setSelectedMonth(currentMonthStr);
-                  setSelectedDayDate('');
+                  setActiveTab('all');
+                  const targetFilter = unregisteredCount > 0 ? 'unregistered' : 'pending';
+                  setFilterStatusCol(filterStatusCol === targetFilter ? 'all' : targetFilter);
                 }}
-                className="text-xs h-7 px-2.5 rounded-lg font-semibold gap-1.5"
-                title={`Lihat data Bulan Berjalan (${currentMonthLabel})`}
+                className={`p-3.5 rounded-2xl border text-left transition-all ${
+                  filterStatusCol === 'unregistered' || filterStatusCol === 'pending'
+                    ? 'border-purple-500 bg-purple-500/10 ring-1 ring-purple-500/30'
+                    : 'border-border bg-card hover:border-purple-400'
+                }`}
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                <span>Bulan Berjalan ({currentMonthLabel})</span>
-              </Button>
-              <Button
-                size="sm"
-                variant={selectedMonth === pastMonthStr ? 'default' : 'ghost'}
-                onClick={() => {
-                  setSelectedMonth(pastMonthStr);
-                  setSelectedDayDate('');
-                }}
-                className="text-xs h-7 px-2.5 rounded-lg font-semibold gap-1.5"
-                title={`Lihat data Bulan Sebelumnya (${pastMonthLabel})`}
-              >
-                <RotateCcw size={12} />
-                <span>Bulan Lalu ({pastMonthLabel})</span>
-              </Button>
-            </div>
-
-            {/* Mode Switch: Rekap Bulanan vs Presensi Live Hari Terpilih */}
-            <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border">
-              <Button
-                size="sm"
-                variant={lampiran2ViewMode === 'monthly' ? 'default' : 'ghost'}
-                onClick={() => setLampiran2ViewMode('monthly')}
-                className="text-xs h-7 px-2.5 rounded-lg font-semibold gap-1.5"
-                title={`Tampilkan total akumulasi ${selectedMonthLabel}`}
-              >
-                <CalendarDays size={12} />
-                <span>Rekap Bulanan</span>
-              </Button>
-              <Button
-                size="sm"
-                variant={lampiran2ViewMode === 'daily' ? 'default' : 'ghost'}
-                onClick={() => setLampiran2ViewMode('daily')}
-                className="text-xs h-7 px-2.5 rounded-lg font-semibold gap-1.5"
-                title="Tampilkan status presensi harian langsung"
-              >
-                <Clock size={12} />
-                <span>Live Hari Terpilih</span>
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {/* Status Counters (8 Cards: Responsive Balanced 8 / 4 / 2 Grid) */}
-        {lampiran2ViewMode === 'monthly' ? (
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
-            {/* Card 1: Semua Personil FRP */}
-            <div
-              onClick={() => {
-                setFilterCategory('all');
-                setActiveTab('all');
-              }}
-              className="p-3.5 rounded-2xl border border-primary/40 bg-primary/10 cursor-pointer transition-all flex flex-col justify-between hover:bg-primary/15 shadow-2xs"
-            >
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span className="text-[11px] font-semibold truncate text-primary">Personil FRP</span>
-                <Users size={13} className="text-primary shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-foreground mt-1.5 font-mono">
-                {scopedMonitoredList.length} <span className="text-xs font-sans font-medium text-muted-foreground">Orang</span>
-              </p>
-              <span className="text-[10px] text-muted-foreground truncate mt-1">
-                47 S • 33 RT • 3 Tetap
-              </span>
-            </div>
-
-            {/* Card 2: Total Hadir (H) */}
-            <div
-              onClick={() => {
-                setActiveTab('present');
-              }}
-              className="p-3.5 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 cursor-pointer transition-all flex flex-col justify-between hover:bg-emerald-500/15 shadow-2xs"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 truncate">Total Hadir (H)</span>
-                <UserCheck size={13} className="text-emerald-600 shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-emerald-700 dark:text-emerald-400 mt-1.5 font-mono">
-                {monthStats.totalHadir} <span className="text-xs font-sans font-medium text-emerald-600/80">Sesi</span>
-              </p>
-              <span className="text-[10px] text-emerald-700/80 dark:text-emerald-300/80 font-mono truncate mt-1">
-                {monthStats.totalTepat} Tepat • {monthStats.totalLate} Telat
-              </span>
-            </div>
-
-            {/* Card 3: Total Terlambat */}
-            <div
-              onClick={() => {
-                setActiveTab('late');
-              }}
-              className="p-3.5 rounded-2xl border border-amber-500/40 bg-amber-500/10 cursor-pointer transition-all flex flex-col justify-between hover:bg-amber-500/15 shadow-2xs"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300 truncate">Total Terlambat</span>
-                <Clock size={13} className="text-amber-600 shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-amber-700 dark:text-amber-400 mt-1.5 font-mono">
-                {monthStats.totalLate} <span className="text-xs font-sans font-medium text-amber-600/80">Sesi</span>
-              </p>
-              <span className="text-[10px] text-amber-700/80 dark:text-amber-300/80 font-mono truncate mt-1">
-                {monthStats.totalHadir > 0 ? `${Math.round((monthStats.totalLate / monthStats.totalHadir) * 100)}% dari hadir` : '0%'}
-              </span>
-            </div>
-
-            {/* Card 4: Total Sakit (SK) */}
-            <div
-              className="p-3.5 rounded-2xl border border-sky-500/40 bg-sky-500/10 transition-all flex flex-col justify-between shadow-2xs"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-sky-800 dark:text-sky-300 truncate">Total Sakit (SK)</span>
-                <HeartPulse size={13} className="text-sky-600 shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-sky-700 dark:text-sky-400 mt-1.5 font-mono">
-                {monthStats.totalSakit} <span className="text-xs font-sans font-medium text-sky-600/80">Hari</span>
-              </p>
-              <span className="text-[10px] text-sky-700/80 dark:text-sky-300/80 truncate mt-1">
-                Surat Sakit Resmi
-              </span>
-            </div>
-
-            {/* Card 5: Total Izin (I) */}
-            <div
-              className="p-3.5 rounded-2xl border border-indigo-500/40 bg-indigo-500/10 transition-all flex flex-col justify-between shadow-2xs"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-indigo-800 dark:text-indigo-300 truncate">Total Izin (I)</span>
-                <FileCheck2 size={13} className="text-indigo-600 shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-indigo-700 dark:text-indigo-400 mt-1.5 font-mono">
-                {monthStats.totalIzin} <span className="text-xs font-sans font-medium text-indigo-600/80">Hari</span>
-              </p>
-              <span className="text-[10px] text-indigo-700/80 dark:text-indigo-300/80 truncate mt-1">
-                Disetujui Otoritas
-              </span>
-            </div>
-
-            {/* Card 6: Total Cuti (CT) */}
-            <div
-              className="p-3.5 rounded-2xl border border-teal-500/40 bg-teal-500/10 transition-all flex flex-col justify-between shadow-2xs"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-teal-800 dark:text-teal-300 truncate">Total Cuti (CT)</span>
-                <CalendarCheck size={13} className="text-teal-600 shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-teal-700 dark:text-teal-400 mt-1.5 font-mono">
-                {monthStats.totalCuti} <span className="text-xs font-sans font-medium text-teal-600/80">Hari</span>
-              </p>
-              <span className="text-[10px] text-teal-700/80 dark:text-teal-300/80 truncate mt-1">
-                Use-It-Or-Lose-It
-              </span>
-            </div>
-
-            {/* Card 7: Total Mangkir / Alpa (A) */}
-            <div
-              onClick={() => {
-                setActiveTab('mangkir');
-              }}
-              className="p-3.5 rounded-2xl border border-rose-500/40 bg-rose-500/10 cursor-pointer transition-all flex flex-col justify-between hover:bg-rose-500/15 shadow-2xs"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 truncate">Mangkir / Alpa</span>
-                {monthStats.totalMangkir > 0 ? (
-                  <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
-                ) : (
-                  <UserX size={13} className="text-rose-600 shrink-0" />
-                )}
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-rose-700 dark:text-rose-400 mt-1.5 font-mono">
-                {monthStats.totalMangkir} <span className="text-xs font-sans font-medium text-rose-600/80">Hari</span>
-              </p>
-              <span className="text-[10px] text-rose-700/80 dark:text-rose-300/80 truncate mt-1">
-                {monthStats.totalMangkir > 0 ? 'Potongan Gaji / SPKL' : 'Nihil Pelanggaran'}
-              </span>
-            </div>
-
-            {/* Card 8: Total Lembur (SPKL) */}
-            <div
-              onClick={() => {
-                if (filterOvertimeCol === 'has_ot') {
-                  setFilterOvertimeCol('all');
-                } else {
-                  setFilterOvertimeCol('has_ot');
-                  setFilterShift('all');
-                }
-              }}
-              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between shadow-2xs ${
-                filterOvertimeCol === 'has_ot'
-                  ? 'border-purple-600 bg-purple-500/20 ring-2 ring-purple-500/40'
-                  : 'border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/15'
-              }`}
-              title="Klik untuk menyaring karyawan dengan lembur"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-purple-800 dark:text-purple-300 truncate">Total Lembur (SPKL)</span>
-                <Flame size={13} className="text-purple-600 dark:text-purple-400 shrink-0 fill-purple-600/30" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-purple-700 dark:text-purple-400 mt-1.5 font-mono">
-                {monthStats.totalOtHours} <span className="text-xs font-sans font-medium text-purple-600/80">Jam</span>
-              </p>
-              <div className="flex items-center justify-between text-[10px] text-purple-800 dark:text-purple-300 font-mono mt-1">
-                <span className="font-semibold truncate">Rp {monthStats.totalOtPay.toLocaleString('id-ID')}</span>
-                <span className="text-[9px] text-muted-foreground shrink-0">{monthStats.totalOtCount}x</span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
-            {/* Card 1: Semua Karyawan */}
-            <div
-              onClick={() => setActiveTab('all')}
-              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-                activeTab === 'all'
-                  ? 'border-primary bg-primary/10 ring-2 ring-primary/30 shadow-xs'
-                  : 'border-border bg-card hover:bg-muted/40'
-              }`}
-            >
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span className="text-[11px] font-semibold truncate">
-                  {filterCategory === 'all' ? 'Semua Karyawan' : getEmployeeCategoryLabel(filterCategory)}
-                </span>
-                <Users size={13} className="text-primary shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-foreground mt-1.5 font-mono">
-                {scopedMonitoredList.length} <span className="text-xs font-sans font-medium text-muted-foreground">Orang</span>
-              </p>
-            </div>
-
-            {/* Card 2: Hadir Tepat Waktu */}
-            <div
-              onClick={() => setActiveTab('present')}
-              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-                activeTab === 'present'
-                  ? 'border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/30 shadow-xs'
-                  : 'border-border bg-card hover:bg-muted/40'
-              }`}
-            >
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 truncate">Hadir Tepat</span>
-                <UserCheck size={13} className="text-emerald-600 shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-emerald-700 dark:text-emerald-400 mt-1.5 font-mono">
-                {presentCount} <span className="text-xs font-sans font-medium text-emerald-600/80">Orang</span>
-              </p>
-            </div>
-
-            {/* Card 3: Terlambat */}
-            <div
-              onClick={() => setActiveTab('late')}
-              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-                activeTab === 'late'
-                  ? 'border-amber-500 bg-amber-500/10 ring-2 ring-amber-500/30 shadow-xs'
-                  : 'border-border bg-card hover:bg-muted/40'
-              }`}
-            >
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300 truncate">Terlambat</span>
-                <Clock size={13} className="text-amber-600 shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-amber-700 dark:text-amber-400 mt-1.5 font-mono">
-                {lateCount} <span className="text-xs font-sans font-medium text-amber-600/80">Orang</span>
-              </p>
-            </div>
-
-            {/* Card 4: Mangkir / Alpa */}
-            <div
-              onClick={() => setActiveTab('mangkir')}
-              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-                activeTab === 'mangkir'
-                  ? 'border-rose-600 bg-rose-500/15 ring-2 ring-rose-500/40 shadow-xs dark:bg-rose-950/40'
-                  : 'border-border bg-card hover:bg-muted/40'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 truncate">Mangkir / Alpa</span>
-                {mangkirCount > 0 ? (
-                  <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
-                ) : (
-                  <UserX size={13} className="text-rose-600 shrink-0" />
-                )}
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-rose-700 dark:text-rose-400 mt-1.5 font-mono">
-                {mangkirCount} <span className="text-xs font-sans font-medium text-rose-600/80">Orang</span>
-              </p>
-            </div>
-
-            {/* Card 5: Belum Hadir / OFF */}
-            <div
-              onClick={() => setActiveTab('absent')}
-              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-                activeTab === 'absent'
-                  ? 'border-muted-foreground bg-muted ring-2 ring-border shadow-xs'
-                  : 'border-border bg-card hover:bg-muted/40'
-              }`}
-            >
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span className="text-[11px] font-semibold truncate">Belum Hadir</span>
-                <Clock size={13} className="text-muted-foreground shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-muted-foreground mt-1.5 font-mono">
-                {absentCount} <span className="text-xs font-sans font-medium text-muted-foreground/80">Orang</span>
-              </p>
-            </div>
-
-            {/* Card 6: Audit Anomali */}
-            <div
-              onClick={() => setActiveTab('anomalies')}
-              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-                activeTab === 'anomalies'
-                  ? 'border-rose-500 bg-rose-50/50 dark:bg-rose-950/20 ring-2 ring-rose-500/30 shadow-xs'
-                  : 'border-border bg-card hover:bg-muted/40'
-              }`}
-            >
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 truncate">Audit Anomali</span>
-                {radarSummary.items.length > 0 ? (
-                  <span className="w-2 h-2 rounded-full bg-rose-500" />
-                ) : (
-                  <AlertTriangle size={13} className="text-rose-500 shrink-0" />
-                )}
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-rose-600 dark:text-rose-400 mt-1.5 font-mono">
-                {radarSummary.items.length} <span className="text-xs font-sans font-medium text-rose-500/80">Isu</span>
-              </p>
-            </div>
-
-            {/* Card 7: Pelanggaran Perimeter */}
-            <div
-              onClick={() => setActiveTab('breaches')}
-              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-                activeTab === 'breaches'
-                  ? 'border-rose-500 bg-rose-500/10 ring-2 ring-rose-500/30 shadow-xs'
-                  : 'border-border bg-card hover:bg-muted/40'
-              }`}
-            >
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 truncate">Perimeter</span>
-                {activeBreaches.length > 0 ? (
-                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-                ) : (
-                  <Lock size={13} className="text-rose-500 shrink-0" />
-                )}
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-rose-600 dark:text-rose-400 mt-1.5 font-mono">
-                {activeBreaches.length} <span className="text-xs font-sans font-medium text-rose-500/80">Terkunci</span>
-              </p>
-            </div>
-
-            {/* Card 8: Radar Petugas Lapangan */}
-            <div
-              onClick={() => setActiveTab('field_radar')}
-              className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-                activeTab === 'field_radar'
-                  ? 'border-indigo-500 bg-indigo-500/15 ring-2 ring-indigo-500/40 shadow-xs'
-                  : 'border-border bg-card hover:bg-muted/40'
-              }`}
-            >
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span className="text-[11px] font-semibold text-indigo-800 dark:text-indigo-300 truncate">Radar Lapangan</span>
-                <span className="flex h-2 w-2 relative shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
-                </span>
-              </div>
-              <p className="text-xl sm:text-2xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1.5 font-mono">
-                {fieldAgents.length > 0 ? `${fieldAgents.length}` : '3'} <span className="text-xs font-sans font-medium text-indigo-500/80">Petugas</span>
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ── FITUR PITA TANGGAL BERURUTAN (SEQUENTIAL DATE NAVIGATOR) UNTUK LAMPIRAN III ── */}
-      <Card className="border-border/80 bg-gradient-to-r from-card via-card to-primary/5 rounded-2xl shadow-xs overflow-hidden">
-        <CardContent className="p-3.5 sm:p-4 space-y-3">
-          {/* Header Baris Kontrol Navigasi Tanggal */}
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1.5 font-bold text-xs sm:text-sm text-foreground">
-                <CalendarIcon size={16} className="text-primary shrink-0" />
-                <span>
-                  {new Date(targetDayDate).toLocaleDateString('id-ID', {
-                    weekday: 'long',
-                    day: 'numeric',
-                    month: 'long',
-                    year: 'numeric',
-                  })}
-                </span>
-              </div>
-              {targetDayDate === getTodayDateStr() ? (
-                <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white font-mono text-[11px] gap-1 px-2.5 py-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                  Hari Ini (Live WITA)
-                </Badge>
-              ) : (
-                <div className="flex items-center gap-1.5">
-                  <Badge variant="outline" className="border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-400 font-mono text-[11px] px-2 py-0.5 font-semibold">
-                    🗓️ Tanggal Pantauan: {targetDayDate}
-                  </Badge>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleResetToToday}
-                    className="h-6 text-[10px] px-2 rounded-lg border-primary/30 text-primary hover:bg-primary/10 gap-1 font-semibold"
-                    title="Kembali ke Presensi Hari Ini"
-                  >
-                    <RotateCw size={10} /> Kembali ke Hari Ini
-                  </Button>
+                <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                  <span>Blm Daftar / Tunggu</span>
+                  <AlertTriangle size={14} className="text-purple-600" />
                 </div>
+                <p className="text-2xl font-mono font-black text-purple-600 dark:text-purple-400 mt-1">
+                  {unregisteredCount + pendingShiftCount}{' '}
+                  <span className="text-[10.5px] font-sans font-medium text-muted-foreground">
+                    ({unregisteredCount}•{pendingShiftCount})
+                  </span>
+                </p>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2.5">
+              <div className="p-3.5 rounded-2xl border border-border bg-card">
+                <span className="text-[11px] font-bold text-muted-foreground block">Hadir ({selectedMonthLabel})</span>
+                <p className="text-2xl font-mono font-black text-emerald-600 dark:text-emerald-400 mt-1">
+                  {monthStats.totalHadir} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Hr</span>
+                </p>
+              </div>
+              <div className="p-3.5 rounded-2xl border border-border bg-card">
+                <span className="text-[11px] font-bold text-muted-foreground block">Terlambat</span>
+                <p className="text-2xl font-mono font-black text-amber-600 dark:text-amber-400 mt-1">
+                  {monthStats.totalLate} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Hr</span>
+                </p>
+              </div>
+              <div className="p-3.5 rounded-2xl border border-border bg-card">
+                <span className="text-[11px] font-bold text-muted-foreground block">Cuti Tahunan</span>
+                <p className="text-2xl font-mono font-black text-sky-600 dark:text-sky-400 mt-1">
+                  {monthStats.totalCuti} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Hr</span>
+                </p>
+              </div>
+              <div className="p-3.5 rounded-2xl border border-border bg-card">
+                <span className="text-[11px] font-bold text-muted-foreground block">Izin &amp; Sakit</span>
+                <p className="text-2xl font-mono font-black text-indigo-600 dark:text-indigo-400 mt-1">
+                  {monthStats.totalIzin + monthStats.totalSakit} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Hr</span>
+                </p>
+              </div>
+              <div className="p-3.5 rounded-2xl border border-border bg-card">
+                <span className="text-[11px] font-bold text-muted-foreground block">Mangkir / Alpa</span>
+                <p className="text-2xl font-mono font-black text-rose-600 dark:text-rose-400 mt-1">
+                  {monthStats.totalMangkir} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Hr</span>
+                </p>
+              </div>
+              <div className="p-3.5 rounded-2xl border border-amber-400/40 bg-amber-500/5">
+                <span className="text-[11px] font-bold text-amber-800 dark:text-amber-300 block">Total Lembur SPKL</span>
+                <p className="text-2xl font-mono font-black text-amber-600 dark:text-amber-400 mt-1">
+                  {monthStats.totalOtHours} <span className="text-[11px] font-sans font-semibold text-muted-foreground">Jam ({monthStats.totalOtCount}x)</span>
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Baris Pill Filter Shift Cepat 1-Baris (Menggantikan 6 Kartu Besar Duplikat) */}
+          {isDailyView && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-[11px] font-bold text-muted-foreground mr-1">Filter Shift:</span>
+              {[
+                { id: 'all', label: 'Semua Shift', sub: `${scopedMonitoredList.length}` },
+                { id: 'P', label: 'Shift I (07:30)', sub: `${dailyShiftBreakdown.shift1.present}/${dailyShiftBreakdown.shift1.total}` },
+                { id: 'S', label: 'Shift II (15:30)', sub: `${dailyShiftBreakdown.shift2.present}/${dailyShiftBreakdown.shift2.total}` },
+                { id: 'M', label: 'Shift III (22:30)', sub: `${dailyShiftBreakdown.shift3.present}/${dailyShiftBreakdown.shift3.total}` },
+                { id: 'DAY', label: 'Day Shift', sub: `${dailyShiftBreakdown.dayShift.present}/${dailyShiftBreakdown.dayShift.total}` },
+                { id: 'OFF', label: 'OFF / Cuti', sub: `${dailyShiftBreakdown.off.total}` },
+              ].map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setFilterShift(filterShift === s.id ? 'all' : s.id)}
+                  className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-semibold transition-all flex items-center gap-1.5 ${
+                    filterShift === s.id
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : 'bg-card border-border text-foreground hover:bg-muted/50'
+                  }`}
+                >
+                  <span>{s.label}</span>
+                  <span className={`font-mono text-[10.5px] font-bold ${filterShift === s.id ? 'text-emerald-100' : 'text-muted-foreground'}`}>
+                    {s.sub}
+                  </span>
+                </button>
+              ))}
+
+              <button
+                type="button"
+                onClick={() => setFilterOvertimeCol(filterOvertimeCol === 'has_ot' ? 'all' : 'has_ot')}
+                className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-semibold transition-all flex items-center gap-1.5 ${
+                  filterOvertimeCol === 'has_ot'
+                    ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                    : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300 hover:bg-amber-500/20'
+                }`}
+              >
+                <Flame size={12} />
+                <span>Ada Lembur SPKL</span>
+                <span className="font-mono font-bold">
+                  {dailyOvertimeStats.totalCount} Org ({dailyOvertimeStats.totalHours}j)
+                </span>
+              </button>
+            </div>
+          )}
+
+          {/* ═══ LAPIS 4: TOOLBAR TABEL RAMPING 1-BARIS (ZERO DUPLIKASI FILTER) ═══ */}
+          <div className="bg-card border border-border rounded-2xl p-3 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 shadow-2xs">
+            <div className="flex flex-wrap items-center gap-2 flex-1">
+              <div className="relative flex-1 min-w-[200px] max-w-xs">
+                <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <Input
+                  placeholder="Cari nama atau NIP..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8 text-xs rounded-xl h-9"
+                />
+              </div>
+
+              <div className="w-[180px]">
+                <Select value={filterDivision} onValueChange={setFilterDivision}>
+                  <SelectTrigger className="text-xs rounded-xl h-9">
+                    <SelectValue placeholder="Semua Divisi" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Divisi</SelectItem>
+                    {divisions.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        {d.name} ({d.code})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="w-[165px]">
+                <Select value={filterStatusCol} onValueChange={setFilterStatusCol}>
+                  <SelectTrigger className="text-xs rounded-xl h-9">
+                    <SelectValue placeholder="Semua Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Status</SelectItem>
+                    <SelectItem value="present">Hadir Tepat</SelectItem>
+                    <SelectItem value="late">Terlambat</SelectItem>
+                    <SelectItem value="cuti">Cuti Tahunan</SelectItem>
+                    <SelectItem value="izin">Izin / Sakit</SelectItem>
+                    <SelectItem value="mangkir">Mangkir / Alpa</SelectItem>
+                    <SelectItem value="off">OFF / Libur</SelectItem>
+                    <SelectItem value="pending">Menunggu Shift</SelectItem>
+                    <SelectItem value="unregistered">Belum Daftar Wajah</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {(filterShift !== 'all' || filterStatusCol !== 'all' || filterOvertimeCol !== 'all' || filterDivision !== 'all' || filterCategory !== 'all' || searchQuery || activeTab !== 'all') && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setActiveTab('all');
+                    setFilterShift('all');
+                    setFilterStatusCol('all');
+                    setFilterOvertimeCol('all');
+                    setFilterDivision('all');
+                    setFilterCategory('all');
+                    setSearchQuery('');
+                  }}
+                  className="h-9 px-2.5 text-xs rounded-xl text-rose-600 hover:bg-rose-500/10 font-semibold gap-1"
+                >
+                  <X size={13} /> Reset
+                </Button>
               )}
             </div>
 
-            {/* Quick Action Navigation Controls */}
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={handlePrevDay}
-                  className="h-7 px-2 text-xs rounded-lg text-muted-foreground hover:text-foreground font-semibold gap-1"
-                  title="Pindah ke 1 hari sebelumnya"
-                >
-                  <ChevronLeft size={14} /> H-1
-                </Button>
-                <input
-                  type="date"
-                  value={targetDayDate}
-                  onChange={(e) => handleSelectDayDate(e.target.value)}
-                  className="h-7 text-xs bg-background px-2 py-0.5 rounded-lg border border-border/80 font-mono font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                  title="Pilih langsung tanggal tertentu dari kalender"
-                />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={handleNextDay}
-                  className="h-7 px-2 text-xs rounded-lg text-muted-foreground hover:text-foreground font-semibold gap-1"
-                  title="Pindah ke 1 hari berikutnya"
-                >
-                  H+1 <ChevronRight size={14} />
-                </Button>
-              </div>
-
-              {/* Month Stepper */}
-              <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={handlePrevMonth}
-                  className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
-                  title="Bulan Sebelumnya"
-                >
-                  <ChevronLeft size={14} />
-                </Button>
-                <span className="text-[11px] font-semibold text-foreground px-1.5 min-w-[95px] text-center">
-                  {selectedMonthLabel}
-                </span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={handleNextMonth}
-                  className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-foreground"
-                  title="Bulan Berikutnya"
-                >
-                  <ChevronRight size={14} />
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          {/* Pita Tanggal Berurutan (Horizontal Date Pills) */}
-          <div className="space-y-1 pt-1 border-t border-border/60">
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground pb-0.5">
-              <span>Klik Tanggal di Bawah untuk Melihat Presensi &amp; Jadwal Hari Tersebut:</span>
-              <span className="font-mono text-[10px]">
-                {daysInSelectedMonth.length} Hari di {selectedMonthLabel}
+            <div className="flex items-center gap-2 shrink-0 justify-between lg:justify-end">
+              <span className="text-[11px] font-mono text-muted-foreground">
+                <strong className="text-foreground">{filtered.length}</strong> / {scopedMonitoredList.length} Org
               </span>
-            </div>
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 pt-0.5 scrollbar-thin">
-              {daysInSelectedMonth.map((d) => {
-                const isSelected = targetDayDate === d.dateStr;
-                const isToday = d.dateStr === getTodayDateStr();
-                const dayAttCount = allAttendances.filter(
-                  (a) => (a.attendanceDate || (a as any).date) === d.dateStr && (Boolean(a.clockIn) || a.status === 'hadir' || a.status === 'terlambat')
-                ).length;
-                const dayOtCount = overtimes.filter((o) => {
-                  const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || '').slice(0, 10);
-                  const isApproved = o.status === 'approved' || (o as any).status === 'completed';
-                  return oDate === d.dateStr && isApproved && isOfficialFrEmployee(o);
-                }).length;
-                const dObj = new Date(d.dateStr);
-                const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
 
-                return (
-                  <button
-                    key={d.dateStr}
-                    type="button"
-                    onClick={() => handleSelectDayDate(d.dateStr)}
-                    className={`group relative flex flex-col items-center justify-center h-12 min-w-[50px] px-2 rounded-xl border transition-all shrink-0 cursor-pointer ${
-                      isSelected
-                        ? 'bg-primary text-primary-foreground border-primary font-bold shadow-md ring-2 ring-primary/40 scale-105'
-                        : isToday
-                        ? 'border-emerald-500/80 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-bold hover:bg-emerald-500/20'
-                        : isWeekend
-                        ? 'border-border/60 bg-muted/30 text-muted-foreground/80 hover:bg-muted/60'
-                        : 'border-border bg-card hover:bg-muted/50 text-foreground'
-                    }`}
-                    title={`${d.dayName}, ${d.dateStr} • ${dayAttCount} presensi hadir${dayOtCount > 0 ? ` • ${dayOtCount} personil lembur (SPKL)` : ''}`}
-                  >
-                    <span className="text-[10px] uppercase font-semibold leading-none opacity-90">{d.dayName}</span>
-                    <span className="text-xs font-bold font-mono mt-0.5">{String(d.dayNum).padStart(2, '0')}</span>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      {dayAttCount > 0 && (
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            isSelected ? 'bg-primary-foreground' : 'bg-emerald-500'
-                          }`}
-                          title={`${dayAttCount} hadir`}
-                        />
-                      )}
-                      {dayOtCount > 0 && (
-                        <span
-                          className={`px-1 rounded-full text-[8px] font-extrabold font-mono leading-tight ${
-                            isSelected
-                              ? 'bg-amber-300 text-amber-950'
-                              : 'bg-amber-500/25 text-amber-800 dark:text-amber-300 border border-amber-500/40'
-                          }`}
-                          title={`${dayOtCount} lembur SPKL pada tanggal ini`}
-                        >
-                          ⚡{dayOtCount}
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* ── LIVE REKAPITULASI PRESENSI PER SHIFT & LEMBUR PADA TANGGAL INI ── */}
-          <div className="pt-2.5 border-t border-border/60 space-y-2">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
-              <span className="font-bold text-foreground flex items-center gap-1.5">
-                <Clock size={14} className="text-primary shrink-0" />
-                <span>
-                  Kehadiran Shift & Lembur Real-Time Tanggal{' '}
-                  <strong className="text-primary font-mono">
-                    {new Date(targetDayDate).toLocaleDateString('id-ID', {
-                      day: 'numeric',
-                      month: 'short',
-                      year: 'numeric',
-                    })}
-                  </strong>
-                </span>
-              </span>
-              <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                <span>Klik kartu shift / lembur untuk menyaring:</span>
-                {filterShift !== 'all' && (
-                  <button
-                    type="button"
-                    onClick={() => setFilterShift('all')}
-                    className="text-primary hover:underline font-semibold text-[11px] ml-1 cursor-pointer"
-                  >
-                    (Reset Filter Shift)
-                  </button>
-                )}
-                {filterOvertimeCol === 'has_ot' && (
-                  <button
-                    type="button"
-                    onClick={() => setFilterOvertimeCol('all')}
-                    className="text-purple-600 dark:text-purple-400 hover:underline font-semibold text-[11px] ml-1 cursor-pointer"
-                  >
-                    (Reset Filter Lembur)
-                  </button>
-                )}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-              {/* Card 1: Shift I (Pagi) */}
-              <button
-                type="button"
-                onClick={() => setFilterShift(filterShift === 'P' ? 'all' : 'P')}
-                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                  filterShift === 'P'
-                    ? 'border-amber-500 bg-amber-500/15 ring-2 ring-amber-500/40 shadow-xs'
-                    : 'border-border bg-card hover:bg-muted/40'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Sunrise size={14} className="text-amber-500 shrink-0" />
-                    <span className="font-bold text-xs text-foreground">Shift I (Pagi)</span>
-                  </div>
-                  {filterShift === 'P' && (
-                    <Badge variant="outline" className="text-[9px] bg-amber-500/20 border-amber-500/40 text-amber-700 dark:text-amber-300 font-semibold px-1 py-0">
-                      Aktif
-                    </Badge>
-                  )}
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">07:30 WITA (Shift I &amp; Day)</div>
-                <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-lg font-extrabold font-mono text-foreground">
-                    {dailyShiftBreakdown.shift1.present}{' '}
-                    <span className="text-xs text-muted-foreground font-normal">/ {dailyShiftBreakdown.shift1.total}</span>
-                  </span>
-                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
-                    {dailyShiftBreakdown.shift1.total > 0
-                      ? `${Math.round((dailyShiftBreakdown.shift1.present / dailyShiftBreakdown.shift1.total) * 100)}%`
-                      : '0%'}
-                  </span>
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                  {dailyShiftBreakdown.shift1.late > 0 ? (
-                    <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.shift1.late} Telat • </span>
-                  ) : null}
-                  {dailyShiftBreakdown.shift1.unregistered > 0 ? (
-                    <span className="text-rose-500 font-semibold">{dailyShiftBreakdown.shift1.unregistered} Belum Daftar Wajah • </span>
-                  ) : null}
-                  <span>{dailyShiftBreakdown.shift1.pendingOrAbsent} Belum Masuk</span>
-                </div>
-              </button>
-
-              {/* Card 2: Shift II (Siang) */}
-              <button
-                type="button"
-                onClick={() => setFilterShift(filterShift === 'S' ? 'all' : 'S')}
-                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                  filterShift === 'S'
-                    ? 'border-sky-500 bg-sky-500/15 ring-2 ring-sky-500/40 shadow-xs'
-                    : 'border-border bg-card hover:bg-muted/40'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Sun size={14} className="text-sky-500 shrink-0" />
-                    <span className="font-bold text-xs text-foreground">Shift II (Siang)</span>
-                  </div>
-                  {filterShift === 'S' && (
-                    <Badge variant="outline" className="text-[9px] bg-sky-500/20 border-sky-500/40 text-sky-700 dark:text-sky-300 font-semibold px-1 py-0">
-                      Aktif
-                    </Badge>
-                  )}
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">15:30 - 22:30 WITA</div>
-                <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-lg font-extrabold font-mono text-foreground">
-                    {dailyShiftBreakdown.shift2.present}{' '}
-                    <span className="text-xs text-muted-foreground font-normal">/ {dailyShiftBreakdown.shift2.total}</span>
-                  </span>
-                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
-                    {dailyShiftBreakdown.shift2.total > 0
-                      ? `${Math.round((dailyShiftBreakdown.shift2.present / dailyShiftBreakdown.shift2.total) * 100)}%`
-                      : '0%'}
-                  </span>
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                  {dailyShiftBreakdown.shift2.late > 0 ? (
-                    <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.shift2.late} Telat • </span>
-                  ) : null}
-                  {dailyShiftBreakdown.shift2.unregistered > 0 ? (
-                    <span className="text-rose-500 font-semibold">{dailyShiftBreakdown.shift2.unregistered} Belum Daftar Wajah • </span>
-                  ) : null}
-                  <span>{dailyShiftBreakdown.shift2.pendingOrAbsent} Belum Masuk</span>
-                </div>
-              </button>
-
-              {/* Card 3: Shift III (Malam) */}
-              <button
-                type="button"
-                onClick={() => setFilterShift(filterShift === 'M' ? 'all' : 'M')}
-                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                  filterShift === 'M'
-                    ? 'border-purple-500 bg-purple-500/15 ring-2 ring-purple-500/40 shadow-xs'
-                    : 'border-border bg-card hover:bg-muted/40'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Moon size={14} className="text-purple-500 shrink-0" />
-                    <span className="font-bold text-xs text-foreground">Shift III (Malam)</span>
-                  </div>
-                  {filterShift === 'M' && (
-                    <Badge variant="outline" className="text-[9px] bg-purple-500/20 border-purple-500/40 text-purple-700 dark:text-purple-300 font-semibold px-1 py-0">
-                      Aktif
-                    </Badge>
-                  )}
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">22:30 - 07:30 WITA</div>
-                <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-lg font-extrabold font-mono text-foreground">
-                    {dailyShiftBreakdown.shift3.present}{' '}
-                    <span className="text-xs text-muted-foreground font-normal">/ {dailyShiftBreakdown.shift3.total}</span>
-                  </span>
-                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
-                    {dailyShiftBreakdown.shift3.total > 0
-                      ? `${Math.round((dailyShiftBreakdown.shift3.present / dailyShiftBreakdown.shift3.total) * 100)}%`
-                      : '0%'}
-                  </span>
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                  {dailyShiftBreakdown.shift3.late > 0 ? (
-                    <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.shift3.late} Telat • </span>
-                  ) : null}
-                  {dailyShiftBreakdown.shift3.unregistered > 0 ? (
-                    <span className="text-rose-500 font-semibold">{dailyShiftBreakdown.shift3.unregistered} Belum Daftar Wajah • </span>
-                  ) : null}
-                  <span>{dailyShiftBreakdown.shift3.pendingOrAbsent} Belum Masuk</span>
-                </div>
-              </button>
-
-              {/* Card 4: Day Shift (Normal) */}
-              <button
-                type="button"
-                onClick={() => setFilterShift(filterShift === 'DAY' ? 'all' : 'DAY')}
-                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                  filterShift === 'DAY'
-                    ? 'border-emerald-500 bg-emerald-500/15 ring-2 ring-emerald-500/40 shadow-xs'
-                    : 'border-border bg-card hover:bg-muted/40'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Briefcase size={14} className="text-emerald-600 shrink-0" />
-                    <span className="font-bold text-xs text-foreground">Day Shift (Normal)</span>
-                  </div>
-                  {filterShift === 'DAY' && (
-                    <Badge variant="outline" className="text-[9px] bg-emerald-500/20 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-semibold px-1 py-0">
-                      Aktif
-                    </Badge>
-                  )}
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">08:00 - 16:00 / Khusus</div>
-                <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-lg font-extrabold font-mono text-foreground">
-                    {dailyShiftBreakdown.dayShift.present}{' '}
-                    <span className="text-xs text-muted-foreground font-normal">/ {dailyShiftBreakdown.dayShift.total}</span>
-                  </span>
-                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
-                    {dailyShiftBreakdown.dayShift.total > 0
-                      ? `${Math.round((dailyShiftBreakdown.dayShift.present / dailyShiftBreakdown.dayShift.total) * 100)}%`
-                      : '0%'}
-                  </span>
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                  {dailyShiftBreakdown.dayShift.total === 0 ? (
-                    <span className="text-muted-foreground italic">Tergabung di Shift Pagi (07:30)</span>
-                  ) : (
-                    <>
-                      {dailyShiftBreakdown.dayShift.late > 0 ? (
-                        <span className="text-amber-600 font-semibold">{dailyShiftBreakdown.dayShift.late} Telat • </span>
-                      ) : null}
-                      {dailyShiftBreakdown.dayShift.unregistered > 0 ? (
-                        <span className="text-rose-500 font-semibold">{dailyShiftBreakdown.dayShift.unregistered} Belum Daftar Wajah • </span>
-                      ) : null}
-                      <span>{dailyShiftBreakdown.dayShift.pendingOrAbsent} Belum Hadir</span>
-                    </>
-                  )}
-                </div>
-              </button>
-
-              {/* Card 5: Libur / OFF Roster */}
-              <button
-                type="button"
-                onClick={() => setFilterShift(filterShift === 'OFF' ? 'all' : 'OFF')}
-                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                  filterShift === 'OFF'
-                    ? 'border-muted-foreground bg-muted ring-2 ring-border shadow-xs'
-                    : 'border-border bg-card hover:bg-muted/40'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Coffee size={14} className="text-muted-foreground shrink-0" />
-                    <span className="font-bold text-xs text-foreground">Libur / OFF Roster</span>
-                  </div>
-                  {filterShift === 'OFF' && (
-                    <Badge variant="outline" className="text-[9px] bg-muted border-border text-foreground font-semibold px-1 py-0">
-                      Aktif
-                    </Badge>
-                  )}
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">Bebas Dinas / Off Duty</div>
-                <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-lg font-extrabold font-mono text-muted-foreground">
-                    {dailyShiftBreakdown.off.total}{' '}
-                    <span className="text-xs text-muted-foreground font-normal">Karyawan</span>
-                  </span>
-                  <span className="text-[10px] font-semibold text-muted-foreground font-mono">
-                    OFF
-                  </span>
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                  {dailyShiftBreakdown.off.leave > 0 ? (
-                    <span className="text-primary font-semibold">{dailyShiftBreakdown.off.leave} Cuti Sah • </span>
-                  ) : null}
-                  <span>{dailyShiftBreakdown.off.regularOff} Jadwal Lepas</span>
-                </div>
-              </button>
-
-              {/* Card 6: Lembur (SPKL Sah) */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (filterOvertimeCol === 'has_ot') {
-                    setFilterOvertimeCol('all');
-                  } else {
-                    setFilterOvertimeCol('has_ot');
-                    setFilterShift('all');
-                  }
-                }}
-                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                  filterOvertimeCol === 'has_ot'
-                    ? 'border-purple-500 bg-purple-500/15 ring-2 ring-purple-500/40 shadow-xs'
-                    : dailyOvertimeStats.totalCount > 0
-                    ? 'border-purple-500/40 bg-purple-500/5 hover:bg-purple-500/10'
-                    : 'border-border bg-card hover:bg-muted/40'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Flame size={14} className="text-purple-600 dark:text-purple-400 shrink-0 fill-purple-600/30" />
-                    <span className="font-bold text-xs text-foreground">Lembur (SPKL)</span>
-                  </div>
-                  {filterOvertimeCol === 'has_ot' && (
-                    <Badge variant="outline" className="text-[9px] bg-purple-500/20 border-purple-500/40 text-purple-700 dark:text-purple-300 font-semibold px-1 py-0">
-                      Aktif
-                    </Badge>
-                  )}
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">Surat Perintah Lembur</div>
-                <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-lg font-extrabold font-mono text-purple-700 dark:text-purple-400">
-                    {dailyOvertimeStats.totalCount}{' '}
-                    <span className="text-xs text-muted-foreground font-normal">Personil</span>
-                  </span>
-                  <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400 font-mono">
-                    {dailyOvertimeStats.totalHours} Jam
-                  </span>
-                </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 truncate font-mono">
-                  {dailyOvertimeStats.totalCount > 0 ? (
-                    <span className="font-semibold text-purple-800 dark:text-purple-300">
-                      Est: Rp {dailyOvertimeStats.totalPay.toLocaleString('id-ID')}
-                    </span>
-                  ) : (
-                    <span>Nihil Lembur Hari Ini</span>
-                  )}
-                </div>
-              </button>
-            </div>
-
-            {/* Sub-Panel: Detail Karyawan Lembur Resmi pada Tanggal Ini */}
-            {dailyOvertimeStats.totalCount > 0 && (
-              <div className="flex flex-wrap items-center gap-2 p-2.5 px-3 rounded-xl bg-purple-500/10 border border-purple-500/30 text-xs mt-1">
-                <div className="flex items-center gap-1.5 font-bold text-purple-900 dark:text-purple-200">
-                  <Flame size={14} className="text-purple-600 shrink-0 fill-purple-600/40" />
-                  <span>
-                    Detail {dailyOvertimeStats.totalCount} Personil Lembur (
-                    {new Date(targetDayDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}):
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {dailyOvertimeStats.employees.map((emp) => (
-                    <Badge
-                      key={emp.id}
-                      variant="outline"
-                      onClick={() => {
-                        setSearchQuery(emp.name);
-                      }}
-                      className="bg-background/90 hover:bg-background border-purple-500/40 text-foreground font-mono text-[11px] gap-1 cursor-pointer py-1 px-2.5 transition-all shadow-2xs hover:scale-105"
-                      title={`Klik untuk mencari ${emp.name} (${emp.task || 'Lembur'})`}
-                    >
-                      <span className="font-bold">{emp.name}</span>
-                      <span className="text-purple-600 font-extrabold">({emp.hours}J)</span>
-                      {emp.startTime && emp.endTime && (
-                        <span className="text-muted-foreground text-[10px]">[{emp.startTime.slice(0, 5)}-{emp.endTime.slice(0, 5)}]</span>
-                      )}
-                      <span className="text-emerald-700 dark:text-emerald-400 font-semibold text-[10px]">
-                        Rp {emp.pay.toLocaleString('id-ID')}
-                      </span>
-                    </Badge>
-                  ))}
-                </div>
-                <div className="ml-auto text-[11px] text-purple-800 dark:text-purple-300 font-mono font-bold flex items-center gap-2">
-                  <span>Total Biaya: <strong>Rp {dailyOvertimeStats.totalPay.toLocaleString('id-ID')}</strong></span>
-                  {filterOvertimeCol !== 'has_ot' && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setFilterOvertimeCol('has_ot');
-                        setFilterShift('all');
-                      }}
-                      className="h-6 text-[10px] px-2 rounded-lg border-purple-500/40 hover:bg-purple-500/20 text-purple-800 dark:text-purple-300 cursor-pointer"
-                    >
-                      Saring Tabel Karyawan
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Filter Bar */}
-      <Card className="border-border/80 bg-card rounded-2xl shadow-xs">
-        <CardContent className="p-3.5 space-y-3">
-          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
-            <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="relative">
-                <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-                <Input
-                  placeholder="Cari Nama Karyawan / NIP..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 text-xs rounded-xl h-9"
-                />
-              </div>
-
-              <Select value={filterCategory} onValueChange={(v) => setFilterCategory(v as 'all' | EmployeeCategoryGroup)}>
-                <SelectTrigger className="text-xs rounded-xl h-9">
-                  <SelectValue placeholder="Semua Kelompok" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Semua Kelompok Operasional</SelectItem>
-                  <SelectItem value="RUMAH TANGGA">🏠 Rumah Tangga (FR07001–FR07033)</SelectItem>
-                  <SelectItem value="SHIPMENT">🚢 Shipment (FR07034–FR07080)</SelectItem>
-                  <SelectItem value="KARYAWAN TETAP">⭐ Karyawan Tetap (Takdir, Aslam, Samsi)</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Select value={filterDivision} onValueChange={setFilterDivision}>
-                <SelectTrigger className="text-xs rounded-xl h-9">
-                  <SelectValue placeholder="Semua Divisi" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Semua Divisi</SelectItem>
-                  {divisions.map((d) => (
-                    <SelectItem key={d.id} value={d.id}>
-                      {d.name} ({d.code})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setFinancialRecapModalOpen(true)}
-                className="h-9 px-3.5 text-xs rounded-xl gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 font-bold shadow-xs transition-all"
-                title="Buka Rekapitulasi Bulanan Lengkap (Presensi, Kedisiplinan, Plafon Lembur Rp 69 Jt & Gaji Bersih)"
-              >
-                <CalendarDays size={13} className="text-emerald-600 dark:text-emerald-400" />
-                <span>Rekapan Bulanan Lengkap</span>
-              </Button>
-
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={handleExportAllRealtimeExcel}
-                className="h-9 px-3 text-xs rounded-xl gap-1.5 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 font-medium shadow-xs"
-                title="Unduh Rekap Laporan Realtime Seluruh Karyawan (.xlsx)"
-              >
-                <Download size={13} /> Export Excel ({filtered.length})
-              </Button>
-
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={handleExportAllRealtimePdf}
-                className="h-9 px-3 text-xs rounded-xl gap-1.5 border-rose-500/40 text-rose-700 dark:text-rose-300 hover:bg-rose-500/10 font-medium shadow-xs"
-                title="Unduh Rekap Laporan Realtime Seluruh Karyawan (.pdf)"
-              >
-                <FileText size={13} /> Export PDF ({filtered.length})
-              </Button>
-
-              {/* Popover Filter Visibilitas Kolom */}
+              {/* Popover Visibilitas Kolom */}
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-9 px-3 text-xs rounded-xl gap-1.5 border-primary/30 text-primary hover:bg-primary/10 font-semibold shadow-xs"
-                    title="Atur kolom yang ingin ditampilkan atau disembunyikan di tabel"
+                    className="h-9 px-2.5 text-xs rounded-xl gap-1.5 font-semibold"
+                    title="Atur kolom tabel"
                   >
                     <SlidersHorizontal size={13} />
-                    <span>Filter Kolom</span>
+                    <span className="hidden sm:inline">Kolom</span>
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent align="end" className="w-64 p-3.5 rounded-2xl shadow-xl border border-border bg-card z-50">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between pb-2 border-b border-border/70">
-                      <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                        <SlidersHorizontal size={12} className="text-primary" /> Visibilitas Kolom
-                      </span>
+                <PopoverContent align="end" className="w-60 p-3 rounded-2xl shadow-xl border border-border bg-card z-50">
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between pb-1.5 border-b border-border/70">
+                      <span className="text-xs font-bold text-foreground">Visibilitas Kolom</span>
                       <button
                         type="button"
                         onClick={() => updateVisibleColumns(() => ({
-                          category: true,
-                          division: true,
-                          shift: true,
-                          status: true,
-                          clockIn: true,
-                          clockOut: true,
-                          overtime: true,
-                          security: true,
-                          actions: true,
+                          category: true, division: true, shift: true, status: true,
+                          clockIn: true, clockOut: true, overtime: true, security: true, actions: true,
                         }))}
                         className="text-[10px] text-primary hover:underline font-semibold"
                       >
-                        Reset Semua
+                        Reset
                       </button>
                     </div>
-                    <div className="space-y-2 text-xs">
-                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
-                        <Checkbox checked={visibleColumns.category} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, category: Boolean(v) }))} />
-                        <span className="text-foreground font-medium">Kelompok / Kategori</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
-                        <Checkbox checked={visibleColumns.division} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, division: Boolean(v) }))} />
-                        <span className="text-foreground font-medium">Divisi &amp; Jabatan</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
-                        <Checkbox checked={visibleColumns.shift} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, shift: Boolean(v) }))} />
-                        <span className="text-foreground font-medium">Jadwal Shift</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
-                        <Checkbox checked={visibleColumns.status} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, status: Boolean(v) }))} />
-                        <span className="text-foreground font-medium">Status Kehadiran</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
-                        <Checkbox checked={visibleColumns.clockIn} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, clockIn: Boolean(v) }))} />
-                        <span className="text-foreground font-medium">Jam Masuk</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
-                        <Checkbox checked={visibleColumns.clockOut} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, clockOut: Boolean(v) }))} />
-                        <span className="text-foreground font-medium">Jam Pulang</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
-                        <Checkbox checked={visibleColumns.overtime} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, overtime: Boolean(v) }))} />
-                        <span className="text-foreground font-medium">Lembur (Jam) Live</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
-                        <Checkbox checked={visibleColumns.security} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, security: Boolean(v) }))} />
-                        <span className="text-foreground font-medium">Verifikasi Keamanan</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 cursor-pointer hover:bg-muted/50 p-1 rounded-lg transition-colors">
-                        <Checkbox checked={visibleColumns.actions} onCheckedChange={(v) => updateVisibleColumns(p => ({ ...p, actions: Boolean(v) }))} />
-                        <span className="text-foreground font-medium">Tindakan &amp; Laporan</span>
-                      </label>
+                    <div className="space-y-1.5 text-xs">
+                      {[
+                        { key: 'category' as const, label: 'Kelompok / Kategori' },
+                        { key: 'division' as const, label: 'Divisi & Jabatan' },
+                        { key: 'shift' as const, label: 'Jadwal Shift' },
+                        { key: 'status' as const, label: 'Status Kehadiran' },
+                        { key: 'clockIn' as const, label: 'Jam Masuk' },
+                        { key: 'clockOut' as const, label: 'Jam Pulang' },
+                        { key: 'overtime' as const, label: 'Lembur (Jam)' },
+                        { key: 'security' as const, label: 'Verifikasi Keamanan' },
+                        { key: 'actions' as const, label: 'Tindakan & Laporan' },
+                      ].map((col) => (
+                        <label key={col.key} className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 p-1 rounded-lg">
+                          <Checkbox
+                            checked={visibleColumns[col.key]}
+                            onCheckedChange={(v) => updateVisibleColumns((p) => ({ ...p, [col.key]: Boolean(v) }))}
+                          />
+                          <span className="text-foreground font-medium">{col.label}</span>
+                        </label>
+                      ))}
                     </div>
                   </div>
                 </PopoverContent>
               </Popover>
 
               {/* View Mode Toggle */}
-              <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-xl border border-border shrink-0">
+              <div className="flex items-center gap-0.5 bg-muted/60 p-1 rounded-xl border border-border">
                 <Button
                   type="button"
                   variant={viewMode === 'table' ? 'default' : 'ghost'}
                   size="sm"
-                  className={`h-7 px-2.5 text-xs rounded-lg gap-1.5 transition-all ${
-                    viewMode === 'table' ? 'shadow-xs font-medium' : 'text-muted-foreground hover:text-foreground'
-                  }`}
+                  className="h-7 px-2 text-xs rounded-lg gap-1"
                   onClick={() => setViewMode('table')}
                 >
                   <TableProperties size={13} />
-                  <span>Tabel</span>
+                  <span className="hidden sm:inline">Tabel</span>
                 </Button>
                 <Button
                   type="button"
                   variant={viewMode === 'grid' ? 'default' : 'ghost'}
                   size="sm"
-                  className={`h-7 px-2.5 text-xs rounded-lg gap-1.5 transition-all ${
-                    viewMode === 'grid' ? 'shadow-xs font-medium' : 'text-muted-foreground hover:text-foreground'
-                  }`}
+                  className="h-7 px-2 text-xs rounded-lg gap-1"
                   onClick={() => setViewMode('grid')}
                 >
                   <LayoutGrid size={13} />
-                  <span>Kartu</span>
+                  <span className="hidden sm:inline">Kartu</span>
                 </Button>
               </div>
             </div>
           </div>
-
-          {/* Baris Filter Kolom Cepat: Shift, Status, Lembur */}
-          <div className="flex flex-wrap items-center gap-2.5 pt-2.5 border-t border-border/60 text-xs">
-            <span className="text-[11px] font-semibold text-muted-foreground flex items-center gap-1 shrink-0">
-              <Filter size={11} className="text-primary" /> Filter Nilai:
-            </span>
-
-            {/* Filter Nilai Shift */}
-            <div className="w-[170px]">
-              <Select value={filterShift} onValueChange={setFilterShift}>
-                <SelectTrigger className="h-8 text-xs rounded-xl bg-muted/40">
-                  <SelectValue placeholder="Semua Jadwal Shift" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Semua Jadwal Shift</SelectItem>
-                  <SelectItem value="P">Shift Pagi (P / 07:30)</SelectItem>
-                  <SelectItem value="S">Shift Siang (S / 15:30)</SelectItem>
-                  <SelectItem value="M">Shift Malam (M / 22:30)</SelectItem>
-                  <SelectItem value="DAY">Day Shift / Normal</SelectItem>
-                  <SelectItem value="OFF">Libur / OFF Roster</SelectItem>
-                  <SelectItem value="cuti">Cuti Tahunan Sah</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Filter Nilai Status Kehadiran */}
-            <div className="w-[185px]">
-              <Select value={filterStatusCol} onValueChange={setFilterStatusCol}>
-                <SelectTrigger className="h-8 text-xs rounded-xl bg-muted/40">
-                  <SelectValue placeholder="Semua Status Kehadiran" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Semua Status Kehadiran</SelectItem>
-                  <SelectItem value="present">Hadir Tepat Waktu</SelectItem>
-                  <SelectItem value="late">Terlambat</SelectItem>
-                  <SelectItem value="cuti">Cuti Tahunan</SelectItem>
-                  <SelectItem value="izin">Izin / Sakit Resmi</SelectItem>
-                  <SelectItem value="mangkir">Mangkir / Alpa</SelectItem>
-                  <SelectItem value="pending">Shift Belum Dimulai</SelectItem>
-                  <SelectItem value="off">Libur / OFF</SelectItem>
-                  <SelectItem value="unregistered">Belum Registrasi Wajah</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Filter Nilai Lembur */}
-            <div className="w-[155px]">
-              <Select value={filterOvertimeCol} onValueChange={setFilterOvertimeCol}>
-                <SelectTrigger className="h-8 text-xs rounded-xl bg-muted/40">
-                  <SelectValue placeholder="Semua Lembur" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Semua Lembur</SelectItem>
-                  <SelectItem value="has_ot">Ada Lembur (SPKL)</SelectItem>
-                  <SelectItem value="no_ot">Tanpa Lembur (0 Jam)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {(filterShift !== 'all' || filterStatusCol !== 'all' || filterOvertimeCol !== 'all' || filterDivision !== 'all' || filterCategory !== 'all' || searchQuery) && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setFilterShift('all');
-                  setFilterStatusCol('all');
-                  setFilterOvertimeCol('all');
-                  setFilterDivision('all');
-                  setFilterCategory('all');
-                  setSearchQuery('');
-                }}
-                className="h-8 px-2.5 text-[11px] rounded-xl text-rose-600 hover:bg-rose-500/10 font-medium gap-1"
-                title="Reset seluruh filter"
-              >
-                <X size={12} /> Hapus Filter
-              </Button>
-            )}
-
-            <div className="ml-auto text-[11px] text-muted-foreground font-mono">
-              Menampilkan <strong>{filtered.length}</strong> dari {scopedMonitoredList.length} Karyawan • <strong>{new Date(targetDayDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+        </div>
+      )}
 
       {/* ── CONDITIONAL VIEW: ANOMALY RADAR OR PERIMETER BREACHES OR DATAGRID/CARDS ── */}
       {activeTab === 'anomalies' ? (
