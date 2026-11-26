@@ -3933,12 +3933,20 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
       {/* Mobile App Frame (Centered 440px on Tablet/Desktop, Native Full-Bleed on Phone) */}
       <div className="max-w-[440px] mx-auto min-h-screen bg-[#F7F9F8] dark:bg-[#0D1214] sm:border-x sm:border-slate-200/80 dark:sm:border-white/[0.06] sm:shadow-[0_0_48px_rgba(15,23,42,0.06)] flex flex-col justify-between relative">
 
-        {/* ─── STICKY FROSTED TOP BAR (LOGO & NAMA RESMI PERUSAHAAN + DARK/LIGHT TOGGLE) ─── */}
-        <header className="sticky top-0 z-30 bg-[#F7F9F8]/88 dark:bg-[#0D1214]/88 backdrop-blur-xl border-b border-slate-200/70 dark:border-white/[0.07] pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 px-4">
-          <div className="flex items-center justify-between gap-2.5">
-            {/* Corporate Brand: Logo + PT. FAWWAZ RESKI PERWIRA */}
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-9 h-9 rounded-xl bg-white dark:bg-[#161F23] p-1 border border-slate-200/80 dark:border-white/10 shadow-2xs flex items-center justify-center shrink-0">
+        {/* ─── AMBIENT PREMIUM CURVED HEADER BACKDROP (FULL BRAND NAME + INTEGRATED GREETING) ─── */}
+        <header
+          className={`relative z-10 overflow-hidden bg-gradient-to-br from-[#06372E] via-[#0B5949] to-[#0E745E] dark:from-[#06211C] dark:via-[#09342C] dark:to-[#0C463B] dark:border-b dark:border-emerald-500/15 text-white pt-[max(0.875rem,env(safe-area-inset-top))] px-3.5 shadow-[0_10px_28px_-12px_rgba(6,55,46,0.38)] transition-all duration-200 ${
+            activeTab === 'beranda' ? 'pb-9 rounded-b-[28px]' : 'pb-3.5 rounded-b-[22px]'
+          }`}
+        >
+          {/* Soft Organic Ambient Light Orbs (Anti-Kaku) */}
+          <div className="absolute -top-10 -right-8 w-36 h-36 rounded-full bg-emerald-300/15 blur-2xl pointer-events-none" />
+          <div className="absolute -bottom-6 -left-8 w-28 h-28 rounded-full bg-teal-300/10 blur-xl pointer-events-none" />
+
+          {/* Row 1: Logo + 100% Untruncated Company Name + Frosted Glass Control Pill */}
+          <div className="relative z-10 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-8 h-8 rounded-xl bg-white p-1 shadow-sm flex items-center justify-center shrink-0">
                 <img
                   src={defaultAvatar}
                   alt="Logo PT. FAWWAZ RESKI PERWIRA"
@@ -3947,35 +3955,35 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
               </div>
 
               <div className="min-w-0">
-                <h1 className="text-[12.5px] font-extrabold tracking-tight text-slate-900 dark:text-white uppercase truncate leading-tight">
+                <h1 className="text-[11.5px] sm:text-[13px] font-extrabold tracking-[-0.015em] text-white uppercase whitespace-nowrap leading-tight">
                   PT. FAWWAZ RESKI PERWIRA
                 </h1>
-                <p className="text-[10px] font-medium text-slate-500 dark:text-slate-400 truncate leading-tight mt-0.5">
+                <p className="text-[10px] font-medium text-emerald-100/80 whitespace-nowrap leading-tight mt-0.5">
                   Presensi & Operasional SDM
                 </p>
               </div>
             </div>
 
-            {/* Minimal Action Controls: Dark/Light + Notifications + Refresh */}
-            <div className="flex items-center gap-1.5 shrink-0">
+            {/* Unified Frosted Glass Control Pill: Dark/Light + Notifications + Refresh */}
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/12 backdrop-blur-md border border-white/15 shrink-0">
               <button
                 type="button"
                 onClick={toggleThemeMode}
-                className="w-9 h-9 rounded-full bg-white dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/10 flex items-center justify-center text-slate-600 dark:text-amber-300 hover:text-slate-900 dark:hover:text-amber-200 transition-transform active:scale-95"
+                className="w-7 h-7 rounded-full hover:bg-white/15 flex items-center justify-center text-white dark:text-amber-300 transition-transform active:scale-90"
                 title={isDarkMode ? 'Beralih ke Mode Terang' : 'Beralih ke Mode Gelap'}
               >
-                {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                {isDarkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
               </button>
 
               <button
                 type="button"
                 onClick={() => setNotificationsDrawerOpen(true)}
-                className="relative w-9 h-9 rounded-full bg-white dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/10 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-transform active:scale-95"
+                className="relative w-7 h-7 rounded-full hover:bg-white/15 flex items-center justify-center text-white transition-transform active:scale-90"
                 title="Notifikasi"
               >
-                <Bell className="w-4 h-4" />
+                <Bell className="w-3.5 h-3.5" />
                 {unreadNotificationsCount > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 bg-rose-500 text-white text-[9.5px] font-bold rounded-full flex items-center justify-center ring-2 ring-[#F7F9F8] dark:ring-[#0D1214]">
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 bg-rose-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center ring-2 ring-[#0B5949] dark:ring-[#09342C]">
                     {unreadNotificationsCount}
                   </span>
                 )}
@@ -3999,80 +4007,88 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   }
                   window.location.reload();
                 }}
-                className="w-9 h-9 rounded-full bg-white dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/10 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-transform active:scale-95"
+                className="w-7 h-7 rounded-full hover:bg-white/15 flex items-center justify-center text-white transition-transform active:scale-90"
                 title="Muat Ulang Aplikasi"
               >
                 <RotateCw className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
+
+          {/* Row 2 (Beranda Only): Integrated Employee Greeting Inside Ambient Backdrop */}
+          {activeTab === 'beranda' && (
+            <div className="relative z-10 mt-3.5 pt-3 border-t border-white/12 flex items-center justify-between gap-2.5">
+              <div className="flex items-center gap-3 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('akun')}
+                  className="relative shrink-0 w-11 h-11 rounded-full focus:outline-none active:scale-95 transition-transform"
+                >
+                  <img
+                    src={userAvatarSrc}
+                    alt={user?.fullName}
+                    className="w-11 h-11 rounded-full object-cover ring-2 ring-white/25 bg-white/15"
+                    onError={(e) => {
+                      const el = e.target as HTMLImageElement;
+                      const avatarApi = user?.id ? `/api/users/${user.id}/avatar` : '';
+                      if (avatarApi && !el.src.includes(avatarApi)) {
+                        el.src = avatarApi;
+                      } else if (todayAttendance?.clockInPhoto || todayAttendance?.photoIn) {
+                        el.src = (todayAttendance.clockInPhoto || todayAttendance.photoIn)!;
+                      } else {
+                        el.src = defaultAvatar;
+                      }
+                    }}
+                  />
+                  <span
+                    className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-[#0B5949] dark:ring-[#09342C] ${
+                      locationStatus === 'inside' ? 'bg-emerald-400' : 'bg-amber-400'
+                    }`}
+                  />
+                </button>
+
+                <div className="min-w-0">
+                  <p className="text-[11px] font-medium text-emerald-100/85 leading-tight">
+                    {greetingText},
+                  </p>
+                  <h2 className="text-[15px] font-bold tracking-tight text-white truncate leading-snug">
+                    {user?.fullName || 'Karyawan'}
+                  </h2>
+                  <div className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-black/20 border border-white/12 text-[10px] text-emerald-50 max-w-full">
+                    <span className="font-mono font-semibold text-emerald-300 shrink-0">{user?.nip || 'PT FRP'}</span>
+                    <span className="opacity-60">•</span>
+                    <span className="truncate">{user?.divisionName || 'Operasional'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {!isStandaloneApp && (
+                <button
+                  type="button"
+                  onClick={handleTriggerPwaInstall}
+                  className="h-8 px-3 rounded-full bg-white text-[#074237] hover:bg-emerald-50 text-[11px] font-bold flex items-center gap-1.5 shadow-sm active:scale-95 transition-transform shrink-0"
+                  title="Pasang Aplikasi ke Layar Utama"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Install</span>
+                </button>
+              )}
+            </div>
+          )}
         </header>
 
-        {/* ─── MAIN CONTENT AREA ─── */}
-        <main className="flex-1 px-4 pt-3.5 pb-28 space-y-3.5 overflow-y-auto">
+        {/* ─── MAIN CONTENT AREA (OVERLAPPING SHEET ON BERANDA FOR SEAMLESS DEPTH) ─── */}
+        <main
+          className={`flex-1 px-4 pb-28 space-y-3.5 relative z-20 ${
+            activeTab === 'beranda' ? '-mt-5' : 'pt-4'
+          }`}
+        >
 
           {/* ═══════════════════════════════════════════════════════════════════
               TAB 1: BERANDA (CLEAN FLAGSHIP ATTENDANCE HUB)
           ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'beranda' && (
             <div className="space-y-3.5 animate-in fade-in duration-150">
-
-              {/* Employee Personal Greeting Strip */}
-              <div className="flex items-center justify-between gap-3 px-0.5">
-                <div className="flex items-center gap-3 min-w-0">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('akun')}
-                    className="relative shrink-0 w-11 h-11 rounded-full focus:outline-none active:scale-95 transition-transform"
-                  >
-                    <img
-                      src={userAvatarSrc}
-                      alt={user?.fullName}
-                      className="w-11 h-11 rounded-full object-cover ring-1 ring-slate-200 dark:ring-white/15 bg-slate-100 dark:bg-slate-800"
-                      onError={(e) => {
-                        const el = e.target as HTMLImageElement;
-                        const avatarApi = user?.id ? `/api/users/${user.id}/avatar` : '';
-                        if (avatarApi && !el.src.includes(avatarApi)) {
-                          el.src = avatarApi;
-                        } else if (todayAttendance?.clockInPhoto || todayAttendance?.photoIn) {
-                          el.src = (todayAttendance.clockInPhoto || todayAttendance.photoIn)!;
-                        } else {
-                          el.src = defaultAvatar;
-                        }
-                      }}
-                    />
-                    <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-[#F7F9F8] dark:ring-[#0D1214] ${
-                      locationStatus === 'inside' ? 'bg-emerald-500' : 'bg-amber-500'
-                    }`} />
-                  </button>
-
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 leading-tight">
-                      {greetingText}
-                    </p>
-                    <h2 className="text-[15px] font-bold tracking-tight text-slate-900 dark:text-white truncate leading-snug">
-                      {user?.fullName || 'Karyawan'}
-                    </h2>
-                    <p className="text-[10.5px] text-slate-500 dark:text-slate-400 truncate">
-                      <span className="font-mono font-semibold text-[#0D7A5F] dark:text-emerald-400">{user?.nip || 'PT FRP'}</span>
-                      {' • '}
-                      <span>{user?.divisionName || 'Operasional'}</span>
-                    </p>
-                  </div>
-                </div>
-
-                {!isStandaloneApp && (
-                  <button
-                    type="button"
-                    onClick={handleTriggerPwaInstall}
-                    className="h-8 px-3 rounded-full bg-[#0D7A5F] hover:bg-[#0A634D] text-white text-[11px] font-semibold flex items-center gap-1.5 shadow-xs active:scale-95 transition-transform shrink-0"
-                    title="Pasang Aplikasi ke Layar Utama"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Install</span>
-                  </button>
-                )}
-              </div>
 
               {/* Role-Adaptive Supervisory Bar (Minimalist Editorial Pill Card) */}
               {(() => {
@@ -4084,7 +4100,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
 
                 if (isDirutOrPimpinan) {
                   return (
-                    <div className="p-3 bg-white dark:bg-[#131A1D] border border-slate-200/80 dark:border-white/[0.07] rounded-2xl flex items-center justify-between gap-2.5 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.04)]">
+                    <div className="p-3 bg-white dark:bg-[#131A1D] border border-slate-200/80 dark:border-white/[0.08] rounded-2xl flex items-center justify-between gap-2.5 shadow-[0_8px_24px_-8px_rgba(15,23,42,0.10)]">
                       <div className="flex items-center gap-2.5 min-w-0">
                         <div className="w-8 h-8 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center shrink-0">
                           <Briefcase className="w-4 h-4" />
@@ -4113,14 +4129,14 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 if (isKorlapRole || isK3Role || isAdminRole) {
                   const roleLabel = isKorlapRole ? 'Otoritas Korlap' : isK3Role ? 'Pengawas K3 & HSE' : 'Admin Operasional';
                   return (
-                    <div className="p-3 bg-white dark:bg-[#131A1D] border border-slate-200/80 dark:border-white/[0.07] rounded-2xl flex items-center justify-between gap-2.5 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.04)]">
+                    <div className="p-3 bg-white dark:bg-[#131A1D] border border-slate-200/80 dark:border-white/[0.08] rounded-2xl flex items-center justify-between gap-2.5 shadow-[0_8px_24px_-8px_rgba(15,23,42,0.10)]">
                       <div className="flex items-center gap-2.5 min-w-0">
                         <div className="w-8 h-8 rounded-xl bg-emerald-500/10 text-[#0D7A5F] dark:text-emerald-400 flex items-center justify-center shrink-0">
                           <ShieldCheck className="w-4 h-4" />
                         </div>
                         <div className="min-w-0">
                           <p className="text-xs font-bold text-slate-900 dark:text-white truncate">{roleLabel}</p>
-                          <p className="text-[10.5px] text-slate-500 dark:text-slate-400 truncate">Verifikasi izin, cuti & SPL tim</p>
+                          <p className="text-[10.5px] text-slate-500 dark:text-slate-400 truncate">Persetujuan cuti & SPL</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -4457,7 +4473,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                         : !isInsideCoordinates
                         ? 'Di Luar Pos'
                         : !isShiftWindowActive && !hasApprovedOvertimeOrSubstituteToday && !isFieldSpecial
-                        ? `Buka ${checkShiftClockInWindow(userShift, currentTime).openTimeStr || userShift?.startTime || '08:00'}`
+                        ? `Buka ${(checkShiftClockInWindow(userShift, currentTime).openTimeStr || userShift?.startTime || '08:00').replace(/\s*WITA/i, '').trim()}`
                         : hasApprovedOvertimeOrSubstituteToday
                         ? 'Masuk Lembur'
                         : 'Absen Masuk'}
