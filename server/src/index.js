@@ -17805,207 +17805,368 @@ async function generateAndSendSuperadminShiftReport(targetDateStr = null, checkp
     const sRes = await pool.query("SELECT value FROM hrm_system_settings WHERE key = 'wa_superadmin_phone'");
     const superadminPhone = sRes.rows[0]?.value || '081355904897';
 
-    // Query Rekap 83 Personil Resmi
-    const query = `
-      WITH official_83 AS (
-        SELECT p.id, p.full_name, p.nip,
-          CASE 
-            WHEN p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632') THEN 'KARYAWAN TETAP'
-            WHEN substring(regexp_replace(p.nip, '[^0-9]', '', 'g') from 1 for 5)::int BETWEEN 7001 AND 7033 THEN 'RUMAH TANGGA'
-            WHEN substring(regexp_replace(p.nip, '[^0-9]', '', 'g') from 1 for 5)::int BETWEEN 7034 AND 7080 THEN 'SHIPMENT'
-            ELSE 'OTHER'
-          END as grp
+    const todayWitaStr = `${nowWita.getUTCFullYear()}-${String(nowWita.getUTCMonth() + 1).padStart(2, '0')}-${String(nowWita.getUTCDate()).padStart(2, '0')}`;
+    const curWitaMins = nowWita.getUTCHours() * 60 + nowWita.getUTCMinutes();
+    const isTargetToday = finalDateStr === todayWitaStr;
+    const monthPrefix = finalDateStr.slice(0, 7);
+    const monthStart = `${monthPrefix}-01`;
+    const [mY, mM] = monthPrefix.split('-').map(Number);
+    const monthEnd = `${monthPrefix}-${String(new Date(mY, mM, 0).getDate()).padStart(2, '0')}`;
+    const targetDow = dObj.getUTCDay(); // 0=Min, 6=Sab
+
+    // Query paralel 83 personil resmi + jadwal + presensi + cuti/izin + lembur SPKL (100% sinkron dengan Dashboard)
+    const [profilesRes, schedsRes, attsRes, monthAttUsersRes, leavesRes, otsRes] = await Promise.all([
+      pool.query(`
+        SELECT p.id, p.full_name, p.nip, p.email, p.operational_group,
+               p.custom_start_time::text as custom_start_time, p.custom_end_time::text as custom_end_time,
+               (p.face_descriptor IS NOT NULL) as has_face_desc,
+               (p.face_enrolled_photo IS NOT NULL) as has_face_photo,
+               s.code as shift_code, s.name as shift_name, s.start_time::text as shift_start, s.end_time::text as shift_end
         FROM hrm_profiles p
-        WHERE p.is_active = true
-          AND (
-            p.id IN ('ebf10b16-ab2f-4b53-ab22-b3ffc00694db', '2ce41a19-0c65-45d3-913e-a68a02203fe2', '0a49f92e-5733-4b72-947c-7361f9490632')
-            OR substring(regexp_replace(p.nip, '[^0-9]', '', 'g') from 1 for 5)::int BETWEEN 7001 AND 7080
-          )
-      ),
-      target_schedule AS (
-        SELECT o.id, o.full_name, o.nip, o.grp,
-          COALESCE(es.shift_code, 'DAY') as raw_shift_code,
-          COALESCE(es.is_off, false) as is_off,
-          CASE 
-            WHEN COALESCE(es.is_off, false) = true OR COALESCE(es.shift_code, '') = 'OFF' THEN 'OFF'
-            WHEN es.shift_code IN ('DAY', 'D') OR es.shift_name ILIKE '%day%' THEN 'DAYSHIFT'
-            WHEN es.shift_code IN ('P', '1') OR es.shift_name ILIKE '%shift I%' OR es.shift_name ILIKE '%shift 1%' THEN 'SHIFT I'
-            WHEN es.shift_code IN ('S', '2') OR es.shift_name ILIKE '%shift II%' OR es.shift_name ILIKE '%shift 2%' THEN 'SHIFT II'
-            WHEN es.shift_code IN ('M', '3') OR es.shift_name ILIKE '%shift III%' OR es.shift_name ILIKE '%shift 3%' THEN 'SHIFT III'
-            ELSE 'DAYSHIFT'
-          END as shift_group
-        FROM official_83 o
-        LEFT JOIN hrm_employee_schedules es ON es.user_id = o.id AND es.schedule_date = $1
-      ),
-      att_data AS (
-        SELECT a.user_id,
-          bool_or(a.clock_in IS NOT NULL OR a.status IN ('present', 'late', 'hadir', 'telat')) as has_presence,
-          bool_or(a.status = 'late' OR (a.late_minutes IS NOT NULL AND a.late_minutes > 0)) as is_late,
-          bool_or(a.status ILIKE '%lembur%' OR a.is_emergency_overtime = true OR (a.emergency_overtime_hours IS NOT NULL AND a.emergency_overtime_hours > 0)) as has_att_overtime
-        FROM hrm_attendances a
-        WHERE a.attendance_date = $1
-        GROUP BY a.user_id
-      ),
-      ot_data AS (
-        SELECT ov.user_id, true as has_spl_overtime
-        FROM hrm_overtime_records ov
-        WHERE ov.date = $1 AND ov.status IN ('approved', 'completed', 'in_progress')
-        GROUP BY ov.user_id
-      ),
-      leave_data AS (
-        SELECT l.user_id,
-          CASE 
-            WHEN l.leave_type IN ('sick', 'sakit') THEN 'SAKIT'
-            WHEN l.leave_type IN ('permit', 'izin') THEN 'IZIN'
-            ELSE 'CUTI'
-          END as leave_category
-        FROM hrm_leave_requests l
-        WHERE $1 BETWEEN l.start_date AND l.end_date AND l.status = 'approved'
-      ),
-      emp_status AS (
-        SELECT 
-          ts.id,
-          ts.full_name,
-          ts.nip,
-          ts.grp,
-          ts.shift_group,
-          CASE 
-            WHEN ld.leave_category = 'CUTI' THEN 'CUTI'
-            WHEN ld.leave_category IN ('IZIN', 'SAKIT') THEN 'IZIN'
-            WHEN COALESCE(att.has_presence, false) = true THEN 'HADIR'
-            WHEN ts.shift_group = 'OFF' THEN 'OFF'
-            ELSE 'MANGKIR'
-          END as final_status,
-          (COALESCE(att.has_att_overtime, false) = true OR COALESCE(ot.has_spl_overtime, false) = true) as is_lembur
-        FROM target_schedule ts
-        LEFT JOIN att_data att ON att.user_id = ts.id
-        LEFT JOIN ot_data ot ON ot.user_id = ts.id
-        LEFT JOIN leave_data ld ON ld.user_id = ts.id
-      )
-      SELECT 
-        id, full_name, nip, grp, shift_group, final_status, is_lembur
-      FROM emp_status
-      ORDER BY 
-        CASE shift_group
-          WHEN 'DAYSHIFT' THEN 1
-          WHEN 'SHIFT I' THEN 2
-          WHEN 'SHIFT II' THEN 3
-          WHEN 'SHIFT III' THEN 4
-          WHEN 'OFF' THEN 5
-          ELSE 6
-        END,
-        nip ASC;
-    `;
+        LEFT JOIN hrm_shifts s ON p.shift_id = s.id
+        WHERE UPPER(REPLACE(REPLACE(COALESCE(p.nip, ''), ' ', ''), '.', '')) LIKE 'FR%'
+          AND COALESCE(p.is_active, true) = true
+        ORDER BY p.nip ASC
+      `),
+      pool.query(`
+        SELECT user_id, shift_code, shift_name, start_time::text as start_time, end_time::text as end_time, COALESCE(is_off, false) as is_off
+        FROM hrm_employee_schedules
+        WHERE schedule_date = $1::date
+      `, [finalDateStr]),
+      pool.query(`
+        SELECT user_id, status, clock_in::text as clock_in, clock_out::text as clock_out,
+               COALESCE(late_minutes, 0) as late_minutes, shift_name
+        FROM hrm_attendances
+        WHERE attendance_date = $1::date
+          AND COALESCE(is_simulation, false) = false
+        ORDER BY created_at ASC
+      `, [finalDateStr]),
+      pool.query(`
+        SELECT DISTINCT user_id
+        FROM hrm_attendances
+        WHERE attendance_date >= $1::date AND attendance_date <= $2::date
+          AND COALESCE(is_simulation, false) = false
+          AND status IN ('hadir', 'terlambat', 'present', 'late')
+      `, [monthStart, monthEnd]),
+      pool.query(`
+        SELECT user_id, leave_type, reason
+        FROM hrm_leave_requests
+        WHERE status = 'approved'
+          AND $1::date BETWEEN start_date AND end_date
+      `, [finalDateStr]),
+      pool.query(`
+        SELECT id, user_id, start_time::text as start_time, end_time::text as end_time,
+               COALESCE(approved_hours, duration_hours, 0) as hours, source, task_description
+        FROM hrm_overtime_records
+        WHERE status IN ('approved', 'completed')
+          AND date = $1::date
+        ORDER BY start_time ASC
+      `, [finalDateStr]),
+    ]);
 
-    const resDb = await pool.query(query, [finalDateStr]);
-    const rows = resDb.rows;
-
-    const stats = {
-      'DAYSHIFT': { total: 0, hadir: 0, off: 0, mangkir: 0, cuti: 0, izin: 0, lembur: 0, details: [] },
-      'SHIFT I': { total: 0, hadir: 0, off: 0, mangkir: 0, cuti: 0, izin: 0, lembur: 0, details: [] },
-      'SHIFT II': { total: 0, hadir: 0, off: 0, mangkir: 0, cuti: 0, izin: 0, lembur: 0, details: [] },
-      'SHIFT III': { total: 0, hadir: 0, off: 0, mangkir: 0, cuti: 0, izin: 0, lembur: 0, details: [] },
-      'OFF': { total: 0, hadir: 0, off: 0, mangkir: 0, cuti: 0, izin: 0, lembur: 0, details: [] },
+    const normalizeGrp = (p) => {
+      if (isLeadershipSpecialFieldOfficer(p)) return 'KARYAWAN TETAP';
+      const og = (p.operational_group || '').toUpperCase().trim();
+      if (og === 'KARYAWAN TETAP') return 'KARYAWAN TETAP';
+      if (og === 'RUMAH TANGGA') return 'RUMAH TANGGA';
+      if (og === 'SHIPMENT') return 'SHIPMENT';
+      const num = parseInt((p.nip || '').replace(/[^0-9]/g, ''), 10);
+      if (num >= 7001 && num <= 7033) return 'RUMAH TANGGA';
+      return 'SHIPMENT';
     };
 
-    let totalOfficial = rows.length;
-    let totHadir = 0;
-    let totOff = 0;
-    let totMangkir = 0;
-    let totCuti = 0;
-    let totIzin = 0;
-    let totLembur = 0;
+    // Urutan WAJIB: SHIFT III -> SHIFT II -> SHIFT I -> DAY SHIFT (mencegah 'Shift II'/'Shift III' salah cocok ke 'Shift I')
+    const classifyShiftKey = (code, name, startStr, endStr, grp) => {
+      const c = String(code || '').toUpperCase().trim();
+      const n = String(name || '').toUpperCase().trim();
+      const s = String(startStr || '').substring(0, 5);
+      const e = String(endStr || '').substring(0, 5);
 
-    let shipmentCount = 0;
-    let rumahTanggaCount = 0;
-    let tetapCount = 0;
-
-    rows.forEach((r) => {
-      if (r.grp === 'SHIPMENT') shipmentCount++;
-      else if (r.grp === 'RUMAH TANGGA') rumahTanggaCount++;
-      else if (r.grp === 'KARYAWAN TETAP') tetapCount++;
-
-      const sg = stats[r.shift_group] ? r.shift_group : 'DAYSHIFT';
-      stats[sg].total++;
-
-      if (r.final_status === 'HADIR') {
-        stats[sg].hadir++;
-        totHadir++;
-      } else if (r.final_status === 'OFF') {
-        stats[sg].off++;
-        totOff++;
-      } else if (r.final_status === 'MANGKIR') {
-        stats[sg].mangkir++;
-        totMangkir++;
-        stats[sg].details.push(`• ⚠️ ${r.full_name} (${r.nip}) [Mangkir]`);
-      } else if (r.final_status === 'CUTI') {
-        stats[sg].cuti++;
-        totCuti++;
-        stats[sg].details.push(`• 📝 ${r.full_name} (${r.nip}) [Cuti]`);
-      } else if (r.final_status === 'IZIN') {
-        stats[sg].izin++;
-        totIzin++;
-        stats[sg].details.push(`• 🏥 ${r.full_name} (${r.nip}) [Izin/Sakit]`);
+      if (c === 'M' || c.includes('SHF-III') || c.includes('MALAM') || n.includes('SHIFT III') || n.includes('SHIFT 3') || n.includes('MALAM') || s === '22:30') {
+        return 'SHIFT III';
       }
-
-      if (r.is_lembur) {
-        stats[sg].lembur++;
-        totLembur++;
-        stats[sg].details.push(`• ⚡ ${r.full_name} (${r.nip}) [Lembur]`);
+      if (c === 'S' || c.includes('SHF-II') || c.includes('SIANG') || c.includes('SORE') || n.includes('SHIFT II') || n.includes('SHIFT 2') || s === '15:30') {
+        return 'SHIFT II';
       }
+      if (c === 'P' || c.includes('SHF-I') || c.includes('PAGI') || n.includes('SHIFT I ') || n.includes('SHIFT I(') || n === 'SHIFT I' || n.includes('SHIFT 1') || (s === '07:30' && e === '15:30')) {
+        return 'SHIFT I';
+      }
+      if (c.includes('DAY') || c.includes('FIELD') || c.includes('EXEC') || n.includes('DAY') || n.includes('PIMPINAN') || n.includes('REGULER') || s === '08:00' || (s === '07:30' && e === '16:30')) {
+        return 'DAY SHIFT';
+      }
+      return grp === 'KARYAWAN TETAP' || grp === 'RUMAH TANGGA' ? 'DAY SHIFT' : 'DAY SHIFT';
+    };
+
+    const classifyOtShiftKey = (otStart, otEnd, fallbackShift) => {
+      const s = String(otStart || '').substring(0, 5);
+      const e = String(otEnd || '').substring(0, 5);
+      const [sH] = s.split(':').map(Number);
+      const [eH] = e.split(':').map(Number);
+      if (Number.isFinite(sH)) {
+        if (sH >= 20 || (Number.isFinite(eH) && eH < sH && eH <= 9)) return 'SHIFT III';
+        if (sH >= 15 && sH < 20) {
+          if (fallbackShift === 'DAY SHIFT' && s >= '16:30' && Number.isFinite(eH) && eH <= 20) return 'DAY SHIFT';
+          return 'SHIFT II';
+        }
+        if (sH >= 5 && sH < 12) return fallbackShift === 'DAY SHIFT' && e >= '16:00' ? 'DAY SHIFT' : 'SHIFT I';
+      }
+      return fallbackShift || 'DAY SHIFT';
+    };
+
+    const isShiftNotStartedYet = (shiftKey) => {
+      if (!isTargetToday) return false;
+      if (shiftKey === 'SHIFT III') return curWitaMins < 22 * 60 + 30;
+      if (shiftKey === 'SHIFT II') return curWitaMins < 15 * 60 + 30;
+      if (shiftKey === 'SHIFT I' || shiftKey === 'DAY SHIFT') return curWitaMins < 7 * 60 + 30;
+      return false;
+    };
+
+    const schedMap = new Map(schedsRes.rows.map((s) => [s.user_id, s]));
+    const attMap = new Map();
+    for (const a of attsRes.rows) {
+      const ex = attMap.get(a.user_id);
+      if (!ex || ((a.status === 'hadir' || a.status === 'terlambat') && ex.status !== 'hadir' && ex.status !== 'terlambat')) {
+        attMap.set(a.user_id, a);
+      }
+    }
+    const monthAttUserSet = new Set(monthAttUsersRes.rows.map((r) => r.user_id));
+    const leaveMap = new Map(leavesRes.rows.map((l) => [l.user_id, l]));
+
+    // Anti-Duplikasi SPKL (Aturan 12)
+    const otMap = new Map();
+    for (const o of otsRes.rows) {
+      const list = otMap.get(o.user_id) || [];
+      const oS = String(o.start_time || '').substring(0, 5);
+      const oE = String(o.end_time || '').substring(0, 5);
+      const dupIdx = list.findIndex((ex) => {
+        const eS = String(ex.start_time || '').substring(0, 5);
+        const eE = String(ex.end_time || '').substring(0, 5);
+        return (oS && eS && oS === eS && oE === eE) || (o.source === 'shift_relief' && ex.source !== 'shift_relief') || (ex.source === 'shift_relief' && o.source !== 'shift_relief');
+      });
+      if (dupIdx >= 0) {
+        if (o.source === 'shift_relief') list[dupIdx] = o;
+      } else {
+        list.push(o);
+      }
+      otMap.set(o.user_id, list);
+    }
+
+    const emptyBucket = () => ({ total: 0, hadir: 0, telat: 0, cuti: 0, izin: 0, mangkir: 0, blmDaftar: 0, menunggu: 0, off: 0 });
+    const makeGroupAcc = () => ({
+      total: 0,
+      shifts: {
+        'SHIFT I': emptyBucket(),
+        'SHIFT II': emptyBucket(),
+        'SHIFT III': emptyBucket(),
+        'DAY SHIFT': emptyBucket(),
+        'OFF': emptyBucket(),
+      },
     });
 
-    const formatShiftSection = (title, key, timeRange) => {
-      const s = stats[key];
-      let str = `*${title} (${timeRange})*\n`;
-      str += `• Terjadwal: ${s.total} Orang\n`;
-      str += `• Hadir: ${s.hadir} | Off: ${s.off} | Mangkir: ${s.mangkir}\n`;
-      str += `• Cuti: ${s.cuti} | Izin/Sakit: ${s.izin} | Lembur: ${s.lembur}`;
-      if (s.details.length > 0) {
-        str += `\n  _Catatan Khusus:_\n  ` + s.details.slice(0, 5).join('\n  ');
-        if (s.details.length > 5) {
-          str += `\n  _...dan ${s.details.length - 5} personil lainnya_`;
-        }
-      }
-      return str;
+    const groupAcc = {
+      'SHIPMENT': makeGroupAcc(),
+      'RUMAH TANGGA': makeGroupAcc(),
+      'KARYAWAN TETAP': makeGroupAcc(),
     };
 
-    const message = [
-      `📊 *UPDATE REALTIME PRESENSI & SHIFT SDM PT FRP*`,
-      `🏢 *PT. FAWWAZ RESKI PERWIRA*`,
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-      `📅 *Hari/Tanggal:* ${formattedDate}`,
-      `⏰ *Waktu Laporan:* ${formattedTime}`,
-      `📌 *Status:* ${checkpointTitle || 'Laporan Checkpoint 2 Jam Pasca Buka Shift'}`,
-      `👥 *Total SDM Resmi Sah:* ${totalOfficial} Orang`,
-      `   • Shipment Lapangan: ${shipmentCount} Orang`,
-      `   • Rumah Tangga Wisma: ${rumahTanggaCount} Orang`,
-      `   • Karyawan Tetap: ${tetapCount} Orang`,
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+    const totals = { total: 0, hadir: 0, telat: 0, off: 0, cuti: 0, izin: 0, mangkir: 0, blmDaftar: 0, menunggu: 0 };
+    const cutiIzinList = [];
+    const mangkirList = [];
+    const blmDaftarList = [];
+    const lemburList = [];
+    let otKerjaCount = 0;
+    let otKerjaJam = 0;
+    let otOffCount = 0;
+    let otOffJam = 0;
+
+    const shortGrp = (g) => (g === 'SHIPMENT' ? 'Shipment' : g === 'RUMAH TANGGA' ? 'R.Tangga' : 'Tetap');
+    const shortShift = (s) => (s === 'DAY SHIFT' ? 'Day Shift' : s === 'SHIFT I' ? 'Shift I' : s === 'SHIFT II' ? 'Shift II' : s === 'SHIFT III' ? 'Shift III' : 'OFF');
+
+    for (const p of profilesRes.rows) {
+      const grp = normalizeGrp(p);
+      const isPermanent = isLeadershipSpecialFieldOfficer(p);
+      const sched = schedMap.get(p.id);
+      const att = attMap.get(p.id);
+      const leave = leaveMap.get(p.id);
+      const ots = isPermanent ? [] : (otMap.get(p.id) || []); // Aturan 11: Karyawan Tetap Rp 0 / non-lembur
+      const isUnenrolled = !p.has_face_desc && !p.has_face_photo && !monthAttUserSet.has(p.id);
+
+      const isOffSched = Boolean(
+        sched
+          ? (sched.is_off || String(sched.shift_code || '').toUpperCase() === 'OFF' || String(sched.shift_name || '').toLowerCase().includes('off') || String(sched.shift_name || '').toLowerCase().includes('libur'))
+          : (grp === 'KARYAWAN TETAP' && (targetDow === 0 || targetDow === 6))
+      );
+
+      let shiftKey = classifyShiftKey(
+        sched?.shift_code || p.shift_code,
+        att?.shift_name || sched?.shift_name || p.shift_name,
+        sched?.start_time || p.custom_start_time || p.shift_start,
+        sched?.end_time || p.custom_end_time || p.shift_end,
+        grp
+      );
+
+      const empOtHours = ots.reduce((sum, o) => sum + (Number(o.hours) || 0), 0);
+      const hasOt = ots.length > 0 && empOtHours > 0;
+      const primaryOt = ots[0];
+
+      // Status harian mutually-exclusive (100% sama dengan Dashboard)
+      let status = 'MENUNGGU';
+      let isLate = false;
+      let leaveTag = '';
+      if (att && (att.status === 'hadir' || att.status === 'terlambat' || att.status === 'present' || att.status === 'late')) {
+        status = 'HADIR';
+        isLate = att.status === 'terlambat' || att.status === 'late' || Number(att.late_minutes || 0) > 0;
+      } else if (leave) {
+        const lt = String(leave.leave_type || '').toLowerCase();
+        if (lt.includes('sakit') || lt.includes('sick')) { status = 'IZIN'; leaveTag = 'Sakit'; }
+        else if (lt.includes('izin') || lt.includes('permit')) { status = 'IZIN'; leaveTag = 'Izin'; }
+        else { status = 'CUTI'; leaveTag = 'Cuti'; }
+      } else if (att && att.status === 'cuti') {
+        status = 'CUTI'; leaveTag = 'Cuti';
+      } else if (att && att.status === 'sakit') {
+        status = 'IZIN'; leaveTag = 'Sakit';
+      } else if (att && att.status === 'izin') {
+        status = 'IZIN'; leaveTag = 'Izin';
+      } else if (att && (att.status === 'alfa' || att.status === 'alpha' || att.status === 'mangkir')) {
+        status = 'MANGKIR';
+      } else if (isOffSched) {
+        status = 'OFF';
+      } else if (isUnenrolled) {
+        status = 'BELUM_DAFTAR';
+      } else if (isShiftNotStartedYet(shiftKey)) {
+        status = 'MENUNGGU';
+      } else {
+        status = 'MANGKIR';
+      }
+
+      if (status === 'OFF') {
+        shiftKey = 'OFF';
+      } else if (isOffSched && hasOt) {
+        shiftKey = classifyOtShiftKey(primaryOt?.start_time, primaryOt?.end_time, 'SHIFT I');
+      }
+
+      const gBucket = groupAcc[grp];
+      const sBucket = gBucket.shifts[shiftKey] || gBucket.shifts['DAY SHIFT'];
+      gBucket.total++;
+      sBucket.total++;
+      totals.total++;
+
+      if (status === 'HADIR') {
+        sBucket.hadir++; totals.hadir++;
+        if (isLate) { sBucket.telat++; totals.telat++; }
+      } else if (status === 'OFF') {
+        sBucket.off++; totals.off++;
+      } else if (status === 'CUTI') {
+        sBucket.cuti++; totals.cuti++;
+        cutiIzinList.push(`• [${shortGrp(grp)} • ${shortShift(shiftKey)}] ${p.full_name} (${leaveTag || 'Cuti'})`);
+      } else if (status === 'IZIN') {
+        sBucket.izin++; totals.izin++;
+        cutiIzinList.push(`• [${shortGrp(grp)} • ${shortShift(shiftKey)}] ${p.full_name} (${leaveTag || 'Izin/Sakit'})`);
+      } else if (status === 'MANGKIR') {
+        sBucket.mangkir++; totals.mangkir++;
+        mangkirList.push(`• [${shortGrp(grp)} • ${shortShift(shiftKey)}] ${p.full_name} (${p.nip})`);
+      } else if (status === 'BELUM_DAFTAR') {
+        sBucket.blmDaftar++; totals.blmDaftar++;
+        blmDaftarList.push({ grp, shift: shiftKey, nip: p.nip, name: p.full_name });
+      } else {
+        sBucket.menunggu++; totals.menunggu++;
+      }
+
+      if (hasOt) {
+        const otShiftKey = classifyOtShiftKey(primaryOt?.start_time, primaryOt?.end_time, shiftKey === 'OFF' ? 'SHIFT I' : shiftKey);
+        const otRange = primaryOt?.start_time && primaryOt?.end_time
+          ? `${String(primaryOt.start_time).substring(0, 5)}–${String(primaryOt.end_time).substring(0, 5)}`
+          : '';
+        const otTypeLabel = isOffSched ? 'Hari OFF' : 'Hari Kerja';
+        if (isOffSched) {
+          otOffCount++;
+          otOffJam = Math.round((otOffJam + empOtHours) * 100) / 100;
+        } else {
+          otKerjaCount++;
+          otKerjaJam = Math.round((otKerjaJam + empOtHours) * 100) / 100;
+        }
+        lemburList.push(
+          `• [${shortGrp(grp)} • ${shortShift(otShiftKey)}] ${p.full_name} (${otRange ? `${otRange}, ` : ''}${empOtHours}j • ${otTypeLabel})`
+        );
+      }
+    }
+
+    const formatGroupBlock = (icon, title, grpKey) => {
+      const g = groupAcc[grpKey];
+      const lines = [`${icon} *${title} (${g.total} Org):*`];
+      const activeShiftKeys = ['SHIFT I', 'SHIFT II', 'SHIFT III', 'DAY SHIFT'];
+      const shiftStartLabel = { 'SHIFT I': '07:30', 'SHIFT II': '15:30', 'SHIFT III': '22:30', 'DAY SHIFT': '07:30' };
+
+      for (const sk of activeShiftKeys) {
+        const b = g.shifts[sk];
+        if (!b || b.total === 0) continue;
+        if (b.menunggu === b.total) {
+          lines.push(`• ${shortShift(sk)} (${b.total}): ⏳ Menunggu buka ${shiftStartLabel[sk]} WITA`);
+          continue;
+        }
+        const parts = [`Hadir ${b.hadir}${b.telat > 0 ? ` (${b.telat} telat)` : ''}`];
+        if (b.cuti + b.izin > 0) parts.push(`Cuti/Izin ${b.cuti + b.izin}`);
+        if (b.mangkir > 0) parts.push(`Mangkir ${b.mangkir}`);
+        if (b.blmDaftar > 0) parts.push(`Blm Daftar ${b.blmDaftar}`);
+        if (b.menunggu > 0) parts.push(`Tunggu ${b.menunggu}`);
+        lines.push(`• ${shortShift(sk)} (${b.total}): ${parts.join(' | ')}`);
+      }
+      if (g.shifts['OFF'].total > 0) {
+        lines.push(`• OFF Roster: ${g.shifts['OFF'].total} Org`);
+      }
+      return lines.join('\n');
+    };
+
+    const totalSumCheck = totals.hadir + totals.off + totals.cuti + totals.izin + totals.mangkir + totals.blmDaftar + totals.menunggu;
+    const totalOtCount = otKerjaCount + otOffCount;
+    const totalOtJam = Math.round((otKerjaJam + otOffJam) * 100) / 100;
+
+    const msgLines = [
+      `📊 *UPDATE PRESENSI SDM — PT. FAWWAZ RESKI PERWIRA*`,
+      `📅 ${formattedDate} • ⏰ ${formattedTime}`,
+      `📌 ${checkpointTitle || 'Laporan Checkpoint Shift'}`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━`,
+      formatGroupBlock('🚢', 'SHIPMENT', 'SHIPMENT'),
       ``,
-      `📋 *RINCIAN STATUS PER SHIFT:*`,
+      formatGroupBlock('🏠', 'RUMAH TANGGA', 'RUMAH TANGGA'),
       ``,
-      formatShiftSection('☀️ 1. DAY SHIFT', 'DAYSHIFT', '07:30 - 16:30 WITA'),
-      ``,
-      formatShiftSection('🌅 2. SHIFT I', 'SHIFT I', '07:30 - 15:30 WITA'),
-      ``,
-      formatShiftSection('🌆 3. SHIFT II', 'SHIFT II', '15:30 - 22:30 WITA'),
-      ``,
-      formatShiftSection('🌙 4. SHIFT III', 'SHIFT III', '22:30 - 07:30 WITA'),
-      ``,
-      `🏖️ *5. OFF ROSTER / LIBUR:* ${stats['OFF'].total} Orang`,
-      ``,
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-      `📈 *REKAPITULASI TOTAL HARI INI (${totalOfficial} PERSONIL):*`,
-      `✅ *Total Hadir:* ${totHadir} Orang`,
-      `🏖️ *Total Off:* ${totOff} Orang`,
-      `⚠️ *Total Mangkir:* ${totMangkir} Orang`,
-      `📝 *Total Cuti:* ${totCuti} Orang`,
-      `🏥 *Total Izin / Sakit:* ${totIzin} Orang`,
-      `⚡ *Total Bertugas Lembur:* ${totLembur} Orang`,
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-      `_Sistem Otomatis Radar Presensi & SDM PT FRP (Pemberitahuan Khusus Superadmin)_`
-    ].join('\n');
+      formatGroupBlock('⭐', 'KARYAWAN TETAP', 'KARYAWAN TETAP'),
+      `━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `📈 *TOTAL ${totalSumCheck}/${totals.total} PERSONIL ✓*`,
+      `✅ Hadir: *${totals.hadir}*${totals.telat > 0 ? ` (${totals.telat} telat)` : ''} | 🏖️ OFF: *${totals.off}*`,
+      `📝 Cuti: *${totals.cuti}* | 🏥 Izin/Sakit: *${totals.izin}*`,
+      `⚠️ Mangkir: *${totals.mangkir}* | 👤 Blm Daftar: *${totals.blmDaftar}*${totals.menunggu > 0 ? ` | ⏳ Tunggu: *${totals.menunggu}*` : ''}`,
+    ];
+
+    if (cutiIzinList.length > 0) {
+      msgLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━`);
+      msgLines.push(`📝 *CUTI / IZIN / SAKIT (${cutiIzinList.length} Org):*`);
+      msgLines.push(...cutiIzinList);
+    }
+
+    if (mangkirList.length > 0) {
+      msgLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━`);
+      msgLines.push(`⚠️ *MANGKIR / ALPA RIIL (${mangkirList.length} Org):*`);
+      msgLines.push(...mangkirList);
+    }
+
+    if (blmDaftarList.length > 0) {
+      msgLines.push(`👤 *Blm Daftar Wajah (${blmDaftarList.length} Org):* ${blmDaftarList.map((x) => `${x.name} (${x.nip})`).join(', ')}`);
+    }
+
+    msgLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━`);
+    if (totalOtCount > 0) {
+      msgLines.push(`⚡ *LEMBUR SPKL (${totalOtCount} Org • ${totalOtJam} Jam)* _(Terpisah dari Headcount)_`);
+      msgLines.push(`   Hari Kerja: ${otKerjaCount} (${otKerjaJam}j) | Hari OFF: ${otOffCount} (${otOffJam}j)`);
+      msgLines.push(...lemburList);
+    } else {
+      msgLines.push(`⚡ *LEMBUR SPKL:* Nihil (0 Org)`);
+    }
+
+    msgLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━`);
+    msgLines.push(`_Radar Otomatis PT. FAWWAZ RESKI PERWIRA (Khusus Superadmin)_`);
+
+    const message = msgLines.join('\n');
 
     console.log(`[Superadmin Shift Report] Mengirim update presensi ke Superadmin (${superadminPhone})...`);
     const waRes = await sendWhatsAppAlert({ phone: superadminPhone, message });
@@ -18015,17 +18176,14 @@ async function generateAndSendSuperadminShiftReport(targetDateStr = null, checkp
       success: true,
       targetDate: finalDateStr,
       recipient: superadminPhone,
+      message,
       summary: {
-        totalOfficial,
-        totHadir,
-        totOff,
-        totMangkir,
-        totCuti,
-        totIzin,
-        totLembur,
-        stats
+        totalOfficial: totals.total,
+        ...totals,
+        lembur: { totalOtCount, totalOtJam, otKerjaCount, otKerjaJam, otOffCount, otOffJam },
+        groups: groupAcc,
       },
-      waRes
+      waRes,
     };
   } catch (err) {
     console.error('[generateAndSendSuperadminShiftReport Error]:', err.message);
