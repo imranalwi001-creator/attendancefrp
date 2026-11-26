@@ -72,7 +72,9 @@ type DrillCategory =
   | 'mangkir'
   | 'belum_absen'
   | 'belum_terdaftar'
-  | 'lembur';
+  | 'lembur'
+  | 'lembur_kerja'
+  | 'lembur_off';
 
 interface ShiftBucketStats {
   key: ShiftKey;
@@ -161,6 +163,7 @@ interface EmployeeDetailRow {
   clockOut: string | null;
   lateMinutes: number;
   hasOvertime: boolean;
+  overtimeType?: 'hari_kerja' | 'hari_off' | null;
   overtimeHours: number;
   overtimeShiftBucket: ShiftKey | null;
   overtimeRange: string | null;
@@ -203,6 +206,10 @@ interface LiveOverviewPayload {
     belumTerdaftar: number;
     lemburOrang: number;
     lemburJam: number;
+    lemburKerjaOrang?: number;
+    lemburKerjaJam?: number;
+    lemburOffOrang?: number;
+    lemburOffJam?: number;
     wajibTugas: number;
     attendanceRate: number;
     shifts: Record<ShiftKey, ShiftBucketStats>;
@@ -222,6 +229,10 @@ interface LiveOverviewPayload {
     lemburSpkl: number;
     lemburOrangUnik: number;
     lemburJam: number;
+    lemburKerjaSpkl?: number;
+    lemburKerjaJam?: number;
+    lemburOffSpkl?: number;
+    lemburOffJam?: number;
     shifts: Record<ShiftKey, ShiftBucketStats>;
   };
   dailySeries: DailyPoint[];
@@ -276,6 +287,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
 
   const [shiftScope, setShiftScope] = useState<'today' | 'month'>('today');
   const [groupTableScope, setGroupTableScope] = useState<'today' | 'month'>('today');
+  const [overtimeScope, setOvertimeScope] = useState<'today' | 'month'>('today');
 
   const [overview, setOverview] = useState<LiveOverviewPayload | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -395,6 +407,8 @@ export const HrmSuperadminDashboard: React.FC = () => {
       if (drillCategory === 'belum_absen' && row.status !== 'belum_absen') return false;
       if (drillCategory === 'belum_terdaftar' && row.status !== 'belum_terdaftar') return false;
       if (drillCategory === 'lembur' && !row.hasOvertime) return false;
+      if (drillCategory === 'lembur_kerja' && (!row.hasOvertime || row.overtimeType !== 'hari_kerja')) return false;
+      if (drillCategory === 'lembur_off' && (!row.hasOvertime || row.overtimeType !== 'hari_off')) return false;
 
       if (q) {
         return (
@@ -425,7 +439,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
     return list.filter((d) => d.value > 0);
   }, [overview, groupTableScope]);
 
-  // Data bar chart perbandingan Shift Aktif + OFF Roster
+  // Data bar chart perbandingan Shift Aktif + OFF Roster (100% murni kehadiran tanpa lembur)
   const shiftChartData = useMemo(() => {
     if (!overview) return [];
     const shiftsObj = shiftScope === 'today' ? overview.today.shifts : overview.month.shifts;
@@ -438,8 +452,6 @@ export const HrmSuperadminDashboard: React.FC = () => {
         'Cuti/Izin': shiftsObj[k].cuti + shiftsObj[k].izin,
         Mangkir: shiftsObj[k].mangkir,
         'Blm Daftar': shiftsObj[k].belumTerdaftar || 0,
-        'Lembur (Org)': shiftsObj[k].lemburOrang,
-        'Lembur (Jam)': shiftsObj[k].lemburJam,
       }));
   }, [overview, shiftScope]);
 
@@ -728,24 +740,19 @@ export const HrmSuperadminDashboard: React.FC = () => {
                           </span>
                         </div>
                         <div>
-                          <span className="text-muted-foreground block text-[10px]">OFF•C/I•A•Blm</span>
+                          <span className="text-muted-foreground block text-[10px]">OFF • C/I</span>
                           <span className="font-mono font-bold text-foreground">
-                            {g.today.off}•{g.today.cuti + g.today.izin}•
-                            <span className={g.today.mangkir > 0 ? 'text-rose-600' : ''}>{g.today.mangkir}</span>•
+                            {g.today.off} • {g.today.cuti + g.today.izin}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-muted-foreground block text-[10px]">Mangkir • Blm</span>
+                          <span className="font-mono font-bold text-foreground">
+                            <span className={g.today.mangkir > 0 ? 'text-rose-600' : ''}>{g.today.mangkir}</span> •{' '}
                             <span className={(g.today.belumTerdaftar || 0) > 0 ? 'text-purple-600 dark:text-purple-400' : ''}>
                               {g.today.belumTerdaftar || 0}
                             </span>
                           </span>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-muted-foreground block text-[10px]">Lembur</span>
-                          {g.group === 'KARYAWAN TETAP' ? (
-                            <span className="text-[10px] font-semibold text-muted-foreground">Non-Lembur</span>
-                          ) : (
-                            <span className="font-mono font-bold text-amber-600 dark:text-amber-400">
-                              {g.today.lemburOrang} Org ({g.today.lemburJam}j)
-                            </span>
-                          )}
                         </div>
                       </div>
                     </button>
@@ -755,8 +762,8 @@ export const HrmSuperadminDashboard: React.FC = () => {
             </CardContent>
           </Card>
 
-          {/* ─── BARIS 3: 7 KARTU KPI STATUS (MUTUALLY EXCLUSIVE = 100% HEADCOUNT + LEMBUR IRISAN) ─── */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+          {/* ─── BARIS 3: 6 KARTU KPI STATUS KEHADIRAN MURNI (MUTUALLY EXCLUSIVE = 100% HEADCOUNT) ─── */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
             {/* 1. HADIR */}
             <button
               type="button"
@@ -927,37 +934,6 @@ export const HrmSuperadminDashboard: React.FC = () => {
               <div className="mt-2 pt-1.5 border-t border-border/60 flex items-center justify-between text-[10px]">
                 <span className="text-muted-foreground">Akum. Bln</span>
                 <span className="font-mono font-bold text-purple-600 dark:text-purple-400">{month?.belumTerdaftar ?? 0} Hr</span>
-              </div>
-            </button>
-
-            {/* 7. LEMBUR (SPKL — IRISAN DARI HADIR) */}
-            <button
-              type="button"
-              onClick={() => openDrillDown(`Daftar Karyawan Lembur SPKL (${formatDateId(overview.meta.date)})`, 'lembur')}
-              className="text-left group bg-card border border-amber-400/40 hover:border-amber-500 rounded-2xl p-3.5 shadow-xs transition-all"
-            >
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">Lembur</span>
-                <div className="w-7 h-7 rounded-lg bg-amber-500/15 text-amber-600 flex items-center justify-center">
-                  <Zap className="w-3.5 h-3.5 fill-amber-500/40" />
-                </div>
-              </div>
-              <div className="flex items-baseline gap-1">
-                <span className="text-2xl font-mono font-black text-amber-600 dark:text-amber-400">
-                  {today?.lemburOrang ?? 0}
-                </span>
-                <span className="text-[11px] font-semibold text-muted-foreground">
-                  Org ({today?.lemburJam ?? 0}j)
-                </span>
-              </div>
-              <p className="text-[10px] text-amber-700/80 dark:text-amber-300/80 mt-0.5 font-medium">
-                Irisan dari Hadir
-              </p>
-              <div className="mt-2 pt-1.5 border-t border-border/60 flex items-center justify-between text-[10px]">
-                <span className="text-muted-foreground">Bulan Ini</span>
-                <span className="font-mono font-bold text-amber-600 dark:text-amber-400">
-                  {month?.lemburJam ?? 0}j
-                </span>
               </div>
             </button>
           </div>
@@ -1152,21 +1128,6 @@ export const HrmSuperadminDashboard: React.FC = () => {
                           </button>
                         </div>
                       </div>
-
-                      {/* Highlight Lembur per Shift (Irisan Hadir) */}
-                      <button
-                        type="button"
-                        onClick={() => openDrillDown(`${s.label} — Lembur SPKL (${formatDateId(overview.meta.date)})`, 'lembur', key)}
-                        className="mt-3 w-full px-3 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 flex items-center justify-between text-xs transition-colors"
-                      >
-                        <span className="font-bold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
-                          <Zap className="w-3.5 h-3.5 fill-amber-500 text-amber-600" />
-                          Lembur {s.label}
-                        </span>
-                        <span className="font-mono font-extrabold text-amber-700 dark:text-amber-300">
-                          {s.lemburOrang} {shiftScope === 'today' ? 'Org' : 'SPKL'} • {s.lemburJam}j
-                        </span>
-                      </button>
                     </div>
                   );
                 })}
@@ -1203,11 +1164,11 @@ export const HrmSuperadminDashboard: React.FC = () => {
                 </button>
               )}
 
-              {/* Mini Horizontal Comparison Bar Chart Across Shifts */}
+              {/* Mini Horizontal Comparison Bar Chart Across Shifts (100% Murni Kehadiran) */}
               <div className="pt-2 border-t border-border/60">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold text-muted-foreground">
-                    Perbandingan Beban Hadir, OFF, Cuti/Izin, Mangkir, Blm Daftar & Lembur Antar Shift ({shiftScope === 'today' ? 'Live Hari Ini' : formatMonthId(overview.meta.month)})
+                    Perbandingan Komposisi Kehadiran Antar Shift & OFF Roster ({shiftScope === 'today' ? 'Live Hari Ini' : formatMonthId(overview.meta.month)})
                   </span>
                 </div>
                 <div className="h-[220px] w-full">
@@ -1225,12 +1186,11 @@ export const HrmSuperadminDashboard: React.FC = () => {
                         }}
                       />
                       <Legend wrapperStyle={{ fontSize: '11px' }} />
-                      <Bar dataKey="Hadir" fill={STATUS_COLORS.hadir} radius={[5, 5, 0, 0]} maxBarSize={28} />
-                      <Bar dataKey="OFF" fill={STATUS_COLORS.off} radius={[5, 5, 0, 0]} maxBarSize={28} />
-                      <Bar dataKey="Cuti/Izin" fill={STATUS_COLORS.cuti} radius={[5, 5, 0, 0]} maxBarSize={28} />
-                      <Bar dataKey="Mangkir" fill={STATUS_COLORS.mangkir} radius={[5, 5, 0, 0]} maxBarSize={28} />
-                      <Bar dataKey="Blm Daftar" fill={STATUS_COLORS.belumTerdaftar} radius={[5, 5, 0, 0]} maxBarSize={28} />
-                      <Bar dataKey="Lembur (Org)" fill={STATUS_COLORS.lembur} radius={[5, 5, 0, 0]} maxBarSize={28} />
+                      <Bar dataKey="Hadir" fill={STATUS_COLORS.hadir} radius={[5, 5, 0, 0]} maxBarSize={30} />
+                      <Bar dataKey="OFF" fill={STATUS_COLORS.off} radius={[5, 5, 0, 0]} maxBarSize={30} />
+                      <Bar dataKey="Cuti/Izin" fill={STATUS_COLORS.cuti} radius={[5, 5, 0, 0]} maxBarSize={30} />
+                      <Bar dataKey="Mangkir" fill={STATUS_COLORS.mangkir} radius={[5, 5, 0, 0]} maxBarSize={30} />
+                      <Bar dataKey="Blm Daftar" fill={STATUS_COLORS.belumTerdaftar} radius={[5, 5, 0, 0]} maxBarSize={30} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -1247,10 +1207,10 @@ export const HrmSuperadminDashboard: React.FC = () => {
                   <div>
                     <CardTitle className="text-base font-bold flex items-center gap-2">
                       <TrendingUp className="w-4 h-4 text-emerald-600" />
-                      Tren Kehadiran & Jam Lembur Harian — {formatMonthId(overview.meta.month)}
+                      Tren Kehadiran Harian — {formatMonthId(overview.meta.month)}
                     </CardTitle>
                     <CardDescription className="text-xs">
-                      Batang bertumpuk (Hadir, OFF, Cuti, Izin, Mangkir) + Garis Jam Lembur (SPKL). Klik tanggal untuk inspeksi hari tersebut.
+                      Batang bertumpuk 100% komposisi headcount (Hadir, OFF, Cuti, Izin/Sakit, Mangkir, Blm Daftar). Klik tanggal untuk inspeksi hari tersebut.
                     </CardDescription>
                   </div>
                   <Badge variant="outline" className="text-[11px] font-mono w-fit">
@@ -1261,7 +1221,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
               <CardContent className="p-4">
                 <div className="h-[320px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart
+                    <BarChart
                       data={overview.dailySeries}
                       margin={{ top: 10, right: 8, left: -16, bottom: 0 }}
                       onClick={(state: any) => {
@@ -1271,15 +1231,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
                     >
                       <CartesianGrid strokeDasharray="3 3" opacity={0.18} vertical={false} />
                       <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                      <YAxis yAxisId="left" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                      <YAxis
-                        yAxisId="right"
-                        orientation="right"
-                        tick={{ fontSize: 10, fill: STATUS_COLORS.lembur }}
-                        axisLine={false}
-                        tickLine={false}
-                        unit="j"
-                      />
+                      <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                       <Tooltip
                         labelFormatter={(label) => `Tanggal ${label} ${formatMonthId(overview.meta.month)}`}
                         contentStyle={{
@@ -1290,23 +1242,13 @@ export const HrmSuperadminDashboard: React.FC = () => {
                         }}
                       />
                       <Legend wrapperStyle={{ fontSize: '11px' }} />
-                      <Bar yAxisId="left" dataKey="hadir" name="Hadir" stackId="a" fill={STATUS_COLORS.hadir} />
-                      <Bar yAxisId="left" dataKey="off" name="OFF" stackId="a" fill={STATUS_COLORS.off} />
-                      <Bar yAxisId="left" dataKey="cuti" name="Cuti" stackId="a" fill={STATUS_COLORS.cuti} />
-                      <Bar yAxisId="left" dataKey="izin" name="Izin/Sakit" stackId="a" fill={STATUS_COLORS.izin} />
-                      <Bar yAxisId="left" dataKey="mangkir" name="Mangkir" stackId="a" fill={STATUS_COLORS.mangkir} />
-                      <Bar yAxisId="left" dataKey="belumTerdaftar" name="Blm Daftar" stackId="a" fill={STATUS_COLORS.belumTerdaftar} radius={[3, 3, 0, 0]} />
-                      <Line
-                        yAxisId="right"
-                        type="monotone"
-                        dataKey="lemburJam"
-                        name="Lembur (Jam)"
-                        stroke={STATUS_COLORS.lembur}
-                        strokeWidth={2.5}
-                        dot={{ r: 3, fill: STATUS_COLORS.lembur }}
-                        activeDot={{ r: 5 }}
-                      />
-                    </ComposedChart>
+                      <Bar dataKey="hadir" name="Hadir" stackId="a" fill={STATUS_COLORS.hadir} />
+                      <Bar dataKey="off" name="OFF" stackId="a" fill={STATUS_COLORS.off} />
+                      <Bar dataKey="cuti" name="Cuti" stackId="a" fill={STATUS_COLORS.cuti} />
+                      <Bar dataKey="izin" name="Izin/Sakit" stackId="a" fill={STATUS_COLORS.izin} />
+                      <Bar dataKey="mangkir" name="Mangkir" stackId="a" fill={STATUS_COLORS.mangkir} />
+                      <Bar dataKey="belumTerdaftar" name="Blm Daftar" stackId="a" fill={STATUS_COLORS.belumTerdaftar} radius={[3, 3, 0, 0]} />
+                    </BarChart>
                   </ResponsiveContainer>
                 </div>
               </CardContent>
@@ -1385,12 +1327,11 @@ export const HrmSuperadminDashboard: React.FC = () => {
                     <thead className="bg-muted/50 text-muted-foreground border-b border-border/70">
                       <tr>
                         <th className="py-2 px-2 text-left font-bold">Grup</th>
-                        <th className="py-2 px-1 text-center font-bold text-emerald-600">H</th>
-                        <th className="py-2 px-1 text-center font-bold">OFF</th>
-                        <th className="py-2 px-1 text-center font-bold text-sky-600">C/I</th>
-                        <th className="py-2 px-1 text-center font-bold text-rose-600">A</th>
-                        <th className="py-2 px-1 text-center font-bold text-purple-600">Blm</th>
-                        <th className="py-2 px-1.5 text-right font-bold text-amber-600">OT</th>
+                        <th className="py-2 px-1.5 text-center font-bold text-emerald-600">H</th>
+                        <th className="py-2 px-1.5 text-center font-bold">OFF</th>
+                        <th className="py-2 px-1.5 text-center font-bold text-sky-600">C/I</th>
+                        <th className="py-2 px-1.5 text-center font-bold text-rose-600">A</th>
+                        <th className="py-2 px-1.5 text-center font-bold text-purple-600">Blm</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/60 font-mono">
@@ -1401,30 +1342,27 @@ export const HrmSuperadminDashboard: React.FC = () => {
                         return (
                           <tr key={g.group} className="hover:bg-muted/30">
                             <td className="py-2 px-2 font-sans font-semibold text-foreground">{shortName}</td>
-                            <td className="py-2 px-1 text-center font-bold text-emerald-600">{src.hadir}</td>
-                            <td className="py-2 px-1 text-center text-muted-foreground">{src.off}</td>
-                            <td className="py-2 px-1 text-center text-sky-600">{src.cuti + src.izin}</td>
-                            <td className={`py-2 px-1 text-center font-bold ${src.mangkir > 0 ? 'text-rose-600' : 'text-muted-foreground'}`}>
+                            <td className="py-2 px-1.5 text-center font-bold text-emerald-600">{src.hadir}</td>
+                            <td className="py-2 px-1.5 text-center text-muted-foreground">{src.off}</td>
+                            <td className="py-2 px-1.5 text-center text-sky-600">{src.cuti + src.izin}</td>
+                            <td className={`py-2 px-1.5 text-center font-bold ${src.mangkir > 0 ? 'text-rose-600' : 'text-muted-foreground'}`}>
                               {src.mangkir}
                             </td>
-                            <td className={`py-2 px-1 text-center font-bold ${(src.belumTerdaftar || 0) > 0 ? 'text-purple-600 dark:text-purple-400' : 'text-muted-foreground'}`}>
+                            <td className={`py-2 px-1.5 text-center font-bold ${(src.belumTerdaftar || 0) > 0 ? 'text-purple-600 dark:text-purple-400' : 'text-muted-foreground'}`}>
                               {src.belumTerdaftar || 0}
-                            </td>
-                            <td className="py-2 px-1.5 text-right font-bold text-amber-600">
-                              {g.group === 'KARYAWAN TETAP' ? '-' : `${src.lemburJam}j`}
                             </td>
                           </tr>
                         );
                       })}
                       <tr className="bg-muted/40 font-bold">
                         <td className="py-2 px-2 font-sans text-foreground">TOTAL ({headcount.total})</td>
-                        <td className="py-2 px-1 text-center text-emerald-600">
+                        <td className="py-2 px-1.5 text-center text-emerald-600">
                           {overview.groups.reduce((s, g) => s + (groupTableScope === 'today' ? g.today.hadir : g.month.hadir), 0)}
                         </td>
-                        <td className="py-2 px-1 text-center">
+                        <td className="py-2 px-1.5 text-center">
                           {overview.groups.reduce((s, g) => s + (groupTableScope === 'today' ? g.today.off : g.month.off), 0)}
                         </td>
-                        <td className="py-2 px-1 text-center text-sky-600">
+                        <td className="py-2 px-1.5 text-center text-sky-600">
                           {overview.groups.reduce(
                             (s, g) =>
                               s +
@@ -1434,20 +1372,11 @@ export const HrmSuperadminDashboard: React.FC = () => {
                             0
                           )}
                         </td>
-                        <td className="py-2 px-1 text-center text-rose-600">
+                        <td className="py-2 px-1.5 text-center text-rose-600">
                           {overview.groups.reduce((s, g) => s + (groupTableScope === 'today' ? g.today.mangkir : g.month.mangkir), 0)}
                         </td>
-                        <td className="py-2 px-1 text-center text-purple-600 dark:text-purple-400">
+                        <td className="py-2 px-1.5 text-center text-purple-600 dark:text-purple-400">
                           {overview.groups.reduce((s, g) => s + (groupTableScope === 'today' ? (g.today.belumTerdaftar || 0) : (g.month.belumTerdaftar || 0)), 0)}
-                        </td>
-                        <td className="py-2 px-1.5 text-right text-amber-600">
-                          {Math.round(
-                            overview.groups.reduce(
-                              (s, g) => s + (groupTableScope === 'today' ? g.today.lemburJam : g.month.lemburJam),
-                              0
-                            ) * 10
-                          ) / 10}
-                          j
                         </td>
                       </tr>
                     </tbody>
@@ -1456,6 +1385,123 @@ export const HrmSuperadminDashboard: React.FC = () => {
               </CardContent>
             </Card>
           </div>
+
+          {/* ─── BARIS 6 (OPSI B): PANEL RINGKASAN LEMBUR SPKL TERPISAH DARI HEADCOUNT KEHADIRAN ─── */}
+          <Card className="border-amber-400/40 bg-card rounded-2xl shadow-xs">
+            <CardHeader className="pb-3 border-b border-border/70">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base font-bold flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-amber-600 fill-amber-500/30" />
+                    Ringkasan Beban Lembur SPKL (Terpisah dari Headcount Kehadiran)
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    Dipisahkan agar karyawan yang lembur di Hari Kerja maupun Hari OFF tidak menimbulkan penghitungan ganda pada matriks kehadiran.
+                  </CardDescription>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1 p-1 bg-muted/60 rounded-xl border border-border/60">
+                    <button
+                      type="button"
+                      onClick={() => setOvertimeScope('today')}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                        overtimeScope === 'today'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {formatDateId(overview.meta.date)}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOvertimeScope('month')}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                        overtimeScope === 'month'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      Total {formatMonthId(overview.meta.month)}
+                    </button>
+                  </div>
+
+                  <Link to="/admin/lembur">
+                    <Button variant="outline" size="sm" className="h-8 rounded-xl text-xs gap-1.5 font-semibold border-amber-400/60 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10">
+                      Buka Manajemen Lembur
+                      <ArrowUpRight className="w-3.5 h-3.5" />
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+            </CardHeader>
+
+            <CardContent className="p-4 sm:p-5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                {/* Total SPKL Lembur */}
+                <button
+                  type="button"
+                  onClick={() => openDrillDown(`Semua SPKL Lembur (${formatDateId(overview.meta.date)})`, 'lembur')}
+                  className="text-left p-4 rounded-2xl border border-amber-400/40 bg-amber-500/5 hover:border-amber-500 transition-all"
+                >
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
+                    Total Lembur SPKL Disetujui
+                  </p>
+                  <div className="mt-1.5 flex items-baseline gap-2">
+                    <span className="text-2xl font-mono font-black text-amber-600 dark:text-amber-400">
+                      {overtimeScope === 'today' ? (today?.lemburOrang ?? 0) : (month?.lemburSpkl ?? 0)}
+                    </span>
+                    <span className="text-xs font-semibold text-muted-foreground">
+                      {overtimeScope === 'today' ? 'SPKL / Orang' : `SPKL (${month?.lemburOrangUnik ?? 0} Org unik)`}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs font-mono font-bold text-foreground">
+                    Akumulasi: {overtimeScope === 'today' ? (today?.lemburJam ?? 0) : (month?.lemburJam ?? 0)} Jam
+                  </p>
+                </button>
+
+                {/* Lembur Hari Kerja */}
+                <button
+                  type="button"
+                  onClick={() => openDrillDown(`Lembur Hari Kerja (${formatDateId(overview.meta.date)})`, 'lembur_kerja')}
+                  className="text-left p-4 rounded-2xl border border-border bg-muted/20 hover:border-emerald-500/60 transition-all"
+                >
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Lembur Hari Kerja
+                  </p>
+                  <div className="mt-1.5 flex items-baseline gap-2">
+                    <span className="text-2xl font-mono font-black text-foreground">
+                      {overtimeScope === 'today' ? (today?.lemburKerjaOrang ?? 0) : (month?.lemburKerjaSpkl ?? 0)}
+                    </span>
+                    <span className="text-xs font-semibold text-muted-foreground">SPKL</span>
+                  </div>
+                  <p className="mt-1 text-xs font-mono text-muted-foreground">
+                    Total <strong className="text-foreground">{overtimeScope === 'today' ? (today?.lemburKerjaJam ?? 0) : (month?.lemburKerjaJam ?? 0)} Jam</strong> • Lanjutan/awal shift kerja
+                  </p>
+                </button>
+
+                {/* Lembur Hari OFF */}
+                <button
+                  type="button"
+                  onClick={() => openDrillDown(`Lembur Hari OFF / Libur Roster (${formatDateId(overview.meta.date)})`, 'lembur_off')}
+                  className="text-left p-4 rounded-2xl border border-border bg-muted/20 hover:border-sky-500/60 transition-all"
+                >
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Lembur Hari OFF (Libur Roster)
+                  </p>
+                  <div className="mt-1.5 flex items-baseline gap-2">
+                    <span className="text-2xl font-mono font-black text-foreground">
+                      {overtimeScope === 'today' ? (today?.lemburOffOrang ?? 0) : (month?.lemburOffSpkl ?? 0)}
+                    </span>
+                    <span className="text-xs font-semibold text-muted-foreground">SPKL</span>
+                  </div>
+                  <p className="mt-1 text-xs font-mono text-muted-foreground">
+                    Total <strong className="text-foreground">{overtimeScope === 'today' ? (today?.lemburOffJam ?? 0) : (month?.lemburOffJam ?? 0)} Jam</strong> • Pengganti pos saat OFF
+                  </p>
+                </button>
+              </div>
+            </CardContent>
+          </Card>
         </>
       ) : (
         <Card className="border-border rounded-2xl p-8 text-center">

@@ -15265,6 +15265,8 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
     const todaySummary = {
       hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, belumTerdaftar: 0,
       lemburOrang: 0, lemburJam: 0,
+      lemburKerjaOrang: 0, lemburKerjaJam: 0,
+      lemburOffOrang: 0, lemburOffJam: 0,
       shifts: createEmptyShiftMap(),
     };
     const monthSummary = {
@@ -15272,6 +15274,8 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
       totalDaysInMonth: daysInMonth,
       hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumTerdaftar: 0,
       lemburSpkl: 0, lemburOrangUnik: 0, lemburJam: 0,
+      lemburKerjaSpkl: 0, lemburKerjaJam: 0,
+      lemburOffSpkl: 0, lemburOffJam: 0,
       shifts: createEmptyShiftMap(),
     };
     const monthUniqueOvertimeUsers = new Set();
@@ -15439,6 +15443,13 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
             dayRow.lemburJam = Math.round((dayRow.lemburJam + empOtHours) * 100) / 100;
             monthSummary.lemburSpkl += ots.length;
             monthSummary.lemburJam = Math.round((monthSummary.lemburJam + empOtHours) * 100) / 100;
+            if (isOffSched) {
+              monthSummary.lemburOffSpkl += ots.length;
+              monthSummary.lemburOffJam = Math.round((monthSummary.lemburOffJam + empOtHours) * 100) / 100;
+            } else {
+              monthSummary.lemburKerjaSpkl += ots.length;
+              monthSummary.lemburKerjaJam = Math.round((monthSummary.lemburKerjaJam + empOtHours) * 100) / 100;
+            }
             monthUniqueOvertimeUsers.add(emp.id);
             const otShiftObj = monthSummary.shifts[otBucket || shiftBucket];
             otShiftObj.lemburOrang += 1;
@@ -15472,6 +15483,13 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
           if (hasOt) {
             todaySummary.lemburOrang += 1;
             todaySummary.lemburJam = Math.round((todaySummary.lemburJam + empOtHours) * 100) / 100;
+            if (isOffSched) {
+              todaySummary.lemburOffOrang += 1;
+              todaySummary.lemburOffJam = Math.round((todaySummary.lemburOffJam + empOtHours) * 100) / 100;
+            } else {
+              todaySummary.lemburKerjaOrang += 1;
+              todaySummary.lemburKerjaJam = Math.round((todaySummary.lemburKerjaJam + empOtHours) * 100) / 100;
+            }
             const otShiftObj = todaySummary.shifts[otBucket || shiftBucket];
             otShiftObj.lemburOrang += 1;
             otShiftObj.lemburJam = Math.round((otShiftObj.lemburJam + empOtHours) * 100) / 100;
@@ -15493,6 +15511,7 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
             clockOut: att?.clock_out ? String(att.clock_out).substring(0, 5) : null,
             lateMinutes: Number(att?.late_minutes || 0),
             hasOvertime: hasOt,
+            overtimeType: hasOt ? (isOffSched ? 'hari_off' : 'hari_kerja') : null,
             overtimeHours: empOtHours,
             overtimeShiftBucket: otBucket,
             overtimeRange: primaryOt ? `${String(primaryOt.start_time || '').substring(0, 5)} – ${String(primaryOt.end_time || '').substring(0, 5)}` : null,
