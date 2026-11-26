@@ -1930,8 +1930,9 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   // Menggabungkan Shift Asli + SPKL Lembur (Sebelum Shift, Setelah Shift, maupun Hari OFF) untuk SEMUA karyawan!
   const continuousDutyInfo = useMemo(() => {
     const baseIsOff = Boolean(effectiveDisplayShift && isShiftOffDay(effectiveDisplayShift));
-    return resolveContinuousDutyShift(effectiveDisplayShift || userShift, approvedOvertimeToday, currentTime, baseIsOff);
-  }, [effectiveDisplayShift, userShift, approvedOvertimeToday, currentTime]);
+    const activeClockInStr = isCurrentlyOnDuty ? (todayAttendance?.clockIn || todayAttendance?.clock_in || null) : null;
+    return resolveContinuousDutyShift(effectiveDisplayShift || userShift, approvedOvertimeToday, currentTime, baseIsOff, activeClockInStr);
+  }, [effectiveDisplayShift, userShift, approvedOvertimeToday, currentTime, isCurrentlyOnDuty, todayAttendance]);
 
   const effectiveDutyEndTime =
     continuousDutyInfo.effectiveEnd ||

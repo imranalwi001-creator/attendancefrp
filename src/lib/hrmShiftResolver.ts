@@ -682,7 +682,7 @@ export function calculateAttendanceLateness(params: {
   };
 }
 
-export type ContinuousDutyMode = 'regular' | 'after_shift' | 'before_shift' | 'off_day_overtime';
+export type ContinuousDutyMode = 'regular' | 'after_shift' | 'before_shift' | 'off_day_overtime' | 'split_shift';
 export type ContinuousDutyPhase = 'before_duty' | 'overtime_phase' | 'regular_shift_phase' | 'ready_to_clock_out';
 
 export interface ContinuousDutyInfo {
@@ -728,7 +728,8 @@ export function resolveContinuousDutyShift(
   baseShift: Shift | null,
   approvedOvertime: any | null | undefined,
   currentTime: Date = new Date(),
-  isOffDay: boolean = false
+  isOffDay: boolean = false,
+  activeClockIn?: string | null
 ): ContinuousDutyInfo {
   const baseStart = (baseShift?.startTime || '').substring(0, 5);
   const baseEnd = (baseShift?.endTime || '').substring(0, 5);
@@ -773,6 +774,12 @@ export function resolveContinuousDutyShift(
   const otIsCross = otEndMins < otStartMins;
   const hasBaseShift = !isOffDay && Boolean(baseShift) && baseShift?.id !== 'unassigned' && !isShiftOffDay(baseShift) && baseStartMins != null && baseEndMins != null;
 
+  const circDist = (a: number, b: number) => {
+    const d = Math.abs(a - b);
+    return d > 720 ? 1440 - d : d;
+  };
+  const clockInMins = parseTimeToMins(activeClockIn);
+
   let dutyMode: ContinuousDutyMode = 'after_shift';
   let effectiveStart = baseStart || otStart;
   let effectiveEnd = otEnd;
@@ -785,17 +792,24 @@ export function resolveContinuousDutyShift(
     effectiveEnd = otEnd;
     effectiveIsCrossDay = otIsCross;
   } else {
-    // Deteksi presisi apakah Lembur SEBELUM Shift atau Lembur SETELAH Shift:
-    // - Shift III lintas hari (22:30 - 07:30) + Lembur Shift I (07:30 - 15:30):
-    //   otStart (07:30) dekat dengan baseEnd (07:30) -> SETELAH SHIFT!
-    // - Lembur Shift II (15:30 - 22:30) + Shift III (22:30 - 07:30):
-    //   otEnd (22:30) dekat dengan baseStart (22:30) dan otStart < baseStart -> SEBELUM SHIFT!
-    // - Lembur Shift I (07:30 - 15:30) + Shift II (15:30 - 22:30):
-    //   otEnd (15:30) <= baseStart (15:30) + 60 dan otStart < baseStart -> SEBELUM SHIFT!
-    const isAfterCrossDayShift = baseIsCross && Math.abs(otStartMins - baseEndMins!) <= 90;
-    const isBeforeShift = !isAfterCrossDayShift && otStartMins < baseStartMins! && otEndMins <= baseStartMins! + 60;
+    // Deteksi apakah sesi saat ini adalah SPLIT-SHIFT terpisah (contoh: Lembur Shift I 07:30-15:30 + jadwal asli Shift III 22:30-07:30 malam)
+    // Jeda antara otEnd (15:30) ke baseStart (22:30) = 7 jam (420 menit > 90 menit).
+    // Jika karyawan belum masuk malam kemarin (clockIn di pagi hari dekat otStart, ATAU belum clockIn & sekarang di pagi/siang hari),
+    // maka sesi pagi ini adalah Split-Shift terpisah (boleh pulang istirahat pk 15:30, lalu masuk Shift III pk 22:30)!
+    const gapOtEndToBaseStart = (baseStartMins! - otEndMins + 1440) % 1440;
+    const clockedInForMorningOt = clockInMins != null && circDist(clockInMins, otStartMins) <= 180 && circDist(clockInMins, otStartMins) < circDist(clockInMins, baseStartMins!);
+    const nowInMorningOtBeforeNightShift = clockInMins == null && baseIsCross && Math.abs(otStartMins - baseEndMins!) <= 90 && isNowInWindow(nowMins, (otStartMins - 120 + 1440) % 1440, (otEndMins + 120) % 1440);
+    const isSplitShiftMorning = gapOtEndToBaseStart > 90 && (clockedInForMorningOt || nowInMorningOtBeforeNightShift);
 
-    if (isBeforeShift) {
+    const isAfterCrossDayShift = baseIsCross && Math.abs(otStartMins - baseEndMins!) <= 90 && !isSplitShiftMorning;
+    const isBeforeShift = !isSplitShiftMorning && !isAfterCrossDayShift && otStartMins < baseStartMins! && otEndMins <= baseStartMins! + 60;
+
+    if (isSplitShiftMorning) {
+      dutyMode = 'split_shift';
+      effectiveStart = otStart;
+      effectiveEnd = otEnd;
+      effectiveIsCrossDay = otIsCross;
+    } else if (isBeforeShift) {
       dutyMode = 'before_shift';
       effectiveStart = otStart;
       effectiveEnd = baseEnd;
@@ -814,10 +828,9 @@ export function resolveContinuousDutyShift(
   let currentPhase: ContinuousDutyPhase = 'regular_shift_phase';
   if (isNowInWindow(nowMins, otStartMins, otEndMins)) {
     currentPhase = 'overtime_phase';
-  } else if (hasBaseShift && isNowInWindow(nowMins, baseStartMins!, baseEndMins!)) {
+  } else if (dutyMode !== 'split_shift' && hasBaseShift && isNowInWindow(nowMins, baseStartMins!, baseEndMins!)) {
     currentPhase = 'regular_shift_phase';
   } else if (!isNowInWindow(nowMins, effStartMins, effEndMins)) {
-    // Di luar rentang aktif: cek apakah sudah lewat jam pulang final atau belum jam mulai
     const isPassedEnd = effectiveIsCrossDay
       ? (nowMins >= effEndMins && nowMins < effStartMins)
       : (nowMins >= effEndMins);
@@ -827,7 +840,10 @@ export function resolveContinuousDutyShift(
   let phaseBadgeLabel = `Lembur (${otStart} - ${otEnd})`;
   let reassuranceText = '';
 
-  if (dutyMode === 'after_shift') {
+  if (dutyMode === 'split_shift') {
+    phaseBadgeLabel = `⚡ Lembur Pengganti (${otStart} - ${otEnd} WITA)`;
+    reassuranceText = `Sesi Lembur Pengganti (${otStart}–${otEnd} WITA) TERCATAT AKTIF terpisah dari jadwal asli malam Anda (${baseStart}–${baseEnd}). Silakan ceklok pulang pk ${otEnd} WITA untuk istirahat, lalu masuk shift asli pk ${baseStart} WITA.`;
+  } else if (dutyMode === 'after_shift') {
     if (currentPhase === 'overtime_phase') {
       phaseBadgeLabel = `⚡ Lembur Aktif (${otStart} - ${otEnd} WITA)`;
       reassuranceText = `Data lembur Anda TERCATAT AKTIF (${otStart}–${otEnd} WITA). Tidak perlu ceklok ulang — cukup 1× ceklok pulang saat lembur selesai pk ${effectiveEnd} WITA.`;

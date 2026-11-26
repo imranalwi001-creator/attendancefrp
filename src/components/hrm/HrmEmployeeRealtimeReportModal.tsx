@@ -753,14 +753,25 @@ export const HrmEmployeeRealtimeReportModal: React.FC<Props> = ({
             (singleAtt.shiftName?.includes('Shift II') ? '22:30' : singleAtt.shiftName?.includes('Shift III') ? '07:30' : '15:30')
         ).substring(0, 5);
 
-        // Kasus 1: Lembur Sebelum Shift (misal: lembur 15:30 - 22:30, shift resmi 22:30 - 07:30, atau lembur 07:30 - 15:30, shift resmi 15:30 - 22:30)
-        // Guard Cross-Day: Untuk Shift III (22:30 - 07:30), lembur Shift I (07:30 - 15:30) adalah SETELAH shift, BUKAN sebelum shift!
+        // Kasus 1: Lembur Sebelum Shift ATAU Split-Shift Pagi + Shift III Malam
+        // Guard Cross-Day Presisi:
+        // - Jika karyawan punya jadwal Shift III (22:30-07:30) + SPKL Shift I (07:30-15:30):
+        //   * Jika singleClockIn di PAGI hari (dekat 07:30, jauh dari 22:30) -> SPLIT-SHIFT PAGI (masuk kolom LEMBUR, Shift III malam belum mulai!)
+        //   * Jika singleClockIn di MALAM hari (dekat 22:30) -> LEMBUR SETELAH SHIFT III!
         const isSchedCrossDay = Boolean(schedStart && schedEnd && schedEnd < schedStart);
+        const clockedInNearOt = Boolean(
+          singleClockIn && otStart &&
+          getTimeDistanceMinutes(singleClockIn, otStart) <= 120 &&
+          (!schedStart || getTimeDistanceMinutes(singleClockIn, otStart) < getTimeDistanceMinutes(singleClockIn, schedStart))
+        );
         const isAfterCrossDayShift = Boolean(
-          isSchedCrossDay && otStart && schedEnd && getTimeDistanceMinutes(otStart, schedEnd) <= 90
+          isSchedCrossDay && otStart && schedEnd && getTimeDistanceMinutes(otStart, schedEnd) <= 90 && !clockedInNearOt
         );
         const isBeforeShiftOvertime = Boolean(
-          !isAfterCrossDayShift && otStart && schedStart && otStart < schedStart && (!otEnd || otEnd <= schedStart || getTimeDistanceMinutes(otEnd, schedStart) <= 60)
+          !isAfterCrossDayShift && (
+            clockedInNearOt ||
+            (otStart && schedStart && otStart < schedStart && (!otEnd || otEnd <= schedStart || getTimeDistanceMinutes(otEnd, schedStart) <= 60))
+          )
         );
         if (isBeforeShiftOvertime) {
           // singleClockIn dianggap sebagai clock-in lembur awal jika mendekati otStart (<=45 mnt) atau terjadi jauh sebelum shift resmi (>=60 mnt)

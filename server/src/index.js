@@ -2694,13 +2694,30 @@ app.post('/api/attendances/clock-in', async (req, res) => {
           }
         }
 
-        // ⚡ CONTINUOUS DUTY SINGLE-SESSION GUARD (Lembur Sebelum Shift & Hari OFF):
-        // Jika karyawan memiliki SPKL Lembur 'approved' yang dimulai SEBELUM shift asli
-        // (misal Lembur Shift I 07:30-15:30 sebelum Shift II 15:30-22:30, atau Lembur Shift II 15:30-22:30 sebelum Shift III 22:30-07:30),
-        // maka jam mulai dinas efektif untuk perhitungan keterlambatan 1x Ceklok Masuk adalah jam mulai lembur tersebut!
+        // Hitung waktu ceklok riil (curMins) lebih dulu agar pencocokan SPKL Lembur Pra-Shift & Split-Shift 100% akurat
+        let curMins = 0;
+        if (time && typeof time === 'string') {
+          const [cH, cM] = time.split(':').map(Number);
+          curMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);
+        } else {
+          const witaDate = new Date(Date.now() + 8 * 3600000);
+          curMins = witaDate.getUTCHours() * 60 + witaDate.getUTCMinutes();
+        }
+
+        const circularTimeDist = (m1, m2) => {
+          const d = Math.abs(m1 - m2);
+          return d > 720 ? 1440 - d : d;
+        };
+
+        // ⚡ CONTINUOUS DUTY & SPLIT-SHIFT GUARD (Berlaku untuk SEMUA Karyawan):
+        // Mencakup:
+        // 1. Lembur Sebelum Shift (misal Lembur 07:30-15:30 sebelum Shift II 15:30-22:30, atau 15:30-22:30 sebelum Shift III 22:30-07:30)
+        // 2. Split-Shift Pagi + Malam (misal Lembur Pengganti Shift I 07:30-15:30 padahal jadwal asli malamnya Shift III 22:30-07:30)
+        // Evaluasi keterlambatan WAJIB memakai jam mulai SPKL (otStart) jika karyawan ceklok masuk untuk shift lembur tersebut,
+        // agar tidak pernah terhitung terlambat 540 menit (9 jam) mundur ke Shift III!
         try {
           const preShiftOtRes = await pool.query(
-            `SELECT start_time, end_time FROM hrm_overtime_records
+            `SELECT start_time, end_time, task_description FROM hrm_overtime_records
              WHERE user_id = $1 AND date = $2::date AND status = 'approved'
              ORDER BY start_time ASC`,
             [validUserId, date]
@@ -2711,6 +2728,7 @@ app.post('/api/attendances/clock-in', async (req, res) => {
             const baseStartMins = (Number.isFinite(baseSH) ? baseSH : 7) * 60 + (Number.isFinite(baseSM) ? baseSM : 30);
             const baseEndMins = (Number.isFinite(baseEH) ? baseEH : 15) * 60 + (Number.isFinite(baseEM) ? baseEM : 30);
             const baseIsCross = Boolean(isCrossDay || baseEndMins < baseStartMins);
+            const distToBaseStart = circularTimeDist(curMins, baseStartMins);
 
             for (const otRow of preShiftOtRes.rows) {
               if (!otRow.start_time || !otRow.end_time) continue;
@@ -2720,16 +2738,27 @@ app.post('/api/attendances/clock-in', async (req, res) => {
               const [oEH, oEM] = otE.split(':').map(Number);
               const otStartMins = (oSH || 0) * 60 + (oSM || 0);
               const otEndMins = (oEH || 0) * 60 + (oEM || 0);
+              const otIsCross = otEndMins < otStartMins;
+              const distToOtStart = circularTimeDist(curMins, otStartMins);
 
-              // Lembur Sebelum Shift:
-              // - Same-day: otStart < baseStart DAN otEnd <= baseStart + 60 (misal 07:30-15:30 sebelum 15:30-22:30)
-              // - Sebelum Shift III (22:30-07:30): otStart 15:30 < 22:30 dan otEnd 22:30 <= 22:30 + 60
-              // Hindari salah klasifikasi untuk Shift III (22:30-07:30) + Lembur Shift I (07:30-15:30) yang adalah Lembur SETELAH Shift!
-              const isAfterCrossDayShift = baseIsCross && Math.abs(otStartMins - baseEndMins) <= 90;
+              // Cek apakah clock-in saat ini nyata-nyata untuk memulai sesi SPKL Lembur (dekat otStart, jauh dari baseStart)
+              const isClockingInForOvertime = distToOtStart <= 180 && distToOtStart < distToBaseStart;
+              const isAfterCrossDayShift = baseIsCross && Math.abs(otStartMins - baseEndMins) <= 90 && !isClockingInForOvertime;
               const isBeforeBaseShift = !isAfterCrossDayShift && otStartMins < baseStartMins && otEndMins <= baseStartMins + 60;
-              if (isBeforeBaseShift) {
+
+              if (isClockingInForOvertime || isBeforeBaseShift) {
                 shiftStartTime = otS;
-                isCrossDay = baseIsCross || baseEndMins < otStartMins;
+                // Jika Split-Shift (misal Shift I pagi 07:30-15:30 terpisah 7 jam dari Shift III 22:30-07:30),
+                // gunakan jam & nama shift sesi lembur pagi agar tidak dianggap cross-day Shift III!
+                const gapToBaseStart = (baseStartMins - otEndMins + 1440) % 1440;
+                const isSplitShift = gapToBaseStart > 90 && isClockingInForOvertime;
+                if (isSplitShift) {
+                  shiftEndTime = otE;
+                  isCrossDay = otIsCross;
+                  resolvedShiftName = `Shift Pengganti / Lembur (${otS} - ${otE} WITA)`;
+                } else {
+                  isCrossDay = otIsCross || (baseIsCross && !isClockingInForOvertime);
+                }
                 break;
               }
             }
@@ -2740,14 +2769,6 @@ app.post('/api/attendances/clock-in', async (req, res) => {
 
         const [sH, sM] = shiftStartTime.split(':').map(Number);
         const startMins = (Number.isFinite(sH) ? sH : 7) * 60 + (Number.isFinite(sM) ? sM : 0);
-        let curMins = 0;
-        if (time && typeof time === 'string') {
-          const [cH, cM] = time.split(':').map(Number);
-          curMins = (Number.isFinite(cH) ? cH : 0) * 60 + (Number.isFinite(cM) ? cM : 0);
-        } else {
-          const witaDate = new Date(Date.now() + 8 * 3600000);
-          curMins = witaDate.getUTCHours() * 60 + witaDate.getUTCMinutes();
-        }
 
         let diff = curMins - startMins;
         if (isCrossDay && curMins < 720 && startMins >= 720) {
