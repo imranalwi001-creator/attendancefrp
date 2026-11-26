@@ -15304,8 +15304,12 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
         mangkir: 0,
         belumAbsen: 0,
         belumTerdaftar: 0,
+        wajibAktif: 0,
+        attendanceRate: null,
         lemburOrang: 0,
         lemburJam: 0,
+        lemburKerjaJam: 0,
+        lemburOffJam: 0,
         isToday,
         isFuture,
       };
@@ -15444,9 +15448,11 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
             monthSummary.lemburSpkl += ots.length;
             monthSummary.lemburJam = Math.round((monthSummary.lemburJam + empOtHours) * 100) / 100;
             if (isOffSched) {
+              dayRow.lemburOffJam = Math.round((dayRow.lemburOffJam + empOtHours) * 100) / 100;
               monthSummary.lemburOffSpkl += ots.length;
               monthSummary.lemburOffJam = Math.round((monthSummary.lemburOffJam + empOtHours) * 100) / 100;
             } else {
+              dayRow.lemburKerjaJam = Math.round((dayRow.lemburKerjaJam + empOtHours) * 100) / 100;
               monthSummary.lemburKerjaSpkl += ots.length;
               monthSummary.lemburKerjaJam = Math.round((monthSummary.lemburKerjaJam + empOtHours) * 100) / 100;
             }
@@ -15519,6 +15525,12 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
             leaveReason: leave?.reason || null,
           });
         }
+      }
+
+      if (!isFuture) {
+        const dayWajib = Math.max(filteredOfficials.length - dayRow.off - dayRow.cuti - dayRow.izin - dayRow.belumTerdaftar, 0);
+        dayRow.wajibAktif = dayWajib;
+        dayRow.attendanceRate = dayWajib > 0 ? Math.round((dayRow.hadir / dayWajib) * 1000) / 10 : 100;
       }
 
       dailySeries.push(dayRow);

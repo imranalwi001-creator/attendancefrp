@@ -44,9 +44,9 @@ import {
   UserX,
 } from 'lucide-react';
 import {
-  ComposedChart,
+  AreaChart,
+  Area,
   Bar,
-  Line,
   BarChart,
   PieChart,
   Pie,
@@ -57,6 +57,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
+  ReferenceLine,
 } from 'recharts';
 
 type GroupFilter = 'ALL' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP';
@@ -141,8 +142,12 @@ interface DailyPoint {
   mangkir: number;
   belumAbsen: number;
   belumTerdaftar: number;
+  wajibAktif?: number;
+  attendanceRate?: number | null;
   lemburOrang: number;
   lemburJam: number;
+  lemburKerjaJam?: number;
+  lemburOffJam?: number;
   isToday: boolean;
   isFuture: boolean;
 }
@@ -288,6 +293,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
   const [shiftScope, setShiftScope] = useState<'today' | 'month'>('today');
   const [groupTableScope, setGroupTableScope] = useState<'today' | 'month'>('today');
   const [overtimeScope, setOvertimeScope] = useState<'today' | 'month'>('today');
+  const [trendMode, setTrendMode] = useState<'rate' | 'composition'>('rate');
 
   const [overview, setOverview] = useState<LiveOverviewPayload | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -1204,35 +1210,132 @@ export const HrmSuperadminDashboard: React.FC = () => {
                 </button>
               )}
 
-              {/* Mini Horizontal Comparison Bar Chart Across 4 Active Work Shifts */}
-              <div className="pt-2 border-t border-border/60">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold text-muted-foreground">
-                    Perbandingan Komposisi 4 Shift Kerja Aktif ({shiftScope === 'today' ? formatDateId(overview.meta.date) : formatMonthId(overview.meta.month)})
+              {/* Executive Horizontal Stacked Bar Across 4 Active Work Shifts (Zero Gaps, Direct Labels & % Attendance) */}
+              <div className="pt-3 border-t border-border/60 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-foreground">
+                    Visualisasi Komposisi 4 Shift Kerja Aktif ({shiftScope === 'today' ? formatDateId(overview.meta.date) : formatMonthId(overview.meta.month)})
                   </span>
+                  <div className="flex flex-wrap items-center gap-3 text-[11px] font-medium text-muted-foreground">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-emerald-600" />
+                      Hadir
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-sky-600" />
+                      Cuti/Izin
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-rose-600" />
+                      Mangkir
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-purple-600" />
+                      Blm Daftar
+                    </span>
+                  </div>
                 </div>
-                <div className="h-[220px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={shiftChartData} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.18} vertical={false} />
-                      <XAxis dataKey="name" tick={{ fontSize: 11, fontWeight: 600 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <Tooltip
-                        contentStyle={{
-                          borderRadius: '12px',
-                          border: '1px solid hsl(var(--border))',
-                          backgroundColor: 'hsl(var(--card))',
-                          fontSize: '12px',
-                        }}
-                      />
-                      <Legend wrapperStyle={{ fontSize: '11px' }} />
-                      <Bar dataKey="Hadir" fill={STATUS_COLORS.hadir} radius={[5, 5, 0, 0]} maxBarSize={32} />
-                      <Bar dataKey="Cuti/Izin" fill={STATUS_COLORS.cuti} radius={[5, 5, 0, 0]} maxBarSize={32} />
-                      <Bar dataKey="Mangkir" fill={STATUS_COLORS.mangkir} radius={[5, 5, 0, 0]} maxBarSize={32} />
-                      <Bar dataKey="Blm Daftar" fill={STATUS_COLORS.belumTerdaftar} radius={[5, 5, 0, 0]} maxBarSize={32} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+
+                {(() => {
+                  const activeKeys: ActiveShiftKey[] = ['SHIFT_I', 'SHIFT_II', 'SHIFT_III', 'DAY_SHIFT'];
+                  const rows = activeKeys
+                    .map((k) => shiftStatsMap?.[k])
+                    .filter((x): x is ShiftBucketStats => Boolean(x));
+                  const maxTotal = Math.max(...rows.map((r) => r.total || 0), 1);
+
+                  return (
+                    <div className="space-y-2.5">
+                      {rows.map((s) => {
+                        const cutiIzin = s.cuti + s.izin;
+                        const blmDaftar = s.belumTerdaftar || 0;
+                        const wajibShift = Math.max(s.total - cutiIzin - blmDaftar, 0);
+                        const pctHadir = wajibShift > 0 ? Math.round((s.hadir / wajibShift) * 100) : 100;
+                        const barScalePct = s.total > 0 ? Math.max((s.total / maxTotal) * 100, 14) : 0;
+
+                        const segments: {
+                          key: string;
+                          label: string;
+                          value: number;
+                          bg: string;
+                          drill: DrillCategory;
+                        }[] = [
+                          { key: 'hadir', label: 'Hadir', value: s.hadir, bg: 'bg-emerald-600 hover:bg-emerald-500', drill: 'hadir' },
+                          { key: 'cuti_izin', label: 'Cuti/Izin', value: cutiIzin, bg: 'bg-sky-600 hover:bg-sky-500', drill: 'cuti_izin' },
+                          { key: 'mangkir', label: 'Mangkir', value: s.mangkir, bg: 'bg-rose-600 hover:bg-rose-500', drill: 'mangkir' },
+                          { key: 'belum_terdaftar', label: 'Blm Daftar', value: blmDaftar, bg: 'bg-purple-600 hover:bg-purple-500', drill: 'belum_terdaftar' },
+                          { key: 'belum_absen', label: 'Tunggu', value: shiftScope === 'today' ? s.belumAbsen : 0, bg: 'bg-slate-400 hover:bg-slate-500', drill: 'belum_absen' },
+                        ].filter((seg) => seg.value > 0);
+
+                        return (
+                          <div
+                            key={s.key}
+                            className="grid grid-cols-12 items-center gap-2 sm:gap-3"
+                          >
+                            {/* Shift Name & Range */}
+                            <div className="col-span-4 sm:col-span-3 min-w-0">
+                              <p className="text-xs font-extrabold text-foreground leading-tight truncate">{s.label}</p>
+                              <p className="text-[10px] font-mono text-muted-foreground truncate">{s.range}</p>
+                            </div>
+
+                            {/* Proportional Horizontal Stacked Bar */}
+                            <div className="col-span-5 sm:col-span-6">
+                              <div className="w-full h-8 rounded-xl bg-muted/40 p-0.5 flex items-center">
+                                {s.total > 0 ? (
+                                  <div
+                                    style={{ width: `${barScalePct}%` }}
+                                    className="h-full rounded-lg overflow-hidden flex gap-[1.5px] transition-all duration-500"
+                                  >
+                                    {segments.map((seg) => {
+                                      const segPct = (seg.value / s.total) * 100;
+                                      return (
+                                        <button
+                                          key={seg.key}
+                                          type="button"
+                                          style={{ width: `${segPct}%` }}
+                                          onClick={() =>
+                                            openDrillDown(
+                                              `${s.label} — ${seg.label} (${formatDateId(overview.meta.date)})`,
+                                              seg.drill,
+                                              s.key
+                                            )
+                                          }
+                                          title={`${s.label} • ${seg.label}: ${seg.value} ${shiftScope === 'today' ? 'Org' : 'Hr'}`}
+                                          className={`${seg.bg} text-white font-mono text-[11px] font-extrabold flex items-center justify-center transition-colors min-w-[20px]`}
+                                        >
+                                          {seg.value}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] text-muted-foreground px-2">Tidak ada jadwal</span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Right Summary: Total & % Attendance */}
+                            <div className="col-span-3 flex items-center justify-end gap-1.5 sm:gap-2 shrink-0">
+                              <span className="font-mono text-xs font-extrabold text-foreground whitespace-nowrap">
+                                {s.total} {shiftScope === 'today' ? 'Org' : 'Hr'}
+                              </span>
+                              <span
+                                className={`font-mono text-[10.5px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${
+                                  pctHadir >= 95
+                                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                    : pctHadir >= 85
+                                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                    : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+                                }`}
+                              >
+                                {pctHadir}%
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             </CardContent>
           </Card>
@@ -1249,45 +1352,161 @@ export const HrmSuperadminDashboard: React.FC = () => {
                       Tren Kehadiran Harian — {formatMonthId(overview.meta.month)}
                     </CardTitle>
                     <CardDescription className="text-xs">
-                      Batang bertumpuk 100% komposisi headcount (Hadir, OFF, Cuti, Izin/Sakit, Mangkir, Blm Daftar). Klik tanggal untuk inspeksi hari tersebut.
+                      {trendMode === 'rate'
+                        ? 'Persentase kehadiran aktif harian terhadap target 95%. Titik merah menandai hari dengan kasus Mangkir. Klik tanggal untuk inspeksi.'
+                        : 'Komposisi headcount harian (Hadir, OFF, Cuti, Izin/Sakit, Mangkir, Blm Daftar). Klik tanggal untuk inspeksi.'}
                     </CardDescription>
                   </div>
-                  <Badge variant="outline" className="text-[11px] font-mono w-fit">
-                    {month?.daysElapsed ?? 0}/{month?.totalDaysInMonth ?? 30} Hari Berjalan
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-0.5 p-0.5 bg-muted rounded-lg text-[10.5px]">
+                      <button
+                        type="button"
+                        onClick={() => setTrendMode('rate')}
+                        className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                          trendMode === 'rate' ? 'bg-emerald-600 text-white shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        % Kehadiran
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTrendMode('composition')}
+                        className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                          trendMode === 'composition' ? 'bg-emerald-600 text-white shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        Komposisi Orang
+                      </button>
+                    </div>
+                    <Badge variant="outline" className="text-[11px] font-mono w-fit hidden sm:inline-flex">
+                      {month?.daysElapsed ?? 0}/{month?.totalDaysInMonth ?? 30} Hr
+                    </Badge>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="p-4">
-                <div className="h-[320px] w-full">
+                <div className="h-[310px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={overview.dailySeries}
-                      margin={{ top: 10, right: 8, left: -16, bottom: 0 }}
-                      onClick={(state: any) => {
-                        const clickedDate = state?.activePayload?.[0]?.payload?.date;
-                        if (clickedDate) setSelectedDate(clickedDate);
-                      }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.18} vertical={false} />
-                      <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                      <Tooltip
-                        labelFormatter={(label) => `Tanggal ${label} ${formatMonthId(overview.meta.month)}`}
-                        contentStyle={{
-                          borderRadius: '12px',
-                          border: '1px solid hsl(var(--border))',
-                          backgroundColor: 'hsl(var(--card))',
-                          fontSize: '12px',
+                    {trendMode === 'rate' ? (
+                      <AreaChart
+                        data={overview.dailySeries}
+                        margin={{ top: 14, right: 14, left: -12, bottom: 0 }}
+                        onClick={(state: any) => {
+                          const clickedDate = state?.activePayload?.[0]?.payload?.date;
+                          if (clickedDate && clickedDate <= (overview.meta.todayWita || initialToday)) {
+                            setSelectedDate(clickedDate);
+                          }
                         }}
-                      />
-                      <Legend wrapperStyle={{ fontSize: '11px' }} />
-                      <Bar dataKey="hadir" name="Hadir" stackId="a" fill={STATUS_COLORS.hadir} />
-                      <Bar dataKey="off" name="OFF" stackId="a" fill={STATUS_COLORS.off} />
-                      <Bar dataKey="cuti" name="Cuti" stackId="a" fill={STATUS_COLORS.cuti} />
-                      <Bar dataKey="izin" name="Izin/Sakit" stackId="a" fill={STATUS_COLORS.izin} />
-                      <Bar dataKey="mangkir" name="Mangkir" stackId="a" fill={STATUS_COLORS.mangkir} />
-                      <Bar dataKey="belumTerdaftar" name="Blm Daftar" stackId="a" fill={STATUS_COLORS.belumTerdaftar} radius={[3, 3, 0, 0]} />
-                    </BarChart>
+                      >
+                        <defs>
+                          <linearGradient id="emeraldAttGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#059669" stopOpacity={0.32} />
+                            <stop offset="95%" stopColor="#059669" stopOpacity={0.02} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.18} vertical={false} />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                        <YAxis
+                          domain={[60, 100]}
+                          tick={{ fontSize: 10 }}
+                          axisLine={false}
+                          tickLine={false}
+                          unit="%"
+                        />
+                        <ReferenceLine
+                          y={95}
+                          stroke="#059669"
+                          strokeDasharray="4 4"
+                          strokeOpacity={0.65}
+                          label={{ value: 'Target 95%', position: 'insideTopRight', fill: '#059669', fontSize: 10, fontWeight: 700 }}
+                        />
+                        <Tooltip
+                          content={({ active, payload }) => {
+                            if (!active || !payload || !payload.length) return null;
+                            const d = payload[0].payload as DailyPoint;
+                            if (d.isFuture) return null;
+                            return (
+                              <div className="rounded-xl border border-border bg-card p-3 shadow-md text-xs space-y-1">
+                                <p className="font-extrabold text-foreground border-b border-border/60 pb-1">
+                                  {formatDateId(d.date)}
+                                </p>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-muted-foreground">Kehadiran Aktif:</span>
+                                  <span className="font-mono font-black text-emerald-600">{d.attendanceRate ?? 100}%</span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-muted-foreground">Hadir / Wajib Aktif:</span>
+                                  <span className="font-mono font-bold text-foreground">{d.hadir} / {d.wajibAktif ?? d.hadir} Org</span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4 text-[11px] pt-1 border-t border-border/50">
+                                  <span>OFF: <strong className="font-mono">{d.off}</strong></span>
+                                  <span>C/I: <strong className="font-mono text-sky-600">{d.cuti + d.izin}</strong></span>
+                                  <span>Mangkir: <strong className={`font-mono ${d.mangkir > 0 ? 'text-rose-600' : ''}`}>{d.mangkir}</strong></span>
+                                </div>
+                              </div>
+                            );
+                          }}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="attendanceRate"
+                          name="Kehadiran Aktif (%)"
+                          stroke="#059669"
+                          strokeWidth={2.5}
+                          fill="url(#emeraldAttGrad)"
+                          connectNulls={false}
+                          dot={(props: any) => {
+                            const { cx, cy, payload } = props;
+                            if (payload?.isFuture || payload?.attendanceRate === null || cx == null || cy == null) {
+                              return <g key={`empty-${payload?.day}`} />;
+                            }
+                            const hasMangkir = (payload?.mangkir || 0) > 0;
+                            const isSelectedDot = payload?.date === selectedDate;
+                            return (
+                              <circle
+                                key={`dot-${payload.day}`}
+                                cx={cx}
+                                cy={cy}
+                                r={isSelectedDot ? 5.5 : hasMangkir ? 4.5 : 2.8}
+                                fill={hasMangkir ? '#e11d48' : '#059669'}
+                                stroke="#ffffff"
+                                strokeWidth={isSelectedDot ? 2 : 1.5}
+                              />
+                            );
+                          }}
+                          activeDot={{ r: 6, fill: '#059669', stroke: '#ffffff', strokeWidth: 2 }}
+                        />
+                      </AreaChart>
+                    ) : (
+                      <BarChart
+                        data={overview.dailySeries}
+                        margin={{ top: 10, right: 8, left: -16, bottom: 0 }}
+                        onClick={(state: any) => {
+                          const clickedDate = state?.activePayload?.[0]?.payload?.date;
+                          if (clickedDate) setSelectedDate(clickedDate);
+                        }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.18} vertical={false} />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                        <Tooltip
+                          labelFormatter={(label) => `Tanggal ${label} ${formatMonthId(overview.meta.month)}`}
+                          contentStyle={{
+                            borderRadius: '12px',
+                            border: '1px solid hsl(var(--border))',
+                            backgroundColor: 'hsl(var(--card))',
+                            fontSize: '12px',
+                          }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                        <Bar dataKey="hadir" name="Hadir" stackId="a" fill={STATUS_COLORS.hadir} />
+                        <Bar dataKey="off" name="OFF" stackId="a" fill={STATUS_COLORS.off} />
+                        <Bar dataKey="cuti" name="Cuti" stackId="a" fill={STATUS_COLORS.cuti} />
+                        <Bar dataKey="izin" name="Izin/Sakit" stackId="a" fill={STATUS_COLORS.izin} />
+                        <Bar dataKey="mangkir" name="Mangkir" stackId="a" fill={STATUS_COLORS.mangkir} />
+                        <Bar dataKey="belumTerdaftar" name="Blm Daftar" stackId="a" fill={STATUS_COLORS.belumTerdaftar} radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    )}
                   </ResponsiveContainer>
                 </div>
               </CardContent>
@@ -1475,7 +1694,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
               </div>
             </CardHeader>
 
-            <CardContent className="p-4 sm:p-5">
+            <CardContent className="p-4 sm:p-5 space-y-5">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
                 {/* Total SPKL Lembur */}
                 <button
@@ -1503,13 +1722,13 @@ export const HrmSuperadminDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => openDrillDown(`Lembur Hari Kerja (${formatDateId(overview.meta.date)})`, 'lembur_kerja')}
-                  className="text-left p-4 rounded-2xl border border-border bg-muted/20 hover:border-emerald-500/60 transition-all"
+                  className="text-left p-4 rounded-2xl border border-border bg-muted/20 hover:border-amber-500/60 transition-all"
                 >
                   <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
                     Lembur Hari Kerja
                   </p>
                   <div className="mt-1.5 flex items-baseline gap-2">
-                    <span className="text-2xl font-mono font-black text-foreground">
+                    <span className="text-2xl font-mono font-black text-amber-600 dark:text-amber-400">
                       {overtimeScope === 'today' ? (today?.lemburKerjaOrang ?? 0) : (month?.lemburKerjaSpkl ?? 0)}
                     </span>
                     <span className="text-xs font-semibold text-muted-foreground">SPKL</span>
@@ -1529,7 +1748,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
                     Lembur Hari OFF (Libur Roster)
                   </p>
                   <div className="mt-1.5 flex items-baseline gap-2">
-                    <span className="text-2xl font-mono font-black text-foreground">
+                    <span className="text-2xl font-mono font-black text-sky-600 dark:text-sky-400">
                       {overtimeScope === 'today' ? (today?.lemburOffOrang ?? 0) : (month?.lemburOffSpkl ?? 0)}
                     </span>
                     <span className="text-xs font-semibold text-muted-foreground">SPKL</span>
@@ -1539,6 +1758,63 @@ export const HrmSuperadminDashboard: React.FC = () => {
                   </p>
                 </button>
               </div>
+
+              {/* 2-Color Stacked Bar Harian: Jam Lembur Hari Kerja vs Jam Lembur Hari OFF + Rata-Rata Harian */}
+              {(() => {
+                const elapsedDays = Math.max(month?.daysElapsed || 1, 1);
+                const avgDailyOt = Math.round(((month?.lemburJam || 0) / elapsedDays) * 10) / 10;
+                return (
+                  <div className="pt-3 border-t border-border/60 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-foreground">
+                        Tren Harian Jam Lembur: Hari Kerja vs Hari OFF — {formatMonthId(overview.meta.month)}
+                      </span>
+                      <span className="text-[11px] font-mono text-amber-700 dark:text-amber-300 font-semibold">
+                        Rata-rata: {avgDailyOt} jam/hari
+                      </span>
+                    </div>
+                    <div className="h-[220px] w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={overview.dailySeries}
+                          margin={{ top: 10, right: 12, left: -16, bottom: 0 }}
+                          onClick={(state: any) => {
+                            const clickedDate = state?.activePayload?.[0]?.payload?.date;
+                            if (clickedDate && clickedDate <= (overview.meta.todayWita || initialToday)) {
+                              setSelectedDate(clickedDate);
+                            }
+                          }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" opacity={0.18} vertical={false} />
+                          <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                          <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} unit="j" />
+                          {avgDailyOt > 0 && (
+                            <ReferenceLine
+                              y={avgDailyOt}
+                              stroke="#b45309"
+                              strokeDasharray="4 4"
+                              strokeOpacity={0.65}
+                            />
+                          )}
+                          <Tooltip
+                            labelFormatter={(label) => `Tanggal ${label} ${formatMonthId(overview.meta.month)}`}
+                            formatter={(val: any, name: any) => [`${val} Jam`, name]}
+                            contentStyle={{
+                              borderRadius: '12px',
+                              border: '1px solid hsl(var(--border))',
+                              backgroundColor: 'hsl(var(--card))',
+                              fontSize: '12px',
+                            }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: '11px' }} />
+                          <Bar dataKey="lemburKerjaJam" name="Lembur Hari Kerja" stackId="ot" fill="#d97706" maxBarSize={24} />
+                          <Bar dataKey="lemburOffJam" name="Lembur Hari OFF" stackId="ot" fill="#0284c7" radius={[4, 4, 0, 0]} maxBarSize={24} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         </>
