@@ -15065,6 +15065,8 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
       pool.query(`
         SELECT p.id, p.full_name, p.nip, p.email, p.operational_group, p.avatar_url,
                p.custom_start_time, p.custom_end_time,
+               (p.face_descriptor IS NOT NULL) as has_face_desc,
+               (p.face_enrolled_photo IS NOT NULL) as has_face_photo,
                d.name as division_name,
                s.code as shift_code, s.name as shift_name, s.start_time::text as shift_start, s.end_time::text as shift_end
         FROM hrm_profiles p
@@ -15176,9 +15178,13 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
 
     // Indexing maps untuk lookup O(1)
     const officialIdSet = new Set(allOfficials.map((p) => p.id));
+    const usersWithAttendanceInMonth = new Set();
     const attByUserDate = new Map();
     for (const a of attsRes.rows) {
       if (!officialIdSet.has(a.user_id)) continue;
+      if (a.status === 'hadir' || a.status === 'terlambat') {
+        usersWithAttendanceInMonth.add(a.user_id);
+      }
       const key = `${a.user_id}|${String(a.att_date).substring(0, 10)}`;
       const existing = attByUserDate.get(key);
       if (!existing || ((a.status === 'hadir' || a.status === 'terlambat') && existing.status !== 'hadir' && existing.status !== 'terlambat')) {
@@ -15232,17 +15238,18 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
     }
 
     const createEmptyShiftMap = () => ({
-      SHIFT_I: { key: 'SHIFT_I', label: 'Shift I', range: '07:30 – 15:30', hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, lemburOrang: 0, lemburJam: 0 },
-      SHIFT_II: { key: 'SHIFT_II', label: 'Shift II', range: '15:30 – 22:30', hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, lemburOrang: 0, lemburJam: 0 },
-      SHIFT_III: { key: 'SHIFT_III', label: 'Shift III', range: '22:30 – 07:30', hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, lemburOrang: 0, lemburJam: 0 },
-      DAY_SHIFT: { key: 'DAY_SHIFT', label: 'Day Shift', range: '07:30 – 16:30', hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, lemburOrang: 0, lemburJam: 0 },
+      SHIFT_I: { key: 'SHIFT_I', label: 'Shift I', range: '07:30 – 15:30', total: 0, hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, belumTerdaftar: 0, lemburOrang: 0, lemburJam: 0 },
+      SHIFT_II: { key: 'SHIFT_II', label: 'Shift II', range: '15:30 – 22:30', total: 0, hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, belumTerdaftar: 0, lemburOrang: 0, lemburJam: 0 },
+      SHIFT_III: { key: 'SHIFT_III', label: 'Shift III', range: '22:30 – 07:30', total: 0, hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, belumTerdaftar: 0, lemburOrang: 0, lemburJam: 0 },
+      DAY_SHIFT: { key: 'DAY_SHIFT', label: 'Day Shift', range: '07:30 – 16:30', total: 0, hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, belumTerdaftar: 0, lemburOrang: 0, lemburJam: 0 },
+      OFF_ROSTER: { key: 'OFF_ROSTER', label: 'OFF Roster', range: 'Libur Rotasi', total: 0, hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, belumTerdaftar: 0, lemburOrang: 0, lemburJam: 0 },
     });
 
     const createGroupAccumulator = (name, total) => ({
       group: name,
       total,
-      today: { hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, lemburOrang: 0, lemburJam: 0 },
-      month: { hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, lemburSpkl: 0, lemburJam: 0 },
+      today: { hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, belumTerdaftar: 0, lemburOrang: 0, lemburJam: 0 },
+      month: { hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumTerdaftar: 0, lemburSpkl: 0, lemburJam: 0 },
     });
 
     const groupStats = {
@@ -15256,14 +15263,14 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
       : allOfficials.filter((p) => p.group === groupFilter);
 
     const todaySummary = {
-      hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0,
+      hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumAbsen: 0, belumTerdaftar: 0,
       lemburOrang: 0, lemburJam: 0,
       shifts: createEmptyShiftMap(),
     };
     const monthSummary = {
       daysElapsed: 0,
       totalDaysInMonth: daysInMonth,
-      hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0,
+      hadir: 0, tepatWaktu: 0, terlambat: 0, off: 0, cuti: 0, izin: 0, sakit: 0, mangkir: 0, belumTerdaftar: 0,
       lemburSpkl: 0, lemburOrangUnik: 0, lemburJam: 0,
       shifts: createEmptyShiftMap(),
     };
@@ -15292,6 +15299,7 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
         sakit: 0,
         mangkir: 0,
         belumAbsen: 0,
+        belumTerdaftar: 0,
         lemburOrang: 0,
         lemburJam: 0,
         isToday,
@@ -15310,19 +15318,12 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
         const sched = schedByUserDate.get(key);
         const leave = leaveByUserDate.get(key);
         const ots = otByUserDate.get(key) || [];
+        const isUnenrolled = !emp.has_face_desc && !emp.has_face_photo && !usersWithAttendanceInMonth.has(emp.id);
 
         const isOffSched = Boolean(
           sched
             ? (sched.is_off || String(sched.shift_code || '').toUpperCase() === 'OFF' || String(sched.shift_name || '').toLowerCase().includes('off') || String(sched.shift_name || '').toLowerCase().includes('libur'))
             : (emp.group === 'KARYAWAN TETAP' && (dow === 0 || dow === 6))
-        );
-
-        const shiftBucket = classifyShiftBucket(
-          sched?.shift_code || emp.shift_code,
-          att?.shift_name || sched?.shift_name || emp.shift_name,
-          sched?.start_time || emp.custom_start_time || emp.shift_start,
-          sched?.end_time || emp.custom_end_time || emp.shift_end,
-          emp.group
         );
 
         // Evaluasi status harian mutually-exclusive
@@ -15346,6 +15347,8 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
           dayStatus = 'mangkir';
         } else if (isOffSched) {
           dayStatus = 'off';
+        } else if (isUnenrolled) {
+          dayStatus = 'belum_terdaftar';
         } else if (!isFuture && dateStr < nowWitaDate) {
           dayStatus = 'mangkir';
         } else {
@@ -15356,7 +15359,21 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
         const empOtHours = ots.reduce((sum, o) => sum + (Number(o.hours) || 0), 0);
         const hasOt = ots.length > 0 && empOtHours > 0;
         const primaryOt = ots[0];
-        const otBucket = hasOt ? classifyOvertimeShiftBucket(primaryOt?.start_time, primaryOt?.end_time, shiftBucket) : null;
+
+        // Klasifikasi bucket shift — pisahkan OFF_ROSTER agar tidak mencemari DAY_SHIFT
+        let shiftBucket = classifyShiftBucket(
+          sched?.shift_code || emp.shift_code,
+          att?.shift_name || sched?.shift_name || emp.shift_name,
+          sched?.start_time || emp.custom_start_time || emp.shift_start,
+          sched?.end_time || emp.custom_end_time || emp.shift_end,
+          emp.group
+        );
+        if (dayStatus === 'off') {
+          shiftBucket = 'OFF_ROSTER';
+        } else if (isOffSched && hasOt) {
+          shiftBucket = classifyOvertimeShiftBucket(primaryOt?.start_time, primaryOt?.end_time, 'SHIFT_I');
+        }
+        const otBucket = hasOt ? classifyOvertimeShiftBucket(primaryOt?.start_time, primaryOt?.end_time, shiftBucket === 'OFF_ROSTER' ? 'SHIFT_I' : shiftBucket) : null;
 
         // Akumulasi Grup (untuk hari target & bulan berjalan)
         if (!isFuture) {
@@ -15368,6 +15385,7 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
           else if (dayStatus === 'sakit') { gStat.month.izin += 1; gStat.month.sakit += 1; }
           else if (dayStatus === 'izin') gStat.month.izin += 1;
           else if (dayStatus === 'mangkir') gStat.month.mangkir += 1;
+          else if (dayStatus === 'belum_terdaftar') gStat.month.belumTerdaftar += 1;
           if (hasOt) {
             gStat.month.lemburSpkl += ots.length;
             gStat.month.lemburJam = Math.round((gStat.month.lemburJam + empOtHours) * 100) / 100;
@@ -15382,6 +15400,7 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
           else if (dayStatus === 'sakit') { gStat.today.izin += 1; gStat.today.sakit += 1; }
           else if (dayStatus === 'izin') gStat.today.izin += 1;
           else if (dayStatus === 'mangkir') gStat.today.mangkir += 1;
+          else if (dayStatus === 'belum_terdaftar') gStat.today.belumTerdaftar += 1;
           else gStat.today.belumAbsen += 1;
           if (hasOt) {
             gStat.today.lemburOrang += 1;
@@ -15394,6 +15413,7 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
 
         if (!isFuture) {
           const mShift = monthSummary.shifts[shiftBucket];
+          mShift.total += 1;
           if (dayStatus === 'hadir') {
             dayRow.hadir += 1; monthSummary.hadir += 1; mShift.hadir += 1;
             if (isLate) { dayRow.terlambat += 1; monthSummary.terlambat += 1; mShift.terlambat += 1; }
@@ -15408,6 +15428,8 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
             dayRow.izin += 1; monthSummary.izin += 1; mShift.izin += 1;
           } else if (dayStatus === 'mangkir') {
             dayRow.mangkir += 1; monthSummary.mangkir += 1; mShift.mangkir += 1;
+          } else if (dayStatus === 'belum_terdaftar') {
+            dayRow.belumTerdaftar += 1; monthSummary.belumTerdaftar += 1; mShift.belumTerdaftar += 1;
           } else {
             dayRow.belumAbsen += 1; mShift.belumAbsen += 1;
           }
@@ -15426,6 +15448,7 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
 
         if (isTargetDay) {
           const tShift = todaySummary.shifts[shiftBucket];
+          tShift.total += 1;
           if (dayStatus === 'hadir') {
             todaySummary.hadir += 1; tShift.hadir += 1;
             if (isLate) { todaySummary.terlambat += 1; tShift.terlambat += 1; }
@@ -15440,6 +15463,8 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
             todaySummary.izin += 1; tShift.izin += 1;
           } else if (dayStatus === 'mangkir') {
             todaySummary.mangkir += 1; tShift.mangkir += 1;
+          } else if (dayStatus === 'belum_terdaftar') {
+            todaySummary.belumTerdaftar += 1; tShift.belumTerdaftar += 1;
           } else {
             todaySummary.belumAbsen += 1; tShift.belumAbsen += 1;
           }
@@ -15462,6 +15487,7 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
             shiftBucket,
             shiftLabel: todaySummary.shifts[shiftBucket].label,
             status: dayStatus,
+            isUnenrolled,
             isLate,
             clockIn: att?.clock_in ? String(att.clock_in).substring(0, 5) : null,
             clockOut: att?.clock_out ? String(att.clock_out).substring(0, 5) : null,
@@ -15481,8 +15507,8 @@ app.get('/api/superadmin/live-overview', async (req, res) => {
 
     monthSummary.lemburOrangUnik = monthUniqueOvertimeUsers.size;
 
-    // Hitung tingkat kehadiran riil hari target: Hadir / Wajib Tugas (Total - OFF - Cuti - Izin)
-    const wajibTugasToday = Math.max(filteredOfficials.length - todaySummary.off - todaySummary.cuti - todaySummary.izin, 0);
+    // Hitung tingkat kehadiran riil hari target: Hadir / Wajib Tugas Aktif (Total - OFF - Cuti - Izin - Belum Terdaftar)
+    const wajibTugasToday = Math.max(filteredOfficials.length - todaySummary.off - todaySummary.cuti - todaySummary.izin - todaySummary.belumTerdaftar, 0);
     todaySummary.wajibTugas = wajibTugasToday;
     todaySummary.attendanceRate = wajibTugasToday > 0 ? Math.round((todaySummary.hadir / wajibTugasToday) * 1000) / 10 : 100;
 

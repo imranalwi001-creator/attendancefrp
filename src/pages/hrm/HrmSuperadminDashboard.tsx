@@ -41,6 +41,7 @@ import {
   Star,
   ArrowUpRight,
   Bell,
+  UserX,
 } from 'lucide-react';
 import {
   ComposedChart,
@@ -59,21 +60,25 @@ import {
 } from 'recharts';
 
 type GroupFilter = 'ALL' | 'SHIPMENT' | 'RUMAH TANGGA' | 'KARYAWAN TETAP';
-type ShiftKey = 'SHIFT_I' | 'SHIFT_II' | 'SHIFT_III' | 'DAY_SHIFT';
+type ShiftKey = 'SHIFT_I' | 'SHIFT_II' | 'SHIFT_III' | 'DAY_SHIFT' | 'OFF_ROSTER';
+type ActiveShiftKey = 'SHIFT_I' | 'SHIFT_II' | 'SHIFT_III' | 'DAY_SHIFT';
 type DrillCategory =
   | 'ALL'
   | 'hadir'
   | 'off'
   | 'cuti'
   | 'izin'
+  | 'cuti_izin'
   | 'mangkir'
   | 'belum_absen'
+  | 'belum_terdaftar'
   | 'lembur';
 
 interface ShiftBucketStats {
   key: ShiftKey;
   label: string;
   range: string;
+  total: number;
   hadir: number;
   tepatWaktu: number;
   terlambat: number;
@@ -83,6 +88,7 @@ interface ShiftBucketStats {
   sakit: number;
   mangkir: number;
   belumAbsen: number;
+  belumTerdaftar: number;
   lemburOrang: number;
   lemburJam: number;
 }
@@ -100,6 +106,7 @@ interface GroupAccumulator {
     sakit: number;
     mangkir: number;
     belumAbsen: number;
+    belumTerdaftar: number;
     lemburOrang: number;
     lemburJam: number;
   };
@@ -112,6 +119,7 @@ interface GroupAccumulator {
     izin: number;
     sakit: number;
     mangkir: number;
+    belumTerdaftar: number;
     lemburSpkl: number;
     lemburJam: number;
   };
@@ -130,6 +138,7 @@ interface DailyPoint {
   sakit: number;
   mangkir: number;
   belumAbsen: number;
+  belumTerdaftar: number;
   lemburOrang: number;
   lemburJam: number;
   isToday: boolean;
@@ -146,6 +155,7 @@ interface EmployeeDetailRow {
   shiftBucket: ShiftKey;
   shiftLabel: string;
   status: string;
+  isUnenrolled?: boolean;
   isLate: boolean;
   clockIn: string | null;
   clockOut: string | null;
@@ -190,6 +200,7 @@ interface LiveOverviewPayload {
     sakit: number;
     mangkir: number;
     belumAbsen: number;
+    belumTerdaftar: number;
     lemburOrang: number;
     lemburJam: number;
     wajibTugas: number;
@@ -207,6 +218,7 @@ interface LiveOverviewPayload {
     izin: number;
     sakit: number;
     mangkir: number;
+    belumTerdaftar: number;
     lemburSpkl: number;
     lemburOrangUnik: number;
     lemburJam: number;
@@ -222,6 +234,7 @@ const STATUS_COLORS = {
   cuti: '#0284c7',
   izin: '#6366f1',
   mangkir: '#e11d48',
+  belumTerdaftar: '#9333ea',
   belumAbsen: '#cbd5e1',
   lembur: '#d97706',
 };
@@ -231,6 +244,7 @@ const SHIFT_META: Record<ShiftKey, { icon: React.ComponentType<any>; accent: str
   SHIFT_II: { icon: Sunset, accent: 'text-amber-600 dark:text-amber-400', badgeBg: 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300' },
   SHIFT_III: { icon: Moon, accent: 'text-indigo-600 dark:text-indigo-400', badgeBg: 'bg-indigo-500/10 border-indigo-500/30 text-indigo-700 dark:text-indigo-300' },
   DAY_SHIFT: { icon: Briefcase, accent: 'text-emerald-600 dark:text-emerald-400', badgeBg: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300' },
+  OFF_ROSTER: { icon: Coffee, accent: 'text-slate-600 dark:text-slate-300', badgeBg: 'bg-slate-500/10 border-slate-400/30 text-slate-700 dark:text-slate-300' },
 };
 
 const formatMonthId = (ym: string) => {
@@ -376,8 +390,10 @@ export const HrmSuperadminDashboard: React.FC = () => {
       if (drillCategory === 'off' && row.status !== 'off') return false;
       if (drillCategory === 'cuti' && row.status !== 'cuti') return false;
       if (drillCategory === 'izin' && row.status !== 'izin' && row.status !== 'sakit') return false;
+      if (drillCategory === 'cuti_izin' && row.status !== 'cuti' && row.status !== 'izin' && row.status !== 'sakit') return false;
       if (drillCategory === 'mangkir' && row.status !== 'mangkir') return false;
       if (drillCategory === 'belum_absen' && row.status !== 'belum_absen') return false;
+      if (drillCategory === 'belum_terdaftar' && row.status !== 'belum_terdaftar') return false;
       if (drillCategory === 'lembur' && !row.hasOvertime) return false;
 
       if (q) {
@@ -397,10 +413,11 @@ export const HrmSuperadminDashboard: React.FC = () => {
     const src = groupTableScope === 'today' ? overview.today : overview.month;
     const list = [
       { name: 'Hadir', value: src.hadir, color: STATUS_COLORS.hadir },
-      { name: 'OFF', value: src.off, color: STATUS_COLORS.off },
+      { name: 'OFF Roster', value: src.off, color: STATUS_COLORS.off },
       { name: 'Cuti', value: src.cuti, color: STATUS_COLORS.cuti },
       { name: 'Izin / Sakit', value: src.izin, color: STATUS_COLORS.izin },
       { name: 'Mangkir', value: src.mangkir, color: STATUS_COLORS.mangkir },
+      { name: 'Belum Terdaftar', value: src.belumTerdaftar || 0, color: STATUS_COLORS.belumTerdaftar },
     ];
     if (groupTableScope === 'today' && overview.today.belumAbsen > 0) {
       list.push({ name: 'Menunggu Shift', value: overview.today.belumAbsen, color: STATUS_COLORS.belumAbsen });
@@ -408,19 +425,22 @@ export const HrmSuperadminDashboard: React.FC = () => {
     return list.filter((d) => d.value > 0);
   }, [overview, groupTableScope]);
 
-  // Data bar chart perbandingan 4 Shift
+  // Data bar chart perbandingan Shift Aktif + OFF Roster
   const shiftChartData = useMemo(() => {
     if (!overview) return [];
     const shiftsObj = shiftScope === 'today' ? overview.today.shifts : overview.month.shifts;
-    return (['SHIFT_I', 'SHIFT_II', 'SHIFT_III', 'DAY_SHIFT'] as ShiftKey[]).map((k) => ({
-      name: shiftsObj[k].label,
-      Hadir: shiftsObj[k].hadir,
-      OFF: shiftsObj[k].off,
-      'Cuti/Izin': shiftsObj[k].cuti + shiftsObj[k].izin,
-      Mangkir: shiftsObj[k].mangkir,
-      'Lembur (Org)': shiftsObj[k].lemburOrang,
-      'Lembur (Jam)': shiftsObj[k].lemburJam,
-    }));
+    return (['SHIFT_I', 'SHIFT_II', 'SHIFT_III', 'DAY_SHIFT', 'OFF_ROSTER'] as ShiftKey[])
+      .filter((k) => Boolean(shiftsObj[k]))
+      .map((k) => ({
+        name: shiftsObj[k].label,
+        Hadir: shiftsObj[k].hadir,
+        OFF: shiftsObj[k].off,
+        'Cuti/Izin': shiftsObj[k].cuti + shiftsObj[k].izin,
+        Mangkir: shiftsObj[k].mangkir,
+        'Blm Daftar': shiftsObj[k].belumTerdaftar || 0,
+        'Lembur (Org)': shiftsObj[k].lemburOrang,
+        'Lembur (Jam)': shiftsObj[k].lemburJam,
+      }));
   }, [overview, shiftScope]);
 
   if (viewMode === 'executive') {
@@ -665,7 +685,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 {overview.groups.map((g) => {
                   const isSelected = groupFilter === g.group;
-                  const wajib = Math.max(g.total - g.today.off - g.today.cuti - g.today.izin, 0);
+                  const wajib = Math.max(g.total - g.today.off - g.today.cuti - g.today.izin - (g.today.belumTerdaftar || 0), 0);
                   const rate = wajib > 0 ? Math.round((g.today.hadir / wajib) * 100) : 100;
                   const Icon = g.group === 'SHIPMENT' ? Building2 : g.group === 'RUMAH TANGGA' ? Home : Star;
                   const accent =
@@ -702,16 +722,19 @@ export const HrmSuperadminDashboard: React.FC = () => {
                       </div>
                       <div className="grid grid-cols-3 gap-1.5 text-[11px] pt-2 border-t border-border/60">
                         <div>
-                          <span className="text-muted-foreground block text-[10px]">Hadir / Wajib</span>
+                          <span className="text-muted-foreground block text-[10px]">Hadir / Aktif</span>
                           <span className="font-mono font-bold text-foreground">
                             {g.today.hadir}/{wajib}
                           </span>
                         </div>
                         <div>
-                          <span className="text-muted-foreground block text-[10px]">OFF • C/I • A</span>
+                          <span className="text-muted-foreground block text-[10px]">OFF•C/I•A•Blm</span>
                           <span className="font-mono font-bold text-foreground">
-                            {g.today.off} • {g.today.cuti + g.today.izin} •{' '}
-                            <span className={g.today.mangkir > 0 ? 'text-rose-600' : ''}>{g.today.mangkir}</span>
+                            {g.today.off}•{g.today.cuti + g.today.izin}•
+                            <span className={g.today.mangkir > 0 ? 'text-rose-600' : ''}>{g.today.mangkir}</span>•
+                            <span className={(g.today.belumTerdaftar || 0) > 0 ? 'text-purple-600 dark:text-purple-400' : ''}>
+                              {g.today.belumTerdaftar || 0}
+                            </span>
                           </span>
                         </div>
                         <div className="text-right">
@@ -732,21 +755,21 @@ export const HrmSuperadminDashboard: React.FC = () => {
             </CardContent>
           </Card>
 
-          {/* ─── BARIS 3: 6 KARTU KPI STATUS (LIVE HARI INI + TOTAL BULAN BERJALAN) ─── */}
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+          {/* ─── BARIS 3: 7 KARTU KPI STATUS (MUTUALLY EXCLUSIVE = 100% HEADCOUNT + LEMBUR IRISAN) ─── */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
             {/* 1. HADIR */}
             <button
               type="button"
               onClick={() => openDrillDown(`Daftar Karyawan Hadir (${formatDateId(overview.meta.date)})`, 'hadir')}
-              className="text-left group bg-card border border-border hover:border-emerald-500/60 rounded-2xl p-4 shadow-xs transition-all"
+              className="text-left group bg-card border border-border hover:border-emerald-500/60 rounded-2xl p-3.5 shadow-xs transition-all"
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Hadir</span>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">Hadir</span>
                 <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
-                  <CheckCircle2 className="w-4 h-4" />
+                  <CheckCircle2 className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className="flex items-baseline gap-1.5">
+              <div className="flex items-baseline gap-1">
                 <span className="text-2xl font-mono font-black text-emerald-600 dark:text-emerald-400">
                   {today?.hadir ?? 0}
                 </span>
@@ -755,7 +778,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
               <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
                 Tepat {today?.tepatWaktu ?? 0} • Telat {today?.terlambat ?? 0}
               </p>
-              <div className="mt-2.5 pt-2 border-t border-border/60 flex items-center justify-between text-[10px]">
+              <div className="mt-2 pt-1.5 border-t border-border/60 flex items-center justify-between text-[10px]">
                 <span className="text-muted-foreground">Bulan Ini</span>
                 <span className="font-mono font-bold text-foreground">{(month?.hadir ?? 0).toLocaleString('id-ID')} Hr</span>
               </div>
@@ -765,22 +788,22 @@ export const HrmSuperadminDashboard: React.FC = () => {
             <button
               type="button"
               onClick={() => openDrillDown(`Daftar Karyawan Libur / OFF (${formatDateId(overview.meta.date)})`, 'off')}
-              className="text-left group bg-card border border-border hover:border-slate-400 rounded-2xl p-4 shadow-xs transition-all"
+              className="text-left group bg-card border border-border hover:border-slate-400 rounded-2xl p-3.5 shadow-xs transition-all"
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">OFF Roster</span>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">OFF Roster</span>
                 <div className="w-7 h-7 rounded-lg bg-slate-500/10 text-slate-600 dark:text-slate-400 flex items-center justify-center">
-                  <Coffee className="w-4 h-4" />
+                  <Coffee className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className="flex items-baseline gap-1.5">
+              <div className="flex items-baseline gap-1">
                 <span className="text-2xl font-mono font-black text-slate-700 dark:text-slate-200">
                   {today?.off ?? 0}
                 </span>
                 <span className="text-[11px] font-semibold text-muted-foreground">Org</span>
               </div>
-              <p className="text-[10px] text-muted-foreground mt-0.5">Jadwal libur rotasi</p>
-              <div className="mt-2.5 pt-2 border-t border-border/60 flex items-center justify-between text-[10px]">
+              <p className="text-[10px] text-muted-foreground mt-0.5">Libur rotasi shift</p>
+              <div className="mt-2 pt-1.5 border-t border-border/60 flex items-center justify-between text-[10px]">
                 <span className="text-muted-foreground">Bulan Ini</span>
                 <span className="font-mono font-bold text-foreground">{(month?.off ?? 0).toLocaleString('id-ID')} Hr</span>
               </div>
@@ -790,22 +813,22 @@ export const HrmSuperadminDashboard: React.FC = () => {
             <button
               type="button"
               onClick={() => openDrillDown(`Daftar Karyawan Cuti (${formatDateId(overview.meta.date)})`, 'cuti')}
-              className="text-left group bg-card border border-border hover:border-sky-500/60 rounded-2xl p-4 shadow-xs transition-all"
+              className="text-left group bg-card border border-border hover:border-sky-500/60 rounded-2xl p-3.5 shadow-xs transition-all"
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Cuti</span>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">Cuti</span>
                 <div className="w-7 h-7 rounded-lg bg-sky-500/10 text-sky-600 flex items-center justify-center">
-                  <CalendarDays className="w-4 h-4" />
+                  <CalendarDays className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className="flex items-baseline gap-1.5">
+              <div className="flex items-baseline gap-1">
                 <span className="text-2xl font-mono font-black text-sky-600 dark:text-sky-400">
                   {today?.cuti ?? 0}
                 </span>
                 <span className="text-[11px] font-semibold text-muted-foreground">Org</span>
               </div>
-              <p className="text-[10px] text-muted-foreground mt-0.5">Cuti resmi disetujui</p>
-              <div className="mt-2.5 pt-2 border-t border-border/60 flex items-center justify-between text-[10px]">
+              <p className="text-[10px] text-muted-foreground mt-0.5">Cuti disetujui</p>
+              <div className="mt-2 pt-1.5 border-t border-border/60 flex items-center justify-between text-[10px]">
                 <span className="text-muted-foreground">Bulan Ini</span>
                 <span className="font-mono font-bold text-foreground">{month?.cuti ?? 0} Hr</span>
               </div>
@@ -815,15 +838,15 @@ export const HrmSuperadminDashboard: React.FC = () => {
             <button
               type="button"
               onClick={() => openDrillDown(`Daftar Karyawan Izin & Sakit (${formatDateId(overview.meta.date)})`, 'izin')}
-              className="text-left group bg-card border border-border hover:border-indigo-500/60 rounded-2xl p-4 shadow-xs transition-all"
+              className="text-left group bg-card border border-border hover:border-indigo-500/60 rounded-2xl p-3.5 shadow-xs transition-all"
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Izin / Sakit</span>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">Izin / Sakit</span>
                 <div className="w-7 h-7 rounded-lg bg-indigo-500/10 text-indigo-600 flex items-center justify-center">
-                  <FileText className="w-4 h-4" />
+                  <FileText className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className="flex items-baseline gap-1.5">
+              <div className="flex items-baseline gap-1">
                 <span className="text-2xl font-mono font-black text-indigo-600 dark:text-indigo-400">
                   {today?.izin ?? 0}
                 </span>
@@ -832,13 +855,13 @@ export const HrmSuperadminDashboard: React.FC = () => {
               <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
                 Izin {(today?.izin ?? 0) - (today?.sakit ?? 0)} • Sakit {today?.sakit ?? 0}
               </p>
-              <div className="mt-2.5 pt-2 border-t border-border/60 flex items-center justify-between text-[10px]">
+              <div className="mt-2 pt-1.5 border-t border-border/60 flex items-center justify-between text-[10px]">
                 <span className="text-muted-foreground">Bulan Ini</span>
                 <span className="font-mono font-bold text-foreground">{month?.izin ?? 0} Hr</span>
               </div>
             </button>
 
-            {/* 5. MANGKIR / ALPA */}
+            {/* 5. MANGKIR / ALPA RIIL */}
             <button
               type="button"
               onClick={() =>
@@ -849,46 +872,77 @@ export const HrmSuperadminDashboard: React.FC = () => {
                   (today?.mangkir ?? 0) > 0 ? 'mangkir' : 'belum_absen'
                 )
               }
-              className={`text-left group rounded-2xl p-4 shadow-xs border transition-all ${
+              className={`text-left group rounded-2xl p-3.5 shadow-xs border transition-all ${
                 (today?.mangkir ?? 0) > 0
                   ? 'bg-rose-50/70 dark:bg-rose-950/25 border-rose-300 dark:border-rose-800 hover:border-rose-500'
                   : 'bg-card border-border hover:border-rose-400/60'
               }`}
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Mangkir</span>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">Mangkir</span>
                 <div className="w-7 h-7 rounded-lg bg-rose-500/10 text-rose-600 flex items-center justify-center">
-                  <AlertTriangle className="w-4 h-4" />
+                  <AlertTriangle className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className="flex items-baseline gap-1.5">
+              <div className="flex items-baseline gap-1">
                 <span className="text-2xl font-mono font-black text-rose-600 dark:text-rose-400">
                   {today?.mangkir ?? 0}
                 </span>
                 <span className="text-[11px] font-semibold text-muted-foreground">Org</span>
               </div>
               <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
-                {isViewingToday ? `Menunggu shift: ${today?.belumAbsen ?? 0}` : 'Tanpa keterangan'}
+                {isViewingToday ? `Tunggu shift: ${today?.belumAbsen ?? 0}` : 'Alpa tanpa ket.'}
               </p>
-              <div className="mt-2.5 pt-2 border-t border-border/60 flex items-center justify-between text-[10px]">
+              <div className="mt-2 pt-1.5 border-t border-border/60 flex items-center justify-between text-[10px]">
                 <span className="text-muted-foreground">Bulan Ini</span>
                 <span className="font-mono font-bold text-rose-600 dark:text-rose-400">{month?.mangkir ?? 0} Hr</span>
               </div>
             </button>
 
-            {/* 6. LEMBUR (SPKL) */}
+            {/* 6. BELUM TERDAFTAR WAJAH / BELUM AKTIF APLIKASI */}
+            <button
+              type="button"
+              onClick={() =>
+                openDrillDown(`Belum Terdaftar Wajah / Aplikasi (${formatDateId(overview.meta.date)})`, 'belum_terdaftar')
+              }
+              className={`text-left group rounded-2xl p-3.5 shadow-xs border transition-all ${
+                (today?.belumTerdaftar ?? 0) > 0
+                  ? 'bg-purple-50/60 dark:bg-purple-950/20 border-purple-300/70 dark:border-purple-800/70 hover:border-purple-500'
+                  : 'bg-card border-border hover:border-purple-400/60'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">Blm Daftar</span>
+                <div className="w-7 h-7 rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                  <UserX className="w-3.5 h-3.5" />
+                </div>
+              </div>
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-mono font-black text-purple-600 dark:text-purple-400">
+                  {today?.belumTerdaftar ?? 0}
+                </span>
+                <span className="text-[11px] font-semibold text-muted-foreground">Org</span>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-0.5 truncate">Belum enroll wajah</p>
+              <div className="mt-2 pt-1.5 border-t border-border/60 flex items-center justify-between text-[10px]">
+                <span className="text-muted-foreground">Akum. Bln</span>
+                <span className="font-mono font-bold text-purple-600 dark:text-purple-400">{month?.belumTerdaftar ?? 0} Hr</span>
+              </div>
+            </button>
+
+            {/* 7. LEMBUR (SPKL — IRISAN DARI HADIR) */}
             <button
               type="button"
               onClick={() => openDrillDown(`Daftar Karyawan Lembur SPKL (${formatDateId(overview.meta.date)})`, 'lembur')}
-              className="text-left group bg-card border border-amber-400/40 hover:border-amber-500 rounded-2xl p-4 shadow-xs transition-all"
+              className="text-left group bg-card border border-amber-400/40 hover:border-amber-500 rounded-2xl p-3.5 shadow-xs transition-all"
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Lembur SPKL</span>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">Lembur</span>
                 <div className="w-7 h-7 rounded-lg bg-amber-500/15 text-amber-600 flex items-center justify-center">
-                  <Zap className="w-4 h-4 fill-amber-500/40" />
+                  <Zap className="w-3.5 h-3.5 fill-amber-500/40" />
                 </div>
               </div>
-              <div className="flex items-baseline gap-1.5">
+              <div className="flex items-baseline gap-1">
                 <span className="text-2xl font-mono font-black text-amber-600 dark:text-amber-400">
                   {today?.lemburOrang ?? 0}
                 </span>
@@ -896,30 +950,30 @@ export const HrmSuperadminDashboard: React.FC = () => {
                   Org ({today?.lemburJam ?? 0}j)
                 </span>
               </div>
-              <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
-                SPKL disetujui resmi
+              <p className="text-[10px] text-amber-700/80 dark:text-amber-300/80 mt-0.5 font-medium">
+                Irisan dari Hadir
               </p>
-              <div className="mt-2.5 pt-2 border-t border-border/60 flex items-center justify-between text-[10px]">
+              <div className="mt-2 pt-1.5 border-t border-border/60 flex items-center justify-between text-[10px]">
                 <span className="text-muted-foreground">Bulan Ini</span>
                 <span className="font-mono font-bold text-amber-600 dark:text-amber-400">
-                  {month?.lemburJam ?? 0}j ({month?.lemburSpkl ?? 0} SPKL)
+                  {month?.lemburJam ?? 0}j
                 </span>
               </div>
             </button>
           </div>
 
-          {/* ─── BARIS 4: MATRIKS OPERASIONAL PER-SHIFT (SHIFT I, II, III, & DAY SHIFT) ─── */}
+          {/* ─── BARIS 4: MATRIKS OPERASIONAL PER-SHIFT (SHIFT I, II, III, DAY SHIFT + OFF ROSTER) ─── */}
           <Card className="border-border bg-card rounded-2xl shadow-xs">
             <CardHeader className="pb-3 border-b border-border/70">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <CardTitle className="text-base font-bold flex items-center gap-2">
                     <Layers className="w-4 h-4 text-emerald-600" />
-                    Matriks Operasional Per-Shift (Shift I, II, III & Day Shift)
+                    Matriks Operasional Per-Shift (Shift I, II, III, Day Shift & OFF Roster)
                   </CardTitle>
                   <CardDescription className="text-xs">
                     {shiftScope === 'today'
-                      ? `Rekap langsung tanggal ${formatDateId(overview.meta.date)} — klik kartu shift untuk daftar personil.`
+                      ? `Rekap akurat tanggal ${formatDateId(overview.meta.date)} — total semua shift + OFF selalu tepat ${overview.meta.filteredTotal} personil.`
                       : `Akumulasi total bulan ${formatMonthId(overview.meta.month)} (${month?.daysElapsed ?? 0} hari berjalan).`}
                   </CardDescription>
                 </div>
@@ -952,15 +1006,50 @@ export const HrmSuperadminDashboard: React.FC = () => {
               </div>
             </CardHeader>
 
-            <CardContent className="p-4 sm:p-5 space-y-5">
-              {/* 4 Shift Cards */}
+            <CardContent className="p-4 sm:p-5 space-y-4">
+              {/* Banner Rekonsiliasi Eksplisit 100% Akurat */}
+              {shiftScope === 'today' && shiftStatsMap && (() => {
+                const s1 = shiftStatsMap.SHIFT_I?.total ?? 0;
+                const s2 = shiftStatsMap.SHIFT_II?.total ?? 0;
+                const s3 = shiftStatsMap.SHIFT_III?.total ?? 0;
+                const ds = shiftStatsMap.DAY_SHIFT?.total ?? 0;
+                const offR = shiftStatsMap.OFF_ROSTER?.total ?? 0;
+                const sumTotal = s1 + s2 + s3 + ds + offR;
+                const isBalanced = sumTotal === overview.meta.filteredTotal;
+                return (
+                  <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1 font-extrabold text-emerald-700 dark:text-emerald-300">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Rekonsiliasi {overview.meta.groupFilter === 'ALL' ? 'Total' : overview.meta.groupFilter}:
+                      </span>
+                      <span className="font-mono text-foreground">
+                        Shift I (<strong>{s1}</strong>) + Shift II (<strong>{s2}</strong>) + Shift III (<strong>{s3}</strong>) + Day Shift (<strong>{ds}</strong>) + OFF (<strong>{offR}</strong>)
+                      </span>
+                    </div>
+                    <Badge
+                      variant="outline"
+                      className={`font-mono font-extrabold text-xs ${
+                        isBalanced
+                          ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                          : 'border-rose-500/50 bg-rose-500/10 text-rose-700'
+                      }`}
+                    >
+                      = {sumTotal} / {overview.meta.filteredTotal} Org {isBalanced ? '✓' : ''}
+                    </Badge>
+                  </div>
+                );
+              })()}
+
+              {/* 4 Active Shift Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
-                {(['SHIFT_I', 'SHIFT_II', 'SHIFT_III', 'DAY_SHIFT'] as ShiftKey[]).map((key) => {
+                {(['SHIFT_I', 'SHIFT_II', 'SHIFT_III', 'DAY_SHIFT'] as ActiveShiftKey[]).map((key) => {
                   const s = shiftStatsMap?.[key];
                   if (!s) return null;
                   const meta = SHIFT_META[key];
                   const ShiftIcon = meta.icon;
                   const isActiveNow = isViewingToday && shiftScope === 'today' && activeShiftNow === key;
+                  const cutiIzinTotal = s.cuti + s.izin;
 
                   return (
                     <div
@@ -973,24 +1062,29 @@ export const HrmSuperadminDashboard: React.FC = () => {
                     >
                       <div>
                         <div className="flex items-center justify-between gap-2 mb-3">
-                          <div className="flex items-center gap-2">
-                            <div className={`w-8 h-8 rounded-xl border flex items-center justify-center ${meta.badgeBg}`}>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className={`w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 ${meta.badgeBg}`}>
                               <ShiftIcon className="w-4 h-4" />
                             </div>
-                            <div>
-                              <p className="text-sm font-extrabold text-foreground leading-tight">{s.label}</p>
+                            <div className="min-w-0">
+                              <p className="text-sm font-extrabold text-foreground leading-tight truncate">{s.label}</p>
                               <p className="text-[11px] font-mono text-muted-foreground">{s.range} WITA</p>
                             </div>
                           </div>
-                          {isActiveNow && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[9.5px] font-bold">
-                              <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-                              AKTIF
+                          <div className="flex flex-col items-end gap-1 shrink-0">
+                            <span className="px-2 py-0.5 rounded-full bg-background border border-border font-mono text-[11px] font-extrabold text-foreground">
+                              {s.total} {shiftScope === 'today' ? 'Org' : 'Hr'}
                             </span>
-                          )}
+                            {isActiveNow && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full bg-emerald-600 text-white text-[9px] font-bold">
+                                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                                AKTIF
+                              </span>
+                            )}
+                          </div>
                         </div>
 
-                        {/* Status Grid */}
+                        {/* Status Grid (4 Mutual-Exclusive Buckets per Shift) */}
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           <button
                             type="button"
@@ -1008,32 +1102,27 @@ export const HrmSuperadminDashboard: React.FC = () => {
 
                           <button
                             type="button"
-                            onClick={() => openDrillDown(`${s.label} — OFF (${formatDateId(overview.meta.date)})`, 'off', key)}
-                            className="p-2 rounded-xl bg-background/80 border border-border/60 hover:border-slate-400 text-left transition-colors"
-                          >
-                            <span className="text-[10px] text-muted-foreground block">OFF / Libur</span>
-                            <span className="text-base font-mono font-black text-slate-600 dark:text-slate-300">
-                              {s.off}
-                            </span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => openDrillDown(`${s.label} — Cuti & Izin (${formatDateId(overview.meta.date)})`, 'cuti', key)}
+                            onClick={() => openDrillDown(`${s.label} — Cuti, Izin & Sakit (${formatDateId(overview.meta.date)})`, 'cuti_izin', key)}
                             className="p-2 rounded-xl bg-background/80 border border-border/60 hover:border-sky-500/50 text-left transition-colors"
                           >
-                            <span className="text-[10px] text-muted-foreground block">Cuti • Izin</span>
-                            <span className="text-sm font-mono font-bold text-sky-600 dark:text-sky-400">
-                              {s.cuti} <span className="text-muted-foreground">•</span>{' '}
-                              <span className="text-indigo-600 dark:text-indigo-400">{s.izin}</span>
-                            </span>
+                            <span className="text-[10px] text-muted-foreground block">Cuti / Izin</span>
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="text-base font-mono font-black text-sky-600 dark:text-sky-400">
+                                {cutiIzinTotal}
+                              </span>
+                              {cutiIzinTotal > 0 && (
+                                <span className="text-[9.5px] font-mono text-muted-foreground">
+                                  ({s.cuti}C•{s.izin}I)
+                                </span>
+                              )}
+                            </div>
                           </button>
 
                           <button
                             type="button"
                             onClick={() =>
                               openDrillDown(
-                                `${s.label} — ${s.mangkir > 0 ? 'Mangkir' : 'Menunggu Shift'} (${formatDateId(overview.meta.date)})`,
+                                `${s.label} — ${s.mangkir > 0 ? 'Mangkir / Alpa' : 'Menunggu Shift'} (${formatDateId(overview.meta.date)})`,
                                 s.mangkir > 0 ? 'mangkir' : 'belum_absen',
                                 key
                               )
@@ -1041,19 +1130,30 @@ export const HrmSuperadminDashboard: React.FC = () => {
                             className="p-2 rounded-xl bg-background/80 border border-border/60 hover:border-rose-500/50 text-left transition-colors"
                           >
                             <span className="text-[10px] text-muted-foreground block">
-                              Mangkir{shiftScope === 'today' ? ' • Tunggu' : ''}
+                              Mangkir{shiftScope === 'today' && s.belumAbsen > 0 ? ' • Tunggu' : ''}
                             </span>
-                            <span className={`text-sm font-mono font-bold ${s.mangkir > 0 ? 'text-rose-600' : 'text-foreground'}`}>
+                            <span className={`text-base font-mono font-black ${s.mangkir > 0 ? 'text-rose-600' : 'text-foreground'}`}>
                               {s.mangkir}
-                              {shiftScope === 'today' && (
-                                <span className="text-muted-foreground font-normal"> • {s.belumAbsen}</span>
+                              {shiftScope === 'today' && s.belumAbsen > 0 && (
+                                <span className="text-xs text-muted-foreground font-semibold"> • {s.belumAbsen}</span>
                               )}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => openDrillDown(`${s.label} — Belum Terdaftar Wajah (${formatDateId(overview.meta.date)})`, 'belum_terdaftar', key)}
+                            className="p-2 rounded-xl bg-background/80 border border-border/60 hover:border-purple-500/50 text-left transition-colors"
+                          >
+                            <span className="text-[10px] text-muted-foreground block">Blm Daftar</span>
+                            <span className={`text-base font-mono font-black ${(s.belumTerdaftar || 0) > 0 ? 'text-purple-600 dark:text-purple-400' : 'text-muted-foreground'}`}>
+                              {s.belumTerdaftar || 0}
                             </span>
                           </button>
                         </div>
                       </div>
 
-                      {/* Highlight Lembur per Shift */}
+                      {/* Highlight Lembur per Shift (Irisan Hadir) */}
                       <button
                         type="button"
                         onClick={() => openDrillDown(`${s.label} — Lembur SPKL (${formatDateId(overview.meta.date)})`, 'lembur', key)}
@@ -1072,14 +1172,45 @@ export const HrmSuperadminDashboard: React.FC = () => {
                 })}
               </div>
 
+              {/* Dedicated OFF Roster Strip (Terpisah dari Day Shift agar 100% Jelas) */}
+              {shiftStatsMap?.OFF_ROSTER && (
+                <button
+                  type="button"
+                  onClick={() => openDrillDown(`Daftar Karyawan OFF / Libur Roster (${formatDateId(overview.meta.date)})`, 'off', 'OFF_ROSTER')}
+                  className="w-full rounded-2xl border border-slate-300/70 dark:border-slate-700/70 bg-slate-50/70 dark:bg-slate-900/40 hover:border-slate-400 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-left transition-all"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-slate-500/15 border border-slate-400/30 text-slate-700 dark:text-slate-300 flex items-center justify-center shrink-0">
+                      <Coffee className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-extrabold text-foreground leading-tight">
+                        OFF Roster / Libur Rotasi
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Karyawan yang sedang jadwal libur rotasi (dipisahkan dari Day Shift agar komposisi shift aktif akurat)
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="px-3 py-1 rounded-full bg-background border border-border font-mono text-sm font-black text-slate-700 dark:text-slate-200">
+                      {shiftStatsMap.OFF_ROSTER.total} {shiftScope === 'today' ? 'Orang' : 'Hari'}
+                    </span>
+                    <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                      Lihat Daftar →
+                    </span>
+                  </div>
+                </button>
+              )}
+
               {/* Mini Horizontal Comparison Bar Chart Across Shifts */}
               <div className="pt-2 border-t border-border/60">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold text-muted-foreground">
-                    Perbandingan Beban Hadir, OFF, Mangkir & Lembur Antar Shift ({shiftScope === 'today' ? 'Live Hari Ini' : formatMonthId(overview.meta.month)})
+                    Perbandingan Beban Hadir, OFF, Cuti/Izin, Mangkir, Blm Daftar & Lembur Antar Shift ({shiftScope === 'today' ? 'Live Hari Ini' : formatMonthId(overview.meta.month)})
                   </span>
                 </div>
-                <div className="h-[210px] w-full">
+                <div className="h-[220px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={shiftChartData} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" opacity={0.18} vertical={false} />
@@ -1094,11 +1225,12 @@ export const HrmSuperadminDashboard: React.FC = () => {
                         }}
                       />
                       <Legend wrapperStyle={{ fontSize: '11px' }} />
-                      <Bar dataKey="Hadir" fill={STATUS_COLORS.hadir} radius={[5, 5, 0, 0]} maxBarSize={32} />
-                      <Bar dataKey="OFF" fill={STATUS_COLORS.off} radius={[5, 5, 0, 0]} maxBarSize={32} />
-                      <Bar dataKey="Cuti/Izin" fill={STATUS_COLORS.cuti} radius={[5, 5, 0, 0]} maxBarSize={32} />
-                      <Bar dataKey="Mangkir" fill={STATUS_COLORS.mangkir} radius={[5, 5, 0, 0]} maxBarSize={32} />
-                      <Bar dataKey="Lembur (Org)" fill={STATUS_COLORS.lembur} radius={[5, 5, 0, 0]} maxBarSize={32} />
+                      <Bar dataKey="Hadir" fill={STATUS_COLORS.hadir} radius={[5, 5, 0, 0]} maxBarSize={28} />
+                      <Bar dataKey="OFF" fill={STATUS_COLORS.off} radius={[5, 5, 0, 0]} maxBarSize={28} />
+                      <Bar dataKey="Cuti/Izin" fill={STATUS_COLORS.cuti} radius={[5, 5, 0, 0]} maxBarSize={28} />
+                      <Bar dataKey="Mangkir" fill={STATUS_COLORS.mangkir} radius={[5, 5, 0, 0]} maxBarSize={28} />
+                      <Bar dataKey="Blm Daftar" fill={STATUS_COLORS.belumTerdaftar} radius={[5, 5, 0, 0]} maxBarSize={28} />
+                      <Bar dataKey="Lembur (Org)" fill={STATUS_COLORS.lembur} radius={[5, 5, 0, 0]} maxBarSize={28} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -1162,7 +1294,8 @@ export const HrmSuperadminDashboard: React.FC = () => {
                       <Bar yAxisId="left" dataKey="off" name="OFF" stackId="a" fill={STATUS_COLORS.off} />
                       <Bar yAxisId="left" dataKey="cuti" name="Cuti" stackId="a" fill={STATUS_COLORS.cuti} />
                       <Bar yAxisId="left" dataKey="izin" name="Izin/Sakit" stackId="a" fill={STATUS_COLORS.izin} />
-                      <Bar yAxisId="left" dataKey="mangkir" name="Mangkir" stackId="a" fill={STATUS_COLORS.mangkir} radius={[3, 3, 0, 0]} />
+                      <Bar yAxisId="left" dataKey="mangkir" name="Mangkir" stackId="a" fill={STATUS_COLORS.mangkir} />
+                      <Bar yAxisId="left" dataKey="belumTerdaftar" name="Blm Daftar" stackId="a" fill={STATUS_COLORS.belumTerdaftar} radius={[3, 3, 0, 0]} />
                       <Line
                         yAxisId="right"
                         type="monotone"
@@ -1251,12 +1384,13 @@ export const HrmSuperadminDashboard: React.FC = () => {
                   <table className="w-full text-[11px]">
                     <thead className="bg-muted/50 text-muted-foreground border-b border-border/70">
                       <tr>
-                        <th className="py-2 px-2.5 text-left font-bold">Grup</th>
-                        <th className="py-2 px-1.5 text-center font-bold text-emerald-600">H</th>
-                        <th className="py-2 px-1.5 text-center font-bold">OFF</th>
-                        <th className="py-2 px-1.5 text-center font-bold text-sky-600">C/I</th>
-                        <th className="py-2 px-1.5 text-center font-bold text-rose-600">A</th>
-                        <th className="py-2 px-2 text-right font-bold text-amber-600">OT</th>
+                        <th className="py-2 px-2 text-left font-bold">Grup</th>
+                        <th className="py-2 px-1 text-center font-bold text-emerald-600">H</th>
+                        <th className="py-2 px-1 text-center font-bold">OFF</th>
+                        <th className="py-2 px-1 text-center font-bold text-sky-600">C/I</th>
+                        <th className="py-2 px-1 text-center font-bold text-rose-600">A</th>
+                        <th className="py-2 px-1 text-center font-bold text-purple-600">Blm</th>
+                        <th className="py-2 px-1.5 text-right font-bold text-amber-600">OT</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/60 font-mono">
@@ -1266,28 +1400,31 @@ export const HrmSuperadminDashboard: React.FC = () => {
                           g.group === 'SHIPMENT' ? 'Shipment (47)' : g.group === 'RUMAH TANGGA' ? 'R. Tangga (33)' : 'Tetap (3)';
                         return (
                           <tr key={g.group} className="hover:bg-muted/30">
-                            <td className="py-2 px-2.5 font-sans font-semibold text-foreground">{shortName}</td>
-                            <td className="py-2 px-1.5 text-center font-bold text-emerald-600">{src.hadir}</td>
-                            <td className="py-2 px-1.5 text-center text-muted-foreground">{src.off}</td>
-                            <td className="py-2 px-1.5 text-center text-sky-600">{src.cuti + src.izin}</td>
-                            <td className={`py-2 px-1.5 text-center font-bold ${src.mangkir > 0 ? 'text-rose-600' : 'text-muted-foreground'}`}>
+                            <td className="py-2 px-2 font-sans font-semibold text-foreground">{shortName}</td>
+                            <td className="py-2 px-1 text-center font-bold text-emerald-600">{src.hadir}</td>
+                            <td className="py-2 px-1 text-center text-muted-foreground">{src.off}</td>
+                            <td className="py-2 px-1 text-center text-sky-600">{src.cuti + src.izin}</td>
+                            <td className={`py-2 px-1 text-center font-bold ${src.mangkir > 0 ? 'text-rose-600' : 'text-muted-foreground'}`}>
                               {src.mangkir}
                             </td>
-                            <td className="py-2 px-2 text-right font-bold text-amber-600">
+                            <td className={`py-2 px-1 text-center font-bold ${(src.belumTerdaftar || 0) > 0 ? 'text-purple-600 dark:text-purple-400' : 'text-muted-foreground'}`}>
+                              {src.belumTerdaftar || 0}
+                            </td>
+                            <td className="py-2 px-1.5 text-right font-bold text-amber-600">
                               {g.group === 'KARYAWAN TETAP' ? '-' : `${src.lemburJam}j`}
                             </td>
                           </tr>
                         );
                       })}
                       <tr className="bg-muted/40 font-bold">
-                        <td className="py-2 px-2.5 font-sans text-foreground">TOTAL ({headcount.total})</td>
-                        <td className="py-2 px-1.5 text-center text-emerald-600">
+                        <td className="py-2 px-2 font-sans text-foreground">TOTAL ({headcount.total})</td>
+                        <td className="py-2 px-1 text-center text-emerald-600">
                           {overview.groups.reduce((s, g) => s + (groupTableScope === 'today' ? g.today.hadir : g.month.hadir), 0)}
                         </td>
-                        <td className="py-2 px-1.5 text-center">
+                        <td className="py-2 px-1 text-center">
                           {overview.groups.reduce((s, g) => s + (groupTableScope === 'today' ? g.today.off : g.month.off), 0)}
                         </td>
-                        <td className="py-2 px-1.5 text-center text-sky-600">
+                        <td className="py-2 px-1 text-center text-sky-600">
                           {overview.groups.reduce(
                             (s, g) =>
                               s +
@@ -1297,10 +1434,13 @@ export const HrmSuperadminDashboard: React.FC = () => {
                             0
                           )}
                         </td>
-                        <td className="py-2 px-1.5 text-center text-rose-600">
+                        <td className="py-2 px-1 text-center text-rose-600">
                           {overview.groups.reduce((s, g) => s + (groupTableScope === 'today' ? g.today.mangkir : g.month.mangkir), 0)}
                         </td>
-                        <td className="py-2 px-2 text-right text-amber-600">
+                        <td className="py-2 px-1 text-center text-purple-600 dark:text-purple-400">
+                          {overview.groups.reduce((s, g) => s + (groupTableScope === 'today' ? (g.today.belumTerdaftar || 0) : (g.month.belumTerdaftar || 0)), 0)}
+                        </td>
+                        <td className="py-2 px-1.5 text-right text-amber-600">
                           {Math.round(
                             overview.groups.reduce(
                               (s, g) => s + (groupTableScope === 'today' ? g.today.lemburJam : g.month.lemburJam),
@@ -1408,6 +1548,8 @@ export const HrmSuperadminDashboard: React.FC = () => {
                             className={`text-[10px] uppercase font-bold ${
                               row.status === 'mangkir'
                                 ? 'border-rose-400 text-rose-600'
+                                : row.status === 'belum_terdaftar'
+                                ? 'border-purple-400 text-purple-600 dark:text-purple-400'
                                 : row.status === 'cuti'
                                 ? 'border-sky-400 text-sky-600'
                                 : row.status === 'izin' || row.status === 'sakit'
@@ -1415,7 +1557,7 @@ export const HrmSuperadminDashboard: React.FC = () => {
                                 : 'border-slate-300 text-slate-600'
                             }`}
                           >
-                            {row.status.replace('_', ' ')}
+                            {row.status === 'belum_terdaftar' ? 'Belum Terdaftar' : row.status.replace('_', ' ')}
                           </Badge>
                         )}
                       </td>
