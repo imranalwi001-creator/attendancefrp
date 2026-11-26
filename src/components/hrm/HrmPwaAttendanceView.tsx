@@ -4425,7 +4425,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                   </div>
                 </div>
 
-                {/* Primary Dual Action Buttons (48px Ergonomic Touch Targets) */}
+                {/* Primary Dual Action Buttons (Soft-Tactile Capsule 48px Touch Targets) */}
                 <div className="grid grid-cols-2 gap-2.5">
                   <button
                     type="button"
@@ -4442,17 +4442,21 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       }
                       openLiveCamera('clock_in');
                     }}
-                    className={`h-12 px-3.5 rounded-2xl flex items-center justify-center gap-2 text-xs font-semibold transition-all duration-150 active:scale-[0.98] ${
+                    className={`h-12 px-4 rounded-full flex items-center justify-center gap-2 text-xs font-semibold transition-all duration-150 active:scale-[0.97] ${
                       isCurrentlyOnDuty
-                        ? 'bg-emerald-50 dark:bg-emerald-950/30 text-[#0D7A5F] dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/60 cursor-default'
+                        ? 'bg-gradient-to-b from-emerald-50/95 to-emerald-100/75 dark:from-emerald-950/55 dark:to-emerald-900/35 text-[#0A6851] dark:text-emerald-300 border border-emerald-500/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] dark:shadow-none cursor-default'
                         : isClockInAllowed
-                        ? 'bg-[#0D7A5F] hover:bg-[#0A634D] text-white shadow-sm shadow-emerald-900/15'
+                        ? 'bg-gradient-to-b from-[#109270] to-[#0A6B52] hover:from-[#12A17C] hover:to-[#0B775B] text-white shadow-[0_6px_16px_-4px_rgba(13,122,95,0.42),inset_0_1px_0_rgba(255,255,255,0.22)]'
                         : isCurrentSessionClosed && !hasApprovedOvertimeOrSubstituteToday
-                        ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-xs'
-                        : 'bg-slate-100 dark:bg-white/[0.05] text-slate-400 dark:text-slate-500 cursor-not-allowed'
+                        ? 'bg-gradient-to-b from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-[0_6px_14px_-4px_rgba(217,119,6,0.38)]'
+                        : 'bg-[#F2F6F4] dark:bg-white/[0.04] text-slate-500 dark:text-slate-400 border border-emerald-900/[0.07] dark:border-white/[0.08] cursor-not-allowed'
                     }`}
                   >
-                    <Clock className="w-4 h-4 shrink-0" />
+                    {isCurrentlyOnDuty ? (
+                      <CheckCircle2 className="w-4 h-4 text-[#0D7A5F] dark:text-emerald-400 shrink-0" />
+                    ) : (
+                      <Clock className="w-4 h-4 shrink-0" />
+                    )}
                     <span className="truncate">
                       {isCurrentlyOnDuty
                         ? `Masuk ${(todayAttendance?.clockIn || '').substring(0, 5)}`
@@ -4496,20 +4500,22 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                       }
                       triggerClockOutFlow();
                     }}
-                    className={`h-12 px-3.5 rounded-2xl flex items-center justify-center gap-2 text-xs font-semibold transition-all duration-150 active:scale-[0.98] ${
+                    className={`h-12 px-4 rounded-full flex items-center justify-center gap-2 text-xs font-semibold transition-all duration-150 active:scale-[0.97] ${
                       hasClockedOut
-                        ? 'bg-slate-100 dark:bg-white/[0.05] text-slate-500 cursor-default'
+                        ? 'bg-gradient-to-b from-emerald-50/90 to-emerald-100/65 dark:from-emerald-950/45 dark:to-emerald-900/25 text-[#0A6851] dark:text-emerald-300 border border-emerald-500/20 cursor-default'
                         : !isInsideCoordinates && hasClockedIn && !hasClockedOut
-                        ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-sm'
+                        ? 'bg-gradient-to-b from-rose-500 to-rose-600 hover:from-rose-600 hover:to-rose-700 text-white shadow-[0_6px_16px_-4px_rgba(225,29,72,0.40)]'
                         : isClockOutAllowed
-                        ? 'bg-slate-900 hover:bg-slate-800 dark:bg-white dark:text-slate-900 text-white shadow-sm'
-                        : 'bg-slate-100 dark:bg-white/[0.05] text-slate-400 dark:text-slate-500 cursor-not-allowed'
+                        ? 'bg-gradient-to-b from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white shadow-[0_6px_16px_-4px_rgba(234,88,12,0.40),inset_0_1px_0_rgba(255,255,255,0.22)]'
+                        : isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut
+                        ? 'bg-gradient-to-b from-amber-50/90 to-orange-50/60 dark:from-amber-950/35 dark:to-amber-900/20 text-amber-800/90 dark:text-amber-200/90 border border-amber-400/35 dark:border-amber-500/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] dark:shadow-none cursor-not-allowed'
+                        : 'bg-[#F2F6F4] dark:bg-white/[0.04] text-slate-500 dark:text-slate-400 border border-emerald-900/[0.07] dark:border-white/[0.08] cursor-not-allowed'
                     }`}
                   >
                     {!isInsideCoordinates && hasClockedIn && !hasClockedOut ? (
                       <AlertTriangle className="w-4 h-4 shrink-0" />
                     ) : isBeforeShiftEndTime && !hasApprovedEmergencyLeave && hasClockedIn && !hasClockedOut ? (
-                      <Lock className="w-3.5 h-3.5 shrink-0" />
+                      <Lock className="w-3.5 h-3.5 text-amber-600/85 dark:text-amber-400 shrink-0" />
                     ) : (
                       <LogOut className="w-4 h-4 shrink-0" />
                     )}
@@ -5523,24 +5529,37 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
             <span className="text-[10px] font-semibold mt-1">Riwayat</span>
           </button>
 
-          {/* Center Tactile Attendance Action */}
+          {/* Center State-Aware Tactile Jewel Attendance Action */}
           <div className="flex flex-col items-center justify-center -mt-5 px-2 relative z-50">
             <button
               type="button"
               onClick={handleCenterAttendanceClick}
-              className={`w-[52px] h-[52px] rounded-full flex items-center justify-center text-white shadow-lg transition-transform duration-150 active:scale-92 ring-4 ring-white dark:ring-[#0B1714] ${
+              className={`relative w-[54px] h-[54px] rounded-full flex items-center justify-center text-white transition-all duration-200 active:scale-92 ring-[3.5px] ring-white/95 dark:ring-[#0B1714] ${
                 isCurrentlyOnDuty
-                  ? 'bg-slate-900 dark:bg-white dark:text-slate-900'
+                  ? isClockOutAllowed
+                    ? 'bg-gradient-to-br from-amber-500 via-amber-600 to-orange-600 shadow-[0_8px_20px_-4px_rgba(234,88,12,0.48),inset_0_1px_0_rgba(255,255,255,0.28)]'
+                    : 'bg-gradient-to-br from-[#0F765D] via-[#0B5B48] to-[#084235] shadow-[0_8px_18px_-4px_rgba(11,91,72,0.42),inset_0_1px_0_rgba(255,255,255,0.24)]'
                   : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
-                  ? 'bg-slate-400 dark:bg-slate-700'
+                  ? 'bg-gradient-to-br from-slate-400 to-slate-500 dark:from-slate-600 dark:to-slate-700 shadow-md'
                   : !hasClockedIn || nextShiftInfo?.isNextShiftAvailable
-                  ? 'bg-[#0D7A5F]'
-                  : 'bg-slate-700'
+                  ? 'bg-gradient-to-br from-[#109B78] via-[#0D7A5F] to-[#085542] shadow-[0_8px_20px_-4px_rgba(13,122,95,0.48),inset_0_1px_0_rgba(255,255,255,0.28)]'
+                  : 'bg-gradient-to-br from-emerald-700/80 to-emerald-900/90 shadow-md'
               }`}
-              title={isCurrentlyOnDuty ? 'Absen Pulang' : 'Absen Masuk'}
+              title={isCurrentlyOnDuty ? (isClockOutAllowed ? 'Absen Pulang Aktif' : `Bertugas (Pulang ${effectiveDutyEndTime})`) : 'Absen Masuk'}
             >
               {isCurrentlyOnDuty ? (
-                <LogOut className="w-5 h-5" />
+                <>
+                  {isClockOutAllowed ? (
+                    <LogOut className="w-5 h-5" />
+                  ) : (
+                    <Lock className="w-[19px] h-[19px] opacity-95" />
+                  )}
+                  <span
+                    className={`absolute top-1.5 right-1.5 w-2 h-2 rounded-full ring-2 ring-[#0B5B48] ${
+                      isClockOutAllowed ? 'bg-white animate-ping' : 'bg-emerald-300 animate-pulse'
+                    }`}
+                  />
+                </>
               ) : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday ? (
                 <Coffee className="w-5 h-5" />
               ) : !isCurrentSessionClosed || nextShiftInfo?.isNextShiftAvailable ? (
@@ -5549,9 +5568,15 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <Check className="w-5 h-5" />
               )}
             </button>
-            <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300 mt-1">
+            <span className={`text-[10px] font-bold mt-1 ${
+              isCurrentlyOnDuty && isClockOutAllowed
+                ? 'text-amber-700 dark:text-amber-400'
+                : 'text-[#0B5949] dark:text-emerald-300'
+            }`}>
               {isCurrentlyOnDuty
-                ? 'Pulang'
+                ? isClockOutAllowed
+                  ? 'Pulang'
+                  : 'Bertugas'
                 : (isShiftOffDay(effectiveDisplayShift) || isEmployeeOffToday) && !hasApprovedOvertimeOrSubstituteToday
                 ? 'Libur'
                 : !isCurrentlyOnDuty && !isCurrentSessionClosed
