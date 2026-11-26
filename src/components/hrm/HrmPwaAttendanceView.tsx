@@ -5367,13 +5367,7 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
                 <div className="p-3.5 flex items-center justify-between gap-3">
                   <span className="text-slate-500 dark:text-slate-400">Jadwal Shift</span>
                   <span className="font-semibold text-slate-900 dark:text-white text-right">
-                    {(() => {
-                      const rawName = userShift?.name || user?.shiftName || '';
-                      if (rawName && rawName.includes('(') && rawName.includes(')')) return rawName;
-                      const startTime = userShift?.startTime || user?.shiftStartTime || '07:30';
-                      const endTime = userShift?.endTime || user?.shiftEndTime || '16:30';
-                      return `${rawName || 'Reguler'} (${startTime} – ${endTime})`;
-                    })()}
+                    {unifiedShiftBadgeText}
                   </span>
                 </div>
                 <div className="p-3.5 flex items-center justify-between gap-3">
