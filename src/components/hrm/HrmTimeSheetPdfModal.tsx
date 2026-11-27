@@ -850,7 +850,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
           <div className="flex items-center gap-2">
             <Info size={14} className="text-primary" />
             <span>
-              Menampilkan <strong>{timeSheetRows.length} personil</strong> aktif grup <strong>{selectedGroup}</strong> untuk periode <strong>{monthLabel}</strong>. Tarif lembur baku: <strong>Rp {Math.round(HOURLY_RATE).toLocaleString('id-ID')} / jam</strong>.
+              Menampilkan <strong>{timeSheetRows.length} personil</strong> aktif grup <strong>{selectedGroup}</strong> untuk periode <strong>{monthLabel}</strong>. Tarif lembur per jam disinkronkan per karyawan dari <strong>/admin/payroll</strong> (Upah Pokok ÷ 173).
             </span>
           </div>
           <Badge variant="outline" className="font-mono text-[10px] bg-primary/10 text-primary border-primary/20">
