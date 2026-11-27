@@ -421,6 +421,7 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
       const empName = ((emp.fullName || (emp as any).full_name || (emp as any).name || '')).toLowerCase();
       const empNip = ((emp.nip || '')).toUpperCase();
       const isTimbanganOrSegel = empDiv.includes('timbangan') || empDiv.includes('segel');
+      const isRumahTangga = getEmployeeCategoryGroup(emp) === 'RUMAH TANGGA' || empDiv.includes('wisma') || empDiv.includes('rumah tangga');
       const isMatchingOrIchtiar = empDiv.includes('matching') || empName.includes('ichtiar') || empName.includes('icthiar') || empNip.includes('7044') || empNip.includes('7047');
 
       daysMeta.forEach((d) => {
@@ -502,7 +503,12 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
               desc.includes('pos')
             );
 
-            if (isMatchingOrIchtiar) {
+            if (isRumahTangga) {
+              // ── 0. RUMAH TANGGA (Wisma Biring Ere & Wisma Makassar — FR07001–FR07033) ──
+              // Jam lembur sudah netto (dipotong istirahat) & langsung pengali 2.0x tanpa pengali 1.5x
+              h2r += rawHours;
+              ot2r = o;
+            } else if (isMatchingOrIchtiar) {
               // ── 1. MATCHING & ICHTIAR ──────────────────────────────────────────
               if (isDayOff) {
                 // Hari OFF: Dipotong 1 jam istirahat (jika > 1 jam), seluruh jam efektif pengali 2.0x Libur (m2r)
@@ -733,9 +739,13 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
       const empNip = (editTarget.employee.nip || '').toUpperCase();
       const isMatchingOrIchtiar = divName.includes('matching') || empName.includes('ichtiar') || empName.includes('icthiar') || empNip.includes('7044') || empNip.includes('7047');
       const isTimbanganOrSegel = divName.includes('timbangan') || divName.includes('segel');
+      const isRumahTangga = getEmployeeCategoryGroup(editTarget.employee) === 'RUMAH TANGGA' || divName.includes('wisma') || divName.includes('rumah tangga');
 
       let effectiveHours = duration;
-      if (isMatchingOrIchtiar) {
+      if (isRumahTangga) {
+        // Rumah Tangga: Jam lembur sudah netto (dipotong istirahat), tanpa pemotongan ulang
+        effectiveHours = duration;
+      } else if (isMatchingOrIchtiar) {
         if (inputIsHoliday || editTarget.rowKey === 'm2r') {
           effectiveHours = duration > 1 ? Math.max(0, duration - 1) : duration;
         } else {

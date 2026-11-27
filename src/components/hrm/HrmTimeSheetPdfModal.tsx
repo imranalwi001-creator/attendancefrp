@@ -363,6 +363,7 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
       const empNip = ((emp.nip || '')).toUpperCase();
       const isTimbanganOrSegel = empDiv.includes('timbangan') || empDiv.includes('segel');
       const isMatchingOrIchtiar = empDiv.includes('matching') || empName.includes('ichtiar') || empName.includes('icthiar') || empNip.includes('7044') || empNip.includes('7047');
+      const isRumahTangga = getEmployeeCategoryGroup(emp) === 'RUMAH TANGGA' || empDiv.includes('wisma') || empDiv.includes('rumah tangga');
 
       empOts.forEach((o) => {
         const rawDur = parseFloat((o as any).duration_hours || (o as any).durationHours || (o as any).approved_hours || (o as any).approvedHours || 0);
@@ -397,6 +398,12 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
           realHours += rawDur;
         } else if (explicitMult === 4.0) {
           empPaid = rawDur * 4.0;
+          realHours += rawDur;
+        } else if (isRumahTangga) {
+          // ── 0. RUMAH TANGGA (Wisma Biring Ere & Wisma Makassar — FR07001–FR07033) ──
+          // Jam lembur sudah netto (dipotong istirahat) dan langsung pengali 2.0x tanpa pengali 1.5x
+          effectiveHours = rawDur;
+          empPaid = rawDur * 2.0;
           realHours += rawDur;
         } else if (explicitMult === 2.0 && !isDayOff && (desc.includes('[m2w]') || desc.includes('kelebihan'))) {
           // Khusus sub-row m2w (jam ke-2 dst hari kerja)
