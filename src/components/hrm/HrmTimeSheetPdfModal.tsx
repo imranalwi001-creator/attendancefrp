@@ -736,6 +736,19 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
       grandTotals.upahLembur,
     ];
 
+    const sigHeaderRow =
+      selectedGroup === 'ALL'
+        ? ['', 'Dibayarkan oleh :', '', '', ...Array(Math.max(0, Math.floor(daysInMonth / 2) - 2)).fill(''), 'Mengetahui :', ...Array(Math.max(0, daysInMonth - Math.floor(daysInMonth / 2) + 2)).fill(''), 'Mengetahui :']
+        : ['', 'Dibayarkan oleh :', '', '', ...Array(daysInMonth + 1).fill(''), 'Mengetahui :'];
+    const sigNameRow =
+      selectedGroup === 'ALL'
+        ? ['', 'TAKDIR', '', '', ...Array(Math.max(0, Math.floor(daysInMonth / 2) - 2)).fill(''), 'ABD. RAHMAN', ...Array(Math.max(0, daysInMonth - Math.floor(daysInMonth / 2) + 2)).fill(''), 'ZAM ZAM']
+        : ['', 'TAKDIR', '', '', ...Array(daysInMonth + 1).fill(''), selectedGroup === 'RUMAH TANGGA' ? 'ZAM ZAM' : 'ABD. RAHMAN'];
+    const sigRoleRow =
+      selectedGroup === 'ALL'
+        ? ['', 'Administration', '', '', ...Array(Math.max(0, Math.floor(daysInMonth / 2) - 2)).fill(''), 'Mgr of Shiftment Management 2', ...Array(Math.max(0, daysInMonth - Math.floor(daysInMonth / 2) + 2)).fill(''), 'Mgr Rumah Tangga']
+        : ['', 'Administration', '', '', ...Array(daysInMonth + 1).fill(''), selectedGroup === 'RUMAH TANGGA' ? 'Mgr Rumah Tangga' : 'Mgr of Shiftment Management 2'];
+
     const allSheetData = [
       headers1,
       headers2,
@@ -748,6 +761,14 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
       tableHeader3,
       ...dataRows,
       totalRow,
+      [],
+      [],
+      sigHeaderRow,
+      [],
+      [],
+      [],
+      sigNameRow,
+      sigRoleRow,
     ];
 
     const ws = XLSX.utils.aoa_to_sheet(allSheetData);
@@ -1055,41 +1076,64 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
               </tbody>
             </table>
 
-            {/* FORMAL TRIPLE SIGNATURE BLOCK */}
-            <div className="sig-block grid grid-cols-3 gap-6 text-center mt-8 text-xs font-sans">
-              <div className="space-y-16">
-                <div>
-                  <p className="font-semibold text-slate-800">Dibuat Oleh,</p>
-                  <p className="text-[10px] text-slate-600">Pengawas / Korlap Lapangan</p>
+            {/* FORMAL SIGNATURE BLOCK (GROUP-ADAPTIVE: RUMAH TANGGA / SHIPMENT / GABUNGAN) */}
+            {selectedGroup === 'ALL' ? (
+              <div className="sig-block grid grid-cols-3 gap-6 text-center mt-8 text-xs font-sans">
+                <div className="space-y-16">
+                  <div>
+                    <p className="font-bold text-slate-900">Dibayarkan oleh :</p>
+                  </div>
+                  <div>
+                    <p className="sig-name font-bold underline text-slate-900">TAKDIR</p>
+                    <p className="text-[11px] font-bold text-slate-800">Administration</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="sig-name font-bold underline text-slate-900">Muh Aslam Faisal / Korlap</p>
-                  <p className="text-[10px] text-slate-600 font-mono">NIP: FRP 07065</p>
+                <div className="space-y-16">
+                  <div>
+                    <p className="font-bold text-slate-900">Mengetahui :</p>
+                  </div>
+                  <div>
+                    <p className="sig-name font-bold underline text-slate-900">ABD. RAHMAN</p>
+                    <p className="text-[11px] font-bold text-slate-800">Mgr of Shiftment Management 2</p>
+                  </div>
+                </div>
+                <div className="space-y-16">
+                  <div>
+                    <p className="font-bold text-slate-900">Mengetahui :</p>
+                  </div>
+                  <div>
+                    <p className="sig-name font-bold underline text-slate-900">ZAM ZAM</p>
+                    <p className="text-[11px] font-bold text-slate-800">Mgr Rumah Tangga</p>
+                  </div>
                 </div>
               </div>
+            ) : (
+              <div className="sig-block grid grid-cols-2 gap-12 text-center mt-8 text-xs font-sans px-8">
+                <div className="space-y-16">
+                  <div>
+                    <p className="font-bold text-slate-900">Dibayarkan oleh :</p>
+                  </div>
+                  <div>
+                    <p className="sig-name font-bold underline text-slate-900">TAKDIR</p>
+                    <p className="text-[11px] font-bold text-slate-800">Administration</p>
+                  </div>
+                </div>
 
-              <div className="space-y-16">
-                <div>
-                  <p className="font-semibold text-slate-800">Diperiksa Oleh,</p>
-                  <p className="text-[10px] text-slate-600">HRD &amp; Personalia / Keuangan</p>
-                </div>
-                <div>
-                  <p className="sig-name font-bold underline text-slate-900">Reski Faisal, S.E.</p>
-                  <p className="text-[10px] text-slate-600 font-mono">Bagian Verifikasi Payroll</p>
-                </div>
-              </div>
-
-              <div className="space-y-16">
-                <div>
-                  <p className="font-semibold text-slate-800">Menyetujui,</p>
-                  <p className="text-[10px] text-slate-600">Direktur Utama PT. FRP</p>
-                </div>
-                <div>
-                  <p className="sig-name font-bold underline text-slate-900">Alam AS simpuang ago, S.Sos</p>
-                  <p className="text-[10px] text-slate-600 font-mono">Direktur Utama</p>
+                <div className="space-y-16">
+                  <div>
+                    <p className="font-bold text-slate-900">Mengetahui :</p>
+                  </div>
+                  <div>
+                    <p className="sig-name font-bold underline text-slate-900">
+                      {selectedGroup === 'RUMAH TANGGA' ? 'ZAM ZAM' : 'ABD. RAHMAN'}
+                    </p>
+                    <p className="text-[11px] font-bold text-slate-800">
+                      {selectedGroup === 'RUMAH TANGGA' ? 'Mgr Rumah Tangga' : 'Mgr of Shiftment Management 2'}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </DialogContent>
