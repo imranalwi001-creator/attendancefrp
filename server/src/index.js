@@ -11698,8 +11698,8 @@ app.post('/api/overtime', async (req, res) => {
               COALESCE(approval_notes, '') ILIKE '%' || $3 || '%'
               OR (
                 COALESCE(approval_notes, '') !~* '\\[(M15|M2W|M2R|M3|M4)\\]'
-                AND $4 > 0
-                AND ABS(COALESCE(rate_multiplier, 0) - $4) < 0.01
+                AND $4::numeric > 0
+                AND ABS(COALESCE(rate_multiplier, 0)::numeric - $4::numeric) < 0.01
               )
             )
           ORDER BY (CASE WHEN status = 'approved' THEN 1 ELSE 2 END), created_at DESC
