@@ -11681,21 +11681,44 @@ app.post('/api/overtime', async (req, res) => {
     const finalPhase = targetStatus === 'approved' ? 'completed' : 'requested';
 
     // 🛡️ ANTI-DUPLICATE GUARD LEVEL 1:
-    // Cegah pengajuan lembur jika sudah ada SPKL aktif/disetujui pada tanggal dan jam/shift yang sama
-    const dupCheck = await pool.query(`
-      SELECT id, status, source, start_time, end_time, duration_hours, task_description, approved_by_name
-      FROM hrm_overtime_records
-      WHERE user_id = $1 AND date = $2::date
-        AND status IN ('pending', 'approved')
-        AND (
-          (start_time = $3 AND end_time = $4)
-          OR source = 'shift_relief'
-          OR (start_time < $4 AND end_time > $3)
-          OR created_at >= NOW() - INTERVAL '30 seconds'
-        )
-      ORDER BY (CASE WHEN status = 'approved' THEN 1 ELSE 2 END), created_at DESC
-      LIMIT 1;
-    `, [validUserId, date, startTime, endTime]);
+    // Cegah pengajuan lembur jika sudah ada SPKL aktif/disetujui pada tanggal dan jam/shift yang sama.
+    // Pengecualian presisi untuk Matriks SPL Superadmin: sub-baris pengali berbeda ([M15], [M2W], [M2R], [M3], [M4])
+    // pada tanggal yang sama adalah tier pengali yang saling melengkapi (bukan duplikat shift), sehingga hanya diblokir jika tier-nya sama.
+    const incomingMatrixTagMatch = String(finalApprovalNotes || approvalNotes || '').match(/\[(M15|M2W|M2R|M3|M4)\]/i);
+    const incomingMatrixTag = incomingMatrixTagMatch ? incomingMatrixTagMatch[1].toUpperCase() : '';
+    const incomingMult = Number(req.body.rateMultiplier || req.body.rate_multiplier || 0);
+
+    const dupCheck = (isAdminDirect && incomingMatrixTag)
+      ? await pool.query(`
+          SELECT id, status, source, start_time, end_time, duration_hours, task_description, approved_by_name, rate_multiplier, approval_notes
+          FROM hrm_overtime_records
+          WHERE user_id = $1 AND date = $2::date
+            AND status IN ('pending', 'approved')
+            AND (
+              COALESCE(approval_notes, '') ILIKE '%' || $3 || '%'
+              OR (
+                COALESCE(approval_notes, '') !~* '\\[(M15|M2W|M2R|M3|M4)\\]'
+                AND $4 > 0
+                AND ABS(COALESCE(rate_multiplier, 0) - $4) < 0.01
+              )
+            )
+          ORDER BY (CASE WHEN status = 'approved' THEN 1 ELSE 2 END), created_at DESC
+          LIMIT 1;
+        `, [validUserId, date, `[${incomingMatrixTag}]`, incomingMult])
+      : await pool.query(`
+          SELECT id, status, source, start_time, end_time, duration_hours, task_description, approved_by_name
+          FROM hrm_overtime_records
+          WHERE user_id = $1 AND date = $2::date
+            AND status IN ('pending', 'approved')
+            AND (
+              (start_time = $3 AND end_time = $4)
+              OR source = 'shift_relief'
+              OR (start_time < $4 AND end_time > $3)
+              OR created_at >= NOW() - INTERVAL '30 seconds'
+            )
+          ORDER BY (CASE WHEN status = 'approved' THEN 1 ELSE 2 END), created_at DESC
+          LIMIT 1;
+        `, [validUserId, date, startTime, endTime]);
 
     if (dupCheck.rows.length > 0) {
       const ex = dupCheck.rows[0];
