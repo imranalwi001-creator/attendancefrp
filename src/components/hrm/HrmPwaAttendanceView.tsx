@@ -1915,22 +1915,48 @@ export const HrmPwaAttendanceView: React.FC<HrmPwaAttendanceViewProps> = ({ onSw
   }, [isCurrentlyOnDuty, todayAttendance, todayDateStr, user, userShift]);
 
   // SPKL Lembur Resmi Disetujui (Sinkron Same-Day & Cross-Day; diblokir HANYA untuk 3 Karyawan Tetap sesuai Aturan 11)
+  // 🛡️ GUARD SPLIT-SHIFT FULFILLED: Abaikan SPKL yang sudah selesai dijalankan oleh sesi presensi terpisah (misal Lembur Shift I 07:45-15:35)
+  // agar saat karyawan datang kembali untuk Shift III malam (22:30-07:30), tombol Pulang terbuka tepat pk 07:30 (tidak terkunci ke 15:30)!
   const approvedOvertimeToday = useMemo(() => {
     if (isLeadershipSpecialFieldOfficer(user)) return null;
     const activeAttDate = isCurrentlyOnDuty && todayAttendance
       ? normalizeDateString(todayAttendance.attendanceDate || todayAttendance.date)
       : '';
+    const parseMin = (t?: string | null) => {
+      if (!t) return null;
+      const [h, m] = String(t).substring(0, 5).split(':').map(Number);
+      return Number.isFinite(h) ? h * 60 + (m || 0) : null;
+    };
+    const circDist = (a: number | null, b: number | null) => {
+      if (a == null || b == null) return 9999;
+      const d = Math.abs(a - b);
+      return d > 720 ? 1440 - d : d;
+    };
     const matching = userOvertimeList.filter((o) => {
       if (String(o.status || '').toLowerCase() !== 'approved') return false;
       const otDate = normalizeDateString(o.date || (o as any).overtime_date || (o as any).overtimeDate);
-      if (otDate === todayDateStr) return true;
-      if (activeAttDate && otDate === activeAttDate) return true;
-      return false;
+      if (otDate !== todayDateStr && !(activeAttDate && otDate === activeAttDate)) return false;
+
+      // Cek apakah SPKL ini sudah terpenuhi oleh sesi selesai terpisah (clockOut terisi) di tanggal tersebut
+      const otStartMin = parseMin(o.startTime || (o as any).start_time);
+      const otEndMin = parseMin(o.endTime || (o as any).end_time);
+      if (otStartMin != null && otEndMin != null) {
+        const fulfilledByCompletedSession = attendancesHistory.some((a) => {
+          const aDate = normalizeDateString(a.attendanceDate || a.date || (a as any).attendance_date);
+          if (aDate !== otDate) return false;
+          const aIn = a.clockIn || (a as any).clock_in;
+          const aOut = a.clockOut || (a as any).clock_out;
+          if (!aIn || !aOut) return false;
+          return circDist(parseMin(aIn), otStartMin) <= 150 && circDist(parseMin(aOut), otEndMin) <= 180;
+        });
+        if (fulfilledByCompletedSession) return false;
+      }
+      return true;
     });
     if (matching.length === 0) return null;
     // Prioritaskan SPKL pada tanggal aktif / hari ini dengan rentang waktu terjelas
     return matching.find((o) => o.startTime || (o as any).start_time) || matching[0];
-  }, [userOvertimeList, todayDateStr, isCurrentlyOnDuty, todayAttendance, user]);
+  }, [userOvertimeList, attendancesHistory, todayDateStr, isCurrentlyOnDuty, todayAttendance, user]);
 
   // ⚡ STANDAR SINGLE CONTINUOUS SESSION (1x Ceklok Masuk -> 1x Ceklok Pulang)
   // Menggabungkan Shift Asli + SPKL Lembur (Sebelum Shift, Setelah Shift, maupun Hari OFF) untuk SEMUA karyawan!

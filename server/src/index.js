@@ -17015,24 +17015,42 @@ async function runAutoCloseCompliantAttendance() {
 
     if (candidates.rows.length === 0) return;
 
-    // ⚡ CONTINUOUS DUTY PROTECTION: Ambil semua SPKL Lembur 'approved' milik kandidat pada tanggal presensi & H+1 (untuk lembur lintas hari)
+    // ⚡ CONTINUOUS DUTY PROTECTION: Ambil semua SPKL Lembur 'approved' & sesi selesai (Split-Shift) milik kandidat pada tanggal presensi & H+1
     const candidateUserIds = Array.from(new Set(candidates.rows.map((r) => r.user_id)));
     const approvedOvertimesByUser = new Map();
+    const completedSessionsByUser = new Map();
     try {
-      const otRowsRes = await pool.query(
-        `SELECT user_id, date::text as ot_date, start_time::text as start_time, end_time::text as end_time, duration_hours, task_description
-         FROM hrm_overtime_records
-         WHERE user_id = ANY($1::uuid[])
-           AND status = 'approved'
-           AND date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '3 days'
-           AND date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date + INTERVAL '1 day'
-         ORDER BY date ASC, start_time ASC`,
-        [candidateUserIds]
-      );
+      const [otRowsRes, completedRes] = await Promise.all([
+        pool.query(
+          `SELECT user_id, date::text as ot_date, start_time::text as start_time, end_time::text as end_time, duration_hours, task_description
+           FROM hrm_overtime_records
+           WHERE user_id = ANY($1::uuid[])
+             AND status = 'approved'
+             AND date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '3 days'
+             AND date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date + INTERVAL '1 day'
+           ORDER BY date ASC, start_time ASC`,
+          [candidateUserIds]
+        ),
+        pool.query(
+          `SELECT user_id, attendance_date::text as att_date, clock_in::text as clock_in, clock_out::text as clock_out
+           FROM hrm_attendances
+           WHERE user_id = ANY($1::uuid[])
+             AND clock_in IS NOT NULL
+             AND clock_out IS NOT NULL
+             AND attendance_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date - INTERVAL '3 days'
+             AND attendance_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date + INTERVAL '1 day'`,
+          [candidateUserIds]
+        ),
+      ]);
       for (const otRow of otRowsRes.rows) {
         const list = approvedOvertimesByUser.get(otRow.user_id) || [];
         list.push(otRow);
         approvedOvertimesByUser.set(otRow.user_id, list);
+      }
+      for (const cRow of completedRes.rows) {
+        const list = completedSessionsByUser.get(cRow.user_id) || [];
+        list.push(cRow);
+        completedSessionsByUser.set(cRow.user_id, list);
       }
     } catch (otFetchErr) {
       console.warn('[Auto-Close Continuous Duty OT Fetch Warn]:', otFetchErr.message);
@@ -17086,13 +17104,30 @@ async function runAutoCloseCompliantAttendance() {
       const nextDateObj = new Date(Date.UTC(attY, attM - 1, attD + 1));
       const nextDateStr = nextDateObj.toISOString().split('T')[0];
 
-      // ⚡ CONTINUOUS DUTY EXTENSION (BERLAKU UNTUK SEMUA KARYAWAN — LEMBUR SEBELUM SHIFT, SETELAH SHIFT, & HARI OFF):
-      // Jika karyawan memiliki SPKL Lembur 'approved' yang menyambung, perpanjang effectiveEndUtcMs ke akhir lembur!
+      // ⚡ CONTINUOUS DUTY & SPLIT-SHIFT EXTENSION (LEMBUR SEBELUM SHIFT, SETELAH SHIFT, MELANGKAHI 1 SHIFT, & HARI OFF):
+      // 1. Jika SPKL sudah terpenuhi oleh sesi terpisah yang selesai sebelumnya (Split-Shift), ABAIKAN agar tidak memperpanjang shift reguler berikutnya!
+      // 2. Jika ada jeda > 90 menit (melangkahi 1 shift), perlakukan sebagai sesi terpisah (Split-Shift), BUKAN sesi kontinu.
       let effectiveEndUtcMs = shiftEndUtcMs;
       let effectiveEndStr = shiftEndStr;
       let hasActiveContinuousOvertime = false;
 
+      const parseMin = (hhmm) => {
+        if (!hhmm) return null;
+        const [h, m] = String(hhmm).substring(0, 5).split(':').map(Number);
+        return Number.isFinite(h) ? h * 60 + (m || 0) : null;
+      };
+      const circMinDist = (a, b) => {
+        if (a == null || b == null) return 9999;
+        const d = Math.abs(a - b);
+        return d > 720 ? 1440 - d : d;
+      };
+
+      const rowClockInMin = parseMin(row.clock_in || shiftStartStr);
+      const shiftStartMin = startH * 60 + startM;
+      const shiftEndMin = endH * 60 + endM;
+      const userCompleted = completedSessionsByUser.get(row.user_id) || [];
       const userOts = approvedOvertimesByUser.get(row.user_id) || [];
+
       for (const otRow of userOts) {
         const otDateStr = String(otRow.ot_date || '').substring(0, 10);
         if (!otRow.start_time || !otRow.end_time) continue;
@@ -17102,13 +17137,46 @@ async function runAutoCloseCompliantAttendance() {
         const [oEH, oEM] = otE.split(':').map(Number);
         if (!Number.isFinite(oSH) || !Number.isFinite(oEH)) continue;
 
-        const otCrossDay = (oEH * 60 + (oEM || 0)) < (oSH * 60 + (oSM || 0));
+        const otStartMin = oSH * 60 + (oSM || 0);
+        const otEndMin = oEH * 60 + (oEM || 0);
+        const otCrossDay = otEndMin < otStartMin;
+
+        // 🛡️ GUARD SPLIT-SHIFT FULFILLED: Cek apakah SPKL ini sudah selesai dijalankan oleh sesi presensi terpisah sebelumnya
+        const alreadyFulfilled = userCompleted.some((c) => {
+          const cDate = String(c.att_date || '').substring(0, 10);
+          if (cDate !== otDateStr) return false;
+          const cInMin = parseMin(c.clock_in);
+          const cOutMin = parseMin(c.clock_out);
+          return circMinDist(cInMin, otStartMin) <= 150 && circMinDist(cOutMin, otEndMin) <= 180;
+        });
+        if (alreadyFulfilled) {
+          continue;
+        }
 
         if (otDateStr === attDateStr) {
-          // Kasus 1: SPKL di tanggal yang sama
-          // Sub-kasus: Shift III (22:30-07:30) + SPKL pagi (07:30-15:30) yang tercatat di tanggal Shift III
+          // Cek apakah sesi terbuka ini adalah Sesi 1 Split-Shift Pagi (misal Lembur Shift I 07:30-15:30 sebelum Shift III 22:30-07:30)
+          const gapOtEndToShiftStart = (shiftStartMin - otEndMin + 1440) % 1440;
+          const gapShiftEndToOtStart = (otStartMin - shiftEndMin + 1440) % 1440;
+          const clockedInNearOt = rowClockInMin != null && circMinDist(rowClockInMin, otStartMin) <= 150 && circMinDist(rowClockInMin, otStartMin) < circMinDist(rowClockInMin, shiftStartMin);
+          const clockedInNearShift = rowClockInMin != null && circMinDist(rowClockInMin, shiftStartMin) <= 150;
+
+          if (gapOtEndToShiftStart > 90 && clockedInNearOt) {
+            // Sesi 1 Split-Shift (Lembur Pagi melangkahi 1 shift menuju Shift Malam): selesai di akhir lembur pagi!
+            const otEndDayOffset = otCrossDay ? 1 : 0;
+            effectiveEndUtcMs = Date.UTC(attY, attM - 1, attD + otEndDayOffset, oEH - 8, oEM || 0, 0);
+            effectiveEndStr = otE;
+            hasActiveContinuousOvertime = true;
+            continue;
+          }
+
+          if (gapShiftEndToOtStart > 90 && !isCrossDay && clockedInNearShift && !clockedInNearOt) {
+            // Sesi 1 Split-Shift (Shift I Pagi melangkahi Shift II menuju Lembur Shift III Malam): selesai di akhir Shift I!
+            continue;
+          }
+
+          // Kasus Kontinu 1: SPKL menyambung di tanggal yang sama (termasuk Shift III 22:30-07:30 lanjut Lembur Shift I 07:30-15:30 H+1)
           let otStartDayOffset = 0;
-          if (isCrossDay && (oSH * 60 + (oSM || 0)) < (startH * 60 + startM) && Math.abs((oSH * 60 + (oSM || 0)) - (endH * 60 + endM)) <= 120) {
+          if (isCrossDay && otStartMin < shiftStartMin && Math.abs(otStartMin - shiftEndMin) <= 120) {
             otStartDayOffset = 1;
           }
           const otEndDayOffset = otStartDayOffset + (otCrossDay ? 1 : 0);
@@ -17119,12 +17187,11 @@ async function runAutoCloseCompliantAttendance() {
             effectiveEndStr = otE;
             hasActiveContinuousOvertime = true;
           } else {
-            // Lembur Sebelum Shift (misal 07:30-15:30 sebelum Shift II 15:30-22:30):
-            // effectiveEndUtcMs tetap akhir Shift II (22:30), tandai sebagai sesi kontinu lembur
+            // Lembur Sebelum Shift (kontinu tanpa jeda, misal 07:30-15:30 lanjut Shift II 15:30-22:30):
             hasActiveContinuousOvertime = true;
           }
         } else if (isCrossDay && otDateStr === nextDateStr) {
-          // Kasus 2: Shift lintas hari (misal Shift III 22:30-07:30 pada tgl D) lanjut Lembur Shift I (07:30-15:30 pada tgl D+1)
+          // Kasus Kontinu 2: Shift lintas hari (misal Shift III 22:30-07:30 pada tgl D) lanjut Lembur Shift I (07:30-15:30 pada tgl D+1)
           const otStartUtcMs = Date.UTC(attY, attM - 1, attD + 1, oSH - 8, oSM || 0, 0);
           const gapFromShiftEndMins = Math.abs(otStartUtcMs - shiftEndUtcMs) / 60000;
           if (gapFromShiftEndMins <= 90) {

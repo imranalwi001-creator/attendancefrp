@@ -792,23 +792,30 @@ export function resolveContinuousDutyShift(
     effectiveEnd = otEnd;
     effectiveIsCrossDay = otIsCross;
   } else {
-    // Deteksi apakah sesi saat ini adalah SPLIT-SHIFT terpisah (contoh: Lembur Shift I 07:30-15:30 + jadwal asli Shift III 22:30-07:30 malam)
-    // Jeda antara otEnd (15:30) ke baseStart (22:30) = 7 jam (420 menit > 90 menit).
-    // Jika karyawan belum masuk malam kemarin (clockIn di pagi hari dekat otStart, ATAU belum clockIn & sekarang di pagi/siang hari),
-    // maka sesi pagi ini adalah Split-Shift terpisah (boleh pulang istirahat pk 15:30, lalu masuk Shift III pk 22:30)!
+    // Deteksi apakah sesi saat ini adalah SPLIT-SHIFT terpisah (melangkahi 1 shift, jeda > 90 menit):
+    // 1. Lembur Shift I (07:30-15:30) + melangkahi Shift II + Shift III (22:30-07:30) malam -> Sesi pagi selesai pk 15:30
+    // 2. Shift I (07:30-15:30) + melangkahi Shift II + Lembur Shift III (22:30-07:30) malam -> Sesi pagi selesai pk 15:30, malam selesai pk 07:30
     const gapOtEndToBaseStart = (baseStartMins! - otEndMins + 1440) % 1440;
+    const gapBaseEndToOtStart = (otStartMins - baseEndMins! + 1440) % 1440;
     const clockedInForMorningOt = clockInMins != null && circDist(clockInMins, otStartMins) <= 180 && circDist(clockInMins, otStartMins) < circDist(clockInMins, baseStartMins!);
+    const clockedInForBaseMorning = clockInMins != null && circDist(clockInMins, baseStartMins!) <= 180 && circDist(clockInMins, baseStartMins!) < circDist(clockInMins, otStartMins);
     const nowInMorningOtBeforeNightShift = clockInMins == null && baseIsCross && Math.abs(otStartMins - baseEndMins!) <= 90 && isNowInWindow(nowMins, (otStartMins - 120 + 1440) % 1440, (otEndMins + 120) % 1440);
     const isSplitShiftMorning = gapOtEndToBaseStart > 90 && (clockedInForMorningOt || nowInMorningOtBeforeNightShift);
+    const isSplitShiftBaseBeforeNightOt = gapBaseEndToOtStart > 90 && !baseIsCross && (clockedInForBaseMorning || (clockInMins == null && isNowInWindow(nowMins, (baseStartMins! - 120 + 1440) % 1440, (baseEndMins! + 60) % 1440)));
 
     const isAfterCrossDayShift = baseIsCross && Math.abs(otStartMins - baseEndMins!) <= 90 && !isSplitShiftMorning;
-    const isBeforeShift = !isSplitShiftMorning && !isAfterCrossDayShift && otStartMins < baseStartMins! && otEndMins <= baseStartMins! + 60;
+    const isBeforeShift = !isSplitShiftMorning && !isSplitShiftBaseBeforeNightOt && !isAfterCrossDayShift && otStartMins < baseStartMins! && otEndMins <= baseStartMins! + 60;
 
     if (isSplitShiftMorning) {
       dutyMode = 'split_shift';
       effectiveStart = otStart;
       effectiveEnd = otEnd;
       effectiveIsCrossDay = otIsCross;
+    } else if (isSplitShiftBaseBeforeNightOt) {
+      dutyMode = 'regular';
+      effectiveStart = baseStart;
+      effectiveEnd = baseEnd;
+      effectiveIsCrossDay = baseIsCross;
     } else if (isBeforeShift) {
       dutyMode = 'before_shift';
       effectiveStart = otStart;
