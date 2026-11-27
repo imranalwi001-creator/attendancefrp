@@ -996,12 +996,14 @@ export const HrmLiveMonitoringPage: React.FC = () => {
   // Jumlah Hari dalam Bulan Terpilih (1 s/d 28/29/30/31)
   const daysInSelectedMonth = React.useMemo(() => {
     const totalDays = new Date(selectedYearNum, selectedMonthNum, 0).getDate();
+    const shortDaysId = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
     return Array.from({ length: totalDays }, (_, i) => {
       const dayNum = i + 1;
       const dateStr = `${selectedYearNum}-${String(selectedMonthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
       const d = new Date(selectedYearNum, selectedMonthNum - 1, dayNum);
-      const dayName = d.toLocaleDateString('id-ID', { weekday: 'short' });
-      return { dayNum, dateStr, dayName };
+      const dayOfWeek = d.getDay();
+      const dayName = shortDaysId[dayOfWeek];
+      return { dayNum, dateStr, dayName, dayOfWeek };
     });
   }, [selectedYearNum, selectedMonthNum]);
 
@@ -2331,8 +2333,8 @@ export const HrmLiveMonitoringPage: React.FC = () => {
 
         {/* Sequential Date Strip (1..30/31) — 1-Klik Ganti Tanggal */}
         {isDailyView && (
-          <div className="pt-2.5 border-t border-border/60 space-y-2">
-            <div className="flex items-center justify-between gap-2 text-xs">
+          <div className="pt-2.5 border-t border-border/60 space-y-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-2">
                 <CalendarIcon size={14} className="text-emerald-600 shrink-0" />
                 <span className="font-bold text-foreground">
@@ -2349,29 +2351,38 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={handlePrevDay}
-                  className="px-2 py-1 rounded-lg bg-muted/60 hover:bg-muted text-[11px] font-semibold text-muted-foreground hover:text-foreground"
-                >
-                  ← H-1
-                </button>
-                <button
-                  type="button"
-                  onClick={handleNextDay}
-                  className="px-2 py-1 rounded-lg bg-muted/60 hover:bg-muted text-[11px] font-semibold text-muted-foreground hover:text-foreground"
-                >
-                  H+1 →
-                </button>
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] text-muted-foreground mr-1">
+                  <span className="w-3.5 h-3.5 rounded-full bg-amber-500 text-white text-[8.5px] font-extrabold inline-flex items-center justify-center">
+                    n
+                  </span>
+                  <span>Jumlah SPKL Lembur</span>
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={handlePrevDay}
+                    className="px-2.5 py-1 rounded-lg bg-muted/50 hover:bg-muted border border-border/60 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    ← H-1
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleNextDay}
+                    className="px-2.5 py-1 rounded-lg bg-muted/50 hover:bg-muted border border-border/60 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    H+1 →
+                  </button>
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-thin">
+            <div className="flex items-center gap-1.5 overflow-x-auto pt-2.5 pb-1.5 px-1 scrollbar-thin">
               {daysInSelectedMonth.map((d) => {
                 const isSelected = targetDayDate === d.dateStr;
                 const isTodayBtn = d.dateStr === getTodayDateStr();
                 const isFutureBtn = d.dateStr > getTodayDateStr();
+                const isSunday = d.dayOfWeek === 0;
                 const dayOtCount = overtimes.filter((o) => {
                   const oDate = String(o.date || (o as any).overtimeDate || (o as any).overtime_date || '').slice(0, 10);
                   const isApproved = o.status === 'approved' || (o as any).status === 'completed';
@@ -2384,22 +2395,34 @@ export const HrmLiveMonitoringPage: React.FC = () => {
                     type="button"
                     onClick={() => handleSelectDayDate(d.dateStr)}
                     title={`${d.dayName}, ${d.dateStr}${dayOtCount > 0 ? ` • ${dayOtCount} lembur SPKL` : ''}`}
-                    className={`relative min-w-[34px] h-10 px-1.5 rounded-xl font-mono text-xs font-bold transition-all shrink-0 flex flex-col items-center justify-center ${
+                    className={`relative min-w-[38px] h-[44px] px-1.5 rounded-xl font-mono text-xs font-bold transition-all shrink-0 flex flex-col items-center justify-center border ${
                       isSelected
-                        ? 'bg-emerald-600 text-white shadow-xs'
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
                         : isTodayBtn
-                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/50 hover:bg-emerald-500/25'
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/50 hover:bg-emerald-500/25'
                         : isFutureBtn
-                        ? 'bg-muted/25 text-muted-foreground/50 hover:bg-muted/50'
-                        : 'bg-muted/50 text-foreground/85 hover:bg-emerald-500/10 hover:text-emerald-700 dark:hover:text-emerald-300'
+                        ? 'bg-muted/20 text-muted-foreground/45 border-border/30 hover:bg-muted/45'
+                        : isSunday
+                        ? 'bg-rose-50/60 dark:bg-rose-950/20 text-foreground/85 border-rose-200/60 dark:border-rose-900/40 hover:bg-rose-100/60'
+                        : 'bg-muted/40 text-foreground/85 border-border/50 hover:bg-emerald-500/10 hover:text-emerald-700 dark:hover:text-emerald-300 hover:border-emerald-500/35'
                     }`}
                   >
-                    <span className="text-[8.5px] font-sans uppercase leading-none opacity-75">{d.dayName.slice(0, 2)}</span>
-                    <span className="leading-tight mt-0.5">{d.dayNum}</span>
+                    <span
+                      className={`text-[9px] font-sans font-semibold leading-none ${
+                        isSelected
+                          ? 'text-white/85'
+                          : isSunday && !isFutureBtn
+                          ? 'text-rose-500 dark:text-rose-400'
+                          : 'opacity-70'
+                      }`}
+                    >
+                      {d.dayName}
+                    </span>
+                    <span className="leading-tight mt-0.5 text-[12.5px]">{d.dayNum}</span>
                     {dayOtCount > 0 && (
                       <span
-                        className={`absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full text-[8px] font-extrabold flex items-center justify-center ${
-                          isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-500 text-white'
+                        className={`absolute -top-1.5 -right-1.5 min-w-[16px] h-[16px] px-1 rounded-full text-[9px] leading-none font-extrabold flex items-center justify-center ring-2 ring-card shadow-2xs ${
+                          isSelected ? 'bg-amber-400 text-amber-950' : 'bg-amber-500 text-white'
                         }`}
                       >
                         {dayOtCount}
