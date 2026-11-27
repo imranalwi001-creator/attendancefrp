@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { UserProfile, AttendanceRecord, OvertimeRecord, LeaveRequest, EmployeeCategoryGroup, getEmployeeCategoryGroup, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
+import { hrmService } from '@/services/hrmService';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -179,8 +180,14 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
       });
   }, [employees, selectedGroup]);
 
-  // Overtime Tarif Standar FRP (1/173 dari Rp 4.045.050)
-  const HOURLY_RATE = 23381.79;
+  // Tarif Lembur per Karyawan sinkron 100% dengan /admin/payroll (hrm_payroll_salary_profiles: Math.round(baseSalary / 173))
+  const getEmpHourlyRate = (emp: UserProfile): number => {
+    const sp = hrmService.getSalaryProfile(emp.id);
+    const rawRate = Number((emp as any)?.hourly_overtime_rate || (emp as any)?.hourlyOvertimeRate || (sp as any)?.overtimeRateOverride || 0);
+    if (rawRate > 0) return Math.round(rawRate);
+    const baseSalary = Number(sp?.baseSalary || (emp as any)?.base_salary || (emp as any)?.baseSalary || 4045050);
+    return Math.round(baseSalary / 173);
+  };
 
   // Process rows
   const timeSheetRows = useMemo(() => {
@@ -475,8 +482,9 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         paidHours += empPaid;
       });
 
-      // Total Upah Lembur Bayar selalu sinkron persis: paidHours * HOURLY_RATE (Rp 23.381,79/jam)
-      const totalPay = Math.round(paidHours * HOURLY_RATE);
+      // Total Upah Lembur Bayar sinkron 100% dengan /admin/payroll: Math.round(paidHours * empHourlyRate)
+      const empHourlyRate = getEmpHourlyRate(emp);
+      const totalPay = Math.round(paidHours * empHourlyRate);
 
       // Default shift pattern name
       const shiftPattern = emp.jobTitle?.includes('DAY') ? 'DAY SIFT' : emp.shiftId ? 'SIFT 213' : 'SIFT 213';
@@ -494,11 +502,11 @@ export const HrmTimeSheetPdfModal: React.FC<HrmTimeSheetPdfModalProps> = ({
         countCT,
         realHours,
         paidHours,
-        tarifLembur: Math.round(HOURLY_RATE),
+        tarifLembur: empHourlyRate,
         totalUpahLembur: totalPay,
       };
     });
-  }, [targetEmployees, activeAttendances, activeLeaves, activeOvertimes, activeSchedules, selectedMonth, daysMeta, HOURLY_RATE]);
+  }, [targetEmployees, activeAttendances, activeLeaves, activeOvertimes, activeSchedules, selectedMonth, daysMeta]);
 
   // Grand Totals
   const grandTotals = useMemo(() => {

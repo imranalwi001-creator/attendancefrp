@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { UserProfile, AttendanceRecord, OvertimeRecord, LeaveRequest, getEmployeeCategoryGroup, isLeadershipSpecialFieldOfficer } from '@/types/hrm';
+import { hrmService } from '@/services/hrmService';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -236,8 +237,14 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
       });
   }, [employees, selectedGroup]);
 
-  // Overtime Hourly Rate: Rp 23.381,79
-  const HOURLY_RATE = 23381.79;
+  // Tarif Lembur per Karyawan sinkron 100% dengan /admin/payroll (hrm_payroll_salary_profiles: Math.round(baseSalary / 173))
+  const getEmpHourlyRate = (emp: UserProfile): number => {
+    const sp = hrmService.getSalaryProfile(emp.id);
+    const rawRate = Number((emp as any)?.hourly_overtime_rate || (emp as any)?.hourlyOvertimeRate || (sp as any)?.overtimeRateOverride || 0);
+    if (rawRate > 0) return Math.round(rawRate);
+    const baseSalary = Number(sp?.baseSalary || (emp as any)?.base_salary || (emp as any)?.baseSalary || 4045050);
+    return Math.round(baseSalary / 173);
+  };
 
   // Build Multi-Tier Matrix Data (7 rows per employee)
   const matrixData = useMemo(() => {
@@ -761,8 +768,9 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
           effectiveHours = duration > 6 ? Math.max(0, duration - 1) : duration;
         }
       }
+      const empHourlyRate = getEmpHourlyRate(editTarget.employee);
       const paidHours = effectiveHours * mult;
-      const compensationAmount = Math.round(paidHours * HOURLY_RATE);
+      const compensationAmount = Math.round(paidHours * empHourlyRate);
 
       const rowTag = editTarget.rowKey ? `[${editTarget.rowKey.toUpperCase()}]` : (mult === 1.5 ? '[M15]' : '[M2W]');
       const finalApprovalNotes = `${rowTag} Ditugaskan dan disahkan langsung oleh Super Administrator`;
@@ -778,7 +786,7 @@ export const HrmSplMultiplierMatrixModal: React.FC<HrmSplMultiplierMatrixModalPr
         durationHours: duration,
         approvedHours: duration,
         rateMultiplier: mult,
-        rateApplied: HOURLY_RATE,
+        rateApplied: empHourlyRate,
         totalPay: compensationAmount,
         compensationAmount,
         taskDescription: inputTaskDesc,
